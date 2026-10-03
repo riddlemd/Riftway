@@ -11,4 +11,7 @@ General items: [todo.md](todo.md).
 - [ ] Linux sandbox on Ubuntu 24.04+: AppArmor profile, or documented `--no-sandbox` (M4)
 - [ ] Wayland: CEF Views on Wayland is still being fixed upstream; Oriel targets X11/XWayland for now
 - [ ] linux-x64: only linux-arm64 (Docker on Apple Silicon) has been tested
+- [ ] Modal windows (`Modal = true`) don't block the parent under openbox: the parent still takes focus. Electron
+      disables the parent's input itself on Linux; CEF exposes no input filter, so this needs another route.
+      Check GNOME/KDE, which may honour `_NET_WM_STATE_MODAL`.
 - [ ] Window-manager behaviour beyond openbox (GNOME/Mutter, KDE/KWin): maximize, minimize, full screen

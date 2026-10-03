@@ -12,5 +12,6 @@ General items: [todo.md](todo.md). Windows work runs on the Windows laptop.
   - [ ] Then decide packaging: re-brand and sign per CEF bump, no .NET apphost, likely no single-file publish
 - [ ] Re-run Oriel.ProtocolTest on Windows: the 2 checks added since (video blob control, video paints frames)
 - [ ] Confirm the startup `observer_list.h:192` lines are gone on Windows (fixed in 86c2ae3, verified on macOS)
-- [ ] Run Oriel.WindowTest on Windows (55 checks; so far only macOS and Linux)
+- [ ] Run Oriel.WindowTest on Windows (94 checks; so far only macOS and Linux). New since the laptop's last run:
+      DevTools uses `cef_window_info_win_t` (layout from the header, never exercised), parent/modal (does the modal keep focus from its parent?), webPreferences, F12 blocked with DevTools = false, sendInputEvent.
 - [ ] windows-arm64: untested

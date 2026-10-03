@@ -83,6 +83,15 @@ public sealed record BrowserWindowOptions
     /// elsewhere. Electron's <c>simpleFullscreen</c>.</summary>
     public bool SimpleFullScreen { get; init; }
 
+    /// <summary>The window this one belongs to: it stays above its parent, has no taskbar button of its own,
+    /// and closes with it. Electron's <c>parent</c>.</summary>
+    public BrowserWindow? Parent { get; init; }
+
+    /// <summary>Disables <see cref="Parent"/> while this window is shown; requires a parent. Electron's <c>modal</c>.</summary>
+    /// <remarks>On Linux the parent stays usable under window managers that ignore modal hints (openbox does);
+    /// Electron disables the parent's input itself there, which Oriel does not yet.</remarks>
+    public bool Modal { get; init; }
+
     /// <summary>Settings for the page. Electron's <c>webPreferences</c>.</summary>
     public WebPreferences WebPreferences { get; init; } = new();
 }
@@ -93,12 +102,78 @@ public sealed record WebPreferences
     /// <summary>A script run before the page's own, in an isolated world, with <c>oriel.ipcRenderer</c>
     /// and <c>oriel.contextBridge</c>. Electron's <c>preload</c>.</summary>
     public string? Preload { get; init; }
+
+    /// <summary>Whether <see cref="WebContents.OpenDevTools"/> works. Electron's <c>devTools</c>.</summary>
+    public bool DevTools { get; init; } = true;
+
+    /// <summary>The page's starting zoom, 1.0 for 100%. Like Electron, zoom is remembered per origin: the factor
+    /// applies to each origin the page visits until that origin's zoom is changed. Electron's <c>zoomFactor</c>.</summary>
+    public double ZoomFactor { get; init; } = 1.0;
+
+    /// <summary>Whether the page's scripts run. Without them the preload and IPC do not run either.
+    /// Electron's <c>javascript</c>.</summary>
+    public bool Javascript { get; init; } = true;
+
+    /// <summary>Whether images load. Electron's <c>images</c>.</summary>
+    public bool Images { get; init; } = true;
+
+    /// <summary>Whether the user can resize <c>textarea</c> elements. Electron's <c>textAreasAreResizable</c>.</summary>
+    public bool TextAreasAreResizable { get; init; } = true;
+
+    /// <summary>Whether WebGL is available. Electron's <c>webgl</c>.</summary>
+    public bool WebGL { get; init; } = true;
+
+    /// <summary>Fonts for CSS's generic families. Electron's <c>defaultFontFamily</c>.</summary>
+    public DefaultFontFamily? DefaultFontFamily { get; init; }
+
+    /// <summary>The default font size in CSS pixels; null keeps Chromium's 16. Electron's <c>defaultFontSize</c>.</summary>
+    public int? DefaultFontSize { get; init; }
+
+    /// <summary>The default size of monospace text; null keeps Chromium's 13. Electron's <c>defaultMonospaceFontSize</c>.</summary>
+    public int? DefaultMonospaceFontSize { get; init; }
+
+    /// <summary>The smallest font size text renders at. Electron's <c>minimumFontSize</c>.</summary>
+    /// <remarks>Not supported (setting it throws): CEF applies the profile's value to every window.</remarks>
+    public int? MinimumFontSize { get; init; }
+
+    /// <summary>The encoding for pages that declare none, e.g. <c>ISO-8859-1</c>. Electron's <c>defaultEncoding</c>.</summary>
+    /// <remarks>Not supported (setting it throws): CEF applies the profile's value to every window.</remarks>
+    public string? DefaultEncoding { get; init; }
+
+    /// <summary>Suppresses the page's <c>alert</c>, <c>confirm</c> and <c>prompt</c>: they return at once
+    /// (<c>confirm</c> false, <c>prompt</c> null). Electron's <c>disableDialogs</c>.</summary>
+    public bool DisableDialogs { get; init; }
+}
+
+/// <summary>Fonts for CSS's generic font families; null keeps Chromium's choice. Electron's <c>defaultFontFamily</c>.</summary>
+public sealed record DefaultFontFamily
+{
+    /// <summary>Text with no <c>font-family</c>.</summary>
+    public string? Standard { get; init; }
+
+    /// <summary>The <c>serif</c> family.</summary>
+    public string? Serif { get; init; }
+
+    /// <summary>The <c>sans-serif</c> family.</summary>
+    public string? SansSerif { get; init; }
+
+    /// <summary>The <c>monospace</c> family.</summary>
+    public string? Monospace { get; init; }
+
+    /// <summary>The <c>cursive</c> family.</summary>
+    public string? Cursive { get; init; }
+
+    /// <summary>The <c>fantasy</c> family.</summary>
+    public string? Fantasy { get; init; }
+
+    /// <summary>The <c>math</c> family. Not supported: CEF has no setting for it.</summary>
+    public string? Math { get; init; }
 }
 
 /// <summary>A top-level window hosting web content; Electron's <c>BrowserWindow</c>.</summary>
 /// <remarks>
-/// Create on the UI thread, after <see cref="OrielApp.Ready"/>. Other members may be called from any
-/// thread: queries wait for the UI thread, commands are queued to it. Events are raised on the UI thread.
+/// Create after <see cref="OrielApp.Ready"/>. Members may be called from any thread: the constructor and
+/// queries wait for the UI thread, commands are queued to it. Events are raised on the UI thread.
 /// Electron's event names collide with its method names in C# (<c>focus()</c> / <c>'focus'</c>), so
 /// events use .NET's past tense: <see cref="Focused"/>, <see cref="Moved"/>, <see cref="Maximized"/>, ...
 /// </remarks>
@@ -127,18 +202,29 @@ public sealed unsafe class BrowserWindow
     private bool _closeFromCode;
     private bool _readyToShowRaised;
     private string? _backgroundColor;
+    // Touched only on the UI thread.
+    private readonly List<BrowserWindow> _children = [];
 
     /// <summary>Creates the window, shown unless <see cref="BrowserWindowOptions.Show"/> is false.</summary>
-    /// <exception cref="InvalidOperationException">The application is not ready yet.</exception>
+    /// <exception cref="InvalidOperationException">The application is not ready yet, or the parent is closed.</exception>
+    /// <exception cref="ArgumentException"><see cref="BrowserWindowOptions.Modal"/> without a parent.</exception>
+    /// <exception cref="NotSupportedException">An option CEF cannot honour, such as <see cref="DefaultFontFamily.Math"/>.</exception>
     public BrowserWindow(BrowserWindowOptions? options = null)
     {
         if (!OrielApp.Current.IsReady) throw new InvalidOperationException("Create windows after OrielApp.Ready.");
 
         _options = options ?? new BrowserWindowOptions();
+        if (_options.Modal && _options.Parent is null) throw new ArgumentException("A modal window needs a Parent.", nameof(options));
+        if (_options.WebPreferences.DefaultFontFamily?.Math is not null) throw new NotSupportedException("CEF has no setting for the math font family.");
+        // Chrome-style browsers take these from the profile's preferences, over the browser settings.
+        if (_options.WebPreferences.MinimumFontSize is not null) throw new NotSupportedException("MinimumFontSize is not supported: CEF applies the profile's value to every window.");
+        if (_options.WebPreferences.DefaultEncoding is not null) throw new NotSupportedException("DefaultEncoding is not supported: CEF applies the profile's value to every window.");
+        if (_options.WebPreferences.ZoomFactor <= 0) throw new ArgumentOutOfRangeException(nameof(options), "ZoomFactor must be greater than 0.");
+
         Id = Interlocked.Increment(ref s_nextId);
         _closable = _options.Closable;
         _backgroundColor = _options.BackgroundColor;
-        WebContents = new WebContents(_options.WebPreferences.Preload is { } preload ? File.ReadAllText(preload) : null);
+        WebContents = new WebContents(_options.WebPreferences.Preload is { } preload ? File.ReadAllText(preload) : null, _options.WebPreferences);
         WebContents.PageTitleUpdated += (_, e) => PageTitleUpdated?.Invoke(this, e);
         WebContents.TitleApplied = SetTitle;
         WebContents.DidFinishLoad += (_, _) =>
@@ -147,7 +233,7 @@ public sealed unsafe class BrowserWindow
             _readyToShowRaised = true;
             ReadyToShow?.Invoke(this, EventArgs.Empty);
         };
-        _client = new ClientHandler(WebContents.Display, WebContents.Load);
+        _client = new ClientHandler(WebContents.Display, WebContents.Load, WebContents.JsDialog, WebContents.Request, WebContents.Command);
         _viewDelegate = new BrowserViewDelegate { BrowserCreated = OnBrowserCreated, BrowserDestroyed = OnBrowserDestroyed };
         _windowDelegate = new WindowDelegate
         {
@@ -163,13 +249,26 @@ public sealed unsafe class BrowserWindow
             Frameless = !_options.Frame,
             MinimumSize = new cef_size_t { width = _options.MinWidth, height = _options.MinHeight },
             MaximumSize = new cef_size_t { width = _options.MaxWidth, height = _options.MaxHeight },
+            Parent = _options.Parent is { } parent ? () => (nint)parent._window : null,
+            Modal = _options.Modal,
         };
 
+        CefThread.InvokeOnUi(() =>
+        {
+            if (_options.Parent is { _window: null }) throw new InvalidOperationException("The parent window is closed.");
+            CreateNative();
+            return true;
+        });
+    }
+
+    private void CreateNative()
+    {
         var settings = new cef_browser_settings_t
         {
             size = (nuint)sizeof(cef_browser_settings_t),
             background_color = _backgroundColor is null ? 0 : ParseColor(_backgroundColor),
         };
+        ApplyWebPreferences(&settings, _options.WebPreferences);
         // A document must exist before DevTools answers commands, and the preload is registered
         // over DevTools before the real page loads.
         cef_string_utf16_t url = default;
@@ -179,10 +278,41 @@ public sealed unsafe class BrowserWindow
         NativeObject.AddRef(_viewDelegate.Native);
         _browserView = CefNative.cef_browser_view_create(_client.Native, &url, &settings, null, null, _viewDelegate.Native);
         CefString.Clear(&url);
+        ClearWebPreferenceStrings(&settings);
 
         lock (s_openGate) s_open.Add(this);
+        _options.Parent?._children.Add(this);
         NativeObject.AddRef(_windowDelegate.Native);
         _window = CefNative.cef_window_create_top_level(_windowDelegate.Native);
+    }
+
+    private static void ApplyWebPreferences(cef_browser_settings_t* settings, WebPreferences preferences)
+    {
+        static cef_state_t State(bool enabled) => enabled ? cef_state_t.STATE_DEFAULT : cef_state_t.STATE_DISABLED;
+        settings->javascript = State(preferences.Javascript);
+        settings->image_loading = State(preferences.Images);
+        settings->text_area_resize = State(preferences.TextAreasAreResizable);
+        settings->webgl = State(preferences.WebGL);
+        if (preferences.DefaultFontFamily is { } fonts)
+        {
+            if (fonts.Standard is { } standard) CefString.Set(&settings->standard_font_family, standard);
+            if (fonts.Serif is { } serif) CefString.Set(&settings->serif_font_family, serif);
+            if (fonts.SansSerif is { } sansSerif) CefString.Set(&settings->sans_serif_font_family, sansSerif);
+            if (fonts.Monospace is { } monospace) CefString.Set(&settings->fixed_font_family, monospace);
+            if (fonts.Cursive is { } cursive) CefString.Set(&settings->cursive_font_family, cursive);
+            if (fonts.Fantasy is { } fantasy) CefString.Set(&settings->fantasy_font_family, fantasy);
+        }
+    }
+
+    // CEF copies the settings, so the strings are freed once the browser view exists.
+    private static void ClearWebPreferenceStrings(cef_browser_settings_t* settings)
+    {
+        CefString.Clear(&settings->standard_font_family);
+        CefString.Clear(&settings->serif_font_family);
+        CefString.Clear(&settings->sans_serif_font_family);
+        CefString.Clear(&settings->fixed_font_family);
+        CefString.Clear(&settings->cursive_font_family);
+        CefString.Clear(&settings->fantasy_font_family);
     }
 
     /// <summary>The window's page. Electron's <c>win.webContents</c>.</summary>
@@ -206,6 +336,15 @@ public sealed unsafe class BrowserWindow
 
     /// <summary>The open window with <paramref name="id"/>, or null. Electron's <c>BrowserWindow.fromId()</c>.</summary>
     public static BrowserWindow? FromId(int id) => GetAllWindows().FirstOrDefault(w => w.Id == id);
+
+    /// <summary>The window this one belongs to, or null. Electron's <c>win.getParentWindow()</c>.</summary>
+    public BrowserWindow? GetParentWindow() => _options.Parent;
+
+    /// <summary>The open windows that belong to this one. Electron's <c>win.getChildWindows()</c>.</summary>
+    public IReadOnlyList<BrowserWindow> GetChildWindows() => CefThread.InvokeOnUi(() => (IReadOnlyList<BrowserWindow>)[.. _children]);
+
+    /// <summary>Whether this window disables its parent while shown. Electron's <c>win.isModal()</c>.</summary>
+    public bool IsModal => _options.Modal;
 
     /// <summary>The page set its title; cancel to keep the window's title. Electron's <c>page-title-updated</c>.</summary>
     public event EventHandler<PageTitleUpdatedEventArgs>? PageTitleUpdated;
@@ -261,7 +400,8 @@ public sealed unsafe class BrowserWindow
     public bool IsDestroyed => Query(_ => false, true);
 
     /// <summary>Navigates the window's page. Electron's <c>win.loadURL()</c>.</summary>
-    public void LoadUrl(string url) => WebContents.LoadUrl(url);
+    /// <inheritdoc cref="Oriel.WebContents.LoadUrl" path="/param|/exception"/>
+    public void LoadUrl(string url, LoadUrlOptions? options = null) => WebContents.LoadUrl(url, options);
 
     /// <summary>Shows and focuses the window. Electron's <c>win.show()</c>.</summary>
     public void Show() => Command(w =>
@@ -698,6 +838,10 @@ public sealed unsafe class BrowserWindow
         _window = null;
 
         lock (s_openGate) s_open.Remove(this);
+        _options.Parent?._children.Remove(this);
+        // macOS closes child windows with their parent; Linux does not. Destroy, as Windows does with owned
+        // windows: a child that vetoed would outlive its parent.
+        foreach (var child in _children.ToArray()) child.Destroy();
         Closed?.Invoke(this, EventArgs.Empty);
         if (s_open.Count == 0) OrielApp.Current.OnAllWindowsClosed();
     }

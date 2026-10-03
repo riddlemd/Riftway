@@ -29,6 +29,7 @@
     check('real origin', window.origin === 'app://test', window.origin);
     try { localStorage.setItem('k', 'v'); check('localStorage', localStorage.getItem('k') === 'v', 'ok'); }
     catch (e) { check('localStorage', false, e.message); }
+    check('setUserAgent before the first navigation', navigator.userAgent === 'OrielTest/0.9', navigator.userAgent);
     check('relative subresource', window.subresourceLoaded === true, window.subresourceLoaded);
 
     try {
