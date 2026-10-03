@@ -11,7 +11,7 @@ BrowserWindow? window = null;
 
 IpcMain.Handle("ping", e => JsonValue.Create("pong:" + e.Args[0].GetString()));
 IpcMain.Handle("add", e => JsonValue.Create(e.Args[0].GetInt32() + e.Args[1].GetInt32()));
-IpcMain.Handle("fail", (Func<IpcMainInvokeEvent, JsonNode?>)(_ => throw new InvalidOperationException("boom")));
+IpcMain.Handle("fail", _ => throw new InvalidOperationException("boom"));
 IpcMain.On("subscribe", e => e.Sender.Send("tick", 42));
 IpcMain.Handle("report", e =>
 {
@@ -28,7 +28,7 @@ IpcMain.Handle("report", e =>
     lines.ForEach(Console.WriteLine);
     failures = count;
     window?.Close();
-    return (JsonNode?)null;
+    return null;
 });
 
 app.Ready += (_, _) =>

@@ -32,13 +32,16 @@ electron/electron). When Electron adds or changes a module, this table changes w
 
 ## Windows and views
 
+Detailed item-by-item status: [parity/browser-window.md](parity/browser-window.md).
+
 | Electron | Oriel | Source | Wave | Status |
 |---|---|---|---|---|
 | `BaseWindow` | `BaseWindow` | CEF (Views) | M2 | — |
-| `BrowserWindow` | `BrowserWindow` | CEF (Views) | M2 | partial: size, title, resizable/minimizable/maximizable, loadURL, focus, close, closed |
+| `BrowserWindow` | `BrowserWindow` | CEF (Views) | M2 | partial: ~60 of ~300 items, see parity/browser-window.md |
 | `View` | `View` | CEF (Views panel) | M2 | — |
 | `WebContentsView` | `WebContentsView` | CEF (Views browser view) | M2 | — |
 | `ImageView` | `ImageView` | CEF + .NET | M5 | — |
+| `win.setSimpleFullScreen` (macOS) | `BrowserWindow.SetSimpleFullScreen` | OS | M2 | — (needed: native full screen blacks out other displays on macOS) |
 | `BrowserView` (deprecated) | not implemented; use `WebContentsView` | — | — | — |
 | `<webview>` tag | `<webview>` | Patch | M7 | — |
 | `window.open` handling | `WebContents.SetWindowOpenHandler` | CEF | M2 | — |

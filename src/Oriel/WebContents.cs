@@ -1,7 +1,9 @@
+using System.ComponentModel;
 using System.Reflection;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using Oriel.Cef;
+using Oriel.Cef.Handlers;
 using Oriel.Cef.Interop;
 
 namespace Oriel;
@@ -18,12 +20,16 @@ public sealed unsafe class WebContents
     private readonly string _isolatedScript;
     private readonly DevToolsChannel _devTools = new();
     private readonly List<string> _pendingDeliveries = [];
+    private readonly CancellationTokenSource _destroyed = new();
 
     private cef_browser_t* _browser;
     private bool _ready;
     private string? _pendingUrl;
     private string? _mainFrameId;
     private int? _isolatedContext;
+    // False until the app's first navigation: events from the initial about:blank are not the app's.
+    private bool _navigated;
+    private string _title = string.Empty;
 
     internal WebContents(string? appPreload)
     {
@@ -32,7 +38,87 @@ public sealed unsafe class WebContents
             ? s_preloadRuntime
             : $"{s_preloadRuntime}\n;(() => {{\n{appPreload}\n}})();\n";
         _devTools.EventReceived += OnDevToolsEvent;
+
+        Display = new DisplayHandler { TitleChanged = OnTitleChanged };
+        Load = new LoadHandler
+        {
+            LoadingStateChanged = loading => Raise(loading ? DidStartLoading : DidStopLoading),
+            LoadEnded = (isMain, _) => { if (isMain) Raise(DidFinishLoad); },
+            LoadFailed = (isMain, code, text, url) =>
+            {
+                if (_navigated) DidFailLoad?.Invoke(this, new LoadFailedEventArgs(code, text, url, isMain));
+            },
+        };
     }
+
+    /// <summary>The page's title changed; cancel to keep the window's title. Electron's <c>page-title-updated</c>.</summary>
+    public event EventHandler<PageTitleUpdatedEventArgs>? PageTitleUpdated;
+
+    /// <summary>The page started loading (the tab spinner starts). Electron's <c>did-start-loading</c>.</summary>
+    public event EventHandler? DidStartLoading;
+
+    /// <summary>The page stopped loading. Electron's <c>did-stop-loading</c>.</summary>
+    public event EventHandler? DidStopLoading;
+
+    /// <summary>The main frame finished loading. Electron's <c>did-finish-load</c>.</summary>
+    public event EventHandler? DidFinishLoad;
+
+    /// <summary>A load failed or was cancelled. Electron's <c>did-fail-load</c>.</summary>
+    public event EventHandler<LoadFailedEventArgs>? DidFailLoad;
+
+    internal DisplayHandler Display { get; }
+
+    internal LoadHandler Load { get; }
+
+    /// <summary>The page's title. Electron's <c>webContents.getTitle()</c>.</summary>
+    public string GetTitle() => CefThread.InvokeOnUi(() => _title);
+
+    /// <summary>The main frame's URL. Electron's <c>webContents.getURL()</c>.</summary>
+    public string GetUrl() => CefThread.InvokeOnUi(() =>
+    {
+        if (_browser is null || !_navigated) return string.Empty;
+        var frame = _browser->get_main_frame(_browser);
+        var url = CefString.ReadUserFree(frame->get_url(frame));
+        NativeObject.Release(frame);
+        return url;
+    });
+
+    /// <summary>Reloads the page. Electron's <c>webContents.reload()</c>.</summary>
+    public void Reload() => CefThread.RunOnUi(() =>
+    {
+        if (_browser is not null && _navigated) _browser->reload(_browser);
+    });
+
+    /// <summary>Loads a local file. Electron's <c>webContents.loadFile()</c>.</summary>
+    /// <param name="path">Absolute, or relative to the current directory.</param>
+    /// <param name="query">Query parameters, encoded into the URL.</param>
+    /// <param name="hash">Fragment, without the leading <c>#</c>.</param>
+    public void LoadFile(string path, IReadOnlyDictionary<string, string>? query = null, string? hash = null)
+    {
+        ArgumentNullException.ThrowIfNull(path);
+        var builder = new UriBuilder(new Uri(Path.GetFullPath(path)));
+        if (query is { Count: > 0 })
+            builder.Query = string.Join('&', query.Select(kv => $"{Uri.EscapeDataString(kv.Key)}={Uri.EscapeDataString(kv.Value)}"));
+        if (!string.IsNullOrEmpty(hash)) builder.Fragment = hash;
+        LoadUrl(builder.Uri.AbsoluteUri);
+    }
+
+    private void Raise(EventHandler? handler)
+    {
+        if (_navigated) handler?.Invoke(this, EventArgs.Empty);
+    }
+
+    private void OnTitleChanged(string title)
+    {
+        if (!_navigated) return;
+        _title = title;
+        var args = new PageTitleUpdatedEventArgs(title);
+        PageTitleUpdated?.Invoke(this, args);
+        if (!args.Cancel) TitleApplied?.Invoke(title);
+    }
+
+    /// <summary>The page title, unless a <see cref="PageTitleUpdated"/> handler cancelled it; the window applies it.</summary>
+    internal Action<string>? TitleApplied { get; set; }
 
     /// <summary>Navigates to <paramref name="url"/>. Electron's <c>webContents.loadURL()</c>.</summary>
     public void LoadUrl(string url)
@@ -47,6 +133,7 @@ public sealed unsafe class WebContents
                 return;
             }
 
+            _navigated = true;
             var frame = _browser->get_main_frame(_browser);
             cef_string_utf16_t value = default;
             CefString.Set(&value, url);
@@ -104,8 +191,12 @@ public sealed unsafe class WebContents
         });
     }
 
+    /// <summary>Cancelled when the page's browser is destroyed.</summary>
+    internal CancellationToken DestroyedToken => _destroyed.Token;
+
     internal void OnBrowserDestroyed()
     {
+        _destroyed.Cancel();
         _devTools.Detach();
         NativeObject.Release(_browser);
         _browser = null;
@@ -186,3 +277,17 @@ public sealed unsafe class WebContents
         return reader.ReadToEnd();
     }
 }
+
+/// <summary>Arguments for <see cref="WebContents.PageTitleUpdated"/>; cancel to keep the window's title.</summary>
+public sealed class PageTitleUpdatedEventArgs(string title) : CancelEventArgs
+{
+    /// <summary>The page's new title.</summary>
+    public string Title { get; } = title;
+}
+
+/// <summary>Arguments for <see cref="WebContents.DidFailLoad"/>; Electron's <c>did-fail-load</c> parameters.</summary>
+/// <param name="ErrorCode">Chromium's net error code (negative).</param>
+/// <param name="ErrorDescription">Chromium's description of the error.</param>
+/// <param name="ValidatedUrl">The URL that failed.</param>
+/// <param name="IsMainFrame">Whether the main frame failed, rather than a subframe.</param>
+public sealed record LoadFailedEventArgs(int ErrorCode, string ErrorDescription, string ValidatedUrl, bool IsMainFrame);

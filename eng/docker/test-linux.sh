@@ -26,6 +26,9 @@ fi
 Xvfb :99 -screen 0 1600x1000x24 > /dev/null 2>&1 &
 export DISPLAY=:99
 sleep 1
+# Maximize, minimize and full screen are window-manager operations.
+openbox > /dev/null 2>&1 &
+sleep 1
 
 status=0
 if [ "$sandbox" = 1 ]; then
