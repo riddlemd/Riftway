@@ -8,4 +8,8 @@
     <NoWarn>$(NoWarn);CS1591;IDE1006;CA1707;CA1708;CA1711;CA1716;CA1720;CA1815;CA2211;CS0649</NoWarn>
   </PropertyGroup>
 
+  <ItemGroup>
+    <InternalsVisibleTo Include="Oriel.Tests" />
+  </ItemGroup>
+
 </Project>

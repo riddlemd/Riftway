@@ -17,15 +17,16 @@ public static unsafe class ProcessArgs
     /// <summary>The original argv on Linux, rebuilt from /proc/self/cmdline.</summary>
     /// <remarks>The buffers live for the process: CEF keeps pointers into argv.</remarks>
     [SupportedOSPlatform("linux")]
-    public static cef_main_args_posix_t Linux()
+    public static cef_main_args_posix_t Linux() => FromCmdline(File.ReadAllBytes("/proc/self/cmdline"));
+
+    /// <summary>argc/argv from /proc/&lt;pid&gt;/cmdline content: NUL-terminated arguments, the last one included.</summary>
+    internal static cef_main_args_posix_t FromCmdline(ReadOnlySpan<byte> cmdline)
     {
-        var cmdline = File.ReadAllBytes("/proc/self/cmdline");
         var data = (byte*)NativeMemory.Alloc((nuint)cmdline.Length + 1);
         cmdline.CopyTo(new Span<byte>(data, cmdline.Length));
         data[cmdline.Length] = 0;
 
-        // Each argument is NUL-terminated, the last one included.
-        var count = cmdline.Count(b => b == 0);
+        var count = cmdline.Count((byte)0);
         var argv = (byte**)NativeMemory.Alloc((nuint)(count + 1), (nuint)sizeof(byte*));
 
         var start = 0;
