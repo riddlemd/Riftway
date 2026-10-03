@@ -10,8 +10,30 @@
 #include <windows.h>
 #endif
 
+#if defined(__linux__) && defined(__aarch64__)
+#include <dlfcn.h>
+#include <sys/auxv.h>
+#endif
+
 #include "include/capi/cef_app_capi.h"
 #include "include/cef_api_hash.h"
+
+#if defined(__linux__) && defined(__aarch64__)
+#define HWCAP_SVE_BIT (1UL << 22)
+#define HWCAP2_SME_ALL ((1UL << 23) | (0x7fUL << 24) | (0x3fUL << 37))
+
+// Chromium's libyuv picks its SME rows on HWCAP2_SME alone, but they are built for armv9-a and open
+// with an SVE instruction, so CPUs with SME and no SVE (Linux VMs on Apple M4+) crash the renderer
+// with SIGILL on video. Defined in the exe, this interposes libcef.so's getauxval; glibc's own calls
+// don't go through it.
+unsigned long getauxval(unsigned long type) {
+  static unsigned long (*real)(unsigned long);
+  if (!real) real = (unsigned long (*)(unsigned long))dlsym(RTLD_NEXT, "getauxval");
+  unsigned long value = real(type);
+  if (type == AT_HWCAP2 && !(real(AT_HWCAP) & HWCAP_SVE_BIT)) value &= ~HWCAP2_SME_ALL;
+  return value;
+}
+#endif
 
 // Custom schemes must be registered identically in every process; the browser passes them as
 // "--oriel-custom-schemes=app:89,media:25" (name:cef_scheme_options_t). See SchemeSwitch.cs.

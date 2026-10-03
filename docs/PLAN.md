@@ -154,9 +154,9 @@ with AI help, plus the ongoing Chromium cadence. Estimate, not measured.
 - **Chromium/libyuv SIGILL on SME-without-SVE arm64 (Linux VMs on Apple M4+ hosts):** libyuv picks its
   `*_SME` YUV→RGB rows on HWCAP2_SME alone, but builds them with `-march=armv9-a+sme`, whose prologue
   runs an SVE `cntd`; the renderer dies ("Aw, Snap! SIGILL") on the first software-converted video
-  frame. Linux/Android arm64 only. Tests hide SME with `eng/docker/hide-sme.c` (LD_PRELOAD, applied only
-  when SME is present without SVE). Product decision open: document as a known upstream issue, or ship a
-  workaround. To file upstream with libyuv/Chromium.
+  frame. Linux/Android arm64 only. Worked around in `Oriel.Subprocess.Native`: its own `getauxval`
+  interposes libcef.so's and clears HWCAP2 SME when SVE is absent (see README, Known issues). Remove it
+  once fixed upstream; to file with libyuv/Chromium.
 - **macOS full screen blacks out other displays:** native full screen (`SetFullScreen`, the green
   button) moves the window to its own Space, and the other displays go black. Apps that put content on
   one screen while others stay in use (e.g. KHost's audience screen) must not use it. Oriel needs
