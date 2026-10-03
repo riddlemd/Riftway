@@ -31,12 +31,13 @@ public sealed class IpcMainInvokeEvent : IpcMainEvent
 public static class IpcMain
 {
     private static readonly Lock s_gate = new();
-    private static readonly Dictionary<string, Func<IpcMainInvokeEvent, Task<JsonNode?>>> s_handlers = [];
+    private static readonly Dictionary<string, Func<IpcMainInvokeEvent, CancellationToken, Task<JsonNode?>>> s_handlers = [];
     private static readonly Dictionary<string, List<Action<IpcMainEvent>>> s_listeners = [];
 
     /// <summary>Answers <c>ipcRenderer.invoke(channel, ...)</c>; a thrown exception rejects the page's promise.</summary>
+    /// <remarks>The token is cancelled when the sending page is destroyed, since nobody can receive the answer.</remarks>
     /// <exception cref="InvalidOperationException">The channel already has a handler.</exception>
-    public static void Handle(string channel, Func<IpcMainInvokeEvent, Task<JsonNode?>> handler)
+    public static void Handle(string channel, Func<IpcMainInvokeEvent, CancellationToken, Task<JsonNode?>> handler)
     {
         ArgumentNullException.ThrowIfNull(channel);
         ArgumentNullException.ThrowIfNull(handler);
@@ -52,7 +53,7 @@ public static class IpcMain
     public static void Handle(string channel, Func<IpcMainInvokeEvent, JsonNode?> handler)
     {
         ArgumentNullException.ThrowIfNull(handler);
-        Handle(channel, e => Task.FromResult(handler(e)));
+        Handle(channel, (e, _) => Task.FromResult(handler(e)));
     }
 
     /// <summary>Removes the handler for <paramref name="channel"/>, if any.</summary>
@@ -98,7 +99,7 @@ public static class IpcMain
     internal static async Task<(bool Ok, JsonNode? Value, string? Error)> DispatchInvokeAsync(
         WebContents sender, string channel, IReadOnlyList<JsonElement> args)
     {
-        Func<IpcMainInvokeEvent, Task<JsonNode?>>? handler;
+        Func<IpcMainInvokeEvent, CancellationToken, Task<JsonNode?>>? handler;
         lock (s_gate) s_handlers.TryGetValue(channel, out handler);
 
         // Electron's wording, so page code written for Electron matches on it unchanged.
@@ -106,7 +107,7 @@ public static class IpcMain
 
         try
         {
-            return (true, await handler(new IpcMainInvokeEvent(sender, args)).ConfigureAwait(false), null);
+            return (true, await handler(new IpcMainInvokeEvent(sender, args), sender.DestroyedToken).ConfigureAwait(false), null);
         }
         catch (Exception ex)
         {

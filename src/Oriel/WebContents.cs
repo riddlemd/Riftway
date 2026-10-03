@@ -18,6 +18,7 @@ public sealed unsafe class WebContents
     private readonly string _isolatedScript;
     private readonly DevToolsChannel _devTools = new();
     private readonly List<string> _pendingDeliveries = [];
+    private readonly CancellationTokenSource _destroyed = new();
 
     private cef_browser_t* _browser;
     private bool _ready;
@@ -104,8 +105,12 @@ public sealed unsafe class WebContents
         });
     }
 
+    /// <summary>Cancelled when the page's browser is destroyed.</summary>
+    internal CancellationToken DestroyedToken => _destroyed.Token;
+
     internal void OnBrowserDestroyed()
     {
+        _destroyed.Cancel();
         _devTools.Detach();
         NativeObject.Release(_browser);
         _browser = null;

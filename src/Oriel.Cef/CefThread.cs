@@ -18,6 +18,28 @@ public static unsafe class CefThread
         else PostUi(action);
     }
 
+    /// <summary>Runs <paramref name="func"/> on the UI thread and returns its result, waiting when called
+    /// from another thread.</summary>
+    /// <remarks>Must not be called from a thread the UI thread is itself waiting on, or both stop.</remarks>
+    public static T InvokeOnUi<T>(Func<T> func)
+    {
+        ArgumentNullException.ThrowIfNull(func);
+        if (IsOnUiThread) return func();
+
+        T result = default!;
+        Exception? error = null;
+        using var done = new ManualResetEventSlim();
+        PostUi(() =>
+        {
+            try { result = func(); }
+            catch (Exception e) { error = e; }
+            finally { done.Set(); }
+        });
+        done.Wait();
+        if (error is not null) System.Runtime.ExceptionServices.ExceptionDispatchInfo.Throw(error);
+        return result;
+    }
+
     /// <summary>Queues <paramref name="action"/> on the UI thread.</summary>
     /// <exception cref="InvalidOperationException">CEF is not running, so nothing would run it.</exception>
     public static void PostUi(Action action)
@@ -27,6 +49,16 @@ public static unsafe class CefThread
         // cef_post_task takes the task's only reference; CEF releases it after execute.
         var task = new Task(action);
         if (CefNative.cef_post_task(cef_thread_id_t.TID_UI, task.Native) == 0)
+            throw new InvalidOperationException("CEF's UI thread is not running.");
+    }
+
+    /// <summary>Queues <paramref name="action"/> on the UI thread after <paramref name="delay"/>.</summary>
+    /// <exception cref="InvalidOperationException">CEF is not running, so nothing would run it.</exception>
+    public static void PostUiDelayed(Action action, TimeSpan delay)
+    {
+        ArgumentNullException.ThrowIfNull(action);
+        var task = new Task(action);
+        if (CefNative.cef_post_delayed_task(cef_thread_id_t.TID_UI, task.Native, (long)delay.TotalMilliseconds) == 0)
             throw new InvalidOperationException("CEF's UI thread is not running.");
     }
 

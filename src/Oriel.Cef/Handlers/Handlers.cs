@@ -173,6 +173,15 @@ public sealed unsafe class WindowDelegate
         Native->can_resize = &CanResize;
         Native->can_minimize = &CanMinimize;
         Native->can_maximize = &CanMaximize;
+
+        Native->on_window_activation_changed = &OnActivationChanged;
+        Native->on_window_bounds_changed = &OnBoundsChanged;
+        Native->on_window_fullscreen_transition = &OnFullscreenTransition;
+        Native->is_frameless = &IsFrameless;
+        Native->get_initial_show_state = &GetInitialShowState;
+        // The window delegate is also its root view's delegate, which owns size limits.
+        Native->@base.@base.get_minimum_size = &GetMinimumSize;
+        Native->@base.@base.get_maximum_size = &GetMaximumSize;
     }
 
     public cef_window_delegate_t* Native { get; }
@@ -189,6 +198,80 @@ public sealed unsafe class WindowDelegate
 
     /// <summary>Asked when the user or code closes the window; true lets it close.</summary>
     public WindowPredicate? Closing { get; init; }
+
+    /// <summary>The window gained (true) or lost (false) activation.</summary>
+    public Action<bool>? ActivationChanged { get; init; }
+
+    /// <summary>The window moved or resized; bounds in screen DIPs.</summary>
+    public Action<cef_rect_t>? BoundsChanged { get; init; }
+
+    /// <summary>A full-screen transition started (false) or completed (true).</summary>
+    public Action<bool>? FullscreenTransition { get; init; }
+
+    /// <summary>No title bar or border.</summary>
+    public bool Frameless { get; init; }
+
+    /// <summary>How the window first appears.</summary>
+    public cef_show_state_t InitialShowState { get; init; } = cef_show_state_t.CEF_SHOW_STATE_NORMAL;
+
+    /// <summary>The smallest content size, or 0×0 for none.</summary>
+    public cef_size_t MinimumSize { get; set; }
+
+    /// <summary>The largest content size, or 0×0 for none.</summary>
+    public cef_size_t MaximumSize { get; set; }
+
+    [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])]
+    private static void OnActivationChanged(cef_window_delegate_t* self, cef_window_t* window, int active)
+    {
+        var owner = NativeObject.Owner<WindowDelegate>(self);
+        if (owner.ActivationChanged is { } callback) Guard.Run(() => callback(active != 0));
+        NativeObject.Release(window);
+    }
+
+    [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])]
+    private static void OnBoundsChanged(cef_window_delegate_t* self, cef_window_t* window, cef_rect_t* bounds)
+    {
+        var owner = NativeObject.Owner<WindowDelegate>(self);
+        var value = *bounds;
+        if (owner.BoundsChanged is { } callback) Guard.Run(() => callback(value));
+        NativeObject.Release(window);
+    }
+
+    [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])]
+    private static void OnFullscreenTransition(cef_window_delegate_t* self, cef_window_t* window, int isCompleted)
+    {
+        var owner = NativeObject.Owner<WindowDelegate>(self);
+        if (owner.FullscreenTransition is { } callback) Guard.Run(() => callback(isCompleted != 0));
+        NativeObject.Release(window);
+    }
+
+    [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])]
+    private static int IsFrameless(cef_window_delegate_t* self, cef_window_t* window)
+    {
+        NativeObject.Release(window);
+        return NativeObject.Owner<WindowDelegate>(self).Frameless ? 1 : 0;
+    }
+
+    [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])]
+    private static cef_show_state_t GetInitialShowState(cef_window_delegate_t* self, cef_window_t* window)
+    {
+        NativeObject.Release(window);
+        return NativeObject.Owner<WindowDelegate>(self).InitialShowState;
+    }
+
+    [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])]
+    private static cef_size_t GetMinimumSize(cef_view_delegate_t* self, cef_view_t* view)
+    {
+        NativeObject.Release(view);
+        return NativeObject.Owner<WindowDelegate>(self).MinimumSize;
+    }
+
+    [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])]
+    private static cef_size_t GetMaximumSize(cef_view_delegate_t* self, cef_view_t* view)
+    {
+        NativeObject.Release(view);
+        return NativeObject.Owner<WindowDelegate>(self).MaximumSize;
+    }
 
     [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])]
     private static void OnWindowCreated(cef_window_delegate_t* self, cef_window_t* window)

@@ -151,6 +151,11 @@ with AI help, plus the ongoing Chromium cadence. Estimate, not measured.
   NativeAOT `Oriel.Subprocess`; moving it to the native one comes with the macOS sandbox, which links
   CEF's sandbox library into the helper.
 - **Linux sandbox:** Ubuntu 24.04+ blocks Chromium's sandbox unless an AppArmor profile is installed.
+- **macOS full screen blacks out other displays:** native full screen (`SetFullScreen`, the green
+  button) moves the window to its own Space, and the other displays go black. Apps that put content on
+  one screen while others stay in use (e.g. KHost's audience screen) must not use it. Oriel needs
+  Electron's `setSimpleFullScreen` (macOS: fill the display without a new Space, hide menu bar and Dock
+  via `NSApplication.presentationOptions`), and should document native vs simple full screen.
 - **Size:** ~130–175 MB compressed per platform, comparable to Electron.
 - **Blazor over a message hop:** render batches cross browser → renderer; very busy UIs may need a
   faster path.
