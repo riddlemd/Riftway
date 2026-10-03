@@ -24,6 +24,17 @@ public sealed record BrowserWindowOptions
 
     /// <summary>Whether the window can be maximized.</summary>
     public bool Maximizable { get; init; } = true;
+
+    /// <summary>Settings for the page. Electron's <c>webPreferences</c>.</summary>
+    public WebPreferences WebPreferences { get; init; } = new();
+}
+
+/// <summary>Settings for a window's page; Electron's <c>WebPreferences</c>.</summary>
+public sealed record WebPreferences
+{
+    /// <summary>A script run before the page's own, in an isolated world, with <c>oriel.ipcRenderer</c>
+    /// and <c>oriel.contextBridge</c>. Electron's <c>preload</c>.</summary>
+    public string? Preload { get; init; }
 }
 
 /// <summary>A top-level window hosting web content; Electron's <c>BrowserWindow</c>.</summary>
@@ -40,8 +51,6 @@ public sealed unsafe class BrowserWindow
 
     private cef_browser_view_t* _browserView;
     private cef_window_t* _window;
-    private cef_browser_t* _browser;
-    private string? _pendingUrl;
 
     /// <summary>Creates and shows a window.</summary>
     /// <exception cref="InvalidOperationException">The application is not ready yet.</exception>
@@ -50,6 +59,7 @@ public sealed unsafe class BrowserWindow
         if (!OrielApp.Current.IsReady) throw new InvalidOperationException("Create windows after OrielApp.Ready.");
 
         _options = options ?? new BrowserWindowOptions();
+        WebContents = new WebContents(_options.WebPreferences.Preload is { } preload ? File.ReadAllText(preload) : null);
         _viewDelegate = new BrowserViewDelegate { BrowserCreated = OnBrowserCreated, BrowserDestroyed = OnBrowserDestroyed };
         _windowDelegate = new WindowDelegate
         {
@@ -62,39 +72,46 @@ public sealed unsafe class BrowserWindow
         };
 
         var settings = new cef_browser_settings_t { size = (nuint)sizeof(cef_browser_settings_t) };
+        // A document must exist before DevTools answers commands, and the preload is registered
+        // over DevTools before the real page loads.
         cef_string_utf16_t url = default;
+        CefString.Set(&url, "about:blank");
 
         NativeObject.AddRef(_client.Native);
         NativeObject.AddRef(_viewDelegate.Native);
         _browserView = CefNative.cef_browser_view_create(_client.Native, &url, &settings, null, null, _viewDelegate.Native);
+        CefString.Clear(&url);
 
         s_open.Add(this);
         NativeObject.AddRef(_windowDelegate.Native);
         _window = CefNative.cef_window_create_top_level(_windowDelegate.Native);
     }
 
+    /// <summary>The window's page. Electron's <c>win.webContents</c>.</summary>
+    public WebContents WebContents { get; }
+
     /// <summary>The window closed. Electron's <c>closed</c>.</summary>
     public event EventHandler? Closed;
 
     /// <summary>Navigates the window's page. Electron's <c>win.loadURL()</c>.</summary>
-    public void LoadUrl(string url)
+    public void LoadUrl(string url) => WebContents.LoadUrl(url);
+
+    /// <summary>Brings the window to the front and gives it focus. Electron's <c>win.focus()</c>.</summary>
+    public void Focus() => CefThread.RunOnUi(() =>
     {
-        ArgumentNullException.ThrowIfNull(url);
+        if (_window is not null) _window->activate(_window);
+    });
 
-        // The browser exists once the view joins a window; until then the URL waits.
-        if (_browser is null)
-        {
-            _pendingUrl = url;
-            return;
-        }
-
-        var frame = _browser->get_main_frame(_browser);
-        cef_string_utf16_t value = default;
-        CefString.Set(&value, url);
-        frame->load_url(frame, &value);
-        CefString.Clear(&value);
-        NativeObject.Release(frame);
+    internal static void FocusAll()
+    {
+        foreach (var window in s_open.ToArray()) window.Focus();
     }
+
+    /// <summary>Closes the window as the user would: the page may still cancel via beforeunload. Electron's <c>win.close()</c>.</summary>
+    public void Close() => CefThread.RunOnUi(() =>
+    {
+        if (_window is not null) _window->close(_window);
+    });
 
     private void OnWindowCreated(cef_window_t* window)
     {
@@ -112,34 +129,21 @@ public sealed unsafe class BrowserWindow
         window->show(window);
     }
 
-    private void OnBrowserCreated(cef_browser_t* browser)
-    {
-        NativeObject.AddRef(browser);
-        _browser = browser;
-
-        if (_pendingUrl is { } url)
-        {
-            _pendingUrl = null;
-            LoadUrl(url);
-        }
-    }
+    private void OnBrowserCreated(cef_browser_t* browser) => WebContents.OnBrowserCreated(browser);
 
     private bool OnClosing(cef_window_t* window)
     {
-        if (_browser is null) return true;
+        var browser = WebContents.Browser;
+        if (browser is null) return true;
 
         // Lets the page run beforeunload first; the window closes once the browser has gone.
-        var host = _browser->get_host(_browser);
+        var host = browser->get_host(browser);
         var canClose = host->try_close_browser(host) != 0;
         NativeObject.Release(host);
         return canClose;
     }
 
-    private void OnBrowserDestroyed(cef_browser_t* browser)
-    {
-        NativeObject.Release(_browser);
-        _browser = null;
-    }
+    private void OnBrowserDestroyed(cef_browser_t* browser) => WebContents.OnBrowserDestroyed();
 
     private void OnWindowDestroyed(cef_window_t* window)
     {

@@ -17,6 +17,8 @@
 
   <ItemGroup>
     <None Include="buildTransitive\**" Pack="true" PackagePath="buildTransitive\" />
+    <!-- Injected into every page over DevTools; named by path so WebContents can find them. -->
+    <EmbeddedResource Include="Ipc/*.js" LogicalName="Oriel.Ipc.%(Filename)%(Extension)" />
   </ItemGroup>
 
 </Project>

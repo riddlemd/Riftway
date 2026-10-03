@@ -82,12 +82,29 @@ public sealed unsafe class BrowserProcessHandler
     {
         Native = NativeObject.Create<cef_browser_process_handler_t>(this);
         Native->on_context_initialized = &OnContextInitialized;
+        Native->on_already_running_app_relaunch = &OnAlreadyRunningAppRelaunch;
     }
 
     public cef_browser_process_handler_t* Native { get; }
 
     /// <summary>CEF is initialised; runs on the UI thread.</summary>
     public Action? ContextInitialized { get; init; }
+
+    /// <summary>Another launch of the app found this instance running and handed over its command line
+    /// and working directory.</summary>
+    public Action<string, string>? AlreadyRunningAppRelaunch { get; init; }
+
+    // Always answers "handled": unhandled, CEF opens a default Chrome-styled browser window.
+    [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])]
+    private static int OnAlreadyRunningAppRelaunch(cef_browser_process_handler_t* self, cef_command_line_t* commandLine, cef_string_utf16_t* currentDirectory)
+    {
+        var owner = NativeObject.Owner<BrowserProcessHandler>(self);
+        var line = CefString.ReadUserFree(commandLine->get_command_line_string(commandLine));
+        var directory = CefString.Read(currentDirectory);
+        if (owner.AlreadyRunningAppRelaunch is { } callback) Guard.Run(() => callback(line, directory));
+        NativeObject.Release(commandLine);
+        return 1;
+    }
 
     [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])]
     private static void OnContextInitialized(cef_browser_process_handler_t* self)
@@ -224,5 +241,34 @@ public sealed unsafe class WindowDelegate
     {
         NativeObject.Release(window);
         return NativeObject.Owner<WindowDelegate>(self).Maximizable ? 1 : 0;
+    }
+}
+
+/// <summary>A raw DevTools protocol message (UTF-8 JSON) delivered to a managed callback.</summary>
+public delegate void DevToolsMessageCallback(ReadOnlySpan<byte> message);
+
+/// <summary><c>cef_dev_tools_message_observer_t</c>: every DevTools protocol result and event for one browser.</summary>
+public sealed unsafe class DevToolsMessageObserver
+{
+    public DevToolsMessageObserver(DevToolsMessageCallback callback)
+    {
+        Callback = callback;
+        Native = NativeObject.Create<cef_dev_tools_message_observer_t>(this);
+        Native->on_dev_tools_message = &OnDevToolsMessage;
+    }
+
+    public cef_dev_tools_message_observer_t* Native { get; }
+
+    public DevToolsMessageCallback Callback { get; }
+
+    // Handling the raw message (returning 1) stops CEF from also splitting it into result/event calls.
+    [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])]
+    private static int OnDevToolsMessage(cef_dev_tools_message_observer_t* self, cef_browser_t* browser, void* message, nuint size)
+    {
+        var owner = NativeObject.Owner<DevToolsMessageObserver>(self);
+        try { owner.Callback(new ReadOnlySpan<byte>(message, (int)size)); }
+        catch (Exception e) { Console.Error.WriteLine($"[Oriel] Unhandled exception in a DevTools callback: {e}"); }
+        NativeObject.Release(browser);
+        return 1;
     }
 }

@@ -17,7 +17,7 @@ electron/electron). When Electron adds or changes a module, this table changes w
 
 | Electron | Oriel | Source | Wave | Status |
 |---|---|---|---|---|
-| `app` | `OrielApp` | CEF + OS | M2 | — |
+| `app` | `OrielApp` | CEF + OS | M2 | partial: ready, window-all-closed, second-instance, quit, enableSandbox |
 | `process` | `OrielProcess` | .NET + CEF | M2 | — |
 | `CommandLine` (`app.commandLine`) | `OrielApp.CommandLine` | CEF | M2 | — |
 | Command-line switches | same switches | CEF | M2 | — |
@@ -35,7 +35,7 @@ electron/electron). When Electron adds or changes a module, this table changes w
 | Electron | Oriel | Source | Wave | Status |
 |---|---|---|---|---|
 | `BaseWindow` | `BaseWindow` | CEF (Views) | M2 | — |
-| `BrowserWindow` | `BrowserWindow` | CEF (Views) | M2 | — |
+| `BrowserWindow` | `BrowserWindow` | CEF (Views) | M2 | partial: size, title, resizable/minimizable/maximizable, loadURL, focus, close, closed |
 | `View` | `View` | CEF (Views panel) | M2 | — |
 | `WebContentsView` | `WebContentsView` | CEF (Views browser view) | M2 | — |
 | `ImageView` | `ImageView` | CEF + .NET | M5 | — |
@@ -49,7 +49,7 @@ electron/electron). When Electron adds or changes a module, this table changes w
 
 | Electron | Oriel | Source | Wave | Status |
 |---|---|---|---|---|
-| `webContents` | `WebContents` | CEF | M2 | — |
+| `webContents` | `WebContents` | CEF | M2 | partial: loadURL, send |
 | `webFrameMain` | `WebFrameMain` | CEF | M2 | — |
 | `NavigationHistory` | `NavigationHistory` | CEF | M2 | — |
 | `Debugger` (`webContents.debugger`) | `Debugger` (DevTools protocol) | CEF | M2 | — |
@@ -61,9 +61,9 @@ electron/electron). When Electron adds or changes a module, this table changes w
 
 | Electron | Oriel | Source | Wave | Status |
 |---|---|---|---|---|
-| `ipcMain` | `IpcMain` | CEF | M2 | — |
-| `ipcRenderer` | `oriel.ipcRenderer` in the page | CEF | M2 | — |
-| `contextBridge` | `oriel.contextBridge` (isolated world) | CEF | M2 | — |
+| `ipcMain` | `IpcMain` | CEF | M2 | done: handle, on, removeHandler, removeListener |
+| `ipcRenderer` | `oriel.ipcRenderer` in the page | CEF | M2 | done: invoke, send, on, removeListener |
+| `contextBridge` | `oriel.contextBridge` (isolated world) | CEF | M2 | done: exposeInMainWorld (methods return promises; function args one level deep) |
 | `ipcMainServiceWorker` | `IpcMainServiceWorker` | CEF | M6 | — |
 
 ## Session and network

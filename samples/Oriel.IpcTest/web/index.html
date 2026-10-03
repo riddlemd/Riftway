@@ -1,0 +1,40 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>Oriel IPC test</title>
+<pre id="out">running…</pre>
+<script>
+  // Captured before any await: contextBridge exposures must exist before page scripts run.
+  const exposedAtStart = typeof window.api === 'object';
+  const results = [];
+  const check = (name, pass, detail) => results.push({ name, pass: !!pass, detail: String(detail ?? '') });
+
+  (async () => {
+    check('api exposed before page scripts', exposedAtStart, typeof window.api);
+    check('binding hidden from page', typeof window.__orielIpc === 'undefined', typeof window.__orielIpc);
+    check('oriel runtime hidden from page', typeof window.oriel === 'undefined', typeof window.oriel);
+    check('deliver hook hidden from page', typeof window.__orielDeliver === 'undefined', typeof window.__orielDeliver);
+    check('exposed value crosses', window.api?.version === 1, window.api?.version);
+    check('exposed api is frozen', Object.isFrozen(window.api), Object.isFrozen(window.api));
+
+    try { const v = await api.ping('hello'); check('invoke round trip (string)', v === 'pong:hello', v); }
+    catch (e) { check('invoke round trip (string)', false, e.message); }
+
+    try { const v = await api.add(2, 3); check('invoke round trip (numbers)', v === 5, v); }
+    catch (e) { check('invoke round trip (numbers)', false, e.message); }
+
+    try { await api.fail(); check('handler exception rejects', false, 'resolved'); }
+    catch (e) { check('handler exception rejects', /boom/.test(e.message), e.message); }
+
+    try { await api.unhandled(); check('missing handler rejects', false, 'resolved'); }
+    catch (e) { check('missing handler rejects', /No handler registered/.test(e.message), e.message); }
+
+    const tick = await Promise.race([
+      new Promise((resolve) => api.onTick(resolve)),
+      new Promise((resolve) => setTimeout(() => resolve('timeout'), 5000)),
+    ]);
+    check('send + webContents.send + callback', tick === 42, tick);
+
+    document.getElementById('out').textContent = JSON.stringify(results, null, 2);
+    await api.report(results);
+  })();
+</script>

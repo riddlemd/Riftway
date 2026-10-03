@@ -29,6 +29,10 @@ public sealed unsafe class OrielApp
     /// <summary>Chromium is initialised and windows can be created. Electron's <c>ready</c>.</summary>
     public event EventHandler? Ready;
 
+    /// <summary>The app was launched again while running; the new launch has already exited. Electron's
+    /// <c>second-instance</c>. With no handler the existing windows come to the front.</summary>
+    public event EventHandler<SecondInstanceEventArgs>? SecondInstance;
+
     /// <summary>The last window closed. With no handler the application quits. Electron's <c>window-all-closed</c>.</summary>
     public event EventHandler? WindowAllClosed;
 
@@ -62,7 +66,9 @@ public sealed unsafe class OrielApp
         CefRuntime.Load(CefLayout.MainProcessLibrary());
         if (OperatingSystem.IsMacOS()) MacApplication.Install();
 
-        var app = new AppHandler(new BrowserProcessHandler { ContextInitialized = OnContextInitialized });
+        var app = new AppHandler(
+            new BrowserProcessHandler { ContextInitialized = OnContextInitialized, AlreadyRunningAppRelaunch = OnSecondInstance },
+            OnBeforeCommandLineProcessing);
         var args = CefLayout.MainArgs();
 
         NativeObject.AddRef(app.Native);
@@ -87,7 +93,13 @@ public sealed unsafe class OrielApp
         CefString.Clear(&settings.root_cache_path);
         CefString.Clear(&settings.cache_path);
         CefString.Clear(&settings.browser_subprocess_path);
-        if (!initialized) throw new InvalidOperationException("CEF failed to initialise; see its log output.");
+        // Also false when another instance owns this data directory: CEF has already forwarded this
+        // launch to it (SecondInstance there), and this process should just end.
+        if (!initialized)
+        {
+            Console.Error.WriteLine($"[Oriel] Not started: another instance is using {dataDirectory}, or CEF failed to initialise (see its log).");
+            return 1;
+        }
 
         CefNative.cef_run_message_loop();
         CefNative.cef_shutdown();
@@ -103,9 +115,36 @@ public sealed unsafe class OrielApp
         else Quit();
     }
 
+    private static void OnBeforeCommandLineProcessing(string processType, cef_command_line_t* commandLine)
+    {
+        // Chromium keeps its cookie-encryption key in the Keychain, whose access follows the code
+        // signature; ad-hoc dev builds change it every build and macOS prompts for a password.
+        // TODO(M4): use the real Keychain for signed builds, as Electron's safeStorage does.
+        if (OperatingSystem.IsMacOS() && processType.Length == 0) AppendSwitch(commandLine, "use-mock-keychain");
+    }
+
+    private static void AppendSwitch(cef_command_line_t* commandLine, string name)
+    {
+        cef_string_utf16_t value = default;
+        CefString.Set(&value, name);
+        commandLine->append_switch(commandLine, &value);
+        CefString.Clear(&value);
+    }
+
+    private void OnSecondInstance(string commandLine, string workingDirectory)
+    {
+        if (SecondInstance is { } handler) handler(this, new SecondInstanceEventArgs(commandLine, workingDirectory));
+        else BrowserWindow.FocusAll();
+    }
+
     private void OnContextInitialized()
     {
         IsReady = true;
         Ready?.Invoke(this, EventArgs.Empty);
     }
 }
+
+/// <summary>A relaunch handed to the running instance; Electron's <c>second-instance</c> arguments.</summary>
+/// <param name="CommandLine">The new launch's full command line.</param>
+/// <param name="WorkingDirectory">The new launch's working directory.</param>
+public sealed record SecondInstanceEventArgs(string CommandLine, string WorkingDirectory);

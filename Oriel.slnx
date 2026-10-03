@@ -5,6 +5,7 @@
     <Project Path="src/Oriel.Subprocess/Oriel.Subprocess.csproj" />
   </Folder>
   <Folder Name="/samples/">
+    <Project Path="samples/Oriel.IpcTest/Oriel.IpcTest.csproj" />
     <Project Path="samples/Oriel.Sample/Oriel.Sample.csproj" />
   </Folder>
   <Folder Name="/tests/">
