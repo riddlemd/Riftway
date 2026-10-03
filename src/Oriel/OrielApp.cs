@@ -66,9 +66,21 @@ public sealed unsafe class OrielApp
         CefRuntime.Load(CefLayout.MainProcessLibrary());
         if (OperatingSystem.IsMacOS()) MacApplication.Install();
 
+        var schemes = Protocol.TakePrivilegedSchemes();
+        var schemeSwitch = schemes.Count > 0 ? SchemeSwitch.Format(schemes) : null;
         var app = new AppHandler(
-            new BrowserProcessHandler { ContextInitialized = OnContextInitialized, AlreadyRunningAppRelaunch = OnSecondInstance },
-            OnBeforeCommandLineProcessing);
+            new BrowserProcessHandler
+            {
+                ContextInitialized = OnContextInitialized,
+                AlreadyRunningAppRelaunch = OnSecondInstance,
+                // Every child (the Linux zygote included) must register the same schemes as this process.
+                BeforeChildProcessLaunch = commandLine =>
+                {
+                    if (schemeSwitch is not null) AppendSwitch(commandLine, SchemeSwitch.Name, schemeSwitch);
+                },
+            },
+            OnBeforeCommandLineProcessing,
+            schemes);
         var args = CefLayout.MainArgs();
 
         NativeObject.AddRef(app.Native);
@@ -131,6 +143,17 @@ public sealed unsafe class OrielApp
         CefString.Clear(&value);
     }
 
+    private static void AppendSwitch(cef_command_line_t* commandLine, string name, string value)
+    {
+        cef_string_utf16_t key = default;
+        cef_string_utf16_t text = default;
+        CefString.Set(&key, name);
+        CefString.Set(&text, value);
+        commandLine->append_switch_with_value(commandLine, &key, &text);
+        CefString.Clear(&key);
+        CefString.Clear(&text);
+    }
+
     private void OnSecondInstance(string commandLine, string workingDirectory)
     {
         if (SecondInstance is { } handler) handler(this, new SecondInstanceEventArgs(commandLine, workingDirectory));
@@ -139,6 +162,8 @@ public sealed unsafe class OrielApp
 
     private void OnContextInitialized()
     {
+        // Before Ready, so the first window's page can already load from a custom scheme.
+        Protocol.OnContextInitialized();
         IsReady = true;
         Ready?.Invoke(this, EventArgs.Empty);
     }

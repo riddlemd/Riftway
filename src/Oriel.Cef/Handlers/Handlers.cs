@@ -39,18 +39,37 @@ internal static class Guard
 /// <summary>A process's command line before Chromium reads it; <paramref name="processType"/> is empty in the browser process.</summary>
 public unsafe delegate void CommandLineCallback(string processType, cef_command_line_t* commandLine);
 
+/// <summary>A child process's command line before it launches.</summary>
+public unsafe delegate void ChildCommandLineCallback(cef_command_line_t* commandLine);
+
 /// <summary><c>cef_app_t</c>: process-level hooks.</summary>
 public sealed unsafe class AppHandler
 {
     private readonly BrowserProcessHandler? _browserProcess;
 
-    public AppHandler(BrowserProcessHandler? browserProcess = null, CommandLineCallback? beforeCommandLineProcessing = null)
+    public AppHandler(
+        BrowserProcessHandler? browserProcess = null,
+        CommandLineCallback? beforeCommandLineProcessing = null,
+        IReadOnlyList<CustomScheme>? customSchemes = null)
     {
+        CustomSchemes = customSchemes ?? [];
         _browserProcess = browserProcess;
         BeforeCommandLineProcessing = beforeCommandLineProcessing;
         Native = NativeObject.Create<cef_app_t>(this);
         if (browserProcess is not null) Native->get_browser_process_handler = &GetBrowserProcessHandler;
         if (beforeCommandLineProcessing is not null) Native->on_before_command_line_processing = &OnBeforeCommandLineProcessing;
+        if (CustomSchemes.Count > 0) Native->on_register_custom_schemes = &OnRegisterCustomSchemes;
+    }
+
+    /// <summary>Schemes registered in this process; every process must register the same set.</summary>
+    public IReadOnlyList<CustomScheme> CustomSchemes { get; }
+
+    // The registrar is scoped to the call (cef_base_scoped_t), so it is never released.
+    [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])]
+    private static void OnRegisterCustomSchemes(cef_app_t* self, cef_scheme_registrar_t* registrar)
+    {
+        var owner = NativeObject.Owner<AppHandler>(self);
+        Guard.Run(() => SchemeSwitch.Register(registrar, owner.CustomSchemes));
     }
 
     public cef_app_t* Native { get; }
@@ -83,6 +102,7 @@ public sealed unsafe class BrowserProcessHandler
         Native = NativeObject.Create<cef_browser_process_handler_t>(this);
         Native->on_context_initialized = &OnContextInitialized;
         Native->on_already_running_app_relaunch = &OnAlreadyRunningAppRelaunch;
+        Native->on_before_child_process_launch = &OnBeforeChildProcessLaunch;
     }
 
     public cef_browser_process_handler_t* Native { get; }
@@ -93,6 +113,17 @@ public sealed unsafe class BrowserProcessHandler
     /// <summary>Another launch of the app found this instance running and handed over its command line
     /// and working directory.</summary>
     public Action<string, string>? AlreadyRunningAppRelaunch { get; init; }
+
+    /// <summary>A child process (zygote, renderer, GPU, utility) is about to launch with this command line.</summary>
+    public ChildCommandLineCallback? BeforeChildProcessLaunch { get; init; }
+
+    [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])]
+    private static void OnBeforeChildProcessLaunch(cef_browser_process_handler_t* self, cef_command_line_t* commandLine)
+    {
+        var owner = NativeObject.Owner<BrowserProcessHandler>(self);
+        if (owner.BeforeChildProcessLaunch is { } callback) Guard.Run(() => callback(commandLine));
+        NativeObject.Release(commandLine);
+    }
 
     // Always answers "handled": unhandled, CEF opens a default Chrome-styled browser window.
     [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])]

@@ -20,11 +20,19 @@ Xvfb :99 -screen 0 1600x1000x24 > /dev/null 2>&1 &
 export DISPLAY=:99
 sleep 1
 
+status=0
 if [ "$sandbox" = 1 ]; then
   chown root:root /work/out/app/chrome-sandbox
   chmod 4755 /work/out/app/chrome-sandbox
   chmod -R a+rX /work/out
-  exec runuser -u oriel -- env DISPLAY=:99 "/work/out/app/$exe" --enable-sandbox 2> /work/app.err
+  runuser -u oriel -- env DISPLAY=:99 ORIEL_TRACE_DEVTOOLS="${ORIEL_TRACE_DEVTOOLS:-}" "/work/out/app/$exe" --enable-sandbox 2> /work/app.err || status=$?
 else
-  exec "/work/out/app/$exe" 2> /work/app.err
+  "/work/out/app/$exe" 2> /work/app.err || status=$?
 fi
+
+# A failing run's stderr is the only place Chromium explains itself.
+if [ "$status" != 0 ]; then
+  echo "--- stderr (last 60 lines) ---"
+  tail -60 /work/app.err
+fi
+exit $status
