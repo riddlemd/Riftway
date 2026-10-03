@@ -18,6 +18,9 @@ internal sealed unsafe class ResourceHandler
 {
     private const int ErrFailed = -2;
 
+    // Each request's lifecycle on stderr, for diagnosing requests that never finish.
+    private static readonly bool s_trace = Environment.GetEnvironmentVariable("ORIEL_TRACE_PROTOCOL") == "1";
+
     private readonly ProtocolRequest _request;
     private readonly Func<ProtocolRequest, CancellationToken, Task<ProtocolResponse>> _handler;
     private readonly CancellationTokenSource _cancellation = new();
@@ -49,6 +52,7 @@ internal sealed unsafe class ResourceHandler
     {
         NativeObject.Release(request);
         var owner = NativeObject.Owner<ResourceHandler>(self);
+        owner.Trace("open");
 
         // Answered asynchronously: the callback (whose reference we now hold) continues the request.
         *handleRequest = 0;
@@ -86,6 +90,7 @@ internal sealed unsafe class ResourceHandler
             _remaining = _range?.Length ?? _totalLength ?? -1;
         }
 
+        Trace($"complete status={response.StatusCode} length={_totalLength?.ToString(CultureInfo.InvariantCulture) ?? "?"} range={_range}");
         callback->cont(callback);
         NativeObject.Release(callback);
     }
@@ -105,6 +110,7 @@ internal sealed unsafe class ResourceHandler
             }
 
             var skipped = owner.SkipBody(bytesToSkip);
+            owner.Trace($"skip {bytesToSkip} -> {skipped}");
             *bytesSkipped = skipped > 0 ? skipped : ErrFailed;
             return skipped > 0 ? 1 : 0;
         }
@@ -183,6 +189,7 @@ internal sealed unsafe class ResourceHandler
         CefNative.cef_string_multimap_free(map);
 
         *responseLength = _remaining;
+        Trace($"headers status={status} responseLength={_remaining}");
     }
 
     [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])]
@@ -194,6 +201,7 @@ internal sealed unsafe class ResourceHandler
         {
             if (owner._body is null || owner._remaining == 0)
             {
+                owner.Trace("read done");
                 *bytesRead = 0;
                 return 0;
             }
@@ -202,6 +210,7 @@ internal sealed unsafe class ResourceHandler
             try
             {
                 var read = owner._body.Read(new Span<byte>(dataOut, limit));
+                if (read == 0) owner.Trace("read eof");
                 if (owner._remaining > 0) owner._remaining -= read;
                 *bytesRead = read;
                 return read > 0 ? 1 : 0;
@@ -218,6 +227,7 @@ internal sealed unsafe class ResourceHandler
     private static void Cancel(cef_resource_handler_t* self)
     {
         var owner = NativeObject.Owner<ResourceHandler>(self);
+        owner.Trace("cancel");
         owner._cancellation.Cancel();
         lock (owner._gate)
         {
@@ -225,6 +235,11 @@ internal sealed unsafe class ResourceHandler
             owner._body?.Dispose();
             owner._body = null;
         }
+    }
+
+    private void Trace(string step)
+    {
+        if (s_trace) Console.Error.WriteLine($"[protocol {Environment.CurrentManagedThreadId}] {_request.Method} {_request.Url} {step}");
     }
 
     private static void SetString(cef_response_t* response, delegate* unmanaged[Cdecl]<cef_response_t*, cef_string_utf16_t*, void>* setter, string value)

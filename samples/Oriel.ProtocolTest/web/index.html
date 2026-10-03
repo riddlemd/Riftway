@@ -3,7 +3,6 @@
 <title>Oriel protocol test</title>
 <script src="app.js"></script>
 <pre id="out">running…</pre>
-<video id="video" muted preload="auto"></video>
 <script>
   const results = [];
   const check = (name, pass, detail) => {
@@ -12,13 +11,16 @@
   };
   const bytes = async (response) => new Uint8Array(await response.arrayBuffer());
 
-  const videoChecks = () => new Promise((resolve) => {
-    const video = document.getElementById('video');
+  // Plays src in a fresh element; resolves with how it ended, never hangs past 10 s.
+  const playAndSeek = (src) => new Promise((resolve) => {
+    const video = document.createElement('video');
+    video.muted = true;
+    document.body.append(video);
     const timer = setTimeout(() => resolve(['timeout', video.error?.message]), 10000);
     video.addEventListener('error', () => { clearTimeout(timer); resolve(['error', video.error?.message]); });
     video.addEventListener('loadedmetadata', () => { video.currentTime = 1.0; }, { once: true });
     video.addEventListener('seeked', () => { clearTimeout(timer); resolve(['seeked', video.duration]); }, { once: true });
-    video.src = 'video.webm';
+    video.src = src;
   });
 
   (async () => {
@@ -71,7 +73,14 @@
       check('5 MB streamed body', ok, `len=${body.length}`);
     } catch (e) { check('5 MB streamed body', false, e.message); }
 
-    const [outcome, detail] = await videoChecks();
+    // Control: the same file played from memory, so a failure below isolates custom-scheme streaming.
+    try {
+      const blob = await (await fetch('video.webm')).blob();
+      const [outcome, detail] = await playAndSeek(URL.createObjectURL(blob));
+      check('video from blob (control)', outcome === 'seeked', `${outcome} ${detail}`);
+    } catch (e) { check('video from blob (control)', false, e.message); }
+
+    const [outcome, detail] = await playAndSeek('video.webm');
     check('video plays and seeks (range requests)', outcome === 'seeked', `${outcome} ${detail}`);
 
     document.getElementById('out').textContent = JSON.stringify(results, null, 2);
