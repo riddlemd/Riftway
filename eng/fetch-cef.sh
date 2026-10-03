@@ -16,10 +16,14 @@ if [ -z "$platform" ]; then
   esac
 fi
 
+# Git Bash's python3 is the Windows one: it can't open /c/... paths and ends lines with CRLF.
+config="$root/cef.json"
+if command -v cygpath >/dev/null; then config="$(cygpath -m "$config")"; fi
+
 read -r version cdn sha1 < <(python3 -c "
 import json,sys
-c=json.load(open('$root/cef.json'))
-print(c['version'], c['cdn'], c['minimal']['$platform'])")
+c=json.load(open('$config'))
+print(c['version'], c['cdn'], c['minimal']['$platform'])" | tr -d '\r')
 
 name="cef_binary_${version}_${platform}_minimal"
 cache="${ORIEL_CEF_CACHE:-$HOME/.cache/oriel/cef}"

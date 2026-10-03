@@ -41,6 +41,13 @@ public static unsafe class ProcessArgs
         return new() { argc = count, argv = argv };
     }
 
+    /// <summary>The exe's HINSTANCE on Windows; CEF reads the command line from the OS itself.</summary>
+    [SupportedOSPlatform("windows")]
+    public static cef_main_args_win_t Windows() => new() { instance = GetModuleHandleW(null) };
+
+    [DllImport("kernel32.dll")]
+    private static extern nint GetModuleHandleW(char* moduleName);
+
     [DllImport(LibSystem)]
     private static extern int* _NSGetArgc();
 

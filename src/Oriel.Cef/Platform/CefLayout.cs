@@ -20,6 +20,8 @@ public static class CefLayout
             return Path.GetFullPath(Path.Combine(exeDirectory, "..", "Frameworks", MacFramework, MacLibrary));
         if (OperatingSystem.IsLinux())
             return Path.Combine(exeDirectory, "libcef.so");
+        if (OperatingSystem.IsWindows())
+            return Path.Combine(exeDirectory, "libcef.dll");
         throw new PlatformNotSupportedException($"Oriel does not run on {Environment.OSVersion} yet.");
     }
 
@@ -33,20 +35,24 @@ public static class CefLayout
             return Path.GetFullPath(Path.Combine(exeDirectory, "..", "..", "..", MacFramework, MacLibrary));
         if (OperatingSystem.IsLinux())
             return Path.Combine(exeDirectory, "libcef.so");
+        if (OperatingSystem.IsWindows())
+            return Path.Combine(exeDirectory, "libcef.dll");
         throw new PlatformNotSupportedException($"Oriel does not run on {Environment.OSVersion} yet.");
     }
 
     /// <summary>The subprocess exe to name in <c>cef_settings_t.browser_subprocess_path</c>, or null
     /// where CEF finds it itself (macOS looks for the <c>&lt;App&gt; Helper</c> bundles).</summary>
     public static string? SubprocessPath()
-        => OperatingSystem.IsMacOS() ? null : Path.Combine(AppContext.BaseDirectory, SubprocessName);
+        => OperatingSystem.IsMacOS() ? null
+            : Path.Combine(AppContext.BaseDirectory, OperatingSystem.IsWindows() ? SubprocessName + ".exe" : SubprocessName);
 
     /// <summary>The process's original argc/argv.</summary>
     /// <exception cref="PlatformNotSupportedException">Not yet supported on this OS.</exception>
-    public static cef_main_args_posix_t MainArgs()
+    public static cef_main_args_native_t MainArgs()
     {
-        if (OperatingSystem.IsMacOS()) return ProcessArgs.Mac();
-        if (OperatingSystem.IsLinux()) return ProcessArgs.Linux();
+        if (OperatingSystem.IsMacOS()) return new() { posix = ProcessArgs.Mac() };
+        if (OperatingSystem.IsLinux()) return new() { posix = ProcessArgs.Linux() };
+        if (OperatingSystem.IsWindows()) return new() { win = ProcessArgs.Windows() };
         throw new PlatformNotSupportedException($"Oriel does not run on {Environment.OSVersion} yet.");
     }
 }
