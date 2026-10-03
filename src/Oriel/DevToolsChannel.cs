@@ -84,10 +84,19 @@ internal sealed unsafe class DevToolsChannel
         Console.Error.WriteLine($"[devtools {direction}] {(text.Length > 400 ? text[..400] + "…" : text)}");
     }
 
+    // CEF calls this mid-iteration of its observer list; a handler that navigates (or sends any
+    // browser-handled command) re-enters that list, which Chromium's ObserverList flags.
     private void OnMessage(ReadOnlySpan<byte> message)
     {
+        var copy = message.ToArray();
+        CefThread.PostUi(() => Handle(copy));
+    }
+
+    private void Handle(byte[] message)
+    {
+        if (_browser is null) return;
         if (s_trace) Trace("<-", message);
-        using var document = JsonDocument.Parse(message.ToArray());
+        using var document = JsonDocument.Parse(message);
         var root = document.RootElement;
 
         if (root.TryGetProperty("id", out var id))
