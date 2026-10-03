@@ -1,0 +1,11 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+    <IsAotCompatible>true</IsAotCompatible>
+    <RootNamespace>Oriel.Cef</RootNamespace>
+    <!-- Interop/ is generated (tools/cef-interop/generate.sh) and mirrors C names. -->
+    <NoWarn>$(NoWarn);CS1591;IDE1006;CA1707;CA1708;CA1711;CA1716;CA1720;CA1815;CA2211;CS0649</NoWarn>
+  </PropertyGroup>
+
+</Project>

@@ -1,0 +1,11 @@
+<Project>
+  <!-- Clean removes the whole output and intermediate roots, so a stale file from a renamed or
+       deleted source cannot survive a no-incremental build. -->
+  <Target Name="DeepClean" AfterTargets="Clean">
+    <PropertyGroup>
+      <_DeepCleanOutput>$([MSBuild]::NormalizeDirectory('$(MSBuildProjectDirectory)', '$(BaseOutputPath)'))</_DeepCleanOutput>
+      <_DeepCleanIntermediate>$([MSBuild]::NormalizeDirectory('$(MSBuildProjectDirectory)', '$(BaseIntermediateOutputPath)'))</_DeepCleanIntermediate>
+    </PropertyGroup>
+    <RemoveDir Directories="$(_DeepCleanOutput);$(_DeepCleanIntermediate)" />
+  </Target>
+</Project>

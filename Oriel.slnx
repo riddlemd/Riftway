@@ -1,0 +1,13 @@
+<Solution>
+  <Folder Name="/src/">
+    <Project Path="src/Oriel/Oriel.csproj" />
+    <Project Path="src/Oriel.Cef/Oriel.Cef.csproj" />
+    <Project Path="src/Oriel.Subprocess/Oriel.Subprocess.csproj" />
+  </Folder>
+  <Folder Name="/samples/">
+    <Project Path="samples/Oriel.Sample/Oriel.Sample.csproj" />
+  </Folder>
+  <Folder Name="/tests/">
+    <Project Path="tests/Oriel.Tests/Oriel.Tests.csproj" />
+  </Folder>
+</Solution>

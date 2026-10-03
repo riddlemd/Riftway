@@ -1,0 +1,12 @@
+{
+  "version": "154.0.33+ga03e714+chromium-154.0.8037.94",
+  "cdn": "https://cef-builds.spotifycdn.com",
+  "minimal": {
+    "macosarm64": "bfa2358a5fba8d0a016118941d9cda0bf2d06f20",
+    "macosx64": "056aee40d5c32068686808887dd38ef1540b2aba",
+    "windows64": "fced8a0428b7ef68d0df5e288281c673798d3071",
+    "windowsarm64": "0db82cff7cff2f4f85fed32f29c3f2d0d35b25cd",
+    "linux64": "9794ecf85ccd4dfcca42bfaac7a7666004f051e8",
+    "linuxarm64": "87d20c0c25f08841db595c327125d270f5045865"
+  }
+}

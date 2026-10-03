@@ -1,0 +1,79 @@
+root = true
+
+# Analyzer rules promoted from warning to error. A warning in a build that already prints none is
+# an error nobody reads, and every rule below catches something a reviewer would have to spot by
+# eye. Each was measured against this repo first: all of them are at zero violations, so any one
+# that fires from here is new code, not history.
+#
+# Deliberately NOT errors, and why:
+#   CA1062  argument null checks — every project is <Nullable>enable</Nullable>, so the compiler
+#           already enforces this at the boundary and the rule re-litigates it at runtime.
+#   CA2000  dispose before losing scope — 206 hits, almost all test fixtures and objects handed to
+#           DI, whose ownership the analyzer cannot see.
+#   CA1716  identifiers matching keywords — it guards VB consumers. Honouring it means renaming
+#           IMediaPlayer.Stop, a tips range's `to`, and IDialogService's `error` to worse names.
+#   CA5394  insecure randomness — every hit is a shuffle strategy or a drop position, where
+#           System.Random is the right tool and a CSPRNG would be cargo cult.
+#   CA1849/CA1063/CA1816/CA2213/CA1001 — real, but 400+ hits between them. Worth a pass of their
+#           own rather than a rule that blocks every build until it is done.
+
+[*.cs]
+
+# --- Code that cannot be right ------------------------------------------------------------------
+# A setter assigning its own property; Cast<T> that can only throw; a self-assignment; a log call
+# whose placeholders do not match its arguments. None of these have a working spelling.
+dotnet_diagnostic.CA2011.severity = error
+dotnet_diagnostic.CA2013.severity = error
+dotnet_diagnostic.CA2014.severity = error
+dotnet_diagnostic.CA2017.severity = error
+dotnet_diagnostic.CA2021.severity = error
+dotnet_diagnostic.CA2241.severity = error
+dotnet_diagnostic.CA2242.severity = error
+dotnet_diagnostic.CA2245.severity = error
+dotnet_diagnostic.CA2246.severity = error
+dotnet_diagnostic.CA2248.severity = error
+dotnet_diagnostic.CA1806.severity = error
+
+# --- Exceptions ---------------------------------------------------------------------------------
+# `throw ex;` restarts the stack trace at the rethrow, so the line that actually failed is gone by
+# the time anyone reads the log — three characters between the two spellings, and the damage only
+# shows up in an incident. The rest keep an exception something a caller can catch on.
+dotnet_diagnostic.CA2200.severity = error
+dotnet_diagnostic.CA2201.severity = error
+dotnet_diagnostic.CA2207.severity = error
+dotnet_diagnostic.CA2208.severity = error
+dotnet_diagnostic.CA2219.severity = error
+dotnet_diagnostic.CA1065.severity = error
+dotnet_diagnostic.CA2264.severity = error
+
+# --- Async and disposal -------------------------------------------------------------------------
+# A ValueTask consumed twice is undefined, and a dropped one is a call nobody knows the result of.
+# A CancellationToken that stops at a boundary is a token nobody honours.
+dotnet_diagnostic.CA2012.severity = error
+dotnet_diagnostic.CA2016.severity = error
+dotnet_diagnostic.CA2215.severity = error
+
+# --- API shape ----------------------------------------------------------------------------------
+# CA1725 matters more here than in most repos: Oriel is a library, so a parameter name is part of
+# what a consumer writes against.
+dotnet_diagnostic.CA1725.severity = error
+dotnet_diagnostic.CA1050.severity = error
+dotnet_diagnostic.CA1068.severity = error
+dotnet_diagnostic.CA1507.severity = error
+dotnet_diagnostic.CA1710.severity = error
+dotnet_diagnostic.CA2251.severity = error
+dotnet_diagnostic.CA2249.severity = error
+
+# --- Performance --------------------------------------------------------------------------------
+dotnet_diagnostic.CA1854.severity = error
+dotnet_diagnostic.CA1862.severity = error
+
+# --- Security -----------------------------------------------------------------------------------
+# Broken and weak hashes, unsafe XML, and SQL built by hand. A call site that needs a weak hash
+# suppresses it with a justification rather than turning the rule off.
+dotnet_diagnostic.CA2100.severity = error
+dotnet_diagnostic.CA3075.severity = error
+dotnet_diagnostic.CA5350.severity = error
+dotnet_diagnostic.CA5351.severity = error
+dotnet_diagnostic.CA5359.severity = error
+dotnet_diagnostic.CA5364.severity = error

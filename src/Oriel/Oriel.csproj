@@ -1,0 +1,18 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <ItemGroup>
+    <ProjectReference Include="..\Oriel.Cef\Oriel.Cef.csproj" />
+  </ItemGroup>
+
+  <PropertyGroup>
+    <!-- CEF is a C API; the interop layer needs function pointers and raw structs. -->
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+    <IsAotCompatible>true</IsAotCompatible>
+    <GenerateDocumentationFile>true</GenerateDocumentationFile>
+    <IsPackable>true</IsPackable>
+    <Description>Electron for .NET: desktop apps in C# on Chromium (CEF), with Blazor Hybrid.</Description>
+    <PackageTags>cef;chromium;electron;desktop;blazor</PackageTags>
+    <PackageLicenseExpression>MIT</PackageLicenseExpression>
+  </PropertyGroup>
+
+</Project>
