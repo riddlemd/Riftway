@@ -39,4 +39,5 @@ cl /nologo /std:c11 /O2 /W4 /WX /MT /DUNICODE /D_UNICODE "/DCEF_API_VERSION=$ver
     /link (Join-Path $cef 'Release\libcef.lib') /SUBSYSTEM:WINDOWS `
     /MANIFEST:EMBED "/MANIFESTINPUT:$(Join-Path $PSScriptRoot 'Oriel.Subprocess.exe.manifest')"
 if ($LASTEXITCODE -ne 0) { throw "cl failed ($LASTEXITCODE)." }
+& (Join-Path $repo 'eng\check-windows-manifest.ps1') $Out | Out-Host
 $Out
