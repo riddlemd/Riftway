@@ -150,17 +150,43 @@ public sealed unsafe class ClientHandler
 {
     private readonly DisplayHandler? _display;
     private readonly LoadHandler? _load;
+    private readonly JsDialogHandler? _jsDialog;
+    private readonly RequestHandler? _request;
+    private readonly CommandHandler? _command;
 
-    public ClientHandler(DisplayHandler? display = null, LoadHandler? load = null)
+    public ClientHandler(DisplayHandler? display = null, LoadHandler? load = null, JsDialogHandler? jsDialog = null, RequestHandler? request = null,
+        CommandHandler? command = null)
     {
+        _command = command;
         _display = display;
         _load = load;
+        _jsDialog = jsDialog;
+        _request = request;
         Native = NativeObject.Create<cef_client_t>(this);
         if (display is not null) Native->get_display_handler = &GetDisplayHandler;
         if (load is not null) Native->get_load_handler = &GetLoadHandler;
+        if (jsDialog is not null) Native->get_jsdialog_handler = &GetJsDialogHandler;
+        if (request is not null) Native->get_request_handler = &GetRequestHandler;
+        if (command is not null) Native->get_command_handler = &GetCommandHandler;
     }
 
     public cef_client_t* Native { get; }
+
+    [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])]
+    private static cef_command_handler_t* GetCommandHandler(cef_client_t* self)
+    {
+        var handler = NativeObject.Owner<ClientHandler>(self)._command!.Native;
+        NativeObject.AddRef(handler);
+        return handler;
+    }
+
+    [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])]
+    private static cef_jsdialog_handler_t* GetJsDialogHandler(cef_client_t* self)
+    {
+        var handler = NativeObject.Owner<ClientHandler>(self)._jsDialog!.Native;
+        NativeObject.AddRef(handler);
+        return handler;
+    }
 
     [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])]
     private static cef_display_handler_t* GetDisplayHandler(cef_client_t* self)
@@ -176,6 +202,161 @@ public sealed unsafe class ClientHandler
         var handler = NativeObject.Owner<ClientHandler>(self)._load!.Native;
         NativeObject.AddRef(handler);
         return handler;
+    }
+
+    [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])]
+    private static cef_request_handler_t* GetRequestHandler(cef_client_t* self)
+    {
+        var handler = NativeObject.Owner<ClientHandler>(self)._request!.Native;
+        NativeObject.AddRef(handler);
+        return handler;
+    }
+}
+
+/// <summary>Whether a request should go through a <see cref="ResourceRequestHandler"/>; null frame for
+/// requests with no frame (service workers).</summary>
+public unsafe delegate bool ResourceRequestPredicate(cef_frame_t* frame, cef_request_t* request, bool isNavigation);
+
+/// <summary>A request about to be sent; the callback may change it (headers, method, body, referrer).</summary>
+public unsafe delegate void BeforeResourceLoadCallback(cef_frame_t* frame, cef_request_t* request);
+
+/// <summary><c>cef_request_handler_t</c>: browser-level request policy. Only resource requests are hooked;
+/// navigation policy and certificate prompts keep CEF's defaults.</summary>
+public sealed unsafe class RequestHandler
+{
+    private readonly ResourceRequestHandler _resource;
+
+    public RequestHandler(ResourceRequestHandler resource)
+    {
+        _resource = resource;
+        Native = NativeObject.Create<cef_request_handler_t>(this);
+        Native->get_resource_request_handler = &GetResourceRequestHandler;
+    }
+
+    public cef_request_handler_t* Native { get; }
+
+    /// <summary>Which requests reach the resource handler; null for all. Runs on the IO thread.</summary>
+    public ResourceRequestPredicate? Wants { get; init; }
+
+    // Returning null keeps CEF's default handling, so requests nobody asked about cost no extra hop.
+    [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])]
+    private static cef_resource_request_handler_t* GetResourceRequestHandler(
+        cef_request_handler_t* self, cef_browser_t* browser, cef_frame_t* frame, cef_request_t* request,
+        int isNavigation, int isDownload, cef_string_utf16_t* requestInitiator, int* disableDefaultHandling)
+    {
+        var owner = NativeObject.Owner<RequestHandler>(self);
+        var wants = owner.Wants is not { } predicate || Guard.Run(() => predicate(frame, request, isNavigation != 0), false);
+        NativeObject.Release(request);
+        NativeObject.Release(frame);
+        NativeObject.Release(browser);
+        if (!wants) return null;
+        var handler = owner._resource.Native;
+        NativeObject.AddRef(handler);
+        return handler;
+    }
+}
+
+/// <summary><c>cef_resource_request_handler_t</c>: per-request hooks; only <c>on_before_resource_load</c>
+/// is implemented.</summary>
+public sealed unsafe class ResourceRequestHandler
+{
+    public ResourceRequestHandler()
+    {
+        Native = NativeObject.Create<cef_resource_request_handler_t>(this);
+        Native->on_before_resource_load = &OnBeforeResourceLoad;
+    }
+
+    public cef_resource_request_handler_t* Native { get; }
+
+    /// <summary>A request is about to be sent. Runs on the IO thread.</summary>
+    public BeforeResourceLoadCallback? BeforeResourceLoad { get; init; }
+
+    [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])]
+    private static cef_return_value_t OnBeforeResourceLoad(
+        cef_resource_request_handler_t* self, cef_browser_t* browser, cef_frame_t* frame, cef_request_t* request, cef_callback_t* callback)
+    {
+        var owner = NativeObject.Owner<ResourceRequestHandler>(self);
+        if (owner.BeforeResourceLoad is { } handler) Guard.Run(() => handler(frame, request));
+        NativeObject.Release(callback);
+        NativeObject.Release(request);
+        NativeObject.Release(frame);
+        NativeObject.Release(browser);
+        return cef_return_value_t.RV_CONTINUE;
+    }
+}
+
+/// <summary><c>cef_command_handler_t</c>: Chrome commands from keyboard shortcuts and menus (Chrome style only).</summary>
+public sealed unsafe class CommandHandler
+{
+    private readonly HashSet<int> _blocked;
+
+    /// <param name="blockedCommands"><c>IDC_*</c> names from cef_command_ids.h; names this build lacks are ignored.</param>
+    public CommandHandler(IEnumerable<string> blockedCommands)
+    {
+        _blocked = [.. blockedCommands.Select(IdOf).Where(id => id > 0)];
+        Native = NativeObject.Create<cef_command_handler_t>(this);
+        Native->on_chrome_command = &OnChromeCommand;
+        // C++ answers true for these; a missing C callback answers 0, and the browser process then segfaults
+        // intermittently once this handler is in use.
+        Native->is_chrome_app_menu_item_visible = &AppMenuItemAllowed;
+        Native->is_chrome_app_menu_item_enabled = &AppMenuItemAllowed;
+        Native->is_chrome_page_action_icon_visible = &PageActionIconVisible;
+        Native->is_chrome_toolbar_button_visible = &ToolbarButtonVisible;
+    }
+
+    public cef_command_handler_t* Native { get; }
+
+    // Numbers shift between Chromium versions; CEF maps the stable names.
+    private static int IdOf(string name)
+    {
+        var bytes = System.Text.Encoding.ASCII.GetBytes(name + "\0");
+        fixed (byte* p = bytes) return CefNative.cef_id_for_command_id_name(p);
+    }
+
+    [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])]
+    private static int OnChromeCommand(cef_command_handler_t* self, cef_browser_t* browser, int commandId, cef_window_open_disposition_t disposition)
+    {
+        NativeObject.Release(browser);
+        return NativeObject.Owner<CommandHandler>(self)._blocked.Contains(commandId) ? 1 : 0;
+    }
+
+    [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])]
+    private static int AppMenuItemAllowed(cef_command_handler_t* self, cef_browser_t* browser, int commandId)
+    {
+        NativeObject.Release(browser);
+        return 1;
+    }
+
+    [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])]
+    private static int PageActionIconVisible(cef_command_handler_t* self, cef_chrome_page_action_icon_type_t iconType) => 1;
+
+    [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])]
+    private static int ToolbarButtonVisible(cef_command_handler_t* self, cef_chrome_toolbar_button_type_t buttonType) => 1;
+}
+
+/// <summary><c>cef_jsdialog_handler_t</c>: the page's <c>alert</c>, <c>confirm</c> and <c>prompt</c>.</summary>
+public sealed unsafe class JsDialogHandler
+{
+    public JsDialogHandler()
+    {
+        Native = NativeObject.Create<cef_jsdialog_handler_t>(this);
+        Native->on_jsdialog = &OnJsDialog;
+    }
+
+    public cef_jsdialog_handler_t* Native { get; }
+
+    /// <summary>Suppresses every dialog: <c>alert</c> returns at once, <c>confirm</c> false, <c>prompt</c> null.</summary>
+    public bool SuppressAll { get; set; }
+
+    [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])]
+    private static int OnJsDialog(cef_jsdialog_handler_t* self, cef_browser_t* browser, cef_string_utf16_t* originUrl,
+        cef_jsdialog_type_t type, cef_string_utf16_t* message, cef_string_utf16_t* defaultPrompt, cef_jsdialog_callback_t* callback, int* suppressMessage)
+    {
+        // Suppressing rather than answering through the callback: CEF treats instant answers as dialog spam.
+        *suppressMessage = NativeObject.Owner<JsDialogHandler>(self).SuppressAll ? 1 : 0;
+        NativeObject.Release(callback);
+        NativeObject.Release(browser);
+        return 0;
     }
 }
 
@@ -283,6 +464,7 @@ public sealed unsafe class BrowserViewDelegate
 
     public cef_browser_view_delegate_t* Native { get; }
 
+
     public BrowserCallback? BrowserCreated { get; init; }
 
     public BrowserCallback? BrowserDestroyed { get; init; }
@@ -328,6 +510,8 @@ public sealed unsafe class WindowDelegate
         Native->on_window_fullscreen_transition = &OnFullscreenTransition;
         Native->is_frameless = &IsFrameless;
         Native->get_initial_show_state = &GetInitialShowState;
+        Native->get_parent_window = &GetParentWindow;
+        Native->is_window_modal_dialog = &IsWindowModalDialog;
         // The window delegate is also its root view's delegate, which owns size limits.
         Native->@base.@base.get_minimum_size = &GetMinimumSize;
         Native->@base.@base.get_maximum_size = &GetMaximumSize;
@@ -359,6 +543,12 @@ public sealed unsafe class WindowDelegate
 
     /// <summary>No title bar or border.</summary>
     public bool Frameless { get; init; }
+
+    /// <summary>The window this one belongs to, asked once at creation; null for a top-level window.</summary>
+    public Func<nint>? Parent { get; init; }
+
+    /// <summary>Disables the parent while shown. Only applies with a <see cref="Parent"/>.</summary>
+    public bool Modal { get; init; }
 
     /// <summary>How the window first appears.</summary>
     public cef_show_state_t InitialShowState { get; init; } = cef_show_state_t.CEF_SHOW_STATE_NORMAL;
@@ -406,6 +596,23 @@ public sealed unsafe class WindowDelegate
     {
         NativeObject.Release(window);
         return NativeObject.Owner<WindowDelegate>(self).InitialShowState;
+    }
+
+    [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])]
+    private static cef_window_t* GetParentWindow(cef_window_delegate_t* self, cef_window_t* window, int* isMenu, int* canActivateMenu)
+    {
+        NativeObject.Release(window);
+        var owner = NativeObject.Owner<WindowDelegate>(self);
+        var parent = owner.Parent is { } get ? (cef_window_t*)Guard.Run(get, 0) : null;
+        if (parent is not null) NativeObject.AddRef(parent);
+        return parent;
+    }
+
+    [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])]
+    private static int IsWindowModalDialog(cef_window_delegate_t* self, cef_window_t* window)
+    {
+        NativeObject.Release(window);
+        return NativeObject.Owner<WindowDelegate>(self).Modal ? 1 : 0;
     }
 
     [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])]

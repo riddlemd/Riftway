@@ -21,18 +21,30 @@ public sealed unsafe class WebContents
     private readonly DevToolsChannel _devTools = new();
     private readonly List<string> _pendingDeliveries = [];
     private readonly CancellationTokenSource _destroyed = new();
+    // Written on the UI thread, read and consumed on the IO thread by the request handler.
+    private readonly Lock _pendingLoadGate = new();
+    private PendingLoad? _pendingLoad;
 
     private cef_browser_t* _browser;
     private bool _ready;
-    private string? _pendingUrl;
+    private (string Url, PendingLoad? Load)? _queuedLoad;
+    private string? _userAgent;
+    private string? _defaultUserAgent;
     private string? _mainFrameId;
     private int? _isolatedContext;
     // False until the app's first navigation: events from the initial about:blank are not the app's.
     private bool _navigated;
     private string _title = string.Empty;
+    private readonly WebPreferences _preferences;
 
-    internal WebContents(string? appPreload)
+    internal WebContents(string? appPreload, WebPreferences preferences)
     {
+        _preferences = preferences;
+        JsDialog = new JsDialogHandler { SuppressAll = preferences.DisableDialogs };
+        // Chrome's own shortcut (F12) and the context menu's Inspect open DevTools without OpenDevTools.
+        if (!preferences.DevTools)
+            Command = new CommandHandler(["IDC_DEV_TOOLS", "IDC_DEV_TOOLS_CONSOLE", "IDC_DEV_TOOLS_DEVICES", "IDC_DEV_TOOLS_INSPECT",
+                "IDC_DEV_TOOLS_TOGGLE", "IDC_CONTENT_CONTEXT_INSPECTELEMENT", "IDC_CONTENT_CONTEXT_INSPECTBACKGROUNDPAGE"]);
         // The app's preload gets its own scope, after Oriel's runtime has defined `oriel`.
         _isolatedScript = appPreload is null
             ? s_preloadRuntime
@@ -42,12 +54,17 @@ public sealed unsafe class WebContents
         Display = new DisplayHandler { TitleChanged = OnTitleChanged };
         Load = new LoadHandler
         {
+            LoadStarted = isMain => { if (isMain) ApplyDefaultZoom(); },
             LoadingStateChanged = loading => Raise(loading ? DidStartLoading : DidStopLoading),
             LoadEnded = (isMain, _) => { if (isMain) Raise(DidFinishLoad); },
             LoadFailed = (isMain, code, text, url) =>
             {
                 if (_navigated) DidFailLoad?.Invoke(this, new LoadFailedEventArgs(code, text, url, isMain));
             },
+        };
+        Request = new RequestHandler(new ResourceRequestHandler { BeforeResourceLoad = OnBeforeResourceLoad })
+        {
+            Wants = WantsRequest,
         };
     }
 
@@ -69,6 +86,159 @@ public sealed unsafe class WebContents
     internal DisplayHandler Display { get; }
 
     internal LoadHandler Load { get; }
+
+    internal RequestHandler Request { get; }
+
+    internal JsDialogHandler JsDialog { get; }
+
+    internal CommandHandler? Command { get; }
+
+    /// <summary>Opens DevTools in their own window; does nothing when <see cref="WebPreferences.DevTools"/> is
+    /// false. Electron's <c>webContents.openDevTools()</c>; docked modes are not supported.</summary>
+    public void OpenDevTools() => WithHost(host =>
+    {
+        if (!_preferences.DevTools) return;
+        var windowInfo = cef_window_info_native_t.Empty();
+        var settings = new cef_browser_settings_t { size = (nuint)sizeof(cef_browser_settings_t) };
+        host->show_dev_tools(host, (cef_window_info_t*)&windowInfo, null, &settings, null);
+    });
+
+    /// <summary>Sends a key event to the page as if typed, including to the browser's own shortcuts.
+    /// Electron's <c>webContents.sendInputEvent()</c>; mouse and wheel events are not supported yet.</summary>
+    /// <remarks><see cref="KeyboardInputEventType.KeyDown"/> presses a key without typing text; send
+    /// <see cref="KeyboardInputEventType.Char"/> to type a character, as in Electron.</remarks>
+    /// <exception cref="ArgumentException">An unknown key name, or a <c>Char</c> event that is not one character.</exception>
+    public void SendInputEvent(KeyboardInputEvent inputEvent)
+    {
+        ArgumentNullException.ThrowIfNull(inputEvent);
+        var isChar = inputEvent.Type == KeyboardInputEventType.Char;
+        if (isChar && inputEvent.KeyCode.Length != 1) throw new ArgumentException("A Char event takes exactly one character.", nameof(inputEvent));
+        var key = isChar ? default : KeyMap.Resolve(inputEvent.KeyCode, inputEvent.Modifiers.HasFlag(InputModifiers.Shift));
+        var modifiers = KeyMap.DevToolsModifiers(inputEvent.Modifiers);
+        CefThread.RunOnUi(() => _devTools.Send("Input.dispatchKeyEvent", w =>
+        {
+            // rawKeyDown: a press that types nothing; text arrives only through char events.
+            w.WriteString("type", inputEvent.Type switch { KeyboardInputEventType.KeyDown => "rawKeyDown", KeyboardInputEventType.KeyUp => "keyUp", _ => "char" });
+            w.WriteNumber("modifiers", modifiers);
+            if (inputEvent.Modifiers.HasFlag(InputModifiers.IsAutoRepeat)) w.WriteBoolean("autoRepeat", true);
+            if (inputEvent.Modifiers.HasFlag(InputModifiers.IsKeypad)) w.WriteNumber("location", 3);
+            if (isChar)
+            {
+                w.WriteString("text", inputEvent.KeyCode);
+                return;
+            }
+            w.WriteString("key", key.KeyValue);
+            w.WriteString("code", key.Code);
+            w.WriteNumber("windowsVirtualKeyCode", key.VirtualKeyCode);
+            w.WriteNumber("nativeVirtualKeyCode", key.VirtualKeyCode);
+        }));
+    }
+
+    /// <summary>Closes DevTools. Electron's <c>webContents.closeDevTools()</c>.</summary>
+    public void CloseDevTools() => WithHost(host => host->close_dev_tools(host));
+
+    /// <summary>Whether DevTools are open. Electron's <c>webContents.isDevToolsOpened()</c>.</summary>
+    public bool IsDevToolsOpened() => QueryHost(host => host->has_dev_tools(host) != 0, false);
+
+    /// <summary>Opens DevTools if closed, else closes them. Electron's <c>webContents.toggleDevTools()</c>.</summary>
+    public void ToggleDevTools()
+    {
+        if (IsDevToolsOpened()) CloseDevTools();
+        else OpenDevTools();
+    }
+
+    /// <summary>Zooms the page, 1.0 for 100%; remembered per origin. Electron's <c>webContents.setZoomFactor()</c>.</summary>
+    /// <exception cref="ArgumentOutOfRangeException"><paramref name="factor"/> is not greater than 0.</exception>
+    public void SetZoomFactor(double factor)
+    {
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(factor);
+        SetZoomLevel(ZoomLevelOf(factor));
+    }
+
+    /// <summary>The page's zoom, 1.0 for 100%. Electron's <c>webContents.getZoomFactor()</c>.</summary>
+    public double GetZoomFactor() => Math.Pow(ZoomBase, GetZoomLevel());
+
+    /// <summary>Zooms the page by level: 0 is 100%, each step is 20% larger or smaller; remembered per origin.
+    /// Electron's <c>webContents.setZoomLevel()</c>.</summary>
+    public void SetZoomLevel(double level) => WithHost(host => host->set_zoom_level(host, level));
+
+    /// <summary>The page's zoom level. Electron's <c>webContents.getZoomLevel()</c>.</summary>
+    public double GetZoomLevel() => QueryHost(host => host->get_zoom_level(host), 0);
+
+    // Chromium's zoom levels are powers of 1.2.
+    private const double ZoomBase = 1.2;
+
+    internal static double ZoomLevelOf(double factor) => Math.Log(factor) / Math.Log(ZoomBase);
+
+    // An origin the page has not zoomed yet starts at the preference's factor.
+    private void ApplyDefaultZoom()
+    {
+        if (!_navigated || _preferences.ZoomFactor == 1.0) return;
+        WithHost(host =>
+        {
+            if (host->get_zoom_level(host) == 0) host->set_zoom_level(host, ZoomLevelOf(_preferences.ZoomFactor));
+        });
+    }
+
+    /// <summary>Runs <paramref name="code"/> in the page's main world and returns its value, awaiting it if it is
+    /// a promise. Electron's <c>webContents.executeJavaScript()</c>.</summary>
+    /// <returns>The value as JSON; null for <c>undefined</c> or <c>null</c>.</returns>
+    /// <exception cref="JavaScriptException">The code threw or its promise rejected.</exception>
+    /// <exception cref="InvalidOperationException">The page has closed.</exception>
+    public Task<JsonNode?> ExecuteJavaScriptAsync(string code, bool userGesture = false)
+    {
+        ArgumentNullException.ThrowIfNull(code);
+        var completion = new TaskCompletionSource<JsonNode?>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var registration = _destroyed.Token.Register(() => completion.TrySetException(new InvalidOperationException("The page has closed.")));
+        CefThread.RunOnUi(() =>
+        {
+            if (_browser is null)
+            {
+                completion.TrySetException(new InvalidOperationException("The page has closed."));
+                return;
+            }
+            _devTools.Send("Runtime.evaluate", w =>
+            {
+                w.WriteString("expression", code);
+                w.WriteBoolean("awaitPromise", true);
+                w.WriteBoolean("returnByValue", true);
+                w.WriteBoolean("userGesture", userGesture);
+            }, (result, error) =>
+            {
+                registration.Dispose();
+                if (error is not null) completion.TrySetException(new JavaScriptException(error));
+                else if (result.TryGetProperty("exceptionDetails", out var details)) completion.TrySetException(new JavaScriptException(DescribeException(details)));
+                else completion.TrySetResult(result.GetProperty("result").TryGetProperty("value", out var value) ? JsonNode.Parse(value.GetRawText()) : null);
+            });
+        });
+        return completion.Task;
+    }
+
+    private static string DescribeException(JsonElement details)
+        => details.TryGetProperty("exception", out var exception) && exception.TryGetProperty("description", out var description)
+            ? description.GetString() ?? "Script error."
+            : details.TryGetProperty("text", out var text) ? text.GetString() ?? "Script error." : "Script error.";
+
+    // Host calls are only valid on the UI thread and while the browser exists.
+    private void WithHost(HostAction action) => CefThread.RunOnUi(() =>
+    {
+        if (_browser is null) return;
+        var host = _browser->get_host(_browser);
+        try { action(host); }
+        finally { NativeObject.Release(host); }
+    });
+
+    private T QueryHost<T>(HostQuery<T> query, T whenClosed) => CefThread.InvokeOnUi(() =>
+    {
+        if (_browser is null) return whenClosed;
+        var host = _browser->get_host(_browser);
+        try { return query(host); }
+        finally { NativeObject.Release(host); }
+    });
+
+    private delegate void HostAction(cef_browser_host_t* host);
+
+    private delegate T HostQuery<out T>(cef_browser_host_t* host);
 
     /// <summary>The page's title. Electron's <c>webContents.getTitle()</c>.</summary>
     public string GetTitle() => CefThread.InvokeOnUi(() => _title);
@@ -121,26 +291,79 @@ public sealed unsafe class WebContents
     internal Action<string>? TitleApplied { get; set; }
 
     /// <summary>Navigates to <paramref name="url"/>. Electron's <c>webContents.loadURL()</c>.</summary>
-    public void LoadUrl(string url)
+    /// <param name="url">The URL, with its scheme.</param>
+    /// <param name="options">Referrer, user agent, extra headers and body for this navigation.</param>
+    /// <exception cref="NotSupportedException"><see cref="LoadUrlOptions.BaseUrlForDataUrl"/>, or an
+    /// <see cref="UploadFile"/> with an offset or length.</exception>
+    public void LoadUrl(string url, LoadUrlOptions? options = null)
     {
         ArgumentNullException.ThrowIfNull(url);
+        var load = PendingLoad.Create(url, options);
+        var userAgent = options?.UserAgent;
         CefThread.RunOnUi(() =>
         {
-            // Until the preload is registered, a navigation would run the page without it.
-            if (!_ready)
-            {
-                _pendingUrl = url;
-                return;
-            }
-
-            _navigated = true;
-            var frame = _browser->get_main_frame(_browser);
-            cef_string_utf16_t value = default;
-            CefString.Set(&value, url);
-            frame->load_url(frame, &value);
-            CefString.Clear(&value);
-            NativeObject.Release(frame);
+            if (userAgent is not null) ApplyUserAgent(userAgent);
+            Navigate(url, load);
         });
+    }
+
+    /// <summary>Overrides the user agent for this page: request headers and <c>navigator.userAgent</c>, for
+    /// every later navigation. An empty string restores the default. Electron's <c>webContents.setUserAgent()</c>.</summary>
+    public void SetUserAgent(string userAgent)
+    {
+        ArgumentNullException.ThrowIfNull(userAgent);
+        CefThread.RunOnUi(() => ApplyUserAgent(userAgent));
+    }
+
+    /// <summary>The page's user agent: the override, else Chromium's default (empty until DevTools reports it,
+    /// just after the window is created). Electron's <c>webContents.getUserAgent()</c>.</summary>
+    public string GetUserAgent() => CefThread.InvokeOnUi(() => _userAgent is { Length: > 0 } ua ? ua : _defaultUserAgent ?? string.Empty);
+
+    private void ApplyUserAgent(string userAgent)
+    {
+        _userAgent = userAgent;
+        // Emulation's override stays for the DevTools session, across navigations and renderer swaps.
+        _devTools.Send("Emulation.setUserAgentOverride", w => w.WriteString("userAgent", userAgent));
+    }
+
+    private void Navigate(string url, PendingLoad? load)
+    {
+        // Until the preload is registered, a navigation would run the page without it.
+        if (!_ready)
+        {
+            _queuedLoad = (url, load);
+            return;
+        }
+
+        // Set even when null: a plain load must not inherit an earlier load's options.
+        lock (_pendingLoadGate) _pendingLoad = load;
+        _navigated = true;
+        var frame = _browser->get_main_frame(_browser);
+        cef_string_utf16_t value = default;
+        CefString.Set(&value, url);
+        frame->load_url(frame, &value);
+        CefString.Clear(&value);
+        NativeObject.Release(frame);
+    }
+
+    // IO thread: only the main-frame navigation a LoadUrl with options started needs the hop.
+    private bool WantsRequest(cef_frame_t* frame, cef_request_t* request, bool isNavigation)
+    {
+        if (!isNavigation || frame is null || frame->is_main(frame) == 0) return false;
+        lock (_pendingLoadGate) return _pendingLoad is not null;
+    }
+
+    private void OnBeforeResourceLoad(cef_frame_t* frame, cef_request_t* request)
+    {
+        var url = CefString.ReadUserFree(request->get_url(request));
+        PendingLoad? load;
+        lock (_pendingLoadGate)
+        {
+            if (_pendingLoad is not { } pending || !pending.Matches(url)) return;
+            load = pending;
+            _pendingLoad = null;
+        }
+        load.ApplyTo(request);
     }
 
     /// <summary>Sends a message to the page's <c>ipcRenderer.on(channel)</c> listeners. Electron's <c>webContents.send()</c>.</summary>
@@ -165,7 +388,23 @@ public sealed unsafe class WebContents
         _devTools.Attach(browser);
 
         _devTools.Send("Page.enable");
+        _devTools.Send("Browser.getVersion", onResult: (result, error) =>
+        {
+            if (error is null) _defaultUserAgent = result.GetProperty("userAgent").GetString();
+        });
+        if (_userAgent is { } userAgent) ApplyUserAgent(userAgent);
         _devTools.Send("Runtime.enable");
+        // Chrome-style browsers ignore the font sizes in the browser settings; this sets them for this page only.
+        if (_preferences.DefaultFontSize is not null || _preferences.DefaultMonospaceFontSize is not null)
+        {
+            _devTools.Send("Page.setFontSizes", w =>
+            {
+                w.WriteStartObject("fontSizes");
+                if (_preferences.DefaultFontSize is { } standard) w.WriteNumber("standard", standard);
+                if (_preferences.DefaultMonospaceFontSize is { } fixedSize) w.WriteNumber("fixed", fixedSize);
+                w.WriteEndObject();
+            });
+        }
         // Scoped to the isolated world: the page's own scripts never see the binding.
         _devTools.Send("Runtime.addBinding", w =>
         {
@@ -183,10 +422,10 @@ public sealed unsafe class WebContents
         {
             _mainFrameId = result.GetProperty("frameTree").GetProperty("frame").GetProperty("id").GetString();
             _ready = true;
-            if (_pendingUrl is { } url)
+            if (_queuedLoad is { } queued)
             {
-                _pendingUrl = null;
-                LoadUrl(url);
+                _queuedLoad = null;
+                Navigate(queued.Url, queued.Load);
             }
         });
     }
@@ -284,6 +523,9 @@ public sealed class PageTitleUpdatedEventArgs(string title) : CancelEventArgs
     /// <summary>The page's new title.</summary>
     public string Title { get; } = title;
 }
+
+/// <summary>Script run by <see cref="WebContents.ExecuteJavaScriptAsync"/> threw, or its promise rejected.</summary>
+public sealed class JavaScriptException(string message) : Exception(message);
 
 /// <summary>Arguments for <see cref="WebContents.DidFailLoad"/>; Electron's <c>did-fail-load</c> parameters.</summary>
 /// <param name="ErrorCode">Chromium's net error code (negative).</param>

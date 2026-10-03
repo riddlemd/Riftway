@@ -8,6 +8,7 @@ var failures = -1;
 var results = new List<string>();
 var step = TimeSpan.FromSeconds(5);
 var simpleReady = false;
+BrowserWindow? childAlive = null;
 
 void Check(string name, bool pass, object? detail = null)
 {
@@ -131,6 +132,8 @@ async Task RunAsync(BrowserWindow win, BrowserWindow simple)
         Fires(h => win.LeftFullScreen += h, h => win.LeftFullScreen -= h, () => win.SetFullScreen(false), step * 2));
     Check("not full screen", Eventually(() => !win.IsFullScreen, step), win.IsFullScreen);
 
+    // Window managers restore the bounds after reporting the state change.
+    Eventually(() => win.GetBounds() is { Width: 700, Height: 500 }, step);
     var before = win.GetBounds();
     Check("SetSimpleFullScreen(true) raises EnteredFullScreen",
         Fires(h => win.EnteredFullScreen += h, h => win.EnteredFullScreen -= h, () => win.SetSimpleFullScreen(true), step * 2));
@@ -165,6 +168,9 @@ async Task RunAsync(BrowserWindow win, BrowserWindow simple)
     }
     Check("GetAllWindows after Destroy", BrowserWindow.GetAllWindows().Count == 1, BrowserWindow.GetAllWindows().Count);
 
+    await WebPreferencesAsync(win);
+    await ParentAndModalAsync(win);
+
     // Closing cancelled once: the window must survive the first close.
     var closingCount = 0;
     EventHandler<CancelEventArgs> veto = (_, e) => { closingCount++; e.Cancel = true; };
@@ -180,9 +186,180 @@ async Task RunAsync(BrowserWindow win, BrowserWindow simple)
     win.SetClosable(false);
     using var closed = new ManualResetEventSlim();
     win.Closed += (_, _) => closed.Set();
+    using var childClosed = new ManualResetEventSlim();
+    childAlive?.Closed += (_, _) => childClosed.Set();
     win.Close();
     Check("Close raises Closed", closed.Wait(step));
+    Check("closing the parent closes its child", childClosed.Wait(step));
     failures = results.Count(r => r.StartsWith("FAIL", StringComparison.Ordinal));
+}
+
+void PressF12(BrowserWindow w)
+{
+    w.Focus();
+    Thread.Sleep(300);
+    w.WebContents.SendInputEvent(new KeyboardInputEvent(KeyboardInputEventType.KeyDown, "F12"));
+    w.WebContents.SendInputEvent(new KeyboardInputEvent(KeyboardInputEventType.KeyUp, "F12"));
+}
+
+async Task<object?> Js(BrowserWindow w, string code)
+{
+    var task = w.WebContents.ExecuteJavaScriptAsync(code);
+    if (await Task.WhenAny(task, Task.Delay(step)) != task) return "timeout";
+    return task.Result?.ToJsonString();
+}
+
+async Task WebPreferencesAsync(BrowserWindow win)
+{
+    // ExecuteJavaScriptAsync: values, promises, undefined, exceptions.
+    Check("ExecuteJavaScript returns a value", await Js(win, "1 + 2") is "3", await Js(win, "1 + 2"));
+    Check("ExecuteJavaScript awaits a promise", await Js(win, "Promise.resolve('done')") is "\"done\"");
+    Check("ExecuteJavaScript: undefined is null", await Js(win, "undefined") is null);
+    var threw = false;
+    try { await win.WebContents.ExecuteJavaScriptAsync("throw new Error('boom')"); }
+    catch (JavaScriptException e) { threw = e.Message.Contains("boom", StringComparison.Ordinal); }
+    Check("ExecuteJavaScript surfaces exceptions", threw);
+
+    // Zoom, set at runtime: devicePixelRatio scales with it.
+    var dpr = double.Parse((await Js(win, "devicePixelRatio"))!.ToString()!, System.Globalization.CultureInfo.InvariantCulture);
+    win.WebContents.SetZoomFactor(2.0);
+    Check("SetZoomFactor / GetZoomFactor", Eventually(() => Math.Abs(win.WebContents.GetZoomFactor() - 2.0) < 0.01, step), win.WebContents.GetZoomFactor());
+    Check("zoom reaches the page", Eventually(() => Js(win, "devicePixelRatio").Result is string r && Math.Abs(double.Parse(r, System.Globalization.CultureInfo.InvariantCulture) / dpr - 2.0) < 0.01, step));
+    win.WebContents.SetZoomLevel(0);
+    Check("SetZoomLevel(0) resets", Eventually(() => win.WebContents.GetZoomLevel() == 0, step), win.WebContents.GetZoomLevel());
+
+    // DevTools.
+    win.WebContents.OpenDevTools();
+    Check("OpenDevTools", Eventually(() => win.WebContents.IsDevToolsOpened(), step));
+    win.WebContents.CloseDevTools();
+    Check("CloseDevTools", Eventually(() => !win.WebContents.IsDevToolsOpened(), step));
+    PressF12(win);
+    Check("F12 opens DevTools (Chrome's shortcut)", Eventually(() => win.WebContents.IsDevToolsOpened(), step));
+    win.WebContents.CloseDevTools();
+    Eventually(() => !win.WebContents.IsDevToolsOpened(), step);
+
+    // SendInputEvent: a typed character reaches a focused input; modifiers reach key listeners.
+    await Js(win, "document.body.innerHTML = '<input id=k>'; window.keys = []; document.getElementById('k').focus(); addEventListener('keydown', e => keys.push(e.key + (e.shiftKey ? ' shift' : '')))");
+    win.Focus();
+    win.WebContents.SendInputEvent(new KeyboardInputEvent(KeyboardInputEventType.Char, "x"));
+    win.WebContents.SendInputEvent(new KeyboardInputEvent(KeyboardInputEventType.KeyDown, "Enter") { Modifiers = InputModifiers.Shift });
+    win.WebContents.SendInputEvent(new KeyboardInputEvent(KeyboardInputEventType.KeyUp, "Enter") { Modifiers = InputModifiers.Shift });
+    Check("SendInputEvent Char types into the page", Eventually(() => Js(win, "document.getElementById('k').value").Result is "\"x\"", step), Js(win, "document.getElementById('k').value").Result);
+    Check("SendInputEvent KeyDown carries key and modifiers", Eventually(() => Js(win, "keys.join()").Result is "\"Enter shift\"", step), Js(win, "keys.join()").Result);
+
+    // A window built with non-default preferences.
+    var dir = Path.Combine(Path.GetTempPath(), "oriel-window-test-prefs");
+    Directory.CreateDirectory(dir);
+    File.WriteAllBytes(Path.Combine(dir, "dot.png"), Convert.FromBase64String("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg=="));
+    File.WriteAllText(Path.Combine(dir, "prefs.html"), """
+        <!doctype html><title>prefs</title>
+        <p id=p>text</p><code id=c>code</code>
+        <img id=img src="dot.png"><textarea id=t></textarea>
+        <div><span id=narrow>iiiiiiiiii</span></div><div><span id=wide>MMMMMMMMMM</span></div>
+        """);
+    var monospace = OperatingSystem.IsMacOS() ? "Menlo" : OperatingSystem.IsWindows() ? "Consolas" : "Liberation Mono";
+    var prefs = new BrowserWindow(new BrowserWindowOptions
+    {
+        Title = "Oriel window test: preferences",
+        Width = 500,
+        Height = 400,
+        WebPreferences = new WebPreferences
+        {
+            DevTools = false,
+            ZoomFactor = 1.5,
+            Images = false,
+            WebGL = false,
+            TextAreasAreResizable = false,
+            DefaultFontSize = 20,
+            DefaultMonospaceFontSize = 17,
+            DisableDialogs = true,
+            DefaultFontFamily = new DefaultFontFamily { Standard = monospace },
+        },
+    });
+    var prefsLoaded = Fires(h => prefs.WebContents.DidFinishLoad += h, h => prefs.WebContents.DidFinishLoad -= h,
+        () => prefs.WebContents.LoadFile(Path.Combine(dir, "prefs.html")), step);
+    Check("preferences window loads", prefsLoaded);
+    Check("ZoomFactor preference", Eventually(() => Math.Abs(prefs.WebContents.GetZoomFactor() - 1.5) < 0.01, step), prefs.WebContents.GetZoomFactor());
+    Check("ZoomFactor preference reaches the page", Js(prefs, "devicePixelRatio").Result is string pr && Math.Abs(double.Parse(pr, System.Globalization.CultureInfo.InvariantCulture) / dpr - 1.5) < 0.01, Js(prefs, "devicePixelRatio").Result);
+    Check("Images = false", await Js(prefs, "document.getElementById('img').naturalWidth") is "0", await Js(prefs, "document.getElementById('img').naturalWidth"));
+    Check("WebGL = false", await Js(prefs, "document.createElement('canvas').getContext('webgl') === null") is "true");
+    Check("TextAreasAreResizable = false", await Js(prefs, "getComputedStyle(document.getElementById('t')).resize") is "\"none\"", await Js(prefs, "getComputedStyle(document.getElementById('t')).resize"));
+    Check("DefaultFontSize", await Js(prefs, "getComputedStyle(document.getElementById('p')).fontSize") is "\"20px\"", await Js(prefs, "getComputedStyle(document.getElementById('p')).fontSize"));
+    Check("DefaultMonospaceFontSize", await Js(prefs, "getComputedStyle(document.getElementById('c')).fontSize") is "\"17px\"", await Js(prefs, "getComputedStyle(document.getElementById('c')).fontSize"));
+    Check("DefaultFontFamily.Standard", await Js(prefs, "document.getElementById('narrow').offsetWidth === document.getElementById('wide').offsetWidth") is "true",
+        await Js(prefs, "[document.getElementById('narrow').offsetWidth, document.getElementById('wide').offsetWidth].join()"));
+    Check("DisableDialogs", await Js(prefs, "[confirm('a'), prompt('b'), alert('c') === undefined].join()") is "\"false,,true\"", await Js(prefs, "[confirm('a'), prompt('b'), alert('c') === undefined].join()"));
+    prefs.WebContents.OpenDevTools();
+    await Task.Delay(1000);
+    Check("DevTools = false blocks OpenDevTools", !prefs.WebContents.IsDevToolsOpened());
+    PressF12(prefs);
+    await Task.Delay(1500);
+    Check("DevTools = false blocks F12", !prefs.WebContents.IsDevToolsOpened());
+
+    var noJs = new BrowserWindow(new BrowserWindowOptions { Title = "Oriel window test: no JS", Width = 300, Height = 200, WebPreferences = new WebPreferences { Javascript = false } });
+    File.WriteAllText(Path.Combine(dir, "nojs.html"), "<!doctype html><title>before</title><script>document.title = 'after'</script>");
+    var noJsLoaded = Fires(h => noJs.WebContents.DidFinishLoad += h, h => noJs.WebContents.DidFinishLoad -= h,
+        () => noJs.WebContents.LoadFile(Path.Combine(dir, "nojs.html")), step);
+    await Task.Delay(500);
+    Check("Javascript = false: page scripts do not run", noJsLoaded && noJs.WebContents.GetTitle() == "before", noJs.WebContents.GetTitle());
+
+    foreach (var w in new[] { prefs, noJs })
+    {
+        using var gone = new ManualResetEventSlim();
+        w.Closed += (_, _) => gone.Set();
+        w.Close();
+        gone.Wait(step);
+    }
+}
+
+async Task ParentAndModalAsync(BrowserWindow win)
+{
+    var threw = false;
+    try { _ = new BrowserWindow(new BrowserWindowOptions { Modal = true, Show = false }); }
+    catch (ArgumentException) { threw = true; }
+    Check("Modal without Parent throws", threw);
+    foreach (var (name, unsupported) in new[] { ("MinimumFontSize", new WebPreferences { MinimumFontSize = 12 }), ("DefaultEncoding", new WebPreferences { DefaultEncoding = "UTF-8" }) })
+    {
+        var rejected = false;
+        try { _ = new BrowserWindow(new BrowserWindowOptions { Show = false, WebPreferences = unsupported }); }
+        catch (NotSupportedException) { rejected = true; }
+        Check($"{name} throws NotSupportedException", rejected);
+    }
+
+    var child = new BrowserWindow(new BrowserWindowOptions { Title = "Oriel window test: child", Width = 300, Height = 200, Parent = win });
+    Check("GetParentWindow", child.GetParentWindow() == win && win.GetParentWindow() is null);
+    Check("GetChildWindows", win.GetChildWindows() is [var only] && only == child, win.GetChildWindows().Count);
+    Check("child is not modal", !child.IsModal);
+    if (OperatingSystem.IsMacOS())
+    {
+        // AppKit child windows follow their parent; an unparented window stays put.
+        await Task.Delay(300);
+        var (parentBefore, childBefore) = (win.GetBounds(), child.GetBounds());
+        win.SetPosition(parentBefore.X + 40, parentBefore.Y + 30);
+        Check("child moves with its parent (macOS)", Eventually(() => child.GetBounds() is var c && c.X == childBefore.X + 40 && c.Y == childBefore.Y + 30, step), $"{childBefore} -> {child.GetBounds()}");
+        win.SetPosition(parentBefore.X, parentBefore.Y);
+    }
+
+    var modal = new BrowserWindow(new BrowserWindowOptions { Title = "Oriel window test: modal", Width = 300, Height = 200, Parent = win, Modal = true });
+    Check("IsModal", modal.IsModal);
+    await Task.Delay(500);
+    win.Focus();
+    await Task.Delay(800);
+    // Linux window managers may ignore window-modal hints (openbox does); a known gap there.
+    if (!OperatingSystem.IsLinux())
+        Check("a modal window keeps focus from its parent", !win.IsFocused && modal.IsFocused, $"parent={win.IsFocused} modal={modal.IsFocused}");
+    child.Focus();
+    Check("a sibling of the modal can still take focus", Eventually(() => child.IsFocused, step), $"child={child.IsFocused}");
+    Check("GetChildWindows lists both", win.GetChildWindows().Count == 2, win.GetChildWindows().Count);
+    using (var modalClosed = new ManualResetEventSlim())
+    {
+        modal.Closed += (_, _) => modalClosed.Set();
+        modal.Close();
+        Check("modal closes", modalClosed.Wait(step));
+    }
+    Check("closed child leaves GetChildWindows", win.GetChildWindows() is [var left] && left == child, win.GetChildWindows().Count);
+    await Task.Delay(200);
+    childAlive = child;
 }
 
 app.Ready += (_, _) =>

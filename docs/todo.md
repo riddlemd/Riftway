@@ -8,22 +8,28 @@ Cross-platform work. Platform-specific items: [linux-todo.md](linux-todo.md), [w
 
 - [ ] BrowserWindow parity, in the order of [parity/browser-window.md](parity/browser-window.md#next-by-importance):
   - [ ] Window menus (`setMenu`, `removeMenu`, `autoHideMenuBar`), with the `Menu` module
-  - [ ] `webPreferences`: `devTools`, `zoomFactor`, `webSecurity`, fonts, `spellcheck`, `session`/`partition`
-  - [ ] `parent`/`modal`, `setParentWindow`, `isModal`, `getChildWindows`
+  - [x] `webPreferences` batch 1 (devTools, zoomFactor, javascript, images, textarea, webgl, fonts, disableDialogs)
+  - [ ] Remaining `webPreferences` (see the parity doc: process-wide switches, session/partition, spellcheck, ...)
+  - [x] `parent`/`modal`, `isModal`, `getChildWindows`, `getParentWindow`
+  - [ ] `setParentWindow` (needs OS code: CEF sets the parent only at creation)
   - [ ] `titleBarStyle`, `titleBarOverlay`, `trafficLightPosition`
   - [ ] `showInactive`, `skipTaskbar`, `flashFrame`, `setProgressBar`
-  - [ ] `loadURL` options (userAgent, extraHeaders, httpReferrer, postData)
+  - [x] `loadURL` options (userAgent, extraHeaders, httpReferrer, postData); `baseURLForDataURL` throws
   - [ ] Window state persistence (`getNormalBounds`, `persisted-state-restored`)
   - [ ] `opacity`, `hasShadow`, `setIgnoreMouseEvents`, content protection, `setKiosk`, `will-*` events
   - [ ] Accuracy gaps: `Shown`/`Hidden` fire only from `Show()`/`Hide()`; `SetIcon` takes a path, not a `NativeImage`
+- [x] webContents: `executeJavaScript`, DevTools open/close/toggle, zoom factor/level, `setUserAgent`/`getUserAgent`
 - [ ] Remaining M2 modules: `BaseWindow`, `View`, `WebContentsView`, `WebFrameMain`, `NavigationHistory`,
       `Debugger`, core `Session`, file `Dialog`, `Screen`, command line, `window.open` handling
 - [ ] `Protocol`: `AllowServiceWorkers` and `CodeCache` privileges throw `NotSupportedException`
 
 ## Runtime and codecs
 
-- [ ] CEF codec build (`~/Developer/_scratch/cef-build`, branch 8037): when done, run the drop-in check (swap the
-      codec libcef into the stock app, H.264/AAC play, API hash matches). Then ask before deleting the ~150 GB tree.
+- [ ] **Deferred (2026-10-03, ~5 h rebuild):** CEF codec build (`~/Developer/_scratch/cef-build`, branch 8037) built, but is not a drop-in: `is_official_build=false`
+      leaves DCHECKs on in Release, and the framework (and its own cefclient) dies at startup on a PartitionAlloc
+      DCHECK (`thread_cache_internal.h:162`). Rebuild with `is_official_build=true` (as stock), or at least
+      `dcheck_always_on=false`, then re-run the drop-in probe (7 H.264/AAC checks, all failing on stock as expected).
+      API headers are byte-identical to stock; dependencies match. Ask before deleting the ~150 GB tree.
 
 ## Docs
 

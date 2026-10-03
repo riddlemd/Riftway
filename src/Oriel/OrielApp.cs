@@ -162,10 +162,27 @@ public sealed unsafe class OrielApp
 
     private void OnContextInitialized()
     {
+        ForgetZoomLevels();
         // Before Ready, so the first window's page can already load from a custom scheme.
         Protocol.OnContextInitialized();
         IsReady = true;
         Ready?.Invoke(this, EventArgs.Empty);
+    }
+
+    // Chrome-style profiles save each origin's zoom across launches; Electron keeps zoom for the session only.
+    private static void ForgetZoomLevels()
+    {
+        var context = CefNative.cef_request_context_get_global_context();
+        var value = CefNative.cef_value_create();
+        value->set_dictionary(value, CefNative.cef_dictionary_value_create());
+        cef_string_utf16_t name = default, error = default;
+        CefString.Set(&name, "partition.per_host_zoom_levels");
+        var manager = (cef_preference_manager_t*)context;
+        if (manager->set_preference(manager, &name, value, &error) == 0)
+            Console.Error.WriteLine($"[Oriel] Could not reset saved zoom levels: {CefString.Read(&error)}");
+        CefString.Clear(&name);
+        CefString.Clear(&error);
+        NativeObject.Release(context);
     }
 }
 
