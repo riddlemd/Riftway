@@ -8,6 +8,9 @@ param(
 )
 $ErrorActionPreference = 'Stop'
 
+# Here too, not only in build.ps1: a subprocess exe can come from anywhere.
+& (Join-Path $PSScriptRoot 'check-windows-manifest.ps1') $Subprocess | Out-Host
+
 $pin = Get-Content (Join-Path $PSScriptRoot 'cef.json') -Raw | ConvertFrom-Json
 $cache = $env:ORIEL_CEF_CACHE ? $env:ORIEL_CEF_CACHE : (Join-Path $HOME '.cache\oriel\cef')
 $cef = Join-Path $cache "cef_binary_$($pin.version)_${Platform}_minimal"

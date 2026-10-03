@@ -2,8 +2,8 @@
 <assembly xmlns="urn:schemas-microsoft-com:asm.v1" manifestVersion="1.0">
   <compatibility xmlns="urn:schemas-microsoft-com:compatibility.v1">
     <application>
-      <!-- Windows 10 and 11. Without it GetVersionEx, and so Chromium, sees Windows 8, and the GPU
-           process dies on a CHECK in its DirectComposition path (it reads its own manifest, not the browser's). -->
+      <!-- Windows 10/11. Windows creates the GPU process's layered child window only for exes declaring Windows 8+;
+           Win10 rather than Win8 also lets Chromium's Windows 10/11 gates see the real OS. -->
       <supportedOS Id="{8e0f7a12-bfb3-4fe8-b9a5-48fd50a15a9a}"/>
     </application>
   </compatibility>
