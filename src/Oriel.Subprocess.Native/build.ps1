@@ -1,7 +1,6 @@
-# Builds the native subprocess for Windows against the pinned CEF.
+# Builds the native subprocess for Windows against the pinned CEF, with MSVC.
 # Usage: src/Oriel.Subprocess.Native/build.ps1 <output-exe> [cef-platform]
-# Needs zig on PATH (or $env:ZIG): it brings its own clang, MinGW CRT and resource compiler, so no
-# Visual Studio C++ workload or Windows SDK is required. CEF's MSVC import library links as is.
+# Needs Visual Studio (or Build Tools) with the C++ workload and a Windows SDK.
 param(
     [Parameter(Mandatory)] [string] $Out,
     [string] $Platform = 'windows64'
@@ -9,8 +8,7 @@ param(
 $ErrorActionPreference = 'Stop'
 
 $repo = Resolve-Path (Join-Path $PSScriptRoot '..\..')
-$zig = $env:ZIG ? $env:ZIG : 'zig'
-$target = $Platform -eq 'windowsarm64' ? 'aarch64-windows-gnu' : 'x86_64-windows-gnu'
+$arch = $Platform -eq 'windowsarm64' ? 'arm64' : 'amd64'
 
 $pin = Get-Content (Join-Path $repo 'eng\cef.json') -Raw | ConvertFrom-Json
 $cache = $env:ORIEL_CEF_CACHE ? $env:ORIEL_CEF_CACHE : (Join-Path $HOME '.cache\oriel\cef')
@@ -22,10 +20,23 @@ if (-not (Test-Path (Join-Path $cef '.complete'))) {
 # The same API version the C# bindings were generated for.
 $version = [regex]::Match((Get-Content (Join-Path $repo 'src\Oriel.Cef\Interop\CefApiVersion.cs') -Raw), 'Version = (\d+)').Groups[1].Value
 
-New-Item -ItemType Directory -Force (Split-Path -Parent $Out) | Out-Null
-& $zig cc -target $target -std=c11 -O2 -Wall -Werror -municode '-Wl,--subsystem,windows' `
-    "-DCEF_API_VERSION=$version" "-I$cef" `
-    (Join-Path $PSScriptRoot 'subprocess.c') (Join-Path $PSScriptRoot 'subprocess.rc') `
-    (Join-Path $cef 'Release\libcef.lib') -o $Out
-if ($LASTEXITCODE -ne 0) { throw "zig cc failed ($LASTEXITCODE)." }
+$vswhere = Join-Path ${env:ProgramFiles(x86)} 'Microsoft Visual Studio\Installer\vswhere.exe'
+$vs = & $vswhere -latest -products * -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath
+if (-not $vs) { throw 'No Visual Studio with the C++ workload found.' }
+# VsDevCmd calls vswhere by name and prints an error when the Installer folder isn't on PATH.
+$env:PATH = "$(Split-Path $vswhere);$env:PATH"
+Import-Module (Join-Path $vs 'Common7\Tools\Microsoft.VisualStudio.DevShell.dll')
+Enter-VsDevShell -VsInstallPath $vs -Arch $arch -HostArch amd64 -SkipAutomaticLocation | Out-Null
+
+$Out = [IO.Path]::GetFullPath($Out, (Get-Location).Path)
+$obj = Join-Path ([IO.Path]::GetDirectoryName($Out)) 'obj'
+New-Item -ItemType Directory -Force $obj | Out-Null
+
+# /MT: the static CRT, as libcef itself uses, so the exe needs no VC++ redistributable.
+# /MANIFESTINPUT: without its supportedOS entry Chromium's GPU process crashes (see the manifest).
+cl /nologo /std:c11 /O2 /W4 /WX /MT /DUNICODE /D_UNICODE "/DCEF_API_VERSION=$version" "/I$cef" `
+    (Join-Path $PSScriptRoot 'subprocess.c') "/Fo$obj\" "/Fe$Out" `
+    /link (Join-Path $cef 'Release\libcef.lib') /SUBSYSTEM:WINDOWS `
+    /MANIFEST:EMBED "/MANIFESTINPUT:$(Join-Path $PSScriptRoot 'Oriel.Subprocess.exe.manifest')"
+if ($LASTEXITCODE -ne 0) { throw "cl failed ($LASTEXITCODE)." }
 $Out

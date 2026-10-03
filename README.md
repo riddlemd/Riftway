@@ -42,7 +42,7 @@ docker run --rm --cap-add SYS_ADMIN --cap-add SYS_PTRACE --security-opt seccomp=
 
 ## Try it (Windows)
 
-Needs Git Bash (for `fetch-cef.sh`) and [zig](https://ziglang.org/download/) on PATH or in `$env:ZIG`.
+Needs Git Bash (for `fetch-cef.sh`) and Visual Studio or Build Tools with the "Desktop development with C++" workload (MSVC and a Windows SDK); `build.ps1` finds it through vswhere.
 
 ```powershell
 bash eng/fetch-cef.sh windows64
