@@ -1,0 +1,6 @@
+<Project>
+  <!-- A props default: an app's own ApplicationManifest, set later in its project file, wins. -->
+  <PropertyGroup>
+    <ApplicationManifest Condition="'$(ApplicationManifest)' == ''">$(MSBuildThisFileDirectory)Oriel.app.manifest</ApplicationManifest>
+  </PropertyGroup>
+</Project>

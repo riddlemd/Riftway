@@ -1,13 +1,14 @@
 <?xml version="1.0" encoding="UTF-8" standalone="yes"?>
-<!-- Chromium's GPU process crashes on its DirectComposition path without these; CEF's samples ship the same. -->
 <assembly xmlns="urn:schemas-microsoft-com:asm.v1" manifestVersion="1.0">
   <compatibility xmlns="urn:schemas-microsoft-com:compatibility.v1">
     <application>
-      <!-- Windows 10 and 11; without it the OS reports 8.x to the process. -->
+      <!-- Windows 10 and 11. Without it GetVersionEx, and so Chromium, sees Windows 8, and the GPU
+           process dies on a CHECK in its DirectComposition path (it reads its own manifest, not the browser's). -->
       <supportedOS Id="{8e0f7a12-bfb3-4fe8-b9a5-48fd50a15a9a}"/>
     </application>
   </compatibility>
   <application xmlns="urn:schemas-microsoft-com:asm.v3">
+    <!-- Not what prevents the GPU crash: gpu_main sets per-monitor v2 at runtime regardless. -->
     <windowsSettings>
       <dpiAware xmlns="http://schemas.microsoft.com/SMI/2005/WindowsSettings">true/pm</dpiAware>
       <dpiAwareness xmlns="http://schemas.microsoft.com/SMI/2016/WindowsSettings">permonitorv2,permonitor</dpiAwareness>

@@ -1,5 +1,8 @@
 <Project Sdk="Microsoft.NET.Sdk">
 
+  <!-- What the Oriel package's buildTransitive brings; a ProjectReference doesn't import it. -->
+  <Import Project="..\..\src\Oriel\buildTransitive\Oriel.props" />
+
   <PropertyGroup>
     <OutputType>Exe</OutputType>
   </PropertyGroup>

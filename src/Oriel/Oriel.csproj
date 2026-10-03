@@ -15,4 +15,8 @@
     <PackageLicenseExpression>MIT</PackageLicenseExpression>
   </PropertyGroup>
 
+  <ItemGroup>
+    <None Include="buildTransitive\**" Pack="true" PackagePath="buildTransitive\" />
+  </ItemGroup>
+
 </Project>
