@@ -13,6 +13,6 @@ mkdir -p "$(dirname "$out")"
 ${CC:-clang} -std=c11 -O2 -Wall -Werror \
   -DCEF_API_VERSION="$version" -I"$cef" \
   "$here/subprocess.c" \
-  -L"$cef/Release" -lcef -Wl,-rpath,'$ORIGIN' \
+  -L"$cef/Release" -lcef -ldl -Wl,-rpath,'$ORIGIN' -Wl,--export-dynamic-symbol=getauxval \
   -o "$out"
 echo "$out"

@@ -17,12 +17,6 @@ src/Oriel.Subprocess.Native/build.sh /work/out/subprocess/Oriel.Subprocess linux
 dotnet publish "$project" -r linux-arm64 -c Release --self-contained -o /work/out/app > /work/publish.log 2>&1 || { cat /work/publish.log; exit 1; }
 eng/layout-linux.sh /work/out/app /work/out/subprocess/Oriel.Subprocess linuxarm64 > /dev/null
 
-# Apple M4+ hosts give the VM SME without SVE, which crashes Chromium's libyuv; see hide-sme.c.
-if grep -qw sme /proc/cpuinfo && ! grep -qw sve /proc/cpuinfo; then
-  clang -shared -fPIC -O2 -o /work/out/hide-sme.so eng/docker/hide-sme.c -ldl
-  export LD_PRELOAD=/work/out/hide-sme.so
-fi
-
 Xvfb :99 -screen 0 1600x1000x24 > /dev/null 2>&1 &
 export DISPLAY=:99
 sleep 1
@@ -35,7 +29,7 @@ if [ "$sandbox" = 1 ]; then
   chown root:root /work/out/app/chrome-sandbox
   chmod 4755 /work/out/app/chrome-sandbox
   chmod -R a+rX /work/out
-  runuser -u oriel -- env DISPLAY=:99 LD_PRELOAD="${LD_PRELOAD:-}" ORIEL_TRACE_DEVTOOLS="${ORIEL_TRACE_DEVTOOLS:-}" "/work/out/app/$exe" --enable-sandbox ${ORIEL_EXTRA_ARGS:-} 2> /work/app.err || status=$?
+  runuser -u oriel -- env DISPLAY=:99 ORIEL_TRACE_DEVTOOLS="${ORIEL_TRACE_DEVTOOLS:-}" "/work/out/app/$exe" --enable-sandbox ${ORIEL_EXTRA_ARGS:-} 2> /work/app.err || status=$?
 else
   "/work/out/app/$exe" ${ORIEL_EXTRA_ARGS:-} 2> /work/app.err || status=$?
 fi

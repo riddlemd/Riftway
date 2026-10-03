@@ -52,11 +52,21 @@ eng/layout-windows.ps1 artifacts/sample artifacts/subprocess/Oriel.Subprocess.ex
 artifacts/sample/Oriel.Sample.exe
 ```
 
+## Known issues
+
+### Video crashes the renderer on Linux arm64 VMs on Apple M4+ (worked around)
+
+Chromium's libyuv, which converts video frames, uses its SME code whenever the CPU reports SME. That code is built for ARMv9-A and starts with an SVE instruction. Apple M4 and later have SME but no SVE, and Linux VMs on them (Docker, Rancher, Parallels, UTM) pass that through, so any `<video>` killed the renderer with SIGILL ("Aw, Snap!") on its first software-converted frame. Chrome and Electron have the same bug on those VMs; macOS, Windows and x64 are unaffected.
+
+`Oriel.Subprocess.Native` works around it. On Linux arm64 it defines its own `getauxval`, which takes precedence over glibc's for libcef.so, and clears the SME bits only when SVE is absent. Every renderer and GPU process runs this exe, so apps need nothing. libyuv falls back to its NEON code. CPUs with SVE see their real flags. The .NET browser process is not covered; no crash there has been seen.
+
+The workaround goes once Chromium fixes libyuv upstream: it should require SVE for those paths, or build them without SVE.
+
 ## Layout
 
 - `src/Oriel` - public API: Electron's modules in C# (`OrielApp`, `BrowserWindow`, ...)
 - `src/Oriel.Cef` - CEF C API bindings (`Interop/` is generated) and the native plumbing under them
-- `src/Oriel.Subprocess.Native` - the exe Chromium runs for its zygote/renderer/GPU/utility processes on Linux and Windows (C, ~25 lines: the zygote must be single-threaded, which no .NET process is)
+- `src/Oriel.Subprocess.Native` - the exe Chromium runs for its zygote/renderer/GPU/utility processes on Linux and Windows (a small C program: the zygote must be single-threaded, which no .NET process is)
 - `src/Oriel.Subprocess` - the same exe for macOS, in NativeAOT C# (until the macOS sandbox moves it to the native one)
 - `tools/cef-interop` - regenerates `Oriel.Cef/Interop` from the pinned CEF headers (ClangSharp)
 - `eng/` - `cef.json` pins the CEF release; `fetch-cef.sh` downloads it; `bundle-macos.sh` assembles a .app
