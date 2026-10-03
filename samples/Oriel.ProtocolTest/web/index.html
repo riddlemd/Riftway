@@ -83,6 +83,21 @@
     const [outcome, detail] = await playAndSeek('video.webm');
     check('video plays and seeks (range requests)', outcome === 'seeked', `${outcome} ${detail}`);
 
+    // Plays for real: decoded frames reach the compositor (the path that converts YUV to RGB).
+    const painted = await new Promise((resolve) => {
+      const video = document.createElement('video');
+      video.muted = true;
+      video.loop = true;
+      document.body.append(video);
+      let frames = 0;
+      const timer = setTimeout(() => resolve(frames), 10000);
+      const onFrame = () => { if (++frames >= 10) { clearTimeout(timer); resolve(frames); } else video.requestVideoFrameCallback(onFrame); };
+      video.requestVideoFrameCallback(onFrame);
+      video.src = 'video.webm';
+      video.play().catch(() => {});
+    });
+    check('video paints frames', painted >= 10, `frames=${painted}`);
+
     document.getElementById('out').textContent = JSON.stringify(results, null, 2);
     await harness.report(results);
   })();

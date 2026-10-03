@@ -70,11 +70,11 @@ app.Ready += (_, _) =>
     });
     window.LoadUrl("app://test/index.html");
 
-    _ = Task.Delay(TimeSpan.FromSeconds(60)).ContinueWith(_ =>
+    _ = Task.Delay(TimeSpan.FromSeconds(int.Parse(Environment.GetEnvironmentVariable("ORIEL_TEST_TIMEOUT") ?? "60"))).ContinueWith(_ =>
     {
         if (failures < 0)
         {
-            Console.WriteLine("FAIL  no report from the page within 60s");
+            Console.WriteLine("FAIL  no report from the page in time");
             window.Close();
         }
     }, TaskScheduler.Default);
