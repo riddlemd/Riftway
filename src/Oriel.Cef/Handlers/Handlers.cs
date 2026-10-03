@@ -114,12 +114,130 @@ public sealed unsafe class BrowserProcessHandler
     }
 }
 
-/// <summary><c>cef_client_t</c>: per-browser handlers. None yet; CEF uses its defaults.</summary>
+/// <summary><c>cef_client_t</c>: per-browser handlers; those left null use CEF's defaults.</summary>
 public sealed unsafe class ClientHandler
 {
-    public ClientHandler() => Native = NativeObject.Create<cef_client_t>(this);
+    private readonly DisplayHandler? _display;
+    private readonly LoadHandler? _load;
+
+    public ClientHandler(DisplayHandler? display = null, LoadHandler? load = null)
+    {
+        _display = display;
+        _load = load;
+        Native = NativeObject.Create<cef_client_t>(this);
+        if (display is not null) Native->get_display_handler = &GetDisplayHandler;
+        if (load is not null) Native->get_load_handler = &GetLoadHandler;
+    }
 
     public cef_client_t* Native { get; }
+
+    [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])]
+    private static cef_display_handler_t* GetDisplayHandler(cef_client_t* self)
+    {
+        var handler = NativeObject.Owner<ClientHandler>(self)._display!.Native;
+        NativeObject.AddRef(handler);
+        return handler;
+    }
+
+    [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])]
+    private static cef_load_handler_t* GetLoadHandler(cef_client_t* self)
+    {
+        var handler = NativeObject.Owner<ClientHandler>(self)._load!.Native;
+        NativeObject.AddRef(handler);
+        return handler;
+    }
+}
+
+/// <summary><c>cef_display_handler_t</c>: page-driven display changes.</summary>
+public sealed unsafe class DisplayHandler
+{
+    public DisplayHandler()
+    {
+        Native = NativeObject.Create<cef_display_handler_t>(this);
+        Native->on_title_change = &OnTitleChange;
+    }
+
+    public cef_display_handler_t* Native { get; }
+
+    /// <summary>The page's title changed.</summary>
+    public Action<string>? TitleChanged { get; init; }
+
+    [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])]
+    private static void OnTitleChange(cef_display_handler_t* self, cef_browser_t* browser, cef_string_utf16_t* title)
+    {
+        var owner = NativeObject.Owner<DisplayHandler>(self);
+        var text = CefString.Read(title);
+        if (owner.TitleChanged is { } callback) Guard.Run(() => callback(text));
+        NativeObject.Release(browser);
+    }
+}
+
+/// <summary><c>cef_load_handler_t</c>: navigation progress. Frame arguments are reduced to whether the
+/// frame is the main frame.</summary>
+public sealed unsafe class LoadHandler
+{
+    public LoadHandler()
+    {
+        Native = NativeObject.Create<cef_load_handler_t>(this);
+        Native->on_loading_state_change = &OnLoadingStateChange;
+        Native->on_load_start = &OnLoadStart;
+        Native->on_load_end = &OnLoadEnd;
+        Native->on_load_error = &OnLoadError;
+    }
+
+    public cef_load_handler_t* Native { get; }
+
+    /// <summary>Loading started (true) or stopped (false) for the whole browser.</summary>
+    public Action<bool>? LoadingStateChanged { get; init; }
+
+    /// <summary>A frame started loading: (isMainFrame).</summary>
+    public Action<bool>? LoadStarted { get; init; }
+
+    /// <summary>A frame finished loading: (isMainFrame, httpStatusCode).</summary>
+    public Action<bool, int>? LoadEnded { get; init; }
+
+    /// <summary>A frame failed to load: (isMainFrame, errorCode, errorText, failedUrl).</summary>
+    public Action<bool, int, string, string>? LoadFailed { get; init; }
+
+    [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])]
+    private static void OnLoadingStateChange(cef_load_handler_t* self, cef_browser_t* browser, int isLoading, int canGoBack, int canGoForward)
+    {
+        var owner = NativeObject.Owner<LoadHandler>(self);
+        if (owner.LoadingStateChanged is { } callback) Guard.Run(() => callback(isLoading != 0));
+        NativeObject.Release(browser);
+    }
+
+    [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])]
+    private static void OnLoadStart(cef_load_handler_t* self, cef_browser_t* browser, cef_frame_t* frame, cef_transition_type_t transition)
+    {
+        var owner = NativeObject.Owner<LoadHandler>(self);
+        var isMain = frame->is_main(frame) != 0;
+        if (owner.LoadStarted is { } callback) Guard.Run(() => callback(isMain));
+        NativeObject.Release(frame);
+        NativeObject.Release(browser);
+    }
+
+    [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])]
+    private static void OnLoadEnd(cef_load_handler_t* self, cef_browser_t* browser, cef_frame_t* frame, int httpStatusCode)
+    {
+        var owner = NativeObject.Owner<LoadHandler>(self);
+        var isMain = frame->is_main(frame) != 0;
+        if (owner.LoadEnded is { } callback) Guard.Run(() => callback(isMain, httpStatusCode));
+        NativeObject.Release(frame);
+        NativeObject.Release(browser);
+    }
+
+    [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])]
+    private static void OnLoadError(cef_load_handler_t* self, cef_browser_t* browser, cef_frame_t* frame, cef_errorcode_t errorCode, cef_string_utf16_t* errorText, cef_string_utf16_t* failedUrl)
+    {
+        var owner = NativeObject.Owner<LoadHandler>(self);
+        var isMain = frame->is_main(frame) != 0;
+        var text = CefString.Read(errorText);
+        var url = CefString.Read(failedUrl);
+        if (owner.LoadFailed is { } callback) Guard.Run(() => callback(isMain, (int)errorCode, text, url));
+        NativeObject.Release(frame);
+        NativeObject.Release(browser);
+    }
 }
 
 /// <summary><c>cef_browser_view_delegate_t</c>: events for the view hosting a browser.</summary>
@@ -186,11 +304,11 @@ public sealed unsafe class WindowDelegate
 
     public cef_window_delegate_t* Native { get; }
 
-    public bool Resizable { get; init; } = true;
+    public bool Resizable { get; set; } = true;
 
-    public bool Minimizable { get; init; } = true;
+    public bool Minimizable { get; set; } = true;
 
-    public bool Maximizable { get; init; } = true;
+    public bool Maximizable { get; set; } = true;
 
     public WindowCallback? Created { get; init; }
 

@@ -21,4 +21,8 @@
     <EmbeddedResource Include="Ipc/*.js" LogicalName="Oriel.Ipc.%(Filename)%(Extension)" />
   </ItemGroup>
 
+  <ItemGroup>
+    <InternalsVisibleTo Include="Oriel.Tests" />
+  </ItemGroup>
+
 </Project>

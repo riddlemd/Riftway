@@ -7,6 +7,7 @@ var app = OrielApp.Create("Oriel.WindowTest");
 var failures = -1;
 var results = new List<string>();
 var step = TimeSpan.FromSeconds(5);
+var simpleReady = false;
 
 void Check(string name, bool pass, object? detail = null)
 {
@@ -44,6 +45,51 @@ static bool Eventually(Func<bool> condition, TimeSpan timeout)
 async Task RunAsync(BrowserWindow win, BrowserWindow simple)
 {
     await Task.Delay(1000);
+
+    // Lookup.
+    Check("ids are unique", win.Id != simple.Id, $"{win.Id} {simple.Id}");
+    Check("FromId", BrowserWindow.FromId(win.Id) == win && BrowserWindow.FromId(-1) is null);
+    Check("GetAllWindows", BrowserWindow.GetAllWindows().Count == 2, BrowserWindow.GetAllWindows().Count);
+    Check("FromWebContents", BrowserWindow.FromWebContents(win.WebContents) == win);
+
+    // Page title drives the window title unless PageTitleUpdated is cancelled; LoadFile, DidFinishLoad, GetUrl.
+    var page = Path.Combine(Path.GetTempPath(), "oriel-window-test.html");
+    File.WriteAllText(page, "<!doctype html><title>Page title</title><p>loaded</p>");
+    string? seenTitle = null;
+    EventHandler<PageTitleUpdatedEventArgs> onTitle = (_, e) => seenTitle = e.Title;
+    win.PageTitleUpdated += onTitle;
+    var loaded = Fires(h => win.WebContents.DidFinishLoad += h, h => win.WebContents.DidFinishLoad -= h,
+        () => win.WebContents.LoadFile(page, new Dictionary<string, string> { ["q"] = "1 2" }, "top"), step);
+    Check("LoadFile raises DidFinishLoad", loaded);
+    Check("GetUrl reflects LoadFile (query, hash)", win.WebContents.GetUrl().EndsWith("oriel-window-test.html?q=1%202#top", StringComparison.Ordinal), win.WebContents.GetUrl());
+    Check("PageTitleUpdated raised", Eventually(() => seenTitle == "Page title", step), seenTitle);
+    Check("window title follows the page", Eventually(() => win.GetTitle() == "Page title", step), win.GetTitle());
+    win.PageTitleUpdated -= onTitle;
+
+    EventHandler<PageTitleUpdatedEventArgs> keep = (_, e) => e.Cancel = true;
+    win.PageTitleUpdated += keep;
+    File.WriteAllText(page, "<!doctype html><title>Ignored title</title>");
+    Check("Reload raises DidFinishLoad",
+        Fires(h => win.WebContents.DidFinishLoad += h, h => win.WebContents.DidFinishLoad -= h, win.WebContents.Reload, step));
+    Check("cancelled PageTitleUpdated keeps the window title", Eventually(() => win.WebContents.GetTitle() == "Ignored title", step) && win.GetTitle() == "Page title", $"{win.WebContents.GetTitle()} / {win.GetTitle()}");
+    win.PageTitleUpdated -= keep;
+
+    // Content size, runtime limits, colour.
+    win.SetContentSize(560, 420);
+    Check("content size", Eventually(() => win.GetContentSize() == (560, 420), step), win.GetContentSize());
+    Check("content fits inside the window", win.GetBounds() is var ob && win.GetContentBounds() is var cb && cb.Width <= ob.Width && cb.Height <= ob.Height, $"{win.GetBounds()} {win.GetContentBounds()}");
+    win.SetResizable(false);
+    Check("SetResizable(false)", !win.IsResizable);
+    win.SetResizable(true);
+    win.SetMinimumSize(500, 350);
+    Check("runtime minimum size", win.GetMinimumSize() == (500, 350), win.GetMinimumSize());
+    win.SetSize(300, 200);
+    Check("runtime minimum size enforced", Eventually(() => win.GetSize().Width >= 500, step), win.GetSize());
+    win.SetMinimumSize(400, 300);
+    // Not 700x500: the next section must see a real resize.
+    win.SetSize(660, 470);
+    win.SetBackgroundColor("#202830");
+    Check("background colour", win.GetBackgroundColor() == "#202830", win.GetBackgroundColor());
 
     win.SetTitle("Oriel window test: retitled");
     Check("title", Eventually(() => win.GetTitle() == "Oriel window test: retitled", step), win.GetTitle());
@@ -105,12 +151,19 @@ async Task RunAsync(BrowserWindow win, BrowserWindow simple)
         Check("SimpleFullScreen option: uses simple full screen on macOS", simple.IsSimpleFullScreen, simple.IsSimpleFullScreen);
     simple.SetFullScreen(false);
     Check("SimpleFullScreen option: SetFullScreen(false) leaves it", Eventually(() => !simple.IsFullScreen, step), simple.IsFullScreen);
+    Check("ReadyToShow raised for a hidden window", Eventually(() => simpleReady, step));
+    simple.SetClosable(false);
+    Check("SetClosable(false)", !simple.IsClosable);
+    var simpleClosing = 0;
+    simple.Closing += (_, _) => simpleClosing++;
     using (var simpleClosed = new ManualResetEventSlim())
     {
         simple.Closed += (_, _) => simpleClosed.Set();
-        simple.Close();
-        Check("second window closes", simpleClosed.Wait(step));
+        simple.Destroy();
+        Check("Destroy closes a non-closable window", simpleClosed.Wait(step));
+        Check("Destroy skips Closing", simpleClosing == 0, simpleClosing);
     }
+    Check("GetAllWindows after Destroy", BrowserWindow.GetAllWindows().Count == 1, BrowserWindow.GetAllWindows().Count);
 
     // Closing cancelled once: the window must survive the first close.
     var closingCount = 0;
@@ -123,6 +176,8 @@ async Task RunAsync(BrowserWindow win, BrowserWindow simple)
 
     failures = results.Count(r => r.StartsWith("FAIL", StringComparison.Ordinal));
     Console.WriteLine($"RESULT: {failures} failure(s) before the final close");
+    // Not closable by the user, but code can still close it.
+    win.SetClosable(false);
     using var closed = new ManualResetEventSlim();
     win.Closed += (_, _) => closed.Set();
     win.Close();
@@ -141,7 +196,9 @@ app.Ready += (_, _) =>
         MinHeight = 300,
     });
     win.LoadUrl("data:text/html,<h1>Oriel window test</h1>");
-    var simple = new BrowserWindow(new BrowserWindowOptions { Title = "Oriel window test: simple", Show = false, SimpleFullScreen = true });
+    var simple = new BrowserWindow(new BrowserWindowOptions { Title = "Oriel window test: simple", Show = false, SimpleFullScreen = true, BackgroundColor = "#102030" });
+    simple.ReadyToShow += (_, _) => simpleReady = true;
+    simple.LoadUrl("data:text/html,<title>simple</title>");
 
     // Off the UI thread: the steps wait for events the UI thread raises.
     _ = Task.Run(() => RunAsync(win, simple)).ContinueWith(t =>

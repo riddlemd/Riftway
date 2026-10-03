@@ -19,26 +19,31 @@ Event naming: Electron `'x'` → past-tense .NET event (`focus`→`Focused`, `cl
 | Events (35) | 14 | 0 | 21 |
 | Static methods (5) | 0 | 0 | 5 |
 
+## Done since the audit
+
+- Lookup: `Id`, `GetAllWindows`, `GetFocusedWindow`, `FromWebContents`, `FromId`.
+- Runtime setters/getters: resizable, minimizable, maximizable, closable (+ `Closable` option; code can still close),
+  minimum/maximum size.
+- Sizes: `GetSize`, `GetPosition`, `Get/SetContentBounds`, `Get/SetContentSize`, `UseContentSize`, `Center` options.
+- `PageTitleUpdated` (window and webContents; window title follows the page unless cancelled), `ReadyToShow`.
+- `BackgroundColor` option, `Set/GetBackgroundColor`; `Icon` option, `SetIcon` (PNG/JPEG).
+- `Destroy`.
+- webContents: `LoadFile` (query, hash), `Reload`, `GetUrl`, `GetTitle`, `did-start-loading`, `did-stop-loading`,
+  `did-finish-load`, `did-fail-load`.
+
 ## Next, by importance
 
-1. `BrowserWindow.GetAllWindows/GetFocusedWindow/FromWebContents/FromId` and `Id` — Oriel.
-2. Window menus: `setMenu/removeMenu`, `autoHideMenuBar`, menu visibility — Oriel/OS (with the `Menu` module).
-3. `webPreferences`: `devTools`, `zoomFactor`, `webSecurity`, fonts, `spellcheck`, `session`/`partition` — `cef_browser_settings_t`, `H`, request contexts.
-4. `parent`/`modal`, `setParentWindow`, `isModal`, `getChildWindows` — `D.get_parent_window`, `D.is_window_modal_dialog`.
-5. Runtime setters for `resizable`, `minimizable`, `maximizable`, `closable`, min/max size — `D.can_*`, size callbacks + `V.invalidate_layout`.
-6. `getSize`, `getPosition`, `get/setContentBounds`, `get/setContentSize`, `useContentSize` — `V`, `W.get_client_area_bounds_in_screen`.
-7. `page-title-updated` — display handler `on_title_change`.
-8. `ready-to-show` — load handler (first paint approximation).
-9. `backgroundColor` — `V.set_background_color` / browser settings.
-10. `titleBarStyle`, `titleBarOverlay`, `trafficLightPosition` — `D.with_standard_window_buttons`, `D.get_titlebar_height`, `W.add_overlay_view`, OS.
-11. `icon`/`setIcon` — `W.set_window_icon`, `W.set_window_app_icon`.
-12. `destroy`, `showInactive` — `H.close_browser(force)` + `W.close`; OS.
-13. `skipTaskbar`, `flashFrame`, `setProgressBar` — OS.
-14. `loadFile`, `reload`, `loadURL` options — Oriel + `cef_browser_t`/`cef_frame_t`.
-15. Window state persistence (`windowStatePersistence`, `getNormalBounds`, `persisted-state-restored`) — Oriel.
+1. Window menus: `setMenu/removeMenu`, `autoHideMenuBar`, menu visibility — Oriel/OS (with the `Menu` module).
+2. `webPreferences`: `devTools`, `zoomFactor`, `webSecurity`, fonts, `spellcheck`, `session`/`partition` — `cef_browser_settings_t`, `H`, request contexts.
+3. `parent`/`modal`, `setParentWindow`, `isModal`, `getChildWindows` — `D.get_parent_window`, `D.is_window_modal_dialog`.
+4. `titleBarStyle`, `titleBarOverlay`, `trafficLightPosition` — `D.with_standard_window_buttons`, `D.get_titlebar_height`, `W.add_overlay_view`, OS.
+5. `showInactive`, `skipTaskbar`, `flashFrame`, `setProgressBar` — OS.
+6. `loadURL` options (userAgent, extraHeaders, httpReferrer, postData) — `cef_request_t` + `load_request`.
+7. Window state persistence (`windowStatePersistence`, `getNormalBounds`, `persisted-state-restored`) — Oriel.
+8. `opacity`, `hasShadow`, `setIgnoreMouseEvents`, content protection, `setKiosk`, `will-*`/`resized`/`moved` events — OS.
 
-Accuracy gap in a done item: `Shown`/`Hidden` fire only from `Show()`/`Hide()`, not when the OS shows or
-hides the window.
+Accuracy gaps in done items: `Shown`/`Hidden` fire only from `Show()`/`Hide()`, not when the OS shows or hides the
+window; `SetIcon` takes a file path, not Electron's `NativeImage` (that module comes later).
 
 ## Platform notes
 
