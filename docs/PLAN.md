@@ -151,6 +151,12 @@ with AI help, plus the ongoing Chromium cadence. Estimate, not measured.
   NativeAOT `Oriel.Subprocess`; moving it to the native one comes with the macOS sandbox, which links
   CEF's sandbox library into the helper.
 - **Linux sandbox:** Ubuntu 24.04+ blocks Chromium's sandbox unless an AppArmor profile is installed.
+- **Chromium/libyuv SIGILL on SME-without-SVE arm64 (Linux VMs on Apple M4+ hosts):** libyuv picks its
+  `*_SME` YUV→RGB rows on HWCAP2_SME alone, but builds them with `-march=armv9-a+sme`, whose prologue
+  runs an SVE `cntd`; the renderer dies ("Aw, Snap! SIGILL") on the first software-converted video
+  frame. Linux/Android arm64 only. Tests hide SME with `eng/docker/hide-sme.c` (LD_PRELOAD, applied only
+  when SME is present without SVE). Product decision open: document as a known upstream issue, or ship a
+  workaround. To file upstream with libyuv/Chromium.
 - **Size:** ~130–175 MB compressed per platform, comparable to Electron.
 - **Blazor over a message hop:** render batches cross browser → renderer; very busy UIs may need a
   faster path.

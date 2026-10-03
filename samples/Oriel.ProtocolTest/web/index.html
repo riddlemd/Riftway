@@ -1,0 +1,104 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>Oriel protocol test</title>
+<script src="app.js"></script>
+<pre id="out">running…</pre>
+<script>
+  const results = [];
+  const check = (name, pass, detail) => {
+    results.push({ name, pass: !!pass, detail: String(detail ?? '') });
+    harness.progress(name);
+  };
+  const bytes = async (response) => new Uint8Array(await response.arrayBuffer());
+
+  // Plays src in a fresh element; resolves with how it ended, never hangs past 10 s.
+  const playAndSeek = (src) => new Promise((resolve) => {
+    const video = document.createElement('video');
+    video.muted = true;
+    document.body.append(video);
+    const timer = setTimeout(() => resolve(['timeout', video.error?.message]), 10000);
+    video.addEventListener('error', () => { clearTimeout(timer); resolve(['error', video.error?.message]); });
+    video.addEventListener('loadedmetadata', () => { video.currentTime = 1.0; }, { once: true });
+    video.addEventListener('seeked', () => { clearTimeout(timer); resolve(['seeked', video.duration]); }, { once: true });
+    video.src = src;
+  });
+
+  (async () => {
+    check('top-level page from custom scheme', location.protocol === 'app:', location.href);
+    check('secure context', isSecureContext, isSecureContext);
+    check('real origin', window.origin === 'app://test', window.origin);
+    try { localStorage.setItem('k', 'v'); check('localStorage', localStorage.getItem('k') === 'v', 'ok'); }
+    catch (e) { check('localStorage', false, e.message); }
+    check('relative subresource', window.subresourceLoaded === true, window.subresourceLoaded);
+
+    try {
+      const response = await fetch('/echo?q=1', { method: 'POST', headers: { 'X-Test': 'yes' }, body: 'hello' });
+      const echo = await response.json();
+      const ok = echo.method === 'POST' && echo.header === 'yes' && echo.body === 'hello' && echo.url === 'app://test/echo?q=1';
+      check('fetch POST echo (method, header, body, url)', ok, JSON.stringify(echo));
+      check('content type passed through', response.headers.get('content-type')?.startsWith('application/json'), response.headers.get('content-type'));
+    } catch (e) { check('fetch POST echo (method, header, body, url)', false, e.message); }
+
+    try {
+      const response = await fetch('/range.bin', { headers: { Range: 'bytes=10-19' } });
+      const body = await bytes(response);
+      const ok = response.status === 206 && response.headers.get('content-range') === 'bytes 10-19/1024'
+        && body.length === 10 && body[0] === 10 && body[9] === 19;
+      check('range bytes=10-19', ok, `${response.status} ${response.headers.get('content-range')} len=${body.length} first=${body[0]}`);
+    } catch (e) { check('range bytes=10-19', false, e.message); }
+
+    try {
+      const response = await fetch('/range.bin', { headers: { Range: 'bytes=1000-' } });
+      const body = await bytes(response);
+      const ok = response.status === 206 && response.headers.get('content-range') === 'bytes 1000-1023/1024'
+        && body.length === 24 && body[0] === (1000 % 256);
+      check('open-ended range bytes=1000-', ok, `${response.status} ${response.headers.get('content-range')} len=${body.length}`);
+    } catch (e) { check('open-ended range bytes=1000-', false, e.message); }
+
+    try {
+      const response = await fetch('/range.bin');
+      const body = await bytes(response);
+      check('no range: whole body, 200', response.status === 200 && body.length === 1024, `${response.status} len=${body.length}`);
+    } catch (e) { check('no range: whole body, 200', false, e.message); }
+
+    try { const r = await fetch('/missing'); check('404 status', r.status === 404, r.status); }
+    catch (e) { check('404 status', false, e.message); }
+
+    try { const r = await fetch('/throws'); check('handler exception becomes 500', r.status === 500, r.status); }
+    catch (e) { check('handler exception becomes 500', false, e.message); }
+
+    try {
+      const body = await bytes(await fetch('/big'));
+      const ok = body.length === 5 * 1024 * 1024 && body[0] === 0 && body[1000003] === 1000003 % 251;
+      check('5 MB streamed body', ok, `len=${body.length}`);
+    } catch (e) { check('5 MB streamed body', false, e.message); }
+
+    // Control: the same file played from memory, so a failure below isolates custom-scheme streaming.
+    try {
+      const blob = await (await fetch('video.webm')).blob();
+      const [outcome, detail] = await playAndSeek(URL.createObjectURL(blob));
+      check('video from blob (control)', outcome === 'seeked', `${outcome} ${detail}`);
+    } catch (e) { check('video from blob (control)', false, e.message); }
+
+    const [outcome, detail] = await playAndSeek('video.webm');
+    check('video plays and seeks (range requests)', outcome === 'seeked', `${outcome} ${detail}`);
+
+    // Plays for real: decoded frames reach the compositor (the path that converts YUV to RGB).
+    const painted = await new Promise((resolve) => {
+      const video = document.createElement('video');
+      video.muted = true;
+      video.loop = true;
+      document.body.append(video);
+      let frames = 0;
+      const timer = setTimeout(() => resolve(frames), 10000);
+      const onFrame = () => { if (++frames >= 10) { clearTimeout(timer); resolve(frames); } else video.requestVideoFrameCallback(onFrame); };
+      video.requestVideoFrameCallback(onFrame);
+      video.src = 'video.webm';
+      video.play().catch(() => {});
+    });
+    check('video paints frames', painted >= 10, `frames=${painted}`);
+
+    document.getElementById('out').textContent = JSON.stringify(results, null, 2);
+    await harness.report(results);
+  })();
+</script>
