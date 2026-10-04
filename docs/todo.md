@@ -10,7 +10,7 @@ Cross-platform work. Platform-specific items: [linux-todo.md](linux-todo.md), [w
   - [x] Window menus (`setMenu`, `removeMenu`, `autoHideMenuBar`), with the `Menu` module
   - [x] `Menu.popup` (context menus), webContents `context-menu`, mouse `sendInputEvent`
   - [x] `webPreferences` batch 1 (devTools, zoomFactor, javascript, images, textarea, webgl, fonts, disableDialogs)
-  - [ ] Remaining `webPreferences` (see the parity doc: process-wide switches, session/partition, spellcheck, ...)
+  - [ ] Remaining `webPreferences` (see the parity doc: process-wide switches, spellcheck, ...; session/partition done)
   - [x] `parent`/`modal`, `isModal`, `getChildWindows`, `getParentWindow`
   - [ ] `setParentWindow` (needs OS code: CEF sets the parent only at creation)
   - [ ] `titleBarStyle`, `titleBarOverlay`, `trafficLightPosition`
@@ -29,8 +29,9 @@ Cross-platform work. Platform-specific items: [linux-todo.md](linux-todo.md), [w
 - [x] File `Dialog` and `Screen`; gaps in [DRIFT.md](DRIFT.md)
 - [x] `NavigationHistory` (`WebContents.NavigationHistory`)
 - [x] `WebFrameMain` (`WebContents.MainFrame`, IPC `SenderFrame`)
+- [x] Core `Session` (`Session`, `Cookies`, partitions; gaps DRIFT E1-E11) and `NativeImage` (gaps DRIFT B1-B5)
 - [ ] Remaining M2 modules: `BaseWindow`, `View`, `WebContentsView`,
-      `Debugger`, core `Session`, command line
+      `Debugger`, command line
 - [x] `window.open` handling: `SetWindowOpenHandler`, `DidCreateWindow` (branch `window-open`)
 - [ ] Menus: Alt+letter mnemonics and the Alt toggle never fire (DRIFT W19): handle Alt in a `cef_keyboard_handler_t`
 - [x] macOS: `Width`/`Height` gave a window a title bar taller than asked (was DRIFT W18)

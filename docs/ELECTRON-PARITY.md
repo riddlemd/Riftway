@@ -9,15 +9,15 @@ Recounted 2026-10-04 against `src/Oriel`. Update these figures when a row or che
 
 | Measure | Done | Partial | Not started | Total |
 |---|---|---|---|---|
-| Module rows below | 1 | 13 | 53 | 67 |
-| M2 rows | 1 | 12 | 8 | 21 |
+| Module rows below | 1 | 16 | 50 | 67 |
+| M2 rows | 1 | 13 | 8 | 22 |
 
 The 67 rows include `BrowserView` (deprecated, never implemented; counted as not started).
 
 | Checklist | Applicable items | Done | Partial | Missing | % done | % done + partial/2 |
 |---|---|---|---|---|---|---|
-| [BrowserWindow](parity/browser-window.md) (with `BaseWindow`) | 294 | 115 | 21 | 158 | 39.1% | 42.7% |
-| [webContents](parity/web-contents.md) (with `navigationHistory`, `WebFrameMain`) | 230 | 52 | 15 | 163 | 22.6% | 25.9% |
+| [BrowserWindow](parity/browser-window.md) (with `BaseWindow`) | 294 | 124 | 20 | 150 | 42.2% | 45.6% |
+| [webContents](parity/web-contents.md) (with `navigationHistory`, `WebFrameMain`) | 230 | 53 | 15 | 162 | 23.0% | 26.3% |
 
 **Source** — where the implementation comes from:
 
@@ -55,7 +55,7 @@ Detailed item-by-item status: [parity/browser-window.md](parity/browser-window.m
 | Electron | Oriel | Source | Wave | Status |
 |---|---|---|---|---|
 | `BaseWindow` | `BaseWindow` | CEF (Views) | M2 | — |
-| `BrowserWindow` | `BrowserWindow` | CEF (Views) | M2 | partial: 115 of 294 applicable items done (39.1%), see parity/browser-window.md |
+| `BrowserWindow` | `BrowserWindow` | CEF (Views) | M2 | partial: 124 of 294 applicable items done (42.2%), see parity/browser-window.md |
 | `View` | `View` | CEF (Views panel) | M2 | — |
 | `WebContentsView` | `WebContentsView` | CEF (Views browser view) | M2 | — |
 | `ImageView` | `ImageView` | CEF + .NET | M5 | — |
@@ -72,7 +72,7 @@ Detailed item-by-item status, including `navigationHistory` and `WebFrameMain`: 
 
 | Electron | Oriel | Source | Wave | Status |
 |---|---|---|---|---|
-| `webContents` | `WebContents` | CEF | M2 | partial: 52 of 230 applicable items done (22.6%) across `webContents`, `navigationHistory` and `WebFrameMain`, see parity/web-contents.md; `loadURL`/`loadFile`/`reload`, `send`, IPC, window-open handler, context menu, input events, zoom, user agent, DevTools |
+| `webContents` | `WebContents` | CEF | M2 | partial: 53 of 230 applicable items done (23.0%) across `webContents`, `navigationHistory` and `WebFrameMain`, see parity/web-contents.md; `loadURL`/`loadFile`/`reload`, `send`, IPC, window-open handler, context menu, input events, zoom, user agent, DevTools |
 | `webFrameMain` | `WebFrameMain` | CEF | M2 | partial: frame tree, url/origin/name, `executeJavaScript`, `reload`, `send`, IPC `senderFrame`; in-process frames only (see DRIFT.md) |
 | `NavigationHistory` | `NavigationHistory` | CEF | M2 | partial: back/forward, index/offset moves, entries, clear; no `removeEntryAtIndex` or `restore` (see DRIFT.md) |
 | `Debugger` (`webContents.debugger`) | `Debugger` (DevTools protocol) | CEF | M2 | — |
@@ -93,9 +93,9 @@ Detailed item-by-item status, including `navigationHistory` and `WebFrameMain`: 
 
 | Electron | Oriel | Source | Wave | Status |
 |---|---|---|---|---|
-| `session` | `Session` | CEF | M2 core, M6 rest | — |
+| `session` | `Session` | CEF | M2 core, M6 rest | partial: core done (`defaultSession`, `fromPartition`, `fromPath`, `persist:` partitions, `WebPreferences.Session`/`Partition`, `WebContents.Session`, per-session `protocol`, `flushStorageData`); no `webRequest`, permissions, downloads, storage clearing, per-session user agent (see DRIFT.md E1-E11) |
 | `protocol` | `Protocol` | CEF | M2 | partial: `handle`, `unhandle`, `isProtocolHandled`, `registerSchemesAsPrivileged`; global, not per session; no `intercept*` or legacy `register*Protocol` (see DRIFT.md) |
-| `Cookies` | `Cookies` | CEF | M6 | — |
+| `Cookies` | `Cookies` | CEF | M6 | partial: `get`, `set`, `remove`, `flushStore`; no `changed` event, no rejection reason (DRIFT E4, E5) |
 | `WebRequest` | `WebRequest` | CEF | M6 | — |
 | `DownloadItem` | `DownloadItem` | CEF | M6 | — |
 | `net` | `Net` | CEF | M6 | — |
@@ -118,7 +118,7 @@ Detailed item-by-item status, including `navigationHistory` and `WebFrameMain`: 
 | `Dock` (`app.dock`, macOS) | `OrielApp.Dock` | OS | M5 | — |
 | `clipboard` / `ClipboardItem` | `Clipboard` / `ClipboardItem` | OS | M5 | — |
 | `shell` | `Shell` | OS | M5 | — |
-| `nativeImage` | `NativeImage` | CEF + .NET | M5 | partial: PNG/JPEG through CEF, raw bitmaps, data URLs, `@Nx` files, crop, resize, representations; window icon, overlay and thumbar buttons take it |
+| `nativeImage` | `NativeImage` | CEF + .NET | M5 | partial: PNG/JPEG through CEF, raw bitmaps, data URLs, `@Nx` files, crop, resize, representations; window icon, overlay and thumbar buttons take it; gaps in DRIFT B1-B5 (no `createThumbnailFromPath`, one resize filter, template images unused, no ICO) |
 | `nativeTheme` | `NativeTheme` | OS + CEF | M5 | — |
 | `powerMonitor` | `PowerMonitor` | OS | M5 | — |
 | `powerSaveBlocker` | `PowerSaveBlocker` | OS | M5 | — |

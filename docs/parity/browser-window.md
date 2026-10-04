@@ -17,13 +17,13 @@ Counted from the Checklist at the end: `BaseWindow` and `BrowserWindow` are one 
 
 | Area | Items | Done | Partial | Missing | n/a | % done | % done + partial/2 |
 |---|---|---|---|---|---|---|---|
-| BaseWindow + BrowserWindow options | 54 | 25 | 2 | 27 | 0 | 46.3% | 48.1% |
-| webPreferences | 46 | 9 | 3 | 27 | 7 | 23.1% | 26.9% |
-| Instance methods | 143 | 54 | 12 | 71 | 6 | 39.4% | 43.8% |
+| BaseWindow + BrowserWindow options | 54 | 26 | 2 | 26 | 0 | 48.1% | 50.0% |
+| webPreferences | 46 | 11 | 3 | 25 | 7 | 28.2% | 32.1% |
+| Instance methods | 143 | 60 | 11 | 66 | 6 | 43.8% | 47.8% |
 | Instance properties | 24 | 11 | 0 | 13 | 0 | 45.8% | 45.8% |
 | Events | 35 | 12 | 4 | 19 | 0 | 34.3% | 40.0% |
 | Static methods | 6 | 4 | 0 | 1 | 1 | 80.0% | 80.0% |
-| **Total** | 308 | 115 | 21 | 158 | 14 | 39.1% | 42.7% |
+| **Total** | 308 | 124 | 20 | 150 | 14 | 42.2% | 45.6% |
 
 ## Done since the audit
 
@@ -103,8 +103,8 @@ Counted from the Checklist at the end: `BaseWindow` and `BrowserWindow` are one 
 ## Next, by importance
 
 1. Remaining webPreferences:
-   - Need other modules: `session`/`partition` and `spellcheck` (Session, request contexts), `offscreen` (offscreen
-     rendering), `transparent`.
+   - Need other modules: `spellcheck` (Session, E10), `offscreen` (offscreen
+     rendering), `transparent`. `session`/`partition` landed with the `Session` module (DRIFT E1-E11).
    - Process-wide in CEF (Chromium switches, not per window): `webSecurity`, `allowRunningInsecureContent`,
      `experimentalFeatures`, `enableBlinkFeatures`/`disableBlinkFeatures`, `autoplayPolicy`, `sandbox`. Decide between
      an app-level option and a per-window gap.
@@ -177,7 +177,7 @@ Parameters in brackets are optional in Electron. `webContents` members are in [w
 | `name` | — | missing |  |
 | `windowStatePersistence` | — | missing |  |
 | `title` | `Title` | done |  |
-| `icon` | `Icon` | partial | File path only, no NativeImage (W3). |
+| `icon` | `Icon`, `IconImage` | done | Two options, `IconImage` (`NativeImage`) wins (W26). |
 | `show` | `Show` | done |  |
 | `frame` | `Frame` | done |  |
 | `parent` | `Parent` | done |  |
@@ -200,7 +200,7 @@ Parameters in brackets are optional in Electron. `webContents` members are in [w
 | `roundedCorners` | — | missing |  |
 | `thickFrame` | — | missing |  |
 | `vibrancy` | — | missing |  |
-| `backgroundMaterial` | — | missing |  |
+| `backgroundMaterial` | `BackgroundMaterial` | partial | Windows 11 22H2+ only; set but hidden behind CEF's opaque painting (W24). |
 | `zoomToPageWidth` | — | missing |  |
 | `tabbingIdentifier` | — | missing |  |
 | `webPreferences (BrowserWindow)` | `WebPreferences` | done | Per-option status in the next table. |
@@ -216,8 +216,8 @@ Parameters in brackets are optional in Electron. `webContents` members are in [w
 | `nodeIntegrationInSubFrames` | — | n/a | Node.js |
 | `preload` | `Preload` | done |  |
 | `sandbox` | — | missing | Process-wide in CEF (W13). |
-| `session` | — | missing | Needs the Session module. |
-| `partition` | — | missing | Needs the Session module. |
+| `session` | `Session` | done | Overrides `Partition`; popups cannot take another session (E7). |
+| `partition` | `Partition` | done | `persist:` dirs live in the data directory (E1). |
 | `zoomFactor` | `ZoomFactor` | partial | Re-applies to an origin whose zoom was reset to 0 (W15). |
 | `zoomMode` | — | missing |  |
 | `javascript` | `Javascript` | done |  |
@@ -346,28 +346,28 @@ Parameters in brackets are optional in Electron. `webContents` members are in [w
 | `isDocumentEdited()` | — | missing |  |
 | `focusOnWebView()` | — | missing |  |
 | `blurWebView()` | — | missing |  |
-| `capturePage(rect, opts)` | — | missing | Needs NativeImage. |
+| `capturePage(rect, opts)` | — | missing | `NativeImage` exists; the capture is missing. |
 | `loadURL(url, options)` | `LoadUrl` | partial | Returns Task; `baseURLForDataURL` throws, `UploadFile` offset/length throw, no client hints, reload drops options (C1, C2, C3, C5). |
 | `loadFile(filePath, options)` | `WebContents.LoadFile` | partial | Only on WebContents, no BrowserWindow shortcut; `query` and `hash`, no `search`. |
 | `reload()` | `WebContents.Reload` | partial | Only on WebContents, no BrowserWindow shortcut. |
 | `setMenu(menu)` | `SetMenu` | done | Drawn by CEF Views on Windows/Linux (W16). |
 | `removeMenu()` | `RemoveMenu` | done |  |
 | `setProgressBar(progress, options)` | `SetProgressBar` | partial | No Linux progress; macOS error/paused show as plain bar (W20). |
-| `setOverlayIcon(overlay, description)` | `SetOverlayIcon` | partial | File path, not NativeImage (W21). |
+| `setOverlayIcon(overlay, description)` | `SetOverlayIcon` | done | Takes a `NativeImage`. |
 | `invalidateShadow()` | — | missing |  |
 | `setHasShadow(hasShadow)` | — | missing |  |
 | `hasShadow()` | — | missing |  |
 | `setOpacity(opacity)` | — | missing |  |
 | `getOpacity()` | — | missing |  |
 | `setShape(rects)` | — | missing |  |
-| `setThumbarButtons(buttons)` | — | missing | W22. |
-| `setThumbnailClip(region)` | — | missing |  |
-| `setThumbnailToolTip(toolTip)` | — | missing |  |
-| `setAppDetails(options)` | — | missing |  |
+| `setThumbarButtons(buttons)` | `SetThumbarButtons` | done | Windows only, as in Electron. |
+| `setThumbnailClip(region)` | `SetThumbnailClip` | done | Windows only, as in Electron. |
+| `setThumbnailToolTip(toolTip)` | `SetThumbnailToolTip` | done | Windows only, as in Electron. |
+| `setAppDetails(options)` | `SetAppDetails` | done | Windows only, as in Electron. |
 | `setAccentColor(accentColor)` | — | missing |  |
 | `getAccentColor()` | — | missing |  |
 | `showDefinitionForSelection()` | — | missing |  |
-| `setIcon(icon)` | `SetIcon` | partial | File path (PNG/JPEG), Windows and Linux only, no NativeImage (W3). |
+| `setIcon(icon)` | `SetIcon` | done | Path or `NativeImage`; Windows and Linux only, as in Electron. |
 | `setWindowButtonVisibility(visible)` | — | missing |  |
 | `setAutoHideMenuBar(hide)` | `AutoHideMenuBar (set)` | done |  |
 | `isMenuBarAutoHide()` | `AutoHideMenuBar (get)` | done |  |
@@ -393,7 +393,7 @@ Parameters in brackets are optional in Electron. `webContents` members are in [w
 | `toggleTabBar()` | — | missing |  |
 | `addTabbedWindow(window)` | — | missing |  |
 | `setVibrancy(type, options)` | — | missing |  |
-| `setBackgroundMaterial(material)` | — | missing |  |
+| `setBackgroundMaterial(material)` | `SetBackgroundMaterial` | partial | Windows 11 22H2+ only; set but hidden (W24). |
 | `setWindowButtonPosition(position)` | — | missing |  |
 | `getWindowButtonPosition()` | — | missing |  |
 | `setTouchBar(touchBar)` | — | missing |  |
