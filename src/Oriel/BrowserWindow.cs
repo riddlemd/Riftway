@@ -71,7 +71,7 @@ public sealed record BrowserWindowOptions
     /// <summary>A PNG or JPEG for the window and taskbar icon (Windows, Linux).</summary>
     public string? Icon { get; init; }
 
-    /// <summary>Whether the window has no taskbar button. Windows only for now: ignored on macOS and Linux.
+    /// <summary>Whether the window has no taskbar button (Windows, Linux; macOS has no per-window taskbar button).
     /// Electron's <c>skipTaskbar</c>.</summary>
     public bool SkipTaskbar { get; init; }
 
@@ -211,6 +211,8 @@ public sealed unsafe class BrowserWindow
 
     private bool _closable;
     private bool _skipTaskbar;
+    // macOS: the Dock bounce FlashFrame started, to cancel.
+    private nint _attentionRequest;
     // Set by Close()/Destroy(): a close from code goes through even when the user may not close.
     private bool _closeFromCode;
     private bool _readyToShowRaised;
@@ -882,7 +884,9 @@ public sealed unsafe class BrowserWindow
     }
 
     /// <summary>Shows progress on the taskbar button, from 0 to 1; below 0 removes it and above 1 shows it as
-    /// indeterminate. Windows only for now: does nothing on macOS and Linux. Electron's <c>win.setProgressBar()</c>.</summary>
+    /// indeterminate. Electron's <c>win.setProgressBar()</c>.</summary>
+    /// <remarks>macOS: on the Dock icon, which all windows share; error and paused show as the plain bar.
+    /// Linux: not shown yet (desktop-specific).</remarks>
     public void SetProgressBar(double progress, ProgressBarOptions? options = null)
     {
         var (state, percent) = ProgressBar.Map(progress, options?.Mode ?? ProgressBarMode.Normal);
@@ -890,18 +894,28 @@ public sealed unsafe class BrowserWindow
         {
             if (OperatingSystem.IsWindows() && !WindowsTaskbar.SetProgress(Hwnd(w), state, percent))
                 Console.Error.WriteLine("[Oriel] The taskbar did not take the progress bar.");
+            // One Dock tile for the whole application; error and paused show as the plain bar.
+            if (OperatingSystem.IsMacOS())
+                MacDock.SetProgress(state == TaskbarProgressState.None ? null : percent / 100.0, state == TaskbarProgressState.Indeterminate);
         });
     }
 
-    /// <summary>Flashes the title bar and taskbar button to get the user's attention, or stops. Windows only for now:
-    /// does nothing on macOS and Linux. Electron's <c>win.flashFrame()</c>.</summary>
+    /// <summary>Flashes the title bar and taskbar button to get the user's attention, or stops. Electron's <c>win.flashFrame()</c>.</summary>
+    /// <remarks>macOS: bounces the Dock icon once, only while the application is not active. Linux: sets the
+    /// window's urgency hint, which the window manager shows its own way.</remarks>
     public void FlashFrame(bool flag) => Command(w =>
     {
         if (OperatingSystem.IsWindows()) WindowsTaskbar.FlashFrame(Hwnd(w), flag);
+        if (OperatingSystem.IsLinux() && !X11Window.SetUrgency(Hwnd(w), flag)) Console.Error.WriteLine("[Oriel] No X display for FlashFrame.");
+        if (OperatingSystem.IsMacOS())
+        {
+            MacDock.CancelAttention(_attentionRequest);
+            _attentionRequest = flag ? MacDock.RequestAttention() : 0;
+        }
     });
 
-    /// <summary>Removes the window's taskbar button, or restores it. Windows only for now: does nothing on macOS and
-    /// Linux. Electron's <c>win.setSkipTaskbar()</c>.</summary>
+    /// <summary>Removes the window's taskbar button, or restores it (Windows, Linux; macOS has none per window).
+    /// Electron's <c>win.setSkipTaskbar()</c>.</summary>
     public void SetSkipTaskbar(bool skip) => Command(w =>
     {
         var changed = _skipTaskbar != skip;
@@ -944,6 +958,8 @@ public sealed unsafe class BrowserWindow
     {
         if (OperatingSystem.IsWindows() && (_skipTaskbar || restore) && !WindowsTaskbar.SetSkipTaskbar(Hwnd(w), _skipTaskbar))
             Console.Error.WriteLine("[Oriel] The taskbar did not take SkipTaskbar.");
+        if (OperatingSystem.IsLinux() && (_skipTaskbar || restore) && !X11Window.SetSkipTaskbar(Hwnd(w), _skipTaskbar))
+            Console.Error.WriteLine("[Oriel] No X display for SkipTaskbar.");
     }
 
     private static nint Hwnd(cef_window_t* w) => (nint)w->get_window_handle(w);
