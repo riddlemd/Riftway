@@ -172,6 +172,7 @@ async Task RunAsync(BrowserWindow win, BrowserWindow simple)
     await WebPreferencesAsync(win);
     await ParentAndModalAsync(win);
     await MenusAsync(win);
+    await ContextMenusAsync(win);
 
     // Closing cancelled once: the window must survive the first close.
     var closingCount = 0;
@@ -362,6 +363,72 @@ async Task ParentAndModalAsync(BrowserWindow win)
     Check("closed child leaves GetChildWindows", win.GetChildWindows() is [var left] && left == child, win.GetChildWindows().Count);
     await Task.Delay(200);
     childAlive = child;
+}
+
+async Task ContextMenusAsync(BrowserWindow win)
+{
+    win.Focus();
+    await Js(win, "document.body.innerHTML = '<textarea id=t>hello world</textarea>'; t.focus(); t.select(); 1");
+    async Task<ContextMenuParams?> AskForMenu(Action ask)
+    {
+        ContextMenuParams? seen = null;
+        using var asked = new ManualResetEventSlim();
+        EventHandler<ContextMenuParams> onMenu = (_, p) => { seen = p; asked.Set(); };
+        win.WebContents.ContextMenu += onMenu;
+        ask();
+        await Task.Run(() => asked.Wait(step));
+        win.WebContents.ContextMenu -= onMenu;
+        return seen;
+    }
+    static string Describe(ContextMenuParams? p) => p is null ? "none"
+        : $"at={p.X},{p.Y} editable={p.IsEditable} selection={p.SelectionText} copy={p.EditFlags.CanCopy} paste={p.EditFlags.CanPaste} page={p.PageUrl.Length > 0}";
+    static bool OnTheSelectedField(ContextMenuParams? p)
+        => p is { IsEditable: true, SelectionText: "hello world", EditFlags.CanCopy: true, EditFlags.CanPaste: true } && p.PageUrl.Length > 0;
+
+    var x = int.Parse((string)(await Js(win, "Math.round(t.getBoundingClientRect().left + 20)"))!);
+    var y = int.Parse((string)(await Js(win, "Math.round(t.getBoundingClientRect().top + 10)"))!);
+    var clicked = await AskForMenu(() =>
+    {
+        win.WebContents.SendInputEvent(new MouseInputEvent(MouseInputEventType.MouseDown, x, y) { Button = MouseButton.Right });
+        win.WebContents.SendInputEvent(new MouseInputEvent(MouseInputEventType.MouseUp, x, y) { Button = MouseButton.Right });
+    });
+    Check("a right click raises ContextMenu with its params", OnTheSelectedField(clicked) && clicked!.X == x && clicked.Y == y, Describe(clicked));
+
+    if (!OperatingSystem.IsMacOS())
+    {
+        // Shift+F10 asks for the context menu from the keyboard (not a macOS convention).
+        var keyed = await AskForMenu(() =>
+        {
+            win.WebContents.SendInputEvent(new KeyboardInputEvent(KeyboardInputEventType.KeyDown, "F10") { Modifiers = InputModifiers.Shift });
+            win.WebContents.SendInputEvent(new KeyboardInputEvent(KeyboardInputEventType.KeyUp, "F10") { Modifiers = InputModifiers.Shift });
+        });
+        Check("Shift+F10 raises ContextMenu", OnTheSelectedField(keyed), Describe(keyed));
+    }
+
+    var popup = new Menu { new MenuItem { Label = "One" }, new MenuItem { Type = MenuItemType.Separator }, new MenuItem { Role = MenuItemRole.Copy } };
+    using (var closed = new ManualResetEventSlim())
+    {
+        popup.Popup(new PopupOptions { Window = win, X = 20, Y = 20, Closed = closed.Set });
+        await Task.Delay(500);
+        Check("a popup stays open until closed", !closed.IsSet);
+        popup.ClosePopup(win);
+        Check("ClosePopup closes it and runs Closed", closed.Wait(step));
+    }
+    using (var closed = new ManualResetEventSlim())
+    {
+        // Without X/Y it opens where the last context menu was asked for.
+        popup.Popup(new PopupOptions { Window = win, Closed = closed.Set });
+        await Task.Delay(300);
+        popup.ClosePopup(win);
+        Check("a popup at the last context menu point", closed.Wait(step));
+    }
+    Check("Popup with X but no Y throws", Throws<ArgumentException>(() => popup.Popup(new PopupOptions { Window = win, X = 1 })));
+}
+
+static bool Throws<T>(Action act) where T : Exception
+{
+    try { act(); return false; }
+    catch (T) { return true; }
 }
 
 async Task MenusAsync(BrowserWindow win)

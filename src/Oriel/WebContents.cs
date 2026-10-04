@@ -52,6 +52,7 @@ public sealed unsafe class WebContents
         _devTools.EventReceived += OnDevToolsEvent;
 
         Display = new DisplayHandler { TitleChanged = OnTitleChanged };
+        ContextMenuRequests = new ContextMenuHandler(OnContextMenu);
         Load = new LoadHandler
         {
             LoadStarted = isMain => { if (isMain) ApplyDefaultZoom(); },
@@ -93,6 +94,58 @@ public sealed unsafe class WebContents
 
     internal CommandHandler? Command { get; }
 
+    internal ContextMenuHandler ContextMenuRequests { get; }
+
+    /// <summary>Where the page last asked for a context menu, in page DIPs; UI thread only.</summary>
+    internal (int X, int Y)? LastContextMenuPoint { get; private set; }
+
+    /// <summary>The user asked for a context menu (right click, the menu key, Shift+F10). Oriel shows none of its
+    /// own, as Electron: call <see cref="Menu.Popup"/> from here to show one. Electron's <c>context-menu</c>.</summary>
+    public event EventHandler<ContextMenuParams>? ContextMenu;
+
+    private void OnContextMenu(cef_frame_t* frame, cef_context_menu_params_t* p)
+    {
+        var flags = p->get_edit_state_flags(p);
+        bool Has(cef_context_menu_edit_state_flags_t flag) => (flags & flag) != 0;
+        var suggestions = CefNative.cef_string_list_alloc();
+        p->get_dictionary_suggestions(p, suggestions);
+        var words = new List<string>();
+        for (nuint i = 0; i < CefNative.cef_string_list_size(suggestions); i++)
+        {
+            cef_string_utf16_t word = default;
+            if (CefNative.cef_string_list_value(suggestions, i, &word) != 0) words.Add(CefString.Read(&word));
+            CefString.Clear(&word);
+        }
+        CefNative.cef_string_list_free(suggestions);
+
+        var args = new ContextMenuParams
+        {
+            X = p->get_xcoord(p),
+            Y = p->get_ycoord(p),
+            LinkUrl = CefString.ReadUserFree(p->get_link_url(p)),
+            SrcUrl = CefString.ReadUserFree(p->get_source_url(p)),
+            PageUrl = CefString.ReadUserFree(p->get_page_url(p)),
+            FrameUrl = CefString.ReadUserFree(p->get_frame_url(p)),
+            FrameCharset = CefString.ReadUserFree(p->get_frame_charset(p)),
+            MediaType = (ContextMenuMediaType)Math.Clamp((int)p->get_media_type(p), 0, (int)ContextMenuMediaType.Plugin),
+            HasImageContents = p->has_image_contents(p) != 0,
+            SelectionText = CefString.ReadUserFree(p->get_selection_text(p)),
+            TitleText = CefString.ReadUserFree(p->get_title_text(p)),
+            IsEditable = p->is_editable(p) != 0,
+            SpellcheckEnabled = p->is_spell_check_enabled(p) != 0,
+            MisspelledWord = CefString.ReadUserFree(p->get_misspelled_word(p)),
+            DictionarySuggestions = words,
+            EditFlags = new ContextMenuEditFlags(
+                Has(cef_context_menu_edit_state_flags_t.CM_EDITFLAG_CAN_UNDO), Has(cef_context_menu_edit_state_flags_t.CM_EDITFLAG_CAN_REDO),
+                Has(cef_context_menu_edit_state_flags_t.CM_EDITFLAG_CAN_CUT), Has(cef_context_menu_edit_state_flags_t.CM_EDITFLAG_CAN_COPY),
+                Has(cef_context_menu_edit_state_flags_t.CM_EDITFLAG_CAN_PASTE), Has(cef_context_menu_edit_state_flags_t.CM_EDITFLAG_CAN_DELETE),
+                Has(cef_context_menu_edit_state_flags_t.CM_EDITFLAG_CAN_SELECT_ALL), Has(cef_context_menu_edit_state_flags_t.CM_EDITFLAG_CAN_EDIT_RICHLY)),
+        };
+        LastContextMenuPoint = (args.X, args.Y);
+        // Raised after CEF has finished with its own (emptied) menu, so a Popup from the handler is not nested in it.
+        CefThread.PostUi(() => ContextMenu?.Invoke(this, args));
+    }
+
     /// <summary>Opens DevTools in their own window; does nothing when <see cref="WebPreferences.DevTools"/> is
     /// false. Electron's <c>webContents.openDevTools()</c>; docked modes are not supported.</summary>
     public void OpenDevTools() => WithHost(host =>
@@ -131,6 +184,24 @@ public sealed unsafe class WebContents
             w.WriteString("code", key.Code);
             w.WriteNumber("windowsVirtualKeyCode", key.VirtualKeyCode);
             w.WriteNumber("nativeVirtualKeyCode", key.VirtualKeyCode);
+        }));
+    }
+
+    /// <summary>Sends a mouse event to the page as if from the user: a right button press opens a context menu.
+    /// Electron's <c>webContents.sendInputEvent()</c> for mouse events; wheel events are not supported yet.</summary>
+    public void SendInputEvent(MouseInputEvent inputEvent)
+    {
+        ArgumentNullException.ThrowIfNull(inputEvent);
+        var modifiers = KeyMap.DevToolsModifiers(inputEvent.Modifiers);
+        CefThread.RunOnUi(() => _devTools.Send("Input.dispatchMouseEvent", w =>
+        {
+            w.WriteString("type", inputEvent.Type switch { MouseInputEventType.MouseDown => "mousePressed", MouseInputEventType.MouseUp => "mouseReleased", _ => "mouseMoved" });
+            w.WriteNumber("x", inputEvent.X);
+            w.WriteNumber("y", inputEvent.Y);
+            w.WriteNumber("modifiers", modifiers);
+            if (inputEvent.Type == MouseInputEventType.MouseMove) return;
+            w.WriteString("button", inputEvent.Button switch { MouseButton.Middle => "middle", MouseButton.Right => "right", _ => "left" });
+            w.WriteNumber("clickCount", inputEvent.ClickCount);
         }));
     }
 

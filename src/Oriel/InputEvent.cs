@@ -39,7 +39,7 @@ public enum InputModifiers
     IsAutoRepeat = 1 << 5,
 }
 
-/// <summary>A key event for <see cref="WebContents.SendInputEvent"/>; Electron's <c>KeyboardInputEvent</c>.</summary>
+/// <summary>A key event for <see cref="WebContents.SendInputEvent(KeyboardInputEvent)"/>; Electron's <c>KeyboardInputEvent</c>.</summary>
 /// <param name="Type">Down, up or a typed character.</param>
 /// <param name="KeyCode">An Electron accelerator key name: <c>A</c>–<c>Z</c>, <c>0</c>–<c>9</c>, <c>F1</c>–<c>F24</c>,
 /// <c>Space</c>, <c>Enter</c>, <c>Tab</c>, <c>Backspace</c>, <c>Delete</c>, <c>Escape</c>, <c>Up</c>, <c>Down</c>,
@@ -47,6 +47,48 @@ public enum InputModifiers
 /// <see cref="KeyboardInputEventType.Char"/>, any single character.</param>
 public sealed record KeyboardInputEvent(KeyboardInputEventType Type, string KeyCode)
 {
+    /// <summary>Modifier keys held during the event.</summary>
+    public InputModifiers Modifiers { get; init; }
+}
+
+/// <summary>The kind of a <see cref="MouseInputEvent"/>; Electron's <c>type</c> values for mouse input.</summary>
+public enum MouseInputEventType
+{
+    /// <summary>A button went down; Electron's <c>mouseDown</c>.</summary>
+    MouseDown,
+
+    /// <summary>A button went up; Electron's <c>mouseUp</c>.</summary>
+    MouseUp,
+
+    /// <summary>The pointer moved; Electron's <c>mouseMove</c>.</summary>
+    MouseMove,
+}
+
+/// <summary>A mouse button; Electron's <c>button</c> values.</summary>
+public enum MouseButton
+{
+    /// <summary>The primary button.</summary>
+    Left,
+
+    /// <summary>The middle button or wheel.</summary>
+    Middle,
+
+    /// <summary>The secondary button, which opens context menus.</summary>
+    Right,
+}
+
+/// <summary>A mouse event for <see cref="WebContents.SendInputEvent(MouseInputEvent)"/>; Electron's <c>MouseInputEvent</c>.</summary>
+/// <param name="Type">Down, up or move.</param>
+/// <param name="X">Horizontal position in the page, in DIPs.</param>
+/// <param name="Y">Vertical position in the page, in DIPs.</param>
+public sealed record MouseInputEvent(MouseInputEventType Type, int X, int Y)
+{
+    /// <summary>The button pressed or released; ignored for moves.</summary>
+    public MouseButton Button { get; init; } = MouseButton.Left;
+
+    /// <summary>How many clicks in a row this is: 2 for a double click.</summary>
+    public int ClickCount { get; init; } = 1;
+
     /// <summary>Modifier keys held during the event.</summary>
     public InputModifiers Modifiers { get; init; }
 }

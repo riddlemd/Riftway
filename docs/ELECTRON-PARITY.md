@@ -91,7 +91,7 @@ Detailed item-by-item status: [parity/browser-window.md](parity/browser-window.m
 |---|---|---|---|---|
 | `dialog` (file dialogs) | `Dialog` | CEF | M2 | — |
 | `dialog` (message boxes, error box, certificate trust) | `Dialog` | OS | M5 | — |
-| `Menu` / `MenuItem` (app menu, context menus) | `Menu` / `MenuItem` | OS + CEF | M5 | partial: application and window menus, roles, accelerators; no `popup` (context menus) yet |
+| `Menu` / `MenuItem` (app menu, context menus) | `Menu` / `MenuItem` | OS + CEF | M5 | partial: application and window menus, popups and context menus, roles, accelerators; no icons, sublabels or tooltips |
 | `Tray` | `Tray` | OS | M5 | — |
 | `Notification` | `Notification` | OS | M5 | — |
 | `globalShortcut` | `GlobalShortcut` | OS | M5 | — |

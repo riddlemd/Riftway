@@ -118,6 +118,40 @@ public static unsafe class MacMenu
     /// <summary>Chooses the item at <paramref name="index"/> as a click would, through AppKit's own dispatch.</summary>
     public static void PerformAction(nint menu, int index) => SendWithNInt(menu, Sel("performActionForItemAtIndex:"u8), index);
 
+    private static readonly System.Collections.Concurrent.ConcurrentQueue<Action> s_mainThreadActions = new();
+
+    /// <summary>Runs <paramref name="action"/> on the main thread even while a menu is open: AppKit's menu loop
+    /// services only its tracking run-loop modes, where CEF's posted tasks wait until the menu closes.</summary>
+    public static void PerformOnMainThread(Action action)
+    {
+        s_mainThreadActions.Enqueue(action);
+        var pool = PushPool();
+        try
+        {
+            ReadOnlySpan<string> names = ["kCFRunLoopCommonModes", "NSEventTrackingRunLoopMode", "NSModalPanelRunLoopMode"];
+            var modes = stackalloc nint[names.Length];
+            for (var i = 0; i < names.Length; i++) modes[i] = NewString(names[i]);
+            var array = SendArray(Class("NSArray"u8), Sel("arrayWithObjects:count:"u8), modes, (nuint)names.Length);
+            for (var i = 0; i < names.Length; i++) Release(modes[i]);
+            SendPerform(Target(), Sel("performSelectorOnMainThread:withObject:waitUntilDone:modes:"u8), PerformSelector(), 0, 0, array);
+        }
+        finally { PopPool(pool); }
+    }
+
+    private static nint s_performSelector;
+
+    private static nint PerformSelector() => s_performSelector != 0 ? s_performSelector : s_performSelector = Sel("orielPerform:"u8);
+
+    [UnmanagedCallersOnly]
+    private static void OnPerform(nint self, nint cmd, nint arg)
+    {
+        while (s_mainThreadActions.TryDequeue(out var action))
+        {
+            try { action(); }
+            catch (Exception e) { Console.Error.WriteLine($"[Oriel] Unhandled exception in a main-thread action: {e}"); }
+        }
+    }
+
     private static nint App() => Send(Class("NSApplication"u8), Sel("sharedApplication"u8));
 
     private static nint ChosenSelector() => s_chosenSelector != 0 ? s_chosenSelector : s_chosenSelector = Sel("orielMenuItemChosen:"u8);
@@ -131,6 +165,7 @@ public static unsafe class MacMenu
         {
             var cls = objc_allocateClassPair(Class("NSObject"u8), name, 0);
             class_addMethod(cls, ChosenSelector(), (delegate* unmanaged<nint, nint, nint, void>)&OnChosen, types);
+            class_addMethod(cls, PerformSelector(), (delegate* unmanaged<nint, nint, nint, void>)&OnPerform, types);
             objc_registerClassPair(cls);
             s_target = Send(Send(cls, Sel("alloc"u8)), Sel("init"u8));
         }
@@ -191,6 +226,12 @@ public static unsafe class MacMenu
 
     private static void SendNUInt(nint receiver, nint selector, nuint value)
         => ((delegate* unmanaged<nint, nint, nuint, void>)s_msgSend)(receiver, selector, value);
+
+    private static nint SendArray(nint receiver, nint selector, nint* objects, nuint count)
+        => ((delegate* unmanaged<nint, nint, nint*, nuint, nint>)s_msgSend)(receiver, selector, objects, count);
+
+    private static void SendPerform(nint receiver, nint selector, nint action, nint arg, byte wait, nint modes)
+        => ((delegate* unmanaged<nint, nint, nint, nint, byte, nint, void>)s_msgSend)(receiver, selector, action, arg, wait, modes);
 
     private static nint SendChars(nint receiver, nint selector, char* chars, nuint length)
         => ((delegate* unmanaged<nint, nint, char*, nuint, nint>)s_msgSend)(receiver, selector, chars, length);

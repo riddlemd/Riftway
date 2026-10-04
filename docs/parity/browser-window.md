@@ -54,8 +54,19 @@ Event naming: Electron `'x'` → past-tense .NET event (`focus`→`Focused`, `cl
   parent on macOS; on Linux (openbox) it does not, because the window manager ignores the modal hint, and Electron's
   Linux workaround (disabling the parent's input) has no CEF equivalent yet.
 - webContents `sendInputEvent` for keyboard events (`keyDown`, `keyUp`, `char`; Electron key names and
-  modifiers), through DevTools `Input.dispatchKeyEvent`, so the browser's own shortcuts see them. Mouse and wheel
-  events are not supported yet.
+  modifiers), through DevTools `Input.dispatchKeyEvent`, so the browser's own shortcuts see them; and for mouse
+  events (`mouseDown`, `mouseUp`, `mouseMove`; button, click count, modifiers) through `Input.dispatchMouseEvent`.
+  Wheel events and `mouseEnter`/`mouseLeave`/`contextMenu` types are not supported yet.
+- Context menus: webContents `context-menu` (`ContextMenu` event with `ContextMenuParams`: position, link, source,
+  page and frame URLs, media type, selection, editability, spelling, `editFlags`), `Menu.popup` (window, x, y,
+  callback) and `Menu.closePopup`. As in Electron, the page has no context menu unless the app shows one: CEF's
+  default is cancelled through `cef_context_menu_handler_t.run_context_menu` (emptying the model in
+  `on_before_context_menu` instead crashes at shutdown on macOS). Popups are `W.show_menu` with the menu bar's
+  model builder. On macOS a popup runs AppKit's menu loop, during which CEF's UI tasks wait, so `closePopup`
+  goes through `performSelectorOnMainThread` in the tracking run-loop modes. Gaps: without x/y the popup opens
+  where the window's last context menu was asked for, not at the pointer; no `positioningItem`, `frame`,
+  `linkText`, `altText`, `selectionRect`, `menuSourceType` or `formControlType` params; the default menu's
+  suppression is verified on screen on macOS only.
 
 - Window menus: `setMenu`, `removeMenu`, `autoHideMenuBar` (option and property), `setMenuBarVisibility`,
   `isMenuBarVisible`, with the `Menu`/`MenuItem` module (`Menu.setApplicationMenu`/`getApplicationMenu`,
@@ -67,8 +78,7 @@ Event naming: Electron `'x'` → past-tense .NET event (`focus`→`Focused`, `cl
   through a runtime-built target class. `getContentBounds` excludes the bar. macOS gets Electron's default
   application menu (app, File, Edit, View, Window) unless the app sets one during `Ready`; unlike Electron,
   Windows and Linux get no default bar. Webcontents gains `undo`, `redo`, `cut`, `copy`, `paste`,
-  `pasteAndMatchStyle`, `delete`, `selectAll`, `reloadIgnoringCache`. Gaps: `Menu.popup` (context menus), menu
-  item icons, sublabels, tooltips and `registerAccelerator`; most macOS-only roles (tabs, speech, recent documents,
+  `pasteAndMatchStyle`, `delete`, `selectAll`, `reloadIgnoringCache`. Gaps: menu item icons, sublabels, tooltips and `registerAccelerator`; most macOS-only roles (tabs, speech, recent documents,
   `shareMenu`); the click callback gets no `KeyboardEvent`; `Command`/`Super` accelerators are ignored on Windows
   and Linux (CEF accelerators have no such modifier); Alt shows an auto-hidden bar until pressed again, rather than
   until the menu is used; the bar takes CEF Views' default look.
@@ -96,7 +106,7 @@ Event naming: Electron `'x'` → past-tense .NET event (`focus`→`Focused`, `cl
 Accuracy gaps in done items: `Shown`/`Hidden` fire only from `Show()`/`Hide()`, not when the OS shows or hides the
 window; `SetIcon` takes a file path, not Electron's `NativeImage` (that module comes later); `devTools: false` blocks
 `OpenDevTools` and, through `cef_command_handler_t`, Chrome's DevTools commands (F12 is live in a Views window and is
-verified blocked; the context menu's Inspect goes through the same handler but is not tested);
+verified blocked; Chrome's default context menu, with its Inspect item, is no longer shown);
 `zoomFactor` re-applies on an origin whose zoom was explicitly reset to 0.
 
 ## Platform notes

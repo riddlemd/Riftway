@@ -241,7 +241,8 @@ public sealed unsafe class BrowserWindow
             _readyToShowRaised = true;
             ReadyToShow?.Invoke(this, EventArgs.Empty);
         };
-        _client = new ClientHandler(WebContents.Display, WebContents.Load, WebContents.JsDialog, WebContents.Request, WebContents.Command);
+        _client = new ClientHandler(WebContents.Display, WebContents.Load, WebContents.JsDialog, WebContents.Request, WebContents.Command,
+            WebContents.ContextMenuRequests);
         if (!OperatingSystem.IsMacOS())
         {
             _menuBar = new WindowMenuBar(this) { AutoHide = _options.AutoHideMenuBar };
@@ -398,6 +399,28 @@ public sealed unsafe class BrowserWindow
 
     /// <summary>Whether a menu bar is showing; always false on macOS. Electron's <c>win.isMenuBarVisible()</c>.</summary>
     public bool IsMenuBarVisible => Query(_ => _menuBar?.IsVisible ?? false, false);
+
+    /// <summary>Shows <paramref name="menu"/> at a point in the page, by default where the last context menu was asked for.</summary>
+    internal void ShowPopup(Menu menu, int? x, int? y, Action? closed) => Command(w =>
+    {
+        var (px, py) = x is { } ax && y is { } ay ? (ax, ay) : WebContents.LastContextMenuPoint ?? (0, 0);
+        var content = ContentBoundsOn(w);
+        var screen = new cef_point_t { x = content.X + px, y = content.Y + py };
+        var popupDelegate = new MenuModelDelegate { CommandExecuted = id => menu.FindByCommandId(id)?.Activate(this), Closed = closed };
+        NativeObject.AddRef(popupDelegate.Native);
+        var model = CefNative.cef_menu_model_create(popupDelegate.Native);
+        MenuModels.Fill(model, menu);
+        // The model reference passes to CEF, which keeps it, and through it the delegate, until the menu closes.
+        w->show_menu(w, model, &screen, cef_menu_anchor_position_t.CEF_MENU_ANCHOR_TOPLEFT);
+    });
+
+    /// <summary>Closes a menu shown by <see cref="ShowPopup"/>.</summary>
+    internal void ClosePopup()
+    {
+        // An open popup holds macOS in AppKit's menu loop, where a posted CEF task would wait for the menu to close.
+        if (OperatingSystem.IsMacOS()) MacMenu.PerformOnMainThread(() => { if (_window is not null) _window->cancel_menu(_window); });
+        else Command(w => w->cancel_menu(w));
+    }
 
     /// <summary>Opens the menu bar's menu at <paramref name="index"/> as a click would; false if there is none.</summary>
     internal bool TriggerMenuBarItem(int index) => Query(_ => _menuBar?.TriggerMenu(index) ?? false, false);

@@ -303,6 +303,22 @@ public sealed class Menu : IEnumerable<MenuItem>
         OnChanged();
     }
 
+    /// <summary>Shows the menu as a popup in a window, as a context menu. Electron's <c>menu.popup()</c>.</summary>
+    /// <exception cref="InvalidOperationException">No window was given and none is focused.</exception>
+    /// <exception cref="ArgumentException">Only one of <see cref="PopupOptions.X"/> and <see cref="PopupOptions.Y"/> is set.</exception>
+    public void Popup(PopupOptions? options = null)
+    {
+        if (options is not null && options.X.HasValue != options.Y.HasValue)
+            throw new ArgumentException("Set both X and Y, or neither.", nameof(options));
+        var window = options?.Window ?? BrowserWindow.GetFocusedWindow()
+            ?? throw new InvalidOperationException("No window to show the menu in: set PopupOptions.Window or focus a window.");
+        window.ShowPopup(this, options?.X, options?.Y, options?.Closed);
+    }
+
+    /// <summary>Closes this menu's popup in <paramref name="window"/>, by default the focused window.
+    /// Electron's <c>menu.closePopup()</c>.</summary>
+    public void ClosePopup(BrowserWindow? window = null) => (window ?? BrowserWindow.GetFocusedWindow())?.ClosePopup();
+
     /// <summary>The first item, here or in a submenu, whose <see cref="MenuItem.Id"/> is <paramref name="id"/>.
     /// Electron's <c>menu.getMenuItemById()</c>.</summary>
     public MenuItem? GetMenuItemById(string id)

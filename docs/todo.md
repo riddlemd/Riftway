@@ -8,7 +8,7 @@ Cross-platform work. Platform-specific items: [linux-todo.md](linux-todo.md), [w
 
 - [ ] BrowserWindow parity, in the order of [parity/browser-window.md](parity/browser-window.md#next-by-importance):
   - [x] Window menus (`setMenu`, `removeMenu`, `autoHideMenuBar`), with the `Menu` module
-  - [ ] `Menu.popup` (context menus): `W.show_menu` with the bar's menu-model builder; replace CEF's default page context menu
+  - [x] `Menu.popup` (context menus), webContents `context-menu`, mouse `sendInputEvent`
   - [x] `webPreferences` batch 1 (devTools, zoomFactor, javascript, images, textarea, webgl, fonts, disableDialogs)
   - [ ] Remaining `webPreferences` (see the parity doc: process-wide switches, session/partition, spellcheck, ...)
   - [x] `parent`/`modal`, `isModal`, `getChildWindows`, `getParentWindow`
