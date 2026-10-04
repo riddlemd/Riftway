@@ -423,7 +423,14 @@ public sealed unsafe class BrowserWindow
     public bool IsVisible => Query(w => w->@base.@base.is_visible(&w->@base.@base) != 0, false);
 
     /// <summary>Brings the window to the front and gives it focus. Electron's <c>win.focus()</c>.</summary>
-    public void Focus() => Command(w => w->activate(w));
+    public void Focus() => CefThread.RunOnUi(() =>
+    {
+        // Windows disables a modal's parent, but SetForegroundWindow still activates a disabled window.
+        var target = this;
+        while (target._children.FirstOrDefault(c => c._options.Modal && c._window is not null && c._window->@base.@base.is_visible(&c._window->@base.@base) != 0) is { } modal)
+            target = modal;
+        if (target._window is not null) target._window->activate(target._window);
+    });
 
     /// <summary>Removes focus from the window. Electron's <c>win.blur()</c>.</summary>
     public void Blur() => Command(w => w->deactivate(w));
