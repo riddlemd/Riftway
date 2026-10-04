@@ -992,7 +992,16 @@ async Task NavigationAsync()
 
 async Task TaskbarAsync(BrowserWindow win)
 {
-    // Windows only so far; the macOS and Linux methods are documented no-ops.
+    if (OperatingSystem.IsMacOS())
+    {
+        await MacTaskbarAsync();
+        return;
+    }
+    if (OperatingSystem.IsLinux())
+    {
+        await LinuxTaskbarAsync();
+        return;
+    }
     if (!OperatingSystem.IsWindows()) return;
 
     // The shell groups an app's windows under one button named "<app> - N running windows"; DeleteTab lowers N.
@@ -1055,6 +1064,53 @@ static string OverlayPng()
     var path = Path.Combine(Path.GetTempPath(), "oriel-overlay-test.png");
     File.WriteAllBytes(path, Convert.FromBase64String("iVBORw0KGgoAAAANSUhEUgAAABAAAAAQCAYAAAAf8/9hAAAAAXNSR0IArs4c6QAAAARnQU1BAACxjwv8YQUAAAAJcEhZcwAADsMAAA7DAcdvqGQAAAAdSURBVDhPY7gjJ/efEsyALkAqHjVg1IBRAwaLAQDHMhcfPZpcYgAAAABJRU5ErkJggg=="));
     return path;
+}
+
+// macOS: the Dock tile carries one progress bar for the whole app; read back from the tile's indicator.
+#pragma warning disable CA1416 // Called only on macOS.
+async Task MacTaskbarAsync()
+{
+    var tb = new BrowserWindow(new BrowserWindowOptions { Title = "Oriel window test: dock", Width = 300, Height = 200 });
+    await Task.Delay(500);
+    (double Value, bool Indeterminate)? Dock() => Oriel.Cef.CefThread.InvokeOnUi(Oriel.Cef.Platform.MacDock.Progress);
+    tb.SetProgressBar(0.5);
+    Check("SetProgressBar shows the value on the Dock icon", Eventually(() => Dock() is (0.5, false), step), Dock());
+    tb.SetProgressBar(0.25, new ProgressBarOptions { Mode = ProgressBarMode.Error });
+    Check("error mode still shows the value (macOS has no colours)", Eventually(() => Dock() is (0.25, false), step), Dock());
+    tb.SetProgressBar(2);
+    Check("above 1 the Dock bar cycles", Eventually(() => Dock() is (_, true), step), Dock());
+    tb.SetProgressBar(-1);
+    Check("below 0 removes the Dock bar", Eventually(() => Dock() is null, step), Dock());
+    tb.SetProgressBar(0.5, new ProgressBarOptions { Mode = ProgressBarMode.None });
+    Check("mode None removes it too", Eventually(() => Dock() is null, step), Dock());
+    // A bounce only happens while the app is inactive and cannot be read back; this only shows the calls are safe.
+    tb.FlashFrame(true);
+    tb.FlashFrame(false);
+    tb.Destroy();
+    await Task.Delay(300);
+}
+#pragma warning restore CA1416
+
+// Linux: read WM_HINTS and _NET_WM_STATE straight from the X server, independently of Oriel's own X calls.
+async Task LinuxTaskbarAsync()
+{
+    var tb = new BrowserWindow(new BrowserWindowOptions { Title = "Oriel window test: taskbar", Width = 300, Height = 200 });
+    await Task.Delay(800);
+    var xid = tb.GetNativeWindowHandle();
+    tb.FlashFrame(true);
+    Check("FlashFrame(true) sets the urgency hint", Eventually(() => LinuxX11.IsUrgent(xid), step), xid);
+    tb.FlashFrame(false);
+    Check("FlashFrame(false) clears it", Eventually(() => !LinuxX11.IsUrgent(xid), step));
+    tb.SetSkipTaskbar(true);
+    Check("SetSkipTaskbar(true): the window manager adds _NET_WM_STATE_SKIP_TASKBAR", Eventually(() => LinuxX11.HasState(xid, "_NET_WM_STATE_SKIP_TASKBAR"), step));
+    tb.SetSkipTaskbar(false);
+    Check("SetSkipTaskbar(false) removes it", Eventually(() => !LinuxX11.HasState(xid, "_NET_WM_STATE_SKIP_TASKBAR"), step));
+    var skipped = new BrowserWindow(new BrowserWindowOptions { Title = "Oriel window test: skip taskbar", Width = 300, Height = 200, SkipTaskbar = true });
+    await Task.Delay(800);
+    Check("the SkipTaskbar option applies when the window shows", Eventually(() => LinuxX11.HasState(skipped.GetNativeWindowHandle(), "_NET_WM_STATE_SKIP_TASKBAR"), step));
+    skipped.Destroy();
+    tb.Destroy();
+    await Task.Delay(300);
 }
 
 app.Ready += (_, _) =>
@@ -1148,4 +1204,41 @@ static class WinDialog
     [System.Runtime.InteropServices.DllImport("user32.dll", CharSet = System.Runtime.InteropServices.CharSet.Unicode)] internal static extern nint FindWindowW(string? className, string title);
     [System.Runtime.InteropServices.DllImport("user32.dll")] internal static extern bool IsWindowVisible(nint hwnd);
     [System.Runtime.InteropServices.DllImport("user32.dll")] internal static extern bool PostMessageW(nint hwnd, uint message, nint wParam, nint lParam);
+}
+
+static unsafe class LinuxX11
+{
+    private const string Lib = "libX11.so.6";
+    private static nint s_display;
+
+    private static nint Display() => s_display != 0 ? s_display : s_display = XOpenDisplay(null);
+
+    internal static bool IsUrgent(nint window)
+    {
+        var hints = XGetWMHints(Display(), window);
+        if (hints == null) return false;
+        var urgent = (*hints & (1 << 8)) != 0;
+        _ = XFree(hints);
+        return urgent;
+    }
+
+    internal static bool HasState(nint window, string state)
+    {
+        var display = Display();
+        var wanted = XInternAtom(display, state, 0);
+        if (XGetWindowProperty(display, window, XInternAtom(display, "_NET_WM_STATE", 0), 0, 64, 0, 4 /* XA_ATOM */,
+            out _, out _, out var count, out _, out var data) != 0 || data == null) return false;
+        var found = new ReadOnlySpan<nint>(data, (int)count).Contains(wanted);
+        _ = XFree(data);
+        return found;
+    }
+
+    [System.Runtime.InteropServices.DllImport(Lib)] private static extern nint XOpenDisplay(byte* name);
+    // The first field of XWMHints is its flags.
+    [System.Runtime.InteropServices.DllImport(Lib)] private static extern long* XGetWMHints(nint display, nint window);
+    [System.Runtime.InteropServices.DllImport(Lib)] private static extern int XFree(void* data);
+    [System.Runtime.InteropServices.DllImport(Lib)] private static extern nint XInternAtom(nint display, string name, int onlyIfExists);
+    [System.Runtime.InteropServices.DllImport(Lib)]
+    private static extern int XGetWindowProperty(nint display, nint window, nint property, nint offset, nint length, int delete, nint type,
+        out nint actualType, out int actualFormat, out nuint count, out nuint bytesAfter, out nint* data);
 }
