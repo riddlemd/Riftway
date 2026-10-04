@@ -192,6 +192,7 @@ async Task RunAsync(BrowserWindow win, BrowserWindow simple)
     await MenusAsync(win);
     await ContextMenusAsync(win);
     await WindowOpenAsync(win);
+    await NavigationAsync();
 
     // Closing cancelled once: the window must survive the first close.
     var closingCount = 0;
@@ -868,6 +869,48 @@ async Task WindowOpenAsync(BrowserWindow win)
     if (!second.IsDestroyed) second.Destroy();
     foreach (var p in popups.ToArray()) if (!p.IsDestroyed) p.Destroy();
     win.WebContents.SetWindowOpenHandler(null);
+    await Task.Delay(300);
+    Directory.Delete(dir, recursive: true);
+}
+
+async Task NavigationAsync()
+{
+    var dir = Directory.CreateTempSubdirectory("oriel-history-").FullName;
+    string Page(string name)
+    {
+        var path = Path.Combine(dir, $"{name}.html");
+        File.WriteAllText(path, $"<!doctype html><title>{name}</title>");
+        return path;
+    }
+    var (one, two, three) = (Page("one"), Page("two"), Page("three"));
+    var nav = new BrowserWindow(new BrowserWindowOptions { Title = "Oriel window test: history", Width = 400, Height = 300 });
+    var history = nav.WebContents.NavigationHistory;
+    bool Load(string path) => Fires(h => nav.WebContents.DidFinishLoad += h, h => nav.WebContents.DidFinishLoad -= h, () => nav.WebContents.LoadFile(path), step);
+    string Titles() => string.Join(",", history.GetAllEntries().Select(e => e.Title));
+    bool At(int index, string title) => Eventually(() => history.GetActiveIndex() == index && nav.WebContents.GetTitle() == title, step);
+
+    Check("history starts with the first page, not the about:blank start", Load(one) && Eventually(() => history.Length() == 1, step), Titles());
+    Load(two);
+    Load(three);
+    Check("each load adds an entry", Eventually(() => Titles() == "one,two,three", step), Titles());
+    Check("GetEntryAtIndex", history.GetEntryAtIndex(0) is { Title: "one" } e && e.Url == new Uri(one).AbsoluteUri && history.GetEntryAtIndex(3) is null && history.GetEntryAtIndex(-1) is null);
+    Check("at the end: back yes, forward no", history.GetActiveIndex() == 2 && history.CanGoBack() && !history.CanGoForward());
+    Check("CanGoToOffset", history.CanGoToOffset(-2) && !history.CanGoToOffset(-3) && !history.CanGoToOffset(1));
+
+    history.GoBack();
+    Check("GoBack", At(1, "two") && history.CanGoForward(), $"{history.GetActiveIndex()} {nav.WebContents.GetTitle()}");
+    history.GoForward();
+    Check("GoForward", At(2, "three"), $"{history.GetActiveIndex()} {nav.WebContents.GetTitle()}");
+    history.GoToIndex(0);
+    Check("GoToIndex", At(0, "one"), $"{history.GetActiveIndex()} {nav.WebContents.GetTitle()}");
+    history.GoToOffset(2);
+    Check("GoToOffset", At(2, "three"), $"{history.GetActiveIndex()} {nav.WebContents.GetTitle()}");
+
+    history.Clear();
+    Check("Clear keeps only the page showing", Eventually(() => history.Length() == 1 && history.GetActiveIndex() == 0 && !history.CanGoBack(), step), Titles());
+    Check("the page showing is kept", history.GetEntryAtIndex(0) is { Title: "three" });
+
+    nav.Destroy();
     await Task.Delay(300);
     Directory.Delete(dir, recursive: true);
 }

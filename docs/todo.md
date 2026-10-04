@@ -21,7 +21,8 @@ Cross-platform work. Platform-specific items: [linux-todo.md](linux-todo.md), [w
   - [ ] Accuracy gaps: `Shown`/`Hidden` fire only from `Show()`/`Hide()`; `SetIcon` takes a path, not a `NativeImage`
 - [x] webContents: `executeJavaScript`, DevTools open/close/toggle, zoom factor/level, `setUserAgent`/`getUserAgent`
 - [x] File `Dialog` and `Screen`; gaps in [DRIFT.md](DRIFT.md)
-- [ ] Remaining M2 modules: `BaseWindow`, `View`, `WebContentsView`, `WebFrameMain`, `NavigationHistory`,
+- [x] `NavigationHistory` (`WebContents.NavigationHistory`)
+- [ ] Remaining M2 modules: `BaseWindow`, `View`, `WebContentsView`, `WebFrameMain`,
       `Debugger`, core `Session`, command line
 - [x] `window.open` handling: `SetWindowOpenHandler`, `DidCreateWindow` (branch `window-open`)
 - [ ] Menus: Alt+letter mnemonics and the Alt toggle never fire (DRIFT W19): handle Alt in a `cef_keyboard_handler_t`

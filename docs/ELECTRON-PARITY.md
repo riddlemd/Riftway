@@ -56,7 +56,7 @@ Detailed item-by-item status: [parity/browser-window.md](parity/browser-window.m
 |---|---|---|---|---|
 | `webContents` | `WebContents` | CEF | M2 | partial: loadURL, send |
 | `webFrameMain` | `WebFrameMain` | CEF | M2 | — |
-| `NavigationHistory` | `NavigationHistory` | CEF | M2 | — |
+| `NavigationHistory` | `NavigationHistory` | CEF | M2 | partial: back/forward, index/offset moves, entries, clear; no `removeEntryAtIndex` or `restore` (see DRIFT.md) |
 | `Debugger` (`webContents.debugger`) | `Debugger` (DevTools protocol) | CEF | M2 | — |
 | `webFrame` (renderer) | `oriel.webFrame` in the page | CEF (DevTools protocol) | M6 | — |
 | `webUtils` (renderer) | `oriel.webUtils` | CEF | M6 | — |
