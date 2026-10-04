@@ -722,6 +722,35 @@ async Task BarMenusAsync(BrowserWindow win, Menu menu, MenuItem save, MenuItem g
     win.AutoHideMenuBar = false;
     Check("clearing AutoHideMenuBar keeps it shown", Eventually(() => win.IsMenuBarVisible && !win.AutoHideMenuBar, step));
 
+    // Keys aimed at the page reach the bar: Alt alone toggles an auto-hidden bar, Alt+letter opens that menu.
+    void Key(string key, KeyboardInputEventType type, InputModifiers modifiers = InputModifiers.None)
+        => win.WebContents.SendInputEvent(new KeyboardInputEvent(type, key) { Modifiers = modifiers });
+    void PressAlt()
+    {
+        Key("Alt", KeyboardInputEventType.KeyDown, InputModifiers.Alt);
+        Key("Alt", KeyboardInputEventType.KeyUp);
+    }
+    win.AutoHideMenuBar = true;
+    win.Focus();
+    await Task.Delay(300);
+    PressAlt();
+    Check("Alt shows an auto-hidden bar", Eventually(() => win.IsMenuBarVisible, step));
+    PressAlt();
+    Check("Alt again hides it", Eventually(() => !win.IsMenuBarVisible, step));
+    win.AutoHideMenuBar = false;
+    Key("Alt", KeyboardInputEventType.KeyDown, InputModifiers.Alt);
+    Key("F", KeyboardInputEventType.KeyDown, InputModifiers.Alt);
+    Key("F", KeyboardInputEventType.KeyUp, InputModifiers.Alt);
+    Key("Alt", KeyboardInputEventType.KeyUp);
+    Check("Alt+F opens the &File menu", Eventually(() => win.IsMenuBarMenuOpen, step));
+    win.CancelMenuBarMenu();
+    Check("the menu closes", Eventually(() => !win.IsMenuBarMenuOpen, step));
+    Key("F", KeyboardInputEventType.KeyDown);
+    Key("F", KeyboardInputEventType.KeyUp);
+    await Task.Delay(500);
+    Check("F without Alt opens nothing", !win.IsMenuBarMenuOpen);
+    win.CancelMenuBarMenu();
+
     win.RemoveMenu();
     Check("RemoveMenu hides the bar", Eventually(() => !win.IsMenuBarVisible && win.GetContentBounds() == content && PageHeight() == fullHeight, step), $"{win.GetContentBounds()} page={PageHeight()}/{fullHeight}");
 

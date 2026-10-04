@@ -113,3 +113,28 @@ public sealed unsafe class ContextMenuHandler
         return 1;
     }
 }
+
+/// <summary><c>cef_keyboard_handler_t</c>: the page's keys before the renderer sees them.</summary>
+public sealed unsafe class KeyboardHandler
+{
+    public KeyboardHandler(KeyEventPredicate preKeyEvent)
+    {
+        PreKeyEvent = preKeyEvent;
+        Native = NativeObject.Create<cef_keyboard_handler_t>(this);
+        Native->on_pre_key_event = &OnPreKeyEvent;
+    }
+
+    public cef_keyboard_handler_t* Native { get; }
+
+    /// <summary>A key about to reach the page; true consumes it.</summary>
+    public KeyEventPredicate PreKeyEvent { get; }
+
+    [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])]
+    private static int OnPreKeyEvent(cef_keyboard_handler_t* self, cef_browser_t* browser, cef_key_event_t* keyEvent, void* osEvent, int* isKeyboardShortcut)
+    {
+        var owner = NativeObject.Owner<KeyboardHandler>(self);
+        var consumed = Guard.Run(() => owner.PreKeyEvent(keyEvent), false);
+        NativeObject.Release(browser);
+        return consumed ? 1 : 0;
+    }
+}

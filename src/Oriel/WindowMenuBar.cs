@@ -14,8 +14,8 @@ internal sealed unsafe class WindowMenuBar
     private readonly BrowserWindow _owner;
     private readonly MenuModelDelegate _modelDelegate;
     private readonly List<int> _accelerators = [];
-    // Buttons by mnemonic letter, for Alt+letter.
-    private readonly Dictionary<char, nint> _mnemonics = [];
+    // Button positions by mnemonic letter, for Alt+letter.
+    private readonly Dictionary<char, int> _mnemonics = [];
     private readonly List<MenuButtonDelegate> _buttonDelegates = [];
     private cef_window_t* _window;
     private cef_panel_t* _panel;
@@ -104,7 +104,8 @@ internal sealed unsafe class WindowMenuBar
         return true;
     }
 
-    /// <summary>A key the page did not handle: Alt alone toggles an auto-hidden bar, Alt+letter opens a menu.</summary>
+    /// <summary>A key on its way to the page, or one the bar's own buttons got: Alt alone toggles an auto-hidden bar
+    /// (the key still reaches the page), Alt+letter opens the menu with that mnemonic (consumed).</summary>
     internal bool OnKeyEvent(cef_key_event_t* key)
     {
         if (_menu is null) return false;
@@ -116,7 +117,6 @@ internal sealed unsafe class WindowMenuBar
             {
                 _altAlone = false;
                 SetShown(!Shown);
-                return true;
             }
             return false;
         }
@@ -124,10 +124,10 @@ internal sealed unsafe class WindowMenuBar
         _altAlone = false;
         var alt = (key->modifiers & (uint)cef_event_flags_t.EVENTFLAG_ALT_DOWN) != 0;
         if (!alt || key->windows_key_code is < 'A' or > 'Z') return false;
-        if (!_mnemonics.TryGetValue((char)key->windows_key_code, out var button)) return false;
+        if (!_mnemonics.TryGetValue((char)key->windows_key_code, out var index)) return false;
         if (AutoHide && !Shown) SetShown(true);
-        var menuButton = (cef_menu_button_t*)button;
-        menuButton->trigger_menu(menuButton);
+        // Opening a menu runs a menu loop, which must not start inside CEF's key callback.
+        CefThread.PostUi(() => TriggerMenu(index));
         return true;
     }
 
@@ -188,7 +188,7 @@ internal sealed unsafe class WindowMenuBar
         CefString.Clear(&text);
         var view = (cef_view_t*)button;
         view->set_enabled(view, item.Enabled ? 1 : 0);
-        if (MnemonicOf(item.Label) is { } letter) _mnemonics.TryAdd(letter, (nint)button);
+        if (MnemonicOf(item.Label) is { } letter) _mnemonics.TryAdd(letter, (int)_panel->get_child_view_count(_panel));
         // The panel takes the creation reference.
         _panel->add_child_view(_panel, view);
     }
@@ -213,11 +213,22 @@ internal sealed unsafe class WindowMenuBar
         ReleasePressedLock();
         NativeObject.AddRef(pressedLock);
         _pressedLock = pressedLock;
+        IsMenuOpen = true;
         button->show_menu(button, model, &origin, cef_menu_anchor_position_t.CEF_MENU_ANCHOR_TOPLEFT);
+    }
+
+    /// <summary>Whether one of the bar's menus is open.</summary>
+    internal bool IsMenuOpen { get; private set; }
+
+    /// <summary>Closes an open bar menu.</summary>
+    internal void CancelMenu()
+    {
+        if (_window is not null) _window->cancel_menu(_window);
     }
 
     private void ReleasePressedLock()
     {
+        IsMenuOpen = false;
         if (_pressedLock is null) return;
         NativeObject.Release(_pressedLock);
         _pressedLock = null;
