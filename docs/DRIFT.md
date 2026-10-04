@@ -61,6 +61,8 @@ Entries marked _(branch `x`)_ are on that branch and not yet in `main`.
 | W21 | `setOverlayIcon(overlay: NativeImage \| null, description)` | Takes a PNG/JPEG file path or null | Module: `NativeImage` (M5) | Overload taking `NativeImage` |
 | W22 | `setThumbarButtons` (Windows) | Missing | Module: `NativeImage` for the icons; the clicks also need the window's `WM_COMMAND` (`THBN_CLICKED`) routed back | `ITaskbarList3::ThumbBarAddButtons` and a subclassed `HWND`, after `NativeImage` |
 | W23 | `setProgressBar(NaN)` is unspecified (Electron casts it to an arbitrary value) | Removes the bar | Design | None |
+| W24 | `backgroundMaterial` / `setBackgroundMaterial` show Mica, Acrylic or Mica Alt behind a transparent window | DWM takes and reports the backdrop (`DWMWA_SYSTEMBACKDROP_TYPE`), but nothing shows: CEF paints the client area and its own title bar opaque, even with a transparent page and `BackgroundColor = "#00000000"`. Without the option DWM already reports Mica (`DWMSBT_MAINWINDOW`), set by Chromium or CEF, not Oriel _(branch `win-apis`)_ | CEF: Views windows on Windows draw their own frame and an opaque background | `DwmExtendFrameIntoClientArea` and a transparent Views window; check whether CEF's frameless mode composites alpha |
+| W25 | `titleBarStyle: 'hidden'` with `titleBarOverlay` (Windows caption buttons over the page, `getTitleBarOverlay` geometry) | Missing _(branch `win-apis`)_ | OS: needs a frameless window, caption buttons drawn over the page and `WM_NCHITTEST` for the drag area | Frameless window plus an overlay view (`W.add_overlay_view`) with min/max/close buttons, after `titleBarStyle` |
 
 ## window.open
 
