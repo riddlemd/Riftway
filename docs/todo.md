@@ -20,7 +20,7 @@ Cross-platform work. Platform-specific items: [linux-todo.md](linux-todo.md), [w
   - [ ] `opacity`, `hasShadow`, `setIgnoreMouseEvents`, content protection, `setKiosk`, `will-*` events
   - [ ] Accuracy gaps: `Shown`/`Hidden` fire only from `Show()`/`Hide()`; `SetIcon` takes a path, not a `NativeImage`
 - [x] webContents: `executeJavaScript`, DevTools open/close/toggle, zoom factor/level, `setUserAgent`/`getUserAgent`
-- [x] File `Dialog` (branch `dialog`) and `Screen` (branch `screen`); gaps in [DRIFT.md](DRIFT.md)
+- [x] File `Dialog` and `Screen`; gaps in [DRIFT.md](DRIFT.md)
 - [ ] Remaining M2 modules: `BaseWindow`, `View`, `WebContentsView`, `WebFrameMain`, `NavigationHistory`,
       `Debugger`, core `Session`, command line, `window.open` handling
 - [ ] `Protocol`: `AllowServiceWorkers` and `CodeCache` privileges throw `NotSupportedException`

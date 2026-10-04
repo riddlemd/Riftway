@@ -17,8 +17,8 @@ General items: [todo.md](todo.md). Windows work runs on the Windows laptop.
 - [x] Confirm the startup `observer_list.h:192` lines are gone on Windows (fixed in 86c2ae3, verified on macOS)
 - [x] Run Oriel.WindowTest on Windows: 90/91 (3 checks are macOS-only). DevTools, F12, webPreferences and
       sendInputEvent pass.
-- [ ] Modal focus on Windows: `Focus()` on a parent activates it although Chromium disabled it (Win32 allows
-      SetForegroundWindow on a disabled window). Fix: focus the innermost visible modal child instead; committed
-      as d5e0b6b on the laptop's `win-windowtest`, not pushed. Its `is_visible` filter has no covering check.
-- [ ] Run the window-menu checks on Windows (branch `menus`; macOS and Linux pass)
+- [x] Modal focus on Windows: `Focus()` on a parent activates it although Chromium disabled it (Win32 allows
+      SetForegroundWindow on a disabled window). Fix: focus the innermost visible modal child instead; merged
+      (d5e0b6b). Its `is_visible` filter has no covering check.
+- [x] Run the window-menu and context-menu checks on Windows (pass, after the menu-bar reference fix)
 - [ ] windows-arm64: untested

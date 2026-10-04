@@ -26,8 +26,8 @@ Entries marked _(branch `x`)_ are on that branch and not yet in `main`.
 | S2 | Plain option objects | Immutable records with `init` properties (`BrowserWindowOptions`, `WebPreferences`, `LoadUrlOptions`, `PopupOptions`) | Design |
 | S3 | Promises | `Task`; `ExecuteJavaScriptAsync` has the `Async` suffix and returns `JsonNode?` | Design |
 | S4 | `app` singleton, `app.whenReady()` | `OrielApp.Create()`, `Ready` event, `Run()` blocks the main thread and returns the exit code | Design |
-| S5 | `Menu.buildFromTemplate(template)` | Collection initializers: `new Menu { new MenuItem { ... } }` _(branch `menus`)_ | Design |
-| S6 | `getNativeWindowHandle()` returns a `Buffer` | Returns `nint` _(branch `green-button`)_ | Design |
+| S5 | `Menu.buildFromTemplate(template)` | Collection initializers: `new Menu { new MenuItem { ... } }` | Design |
+| S6 | `getNativeWindowHandle()` returns a `Buffer` | Returns `nint` | Design |
 | S7 | Renderer API through `require('electron')` | `window.oriel.ipcRenderer` / `oriel.contextBridge`, frozen, in the preload's isolated world; no Node | Design: Chromium's child processes run native code only, no .NET or Node |
 
 ## app / OrielApp
@@ -47,18 +47,17 @@ Entries marked _(branch `x`)_ are on that branch and not yet in `main`.
 | W3 | `setIcon` takes a `NativeImage` | Takes a PNG/JPEG file path; Windows and Linux only | Module: `NativeImage` (M5) | Overload taking `NativeImage` |
 | W4 | `loadURL` returns a promise | Returns void | Todo | Return a `Task` completed by load end or failure |
 | W5 | Modal windows disable their parent's input on Linux | The parent still takes focus under window managers that ignore the modal hint (openbox) | CEF: no input filter to block the parent | OS: X11 input shape or grab; check GNOME/KDE |
-| W6 | `focus()` on a modal's parent leaves the modal focused (Windows) | The parent comes to the front: Win32 activates disabled windows programmatically | OS | Fix committed on the laptop's `win-windowtest` (`Focus()` targets the innermost modal), not pushed |
 | W7 | `openDevTools({ mode })` with docked modes | Separate window only | Unknown | CEF `show_dev_tools` with an inspector view, or `BrowserView` docking |
 | W8 | `setParentWindow` | Missing | CEF: Views sets the parent only at creation | OS: `addChildWindow:`, owner `HWND`, `XSetTransientForHint` |
-| W9 | Native full screen on macOS | Same, but it blacks out other displays; `SimpleFullScreen` is the alternative. With the option set, the green button and the page's Fullscreen API also use simple full screen _(branch `green-button`; page path untested)_ | Design: KHost-style audience screens need the other displays | None needed; document |
+| W9 | Native full screen on macOS | Same, but it blacks out other displays; `SimpleFullScreen` is the alternative. With the option set, the green button and the page's Fullscreen API also use simple full screen _(page path untested)_ | Design: KHost-style audience screens need the other displays | None needed; document |
 | W10 | `closable` not implemented on Linux | Honoured on every OS | Design (superset) | None |
 | W11 | `webPreferences.defaultFontFamily.math` | Throws `NotSupportedException` | CEF: no setting for it | Patch |
 | W12 | `minimumFontSize`, `defaultEncoding` per window | Throw `NotSupportedException` | CEF: Chrome-style browsers take them from the profile, for every window | Per-window profiles (request contexts, with `Session`), or app-level options |
 | W13 | `webSecurity`, `allowRunningInsecureContent`, `experimentalFeatures`, `enable/disableBlinkFeatures`, `autoplayPolicy`, `sandbox` per window | Missing | CEF: Chromium switches, process-wide | App-level options; per-window is a Patch |
 | W14 | `contextIsolation: false` | Always on | Design: the preload runs in an isolated world by construction | None planned |
 | W15 | `zoomFactor` | Re-applies to an origin whose zoom was reset to 0 | Todo | Track explicit resets |
-| W16 | `isMenuBarVisible()` etc. on Windows/Linux; `setMenu` on macOS sets nothing | Same; the bar is drawn by CEF Views with its default look _(branch `menus`)_ | CEF: Views windows have no native menu bar | Style the bar (colours, font) to match the OS |
-| W17 | Alt shows an auto-hidden bar until the menu is used | Until Alt is pressed again _(branch `menus`)_ | Todo | Hide on menu close and on focus loss |
+| W16 | `isMenuBarVisible()` etc. on Windows/Linux; `setMenu` on macOS sets nothing | Same; the bar is drawn by CEF Views with its default look | CEF: Views windows have no native menu bar | Style the bar (colours, font) to match the OS |
+| W17 | Alt shows an auto-hidden bar until the menu is used | Until Alt is pressed again | Todo | Hide on menu close and on focus loss |
 
 ## webContents
 
@@ -70,24 +69,24 @@ Entries marked _(branch `x`)_ are on that branch and not yet in `main`.
 | C4 | `getUserAgent()` always answers | Empty until DevTools answers, just after the window is created | Todo | Read the default UA from CEF settings |
 | C5 | A reload repeats the `loadURL` options | Likely a plain request (untested) | Todo | Keep the options with the navigation entry |
 | C6 | `executeJavaScript` resolves a structured clone | JSON only (`JsonNode?`); undefined is null | Design: DevTools `Runtime.evaluate` returns JSON | Typed overloads |
-| C7 | `sendInputEvent` wheel, `mouseEnter`/`mouseLeave`/`contextMenu` types | Keyboard and mouse down/up/move only (mouse on _branch `context-menus`_) | Todo | DevTools `Input.dispatchMouseEvent` `mouseWheel` |
-| C8 | `context-menu` params `frame`, `linkText`, `altText`, `selectionRect`, `menuSourceType`, `formControlType`, `referrerPolicy`, `suggestedFilename`, `selectionStartOffset` | Missing _(branch `context-menus`)_ | CEF: `cef_context_menu_params_t` lacks them; `frame` needs `WebFrameMain` | Patch; or read the element under the point with JS for text/alt; Module for `frame` |
-| C9 | `context-menu` `mediaFlags` | Missing _(branch `context-menus`)_ | Todo: CEF has `get_media_state_flags` | Map it |
+| C7 | `sendInputEvent` wheel, `mouseEnter`/`mouseLeave`/`contextMenu` types | Keyboard and mouse down/up/move only | Todo | DevTools `Input.dispatchMouseEvent` `mouseWheel` |
+| C8 | `context-menu` params `frame`, `linkText`, `altText`, `selectionRect`, `menuSourceType`, `formControlType`, `referrerPolicy`, `suggestedFilename`, `selectionStartOffset` | Missing | CEF: `cef_context_menu_params_t` lacks them; `frame` needs `WebFrameMain` | Patch; or read the element under the point with JS for text/alt; Module for `frame` |
+| C9 | `context-menu` `mediaFlags` | Missing | Todo: CEF has `get_media_state_flags` | Map it |
 
 ## Menu / MenuItem
 
 | ID | Electron | Oriel | Why | Possible resolution |
 |---|---|---|---|---|
-| M1 | Default application menu on every OS | macOS only; Windows and Linux get no bar unless the app sets one _(branch `menus`)_ | Design: keeps existing Oriel windows unchanged; macOS needs a menu for Cmd+C/V/Q | Decide; Electron's default is mostly reload/DevTools items |
-| M2 | `click(menuItem, window, event)` | No `KeyboardEvent` argument _(branch `menus`)_ | Todo | Pass whether an accelerator triggered it, and modifiers |
-| M3 | Item `icon`, `sublabel`, `toolTip`, `registerAccelerator` | Missing _(branch `menus`)_ | Todo (`icon` is Module: `NativeImage`) | `cef_menu_model` has no icon API either: Patch for Views menus |
-| M4 | macOS roles for tabs, speech, recent documents, `shareMenu`, `showSubstitutions`... | Missing _(branch `menus`)_ | Todo | AppKit selectors for each |
-| M5 | `Command`/`Super` accelerators on Windows and Linux | Ignored _(branch `menus`)_ | CEF: Views accelerators have no such modifier | OS key hook, or Patch |
-| M6 | `menu.popup()` without x/y opens at the pointer | Opens where the window's last context menu was asked for _(branch `context-menus`)_ | OS: CEF has no pointer position (`Screen.GetCursorScreenPoint` brings the OS code) | Use the pointer |
-| M7 | `popup({ positioningItem })` (macOS) | Missing _(branch `context-menus`)_ | CEF: `show_menu` takes a point only | Patch |
-| M8 | Role items' `click` runs if the role has no action | Same; but on macOS the editing, About and Hide roles are AppKit actions and never run `click` _(branch `menus`)_ | Design: they then also work in DevTools and native text fields | None |
+| M1 | Default application menu on every OS | macOS only; Windows and Linux get no bar unless the app sets one | Design: keeps existing Oriel windows unchanged; macOS needs a menu for Cmd+C/V/Q | Decide; Electron's default is mostly reload/DevTools items |
+| M2 | `click(menuItem, window, event)` | No `KeyboardEvent` argument | Todo | Pass whether an accelerator triggered it, and modifiers |
+| M3 | Item `icon`, `sublabel`, `toolTip`, `registerAccelerator` | Missing | Todo (`icon` is Module: `NativeImage`) | `cef_menu_model` has no icon API either: Patch for Views menus |
+| M4 | macOS roles for tabs, speech, recent documents, `shareMenu`, `showSubstitutions`... | Missing | Todo | AppKit selectors for each |
+| M5 | `Command`/`Super` accelerators on Windows and Linux | Ignored | CEF: Views accelerators have no such modifier | OS key hook, or Patch |
+| M6 | `menu.popup()` without x/y opens at the pointer | Opens where the window's last context menu was asked for | OS: CEF has no pointer position (`Screen.GetCursorScreenPoint` brings the OS code) | Use the pointer |
+| M7 | `popup({ positioningItem })` (macOS) | Missing | CEF: `show_menu` takes a point only | Patch |
+| M8 | Role items' `click` runs if the role has no action | Same; but on macOS the editing, About and Hide roles are AppKit actions and never run `click` | Design: they then also work in DevTools and native text fields | None |
 
-## screen _(branch `screen`)_
+## screen
 
 | ID | Electron | Oriel | Why | Possible resolution |
 |---|---|---|---|---|
@@ -97,7 +96,7 @@ Entries marked _(branch `x`)_ are on that branch and not yet in `main`.
 | R4 | `screenToDipPoint` / `dipToScreenPoint` on Windows and Linux only | Also on macOS | Design (superset) | None |
 | R5 | `getCursorScreenPoint` under Wayland | X11 only (`XQueryPointer` on Oriel's own X connection) | OS; see P2 | Follow P2 |
 
-## dialog _(branch `dialog`)_
+## dialog
 
 | ID | Electron | Oriel | Why | Possible resolution |
 |---|---|---|---|---|
@@ -130,4 +129,4 @@ Entries marked _(branch `x`)_ are on that branch and not yet in `main`.
 | P2 | Wayland | X11/XWayland only | CEF: Views on Wayland is still being fixed upstream | Follow upstream |
 | P3 | Real Keychain on macOS (`safeStorage`) | `--use-mock-keychain` | Design until signing: ad-hoc builds change identity and macOS prompts every build | Real Keychain for signed builds (M4) |
 | P4 | macOS apps exit cleanly | Often exit with code 2 after "Teardown watchdog expired" (~10 s) | Unknown: stock cefclient does the same | Investigate |
-| P5 | A popup menu does not stall the main process | On macOS, CEF's UI tasks wait while a popup or context menu is open _(branch `context-menus`)_ | CEF: AppKit's menu loop does not run CEF's task source | Run tasks in the tracking modes during menus |
+| P5 | A popup menu does not stall the main process | On macOS, CEF's UI tasks wait while a popup or context menu is open | CEF: AppKit's menu loop does not run CEF's task source | Run tasks in the tracking modes during menus |
