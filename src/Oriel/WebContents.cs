@@ -37,9 +37,10 @@ public sealed unsafe class WebContents
     private string _title = string.Empty;
     private readonly WebPreferences _preferences;
 
-    internal WebContents(string? appPreload, WebPreferences preferences)
+    internal WebContents(string? appPreload, WebPreferences preferences, Session session)
     {
         _preferences = preferences;
+        Session = session;
         JsDialog = new JsDialogHandler { SuppressAll = preferences.DisableDialogs };
         // Chrome's own shortcut (F12) and the context menu's Inspect open DevTools without OpenDevTools.
         if (!preferences.DevTools)
@@ -154,6 +155,9 @@ public sealed unsafe class WebContents
         // Raised after CEF has finished with its own (emptied) menu, so a Popup from the handler is not nested in it.
         CefThread.PostUi(() => ContextMenu?.Invoke(this, args));
     }
+
+    /// <summary>The session the page's cookies, cache and storage belong to. Electron's <c>webContents.session</c>.</summary>
+    public Session Session { get; }
 
     /// <summary>The settings this page was created with; a page it opens inherits them.</summary>
     internal WebPreferences Preferences => _preferences;

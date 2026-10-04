@@ -67,7 +67,13 @@ public static unsafe class NativeObject
         var header = (Header*)self - 1;
         if (Interlocked.Decrement(ref header->RefCount) != 0) return 0;
 
-        GCHandle.FromIntPtr(header->Owner).Free();
+        var owner = GCHandle.FromIntPtr(header->Owner);
+        if (owner.Target is IReleaseObserver observer)
+        {
+            try { observer.Released(); }
+            catch (Exception e) { Console.Error.WriteLine($"[Oriel] Unhandled exception in a release callback: {e}"); }
+        }
+        owner.Free();
         NativeMemory.Free(header);
         return 1;
     }
@@ -79,4 +85,12 @@ public static unsafe class NativeObject
     [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])]
     private static int HasAtLeastOneRefCallback(cef_base_ref_counted_t* self)
         => Volatile.Read(ref ((Header*)self - 1)->RefCount) >= 1 ? 1 : 0;
+}
+
+/// <summary>An owner told when CEF drops the last reference to its struct.</summary>
+/// <remarks>Some CEF callbacks signal "done" only by releasing: a cookie visitor given no cookies is never called.</remarks>
+public interface IReleaseObserver
+{
+    /// <summary>Runs on whichever thread released the struct, just before it is freed.</summary>
+    void Released();
 }

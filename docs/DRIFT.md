@@ -50,7 +50,7 @@ Entries marked _(branch `x`)_ are on that branch and not yet in `main`.
 | W9 | Native full screen on macOS | Same, but it blacks out other displays; `SimpleFullScreen` is the alternative. With the option set, the green button and the page's Fullscreen API also use simple full screen _(page path untested)_ | Design: KHost-style audience screens need the other displays | None needed; document |
 | W10 | `closable` not implemented on Linux | Honoured on every OS | Design (superset) | None |
 | W11 | `webPreferences.defaultFontFamily.math` | Throws `NotSupportedException` | CEF: no setting for it | Patch |
-| W12 | `minimumFontSize`, `defaultEncoding` per window | Throw `NotSupportedException` | CEF: Chrome-style browsers take them from the profile, for every window | Per-window profiles (request contexts, with `Session`), or app-level options |
+| W12 | `minimumFontSize`, `defaultEncoding` per window | Throw `NotSupportedException` | CEF: Chrome-style browsers take them from the profile, for every window | Set them per `Session` (profile preferences), for every window in it |
 | W13 | `webSecurity`, `allowRunningInsecureContent`, `experimentalFeatures`, `enable/disableBlinkFeatures`, `autoplayPolicy`, `sandbox` per window | Missing | CEF: Chromium switches, process-wide | App-level options; per-window is a Patch |
 | W14 | `contextIsolation: false` | Always on | Design: the preload runs in an isolated world by construction | None planned |
 | W15 | `zoomFactor` | Re-applies to an origin whose zoom was reset to 0 | Todo | Track explicit resets |
@@ -150,6 +150,22 @@ Entries marked _(branch `x`)_ are on that branch and not yet in `main`.
 | G7 | `showOpenDialogSync` blocks the main process | The `Sync` variants throw on the UI thread, which must stay free to run the dialog | CEF: the dialog answers on the UI thread | None; use the async form there |
 | G8 | Return accepts a Linux save dialog | Return in the name field did not accept Chromium's GTK save dialog in testing (Xvfb, openbox); clicking Save did | Unknown: likely no default button set | Check on a desktop session; Patch if confirmed |
 
+## session
+
+| ID | Electron | Oriel | Why | Possible resolution |
+|---|---|---|---|---|
+| E1 | `persist:` partitions live in `<userData>/Partitions/<name>` | `<data directory>/Partition <name>` | CEF: Chrome-style profiles must be direct children of the root cache path | Patch |
+| E2 | `session.fromPath(path)` takes any absolute path | Only a directory directly inside the app's data directory; others throw `ArgumentException` | CEF: as E1 | Patch |
+| E3 | `fromPartition(partition, { cache: false })` | No options | CEF: a request context has no switch to turn its HTTP cache off | Patch |
+| E4 | `cookies.on('changed')` | Missing | CEF: no cookie-change observer | DevTools has none either; Patch |
+| E5 | `cookies.set()` rejects with the reason (bad domain, ...) | `ArgumentException` without the reason | CEF: `set_cookie` reports success only | Patch |
+| E6 | `ses.flushStorageData()` writes all DOM storage | `FlushStorageDataAsync` flushes cookies | CEF: only the cookie store has a flush | Patch |
+| E7 | `overrideBrowserWindowOptions` may give a popup another session | Blocked, with a console message | CEF: a popup always gets its opener's request context | Patch |
+| E8 | `clearStorageData`, `clearData`, `getCacheSize`, `clearHostResolverCache`, `resolveProxy` | Missing | CEF: no API on the request context | DevTools `Storage.clearDataForOrigin` through an open page for `clearStorageData` by origin; Patch for the rest |
+| E9 | `setUserAgent`, `getUserAgent` per session | Missing; `WebContents.SetUserAgent` sets it per page | CEF: the user agent is process-wide or per page (DevTools) | Apply to each page in the session |
+| E10 | `webRequest`, permission handlers, downloads (`will-download`), spellchecker, `preconnect`, certificate verify proc, extensions, `getPreloads`/`registerPreloadScript` | Missing | Todo: CEF has handlers for most (resource request, permission, download, certificate) | Later Session work (M6) |
+| E11 | Session events (`will-download`, `select-*-device`, ...) | None | Todo: with E10 | With E10 |
+
 ## IPC, contextBridge, protocol
 
 | ID | Electron | Oriel | Why | Possible resolution |
@@ -160,7 +176,6 @@ Entries marked _(branch `x`)_ are on that branch and not yet in `main`.
 | I4 | `contextBridge` exposes live objects and nested functions | Values are copied once and frozen; only top-level functions, which return promises; callbacks one level deep; no `exposeInIsolatedWorld` | Design/CEF: worlds share only the DOM, so values cross as JSON | Deeper proxying |
 | I5 | `protocol.handle` takes and returns Fetch `Request`/`Response` | `ProtocolRequest` → `Task<ProtocolResponse>`; Oriel answers `Range` itself | Design | None |
 | I6 | Privileges `allowServiceWorkers`, `codeCache` | Throw `NotSupportedException` | CEF: no service workers or V8 code cache for custom schemes | Patch |
-| I7 | `session.protocol` per session | `Protocol` is global | Module: `Session` | Add with `Session` |
 
 ## Platform and runtime
 
