@@ -37,7 +37,6 @@ Entries marked _(branch `x`)_ are on that branch and not yet in `main`.
 | A1 | `app.enableSandbox()` on every OS | Linux only; `Run()` throws `PlatformNotSupportedException` on macOS and Windows | OS/packaging: CEF forces `--no-sandbox` whenever `browser_subprocess_path` is set (Windows), and the macOS helper does not link the sandbox library | Windows: the `bootstrap.exe` layout (probe passed, see windows-todo.md). macOS: native helper + `cef_sandbox` |
 | A2 | Several instances may run; `requestSingleInstanceLock()` opts in to one | Always single instance per data directory: a second launch exits and the first gets `SecondInstance` | CEF: Chrome-style profiles lock their data directory | Per-instance cache paths when the lock is not requested; `RequestSingleInstanceLock` |
 | A3 | `will-quit`, `before-quit`, `quit` events; `quit()` closes windows first | `Quit()` ends the message loop directly; no quit events | Todo | Close windows (with `Closing`), then quit; raise the events |
-| A4 | `app.quit()` works from anywhere | `Quit()` from a thread other than the UI thread does nothing (found on Windows) | Todo: it calls `cef_quit_message_loop` directly | Run it on the UI thread |
 
 ## BrowserWindow
 
@@ -46,7 +45,6 @@ Entries marked _(branch `x`)_ are on that branch and not yet in `main`.
 | W1 | `show`/`hide` fire whenever the window is shown or hidden | Fire only from `Show()`/`Hide()` | Unknown (CEF reports no visibility change) | OS notifications, or poll like minimize |
 | W2 | `minimize`/`restore` events from the OS | Polled every 250 ms | CEF: reports neither; on macOS minimizing changes no bounds | OS notifications |
 | W3 | `setIcon` takes a `NativeImage` | Takes a PNG/JPEG file path; Windows and Linux only | Module: `NativeImage` (M5) | Overload taking `NativeImage` |
-| W4 | `loadURL` returns a promise | Returns void | Todo | Return a `Task` completed by load end or failure |
 | W5 | Modal windows disable their parent's input on Linux | The parent still takes focus under window managers that ignore the modal hint (openbox) | CEF: no input filter to block the parent | OS: X11 input shape or grab; check GNOME/KDE |
 | W7 | `openDevTools({ mode })` with docked modes | Separate window only | Unknown | CEF `show_dev_tools` with an inspector view, or `BrowserView` docking |
 | W8 | `setParentWindow` | Missing | CEF: Views sets the parent only at creation | OS: `addChildWindow:`, owner `HWND`, `XSetTransientForHint` |
@@ -58,8 +56,7 @@ Entries marked _(branch `x`)_ are on that branch and not yet in `main`.
 | W14 | `contextIsolation: false` | Always on | Design: the preload runs in an isolated world by construction | None planned |
 | W15 | `zoomFactor` | Re-applies to an origin whose zoom was reset to 0 | Todo | Track explicit resets |
 | W16 | `isMenuBarVisible()` etc. on Windows/Linux; `setMenu` on macOS sets nothing; Windows uses a native Win32 menu bar | Same API; the bar is drawn by CEF Views: on Windows a plain strip following the system theme, without mnemonic underlines and with different padding and hover | CEF: Views windows have no native menu bar | Style the bar (colours, font, underlines) to match the OS |
-| W17 | Alt shows an auto-hidden bar until the menu is used | Until Alt is pressed again | Todo | Hide on menu close and on focus loss |
-| W18 | `width`/`height` are the window's outer size unless `useContentSize` | macOS: the window comes out a title bar taller than asked (260 → 288); Linux exact; Windows unchecked | Unknown: likely `center_window` sizing the client area on macOS | Size the frame from the content inset |
+| W17 | Alt shows an auto-hidden bar until the menu is used or focus moves on | Hidden again when its menu closes, or on Alt; not when focus moves back to the page without using a menu | Todo | Hide on focus loss and on a click into the page |
 
 ## window.open
 
@@ -83,7 +80,6 @@ Entries marked _(branch `x`)_ are on that branch and not yet in `main`.
 | C6 | `executeJavaScript` resolves a structured clone | JSON only (`JsonNode?`); undefined is null | Design: DevTools `Runtime.evaluate` returns JSON | Typed overloads |
 | C7 | `sendInputEvent` wheel, `mouseEnter`/`mouseLeave`/`contextMenu` types | Keyboard and mouse down/up/move only | Todo | DevTools `Input.dispatchMouseEvent` `mouseWheel` |
 | C8 | `context-menu` params `frame`, `linkText`, `altText`, `selectionRect`, `menuSourceType`, `formControlType`, `referrerPolicy`, `suggestedFilename`, `selectionStartOffset` | Missing | CEF: `cef_context_menu_params_t` lacks them; `frame` needs `WebFrameMain` | Patch; or read the element under the point with JS for text/alt; Module for `frame` |
-| C9 | `context-menu` `mediaFlags` | Missing | Todo: CEF has `get_media_state_flags` | Map it |
 
 ## Menu / MenuItem
 
@@ -94,7 +90,6 @@ Entries marked _(branch `x`)_ are on that branch and not yet in `main`.
 | M3 | Item `icon`, `sublabel`, `toolTip`, `registerAccelerator` | Missing | Todo (`icon` is Module: `NativeImage`) | `cef_menu_model` has no icon API either: Patch for Views menus |
 | M4 | macOS roles for tabs, speech, recent documents, `shareMenu`, `showSubstitutions`... | Missing | Todo | AppKit selectors for each |
 | M5 | `Command`/`Super` accelerators on Windows and Linux | Ignored | CEF: Views accelerators have no such modifier | OS key hook, or Patch |
-| M6 | `menu.popup()` without x/y opens at the pointer | Opens where the window's last context menu was asked for | OS: CEF has no pointer position (`Screen.GetCursorScreenPoint` brings the OS code) | Use the pointer |
 | M7 | `popup({ positioningItem })` (macOS) | Missing | CEF: `show_menu` takes a point only | Patch |
 | M8 | Role items' `click` runs if the role has no action | Same; but on macOS the editing, About and Hide roles are AppKit actions and never run `click` | Design: they then also work in DevTools and native text fields | None |
 
@@ -104,7 +99,6 @@ Entries marked _(branch `x`)_ are on that branch and not yet in `main`.
 |---|---|---|---|---|
 | R1 | `display-added`, `display-removed`, `display-metrics-changed` from the OS | Displays compared once a second while a handler is attached, so events come up to a second late | CEF: reports no display changes | OS notifications (`NSApplicationDidChangeScreenParametersNotification`, `WM_DISPLAYCHANGE`, XRandR events) |
 | R2 | `Display` has `label`, `internal`, `monochrome`, `colorSpace`, `colorDepth`, `depthPerComponent`, `displayFrequency`, `touchSupport`, `accelerometerSupport`, `detected`, `nativeOrigin`, `maximumCursorSize` | Only `id`, `bounds`, `workArea`, `size`, `workAreaSize`, `scaleFactor`, `rotation` | CEF: `cef_display_t` has no more | OS per field |
-| R3 | `screenToDipRect(window, rect)` / `dipToScreenRect` (Windows) | Missing; the point forms exist | Todo | Add, per display |
 | R4 | `screenToDipPoint` / `dipToScreenPoint` on Windows and Linux only | Also on macOS | Design (superset) | None |
 | R5 | `getCursorScreenPoint` under Wayland | X11 only (`XQueryPointer` on Oriel's own X connection) | OS; see P2 | Follow P2 |
 

@@ -57,9 +57,16 @@ public sealed unsafe class WebContents
         {
             LoadStarted = isMain => { if (isMain) ApplyDefaultZoom(); },
             LoadingStateChanged = loading => Raise(loading ? DidStartLoading : DidStopLoading),
-            LoadEnded = (isMain, _) => { if (isMain) Raise(DidFinishLoad); },
+            LoadEnded = (isMain, _) =>
+            {
+                if (!isMain) return;
+                Raise(DidFinishLoad);
+                if (_navigated) CompleteLoad(null);
+            },
             LoadFailed = (isMain, code, text, url) =>
             {
+                // An aborted load was superseded by a newer one, whose task stays pending; LoadUrl already failed the old one.
+                if (isMain && _navigated && code != AbortedError) CompleteLoad(new LoadFailedException(code, text, url));
                 if (_navigated) DidFailLoad?.Invoke(this, new LoadFailedEventArgs(code, text, url, isMain));
             },
         };
@@ -96,9 +103,6 @@ public sealed unsafe class WebContents
 
     internal ContextMenuHandler ContextMenuRequests { get; }
 
-    /// <summary>Where the page last asked for a context menu, in page DIPs; UI thread only.</summary>
-    internal (int X, int Y)? LastContextMenuPoint { get; private set; }
-
     /// <summary>The user asked for a context menu (right click, the menu key, Shift+F10). Oriel shows none of its
     /// own, as Electron: call <see cref="Menu.Popup"/> from here to show one. Electron's <c>context-menu</c>.</summary>
     public event EventHandler<ContextMenuParams>? ContextMenu;
@@ -129,6 +133,7 @@ public sealed unsafe class WebContents
             FrameCharset = CefString.ReadUserFree(p->get_frame_charset(p)),
             MediaType = (ContextMenuMediaType)Math.Clamp((int)p->get_media_type(p), 0, (int)ContextMenuMediaType.Plugin),
             HasImageContents = p->has_image_contents(p) != 0,
+            MediaFlags = ContextMenuMediaFlags.From(p->get_media_state_flags(p)),
             SelectionText = CefString.ReadUserFree(p->get_selection_text(p)),
             TitleText = CefString.ReadUserFree(p->get_title_text(p)),
             IsEditable = p->is_editable(p) != 0,
@@ -141,7 +146,6 @@ public sealed unsafe class WebContents
                 Has(cef_context_menu_edit_state_flags_t.CM_EDITFLAG_CAN_PASTE), Has(cef_context_menu_edit_state_flags_t.CM_EDITFLAG_CAN_DELETE),
                 Has(cef_context_menu_edit_state_flags_t.CM_EDITFLAG_CAN_SELECT_ALL), Has(cef_context_menu_edit_state_flags_t.CM_EDITFLAG_CAN_EDIT_RICHLY)),
         };
-        LastContextMenuPoint = (args.X, args.Y);
         // Raised after CEF has finished with its own (emptied) menu, so a Popup from the handler is not nested in it.
         CefThread.PostUi(() => ContextMenu?.Invoke(this, args));
     }
@@ -399,14 +403,14 @@ public sealed unsafe class WebContents
     /// <param name="path">Absolute, or relative to the current directory.</param>
     /// <param name="query">Query parameters, encoded into the URL.</param>
     /// <param name="hash">Fragment, without the leading <c>#</c>.</param>
-    public void LoadFile(string path, IReadOnlyDictionary<string, string>? query = null, string? hash = null)
+    public Task LoadFile(string path, IReadOnlyDictionary<string, string>? query = null, string? hash = null)
     {
         ArgumentNullException.ThrowIfNull(path);
         var builder = new UriBuilder(new Uri(Path.GetFullPath(path)));
         if (query is { Count: > 0 })
             builder.Query = string.Join('&', query.Select(kv => $"{Uri.EscapeDataString(kv.Key)}={Uri.EscapeDataString(kv.Value)}"));
         if (!string.IsNullOrEmpty(hash)) builder.Fragment = hash;
-        LoadUrl(builder.Uri.AbsoluteUri);
+        return LoadUrl(builder.Uri.AbsoluteUri);
     }
 
     private void Raise(EventHandler? handler)
@@ -426,21 +430,47 @@ public sealed unsafe class WebContents
     /// <summary>The page title, unless a <see cref="PageTitleUpdated"/> handler cancelled it; the window applies it.</summary>
     internal Action<string>? TitleApplied { get; set; }
 
-    /// <summary>Navigates to <paramref name="url"/>. Electron's <c>webContents.loadURL()</c>.</summary>
+    /// <summary>Navigates to <paramref name="url"/>; the task completes when the page has loaded and fails with a
+    /// <see cref="LoadFailedException"/> if it does not (ERR_ABORTED when a newer load replaces it).
+    /// Electron's <c>webContents.loadURL()</c>.</summary>
     /// <param name="url">The URL, with its scheme.</param>
     /// <param name="options">Referrer, user agent, extra headers and body for this navigation.</param>
     /// <exception cref="NotSupportedException"><see cref="LoadUrlOptions.BaseUrlForDataUrl"/>, or an
     /// <see cref="UploadFile"/> with an offset or length.</exception>
-    public void LoadUrl(string url, LoadUrlOptions? options = null)
+    public Task LoadUrl(string url, LoadUrlOptions? options = null)
     {
         ArgumentNullException.ThrowIfNull(url);
         var load = PendingLoad.Create(url, options);
         var userAgent = options?.UserAgent;
+        var done = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         CefThread.RunOnUi(() =>
         {
+            CompleteLoad(new LoadFailedException(AbortedError, "ERR_ABORTED", url));
+            _loadDone = done;
             if (userAgent is not null) ApplyUserAgent(userAgent);
             Navigate(url, load);
         });
+        return done.Task;
+    }
+
+    // net::ERR_ABORTED: a navigation stopped, typically because a newer one replaced it.
+    private const int AbortedError = -3;
+
+    // The task of the latest LoadUrl, until its page finishes or fails; UI thread only.
+    private TaskCompletionSource? _loadDone;
+
+    /// <summary>Whether loading <paramref name="target"/> from <paramref name="current"/> only moves to a fragment,
+    /// keeping the document: the same URL apart from a fragment, which the target has.</summary>
+    internal static bool IsSameDocument(string current, string target)
+        => Uri.TryCreate(current, UriKind.Absolute, out var from) && Uri.TryCreate(target, UriKind.Absolute, out var to)
+            && to.Fragment.Length > 0 && from.GetLeftPart(UriPartial.Query) == to.GetLeftPart(UriPartial.Query);
+
+    private void CompleteLoad(LoadFailedException? failure)
+    {
+        if (_loadDone is not { } done) return;
+        _loadDone = null;
+        if (failure is null) done.TrySetResult();
+        else done.TrySetException(failure);
     }
 
     /// <summary>Overrides the user agent for this page: request headers and <c>navigator.userAgent</c>, for
@@ -475,6 +505,9 @@ public sealed unsafe class WebContents
         lock (_pendingLoadGate) _pendingLoad = load;
         _navigated = true;
         var frame = _browser->get_main_frame(_browser);
+        // Only the fragment changes: the page stays, and no load end follows.
+        if (IsSameDocument(CefString.ReadUserFree(frame->get_url(frame)), url) && _loadDone is { } current)
+            CefThread.PostUi(() => { if (_loadDone == current) CompleteLoad(null); });
         cef_string_utf16_t value = default;
         CefString.Set(&value, url);
         frame->load_url(frame, &value);
@@ -667,6 +700,24 @@ public sealed class PageTitleUpdatedEventArgs(string title) : CancelEventArgs
 
 /// <summary>Script run by <see cref="WebContents.ExecuteJavaScriptAsync"/> threw, or its promise rejected.</summary>
 public sealed class JavaScriptException(string message) : Exception(message);
+
+/// <summary>A page failed to load; what <see cref="WebContents.LoadUrl"/>'s task fails with. Electron rejects
+/// <c>loadURL</c>'s promise with these details.</summary>
+/// <param name="errorCode">Chromium's net error code (negative), e.g. -6 for a missing file.</param>
+/// <param name="errorDescription">Chromium's description of the error.</param>
+/// <param name="validatedUrl">The URL that failed.</param>
+public sealed class LoadFailedException(int errorCode, string errorDescription, string validatedUrl)
+    : Exception($"{errorDescription} ({errorCode}) loading '{validatedUrl}'")
+{
+    /// <summary>Chromium's net error code (negative).</summary>
+    public int ErrorCode { get; } = errorCode;
+
+    /// <summary>Chromium's description of the error.</summary>
+    public string ErrorDescription { get; } = errorDescription;
+
+    /// <summary>The URL that failed.</summary>
+    public string ValidatedUrl { get; } = validatedUrl;
+}
 
 /// <summary>Arguments for <see cref="WebContents.DidFailLoad"/>; Electron's <c>did-fail-load</c> parameters.</summary>
 /// <param name="ErrorCode">Chromium's net error code (negative).</param>

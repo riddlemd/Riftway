@@ -26,7 +26,7 @@ internal sealed unsafe class WindowMenuBar
     internal WindowMenuBar(BrowserWindow owner)
     {
         _owner = owner;
-        _modelDelegate = new MenuModelDelegate { CommandExecuted = Execute, Closed = ReleasePressedLock };
+        _modelDelegate = new MenuModelDelegate { CommandExecuted = Execute, Closed = OnMenuClosed };
     }
 
     private cef_menu_button_pressed_lock_t* _pressedLock;
@@ -89,6 +89,7 @@ internal sealed unsafe class WindowMenuBar
     internal void SetShown(bool shown)
     {
         Shown = shown;
+        _shownByAlt = false;
         UpdateVisibility();
     }
 
@@ -117,6 +118,7 @@ internal sealed unsafe class WindowMenuBar
             {
                 _altAlone = false;
                 SetShown(!Shown);
+                _shownByAlt = Shown;
             }
             return false;
         }
@@ -125,7 +127,11 @@ internal sealed unsafe class WindowMenuBar
         var alt = (key->modifiers & (uint)cef_event_flags_t.EVENTFLAG_ALT_DOWN) != 0;
         if (!alt || key->windows_key_code is < 'A' or > 'Z') return false;
         if (!_mnemonics.TryGetValue((char)key->windows_key_code, out var index)) return false;
-        if (AutoHide && !Shown) SetShown(true);
+        if (AutoHide && !Shown)
+        {
+            SetShown(true);
+            _shownByAlt = true;
+        }
         // Opening a menu runs a menu loop, which must not start inside CEF's key callback.
         CefThread.PostUi(() => TriggerMenu(index));
         return true;
@@ -224,6 +230,17 @@ internal sealed unsafe class WindowMenuBar
     internal void CancelMenu()
     {
         if (_window is not null) _window->cancel_menu(_window);
+    }
+
+    // An auto-hidden bar that Alt brought up goes away again once its menu has been used, as in Electron.
+    private bool _shownByAlt;
+
+    private void OnMenuClosed()
+    {
+        ReleasePressedLock();
+        if (!AutoHide || !_shownByAlt) return;
+        _shownByAlt = false;
+        SetShown(false);
     }
 
     private void ReleasePressedLock()
