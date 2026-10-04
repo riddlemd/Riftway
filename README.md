@@ -2,7 +2,7 @@
 
 Electron for .NET: desktop apps in C#, rendered by one Chromium (CEF) on every platform, with Blazor Hybrid as the default UI model and Electron's concepts (`app`, `BrowserWindow`, `webContents`, IPC, `protocol`) in idiomatic C#.
 
-**Status: pre-alpha (M1).** On macOS, Linux (X11) and Windows x64, `OrielApp` + `BrowserWindow` open a CEF 154 window and load a URL.
+**Status: pre-alpha (M2 in progress).** On macOS, Linux (X11) and Windows x64: `OrielApp` and `BrowserWindow` with much of Electron's window API, IPC (`ipcMain`, `ipcRenderer`, `contextBridge`) and custom schemes (`Protocol`). See [the todo list](docs/todo.md) for what remains.
 
 ## Platforms
 

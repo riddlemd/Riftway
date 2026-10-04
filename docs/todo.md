@@ -31,11 +31,6 @@ Cross-platform work. Platform-specific items: [linux-todo.md](linux-todo.md), [w
       `dcheck_always_on=false`, then re-run the drop-in probe (7 H.264/AAC checks, all failing on stock as expected).
       API headers are byte-identical to stock; dependencies match. Ask before deleting the ~150 GB tree.
 
-## Docs
-
-- [ ] README status still says pre-alpha M1; M2 IPC, Protocol and BrowserWindow parity batch 1 have landed.
-- [ ] PLAN.md risk "macOS full screen blacks out other displays" still reads as unsolved; `SimpleFullScreen` exists now.
-
 ## Later milestones
 
 - [ ] M3 Blazor Hybrid · M4 ship it · M5 desktop integration · M6 session/network/processes · M7 own CEF builds
