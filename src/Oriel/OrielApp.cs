@@ -165,10 +165,20 @@ public sealed unsafe class OrielApp
     private void OnContextInitialized()
     {
         ForgetZoomLevels();
+        AllowPopups();
         // Before Ready, so the first window's page can already load from a custom scheme.
         Protocol.OnContextInitialized();
         IsReady = true;
         Ready?.Invoke(this, EventArgs.Empty);
+    }
+
+    // Electron has no popup blocker: window.open works without a user gesture, and WebContents.SetWindowOpenHandler decides.
+    private static void AllowPopups()
+    {
+        var context = CefNative.cef_request_context_get_global_context();
+        context->set_content_setting(context, null, null, cef_content_setting_types_t.CEF_CONTENT_SETTING_TYPE_POPUPS,
+            cef_content_setting_values_t.CEF_CONTENT_SETTING_VALUE_ALLOW);
+        NativeObject.Release(context);
     }
 
     // Chrome-style profiles save each origin's zoom across launches; Electron keeps zoom for the session only.

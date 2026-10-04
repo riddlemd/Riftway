@@ -37,6 +37,7 @@ Entries marked _(branch `x`)_ are on that branch and not yet in `main`.
 | A1 | `app.enableSandbox()` on every OS | Linux only; `Run()` throws `PlatformNotSupportedException` on macOS and Windows | OS/packaging: CEF forces `--no-sandbox` whenever `browser_subprocess_path` is set (Windows), and the macOS helper does not link the sandbox library | Windows: the `bootstrap.exe` layout (probe passed, see windows-todo.md). macOS: native helper + `cef_sandbox` |
 | A2 | Several instances may run; `requestSingleInstanceLock()` opts in to one | Always single instance per data directory: a second launch exits and the first gets `SecondInstance` | CEF: Chrome-style profiles lock their data directory | Per-instance cache paths when the lock is not requested; `RequestSingleInstanceLock` |
 | A3 | `will-quit`, `before-quit`, `quit` events; `quit()` closes windows first | `Quit()` ends the message loop directly; no quit events | Todo | Close windows (with `Closing`), then quit; raise the events |
+| A4 | `app.quit()` works from anywhere | `Quit()` from a thread other than the UI thread does nothing (found on Windows) | Todo: it calls `cef_quit_message_loop` directly | Run it on the UI thread |
 
 ## BrowserWindow
 
@@ -47,7 +48,7 @@ Entries marked _(branch `x`)_ are on that branch and not yet in `main`.
 | W3 | `setIcon` takes a `NativeImage` | Takes a PNG/JPEG file path; Windows and Linux only | Module: `NativeImage` (M5) | Overload taking `NativeImage` |
 | W4 | `loadURL` returns a promise | Returns void | Todo | Return a `Task` completed by load end or failure |
 | W5 | Modal windows disable their parent's input on Linux | The parent still takes focus under window managers that ignore the modal hint (openbox) | CEF: no input filter to block the parent | OS: X11 input shape or grab; check GNOME/KDE |
-| W6 | `focus()` on a modal's parent leaves the modal focused (Windows) | The parent comes to the front: Win32 activates disabled windows programmatically | OS | Fix committed on the laptop's `win-windowtest` (`Focus()` targets the innermost modal), not pushed |
+| W6 | `focus()` on a modal's parent leaves the modal focused (Windows) | The parent comes to the front: Win32 activates disabled windows programmatically | OS | Fix pushed on `win-windowtest` (`Focus()` targets the innermost modal), not merged |
 | W7 | `openDevTools({ mode })` with docked modes | Separate window only | Unknown | CEF `show_dev_tools` with an inspector view, or `BrowserView` docking |
 | W8 | `setParentWindow` | Missing | CEF: Views sets the parent only at creation | OS: `addChildWindow:`, owner `HWND`, `XSetTransientForHint` |
 | W9 | Native full screen on macOS | Same, but it blacks out other displays; `SimpleFullScreen` is the alternative. With the option set, the green button and the page's Fullscreen API also use simple full screen _(branch `green-button`; page path untested)_ | Design: KHost-style audience screens need the other displays | None needed; document |
@@ -57,8 +58,20 @@ Entries marked _(branch `x`)_ are on that branch and not yet in `main`.
 | W13 | `webSecurity`, `allowRunningInsecureContent`, `experimentalFeatures`, `enable/disableBlinkFeatures`, `autoplayPolicy`, `sandbox` per window | Missing | CEF: Chromium switches, process-wide | App-level options; per-window is a Patch |
 | W14 | `contextIsolation: false` | Always on | Design: the preload runs in an isolated world by construction | None planned |
 | W15 | `zoomFactor` | Re-applies to an origin whose zoom was reset to 0 | Todo | Track explicit resets |
-| W16 | `isMenuBarVisible()` etc. on Windows/Linux; `setMenu` on macOS sets nothing | Same; the bar is drawn by CEF Views with its default look _(branch `menus`)_ | CEF: Views windows have no native menu bar | Style the bar (colours, font) to match the OS |
+| W16 | `isMenuBarVisible()` etc. on Windows/Linux; `setMenu` on macOS sets nothing; Windows uses a native Win32 menu bar | Same API; the bar is drawn by CEF Views: on Windows a plain strip following the system theme, without mnemonic underlines and with different padding and hover _(branch `menus`)_ | CEF: Views windows have no native menu bar | Style the bar (colours, font, underlines) to match the OS |
 | W17 | Alt shows an auto-hidden bar until the menu is used | Until Alt is pressed again _(branch `menus`)_ | Todo | Hide on menu close and on focus loss |
+| W18 | `width`/`height` are the window's outer size unless `useContentSize` | macOS: the window comes out a title bar taller than asked (260 → 288); Linux exact; Windows unchecked | Unknown: likely `center_window` sizing the client area on macOS | Size the frame from the content inset |
+| W19 | `&` mnemonics open a menu with Alt+letter; Alt toggles an auto-hidden bar | Neither fires on any OS _(branch `menus`)_ | Todo: wired to the window delegate's `on_key_event`, which never sees keys aimed at the page | Handle Alt in the client's `cef_keyboard_handler_t` |
+
+## window.open
+
+| ID | Electron | Oriel | Why | Possible resolution |
+|---|---|---|---|---|
+| O1 | `details.features` is the page's raw string, and features such as `frame=no` or `show=no` apply to the window | Rebuilt from what CEF parsed: `left`, `top`, `width`, `height` only; other features are lost | CEF: `on_before_popup` gives parsed position and size only | Patch |
+| O2 | `details.referrer`, `details.postBody` | Missing | CEF: `on_before_popup` has neither | Patch |
+| O3 | Handler can `createWindow` with its own `webContents` | Not offered | Todo | Adopt a given window's view |
+| O4 | A popup's first page loads once, with the preload | When it commits before Oriel's runtime and preload are registered over DevTools, it is reloaded once so they run: the page loads twice, and a POST target is untested | CEF: the popup's browser exists only as it starts loading; there is no about:blank start as for other windows | Patch, or register before the first commit (DevTools auto-attach) |
+| O5 | `width`/`height` from features | Size the page area (`UseContentSize`), as browsers treat them; not compared with Electron | Unknown | Check Electron |
 
 ## webContents
 

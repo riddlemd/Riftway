@@ -153,11 +153,13 @@ public sealed unsafe class ClientHandler
     private readonly JsDialogHandler? _jsDialog;
     private readonly RequestHandler? _request;
     private readonly CommandHandler? _command;
+    private readonly LifeSpanHandler? _lifeSpan;
 
     public ClientHandler(DisplayHandler? display = null, LoadHandler? load = null, JsDialogHandler? jsDialog = null, RequestHandler? request = null,
-        CommandHandler? command = null)
+        CommandHandler? command = null, LifeSpanHandler? lifeSpan = null)
     {
         _command = command;
+        _lifeSpan = lifeSpan;
         _display = display;
         _load = load;
         _jsDialog = jsDialog;
@@ -168,6 +170,15 @@ public sealed unsafe class ClientHandler
         if (jsDialog is not null) Native->get_jsdialog_handler = &GetJsDialogHandler;
         if (request is not null) Native->get_request_handler = &GetRequestHandler;
         if (command is not null) Native->get_command_handler = &GetCommandHandler;
+        if (lifeSpan is not null) Native->get_life_span_handler = &GetLifeSpanHandler;
+    }
+
+    [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])]
+    private static cef_life_span_handler_t* GetLifeSpanHandler(cef_client_t* self)
+    {
+        var handler = NativeObject.Owner<ClientHandler>(self)._lifeSpan!.Native;
+        NativeObject.AddRef(handler);
+        return handler;
     }
 
     public cef_client_t* Native { get; }
@@ -460,9 +471,49 @@ public sealed unsafe class BrowserViewDelegate
         Native = NativeObject.Create<cef_browser_view_delegate_t>(this);
         Native->on_browser_created = &OnBrowserCreated;
         Native->on_browser_destroyed = &OnBrowserDestroyed;
+        Native->get_delegate_for_popup_browser_view = &GetDelegateForPopupBrowserView;
+        Native->on_popup_browser_view_created = &OnPopupBrowserViewCreated;
     }
 
     public cef_browser_view_delegate_t* Native { get; }
+
+    /// <summary>The delegate for a page popup's view, by the client its <c>on_before_popup</c> chose; null for the
+    /// same delegate as this view. Not asked for DevTools.</summary>
+    public Func<nint, nint>? PopupDelegate { get; init; }
+
+    /// <summary>A page popup's view exists: host it in a window and return true, or false for CEF's default window.
+    /// Arguments: the popup view and its delegate. Not called for DevTools.</summary>
+    public Func<nint, nint, bool>? PopupViewCreated { get; init; }
+
+    [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])]
+    private static cef_browser_view_delegate_t* GetDelegateForPopupBrowserView(cef_browser_view_delegate_t* self, cef_browser_view_t* browserView,
+        cef_browser_settings_t* settings, cef_client_t* client, int isDevtools)
+    {
+        var owner = NativeObject.Owner<BrowserViewDelegate>(self);
+        var popupDelegate = isDevtools == 0 && owner.PopupDelegate is { } find ? Guard.Run(() => find((nint)client), 0) : 0;
+        NativeObject.Release(client);
+        NativeObject.Release(browserView);
+        if (popupDelegate == 0) return null;
+        NativeObject.AddRef((void*)popupDelegate);
+        return (cef_browser_view_delegate_t*)popupDelegate;
+    }
+
+    [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])]
+    private static int OnPopupBrowserViewCreated(cef_browser_view_delegate_t* self, cef_browser_view_t* browserView, cef_browser_view_t* popupBrowserView, int isDevtools)
+    {
+        var owner = NativeObject.Owner<BrowserViewDelegate>(self);
+        var handled = false;
+        if (isDevtools == 0 && owner.PopupViewCreated is { } host)
+        {
+            var view = &popupBrowserView->@base;
+            var popupDelegate = (nint)view->get_delegate(view);
+            handled = Guard.Run(() => host((nint)popupBrowserView, popupDelegate), false);
+            NativeObject.Release((void*)popupDelegate);
+        }
+        NativeObject.Release(popupBrowserView);
+        NativeObject.Release(browserView);
+        return handled ? 1 : 0;
+    }
 
 
     public BrowserCallback? BrowserCreated { get; init; }

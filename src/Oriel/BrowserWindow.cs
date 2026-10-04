@@ -206,12 +206,23 @@ public sealed unsafe class BrowserWindow
     private nint _routedNSWindow;
     // Touched only on the UI thread.
     private readonly List<BrowserWindow> _children = [];
+    // Popups this window's page opened, closed with it unless they outlive it; UI thread only.
+    private readonly List<BrowserWindow> _popups = [];
+    // Popups allowed by on_before_popup whose view CEF has not created yet, by the client CEF will use.
+    private static readonly Dictionary<nint, (BrowserWindow Window, int PopupId, WindowOpenDetails Details)> s_pendingPopups = [];
+    private BrowserWindow? _opener;
+    private bool _outlivesOpener;
 
     /// <summary>Creates the window, shown unless <see cref="BrowserWindowOptions.Show"/> is false.</summary>
     /// <exception cref="InvalidOperationException">The application is not ready yet, or the parent is closed.</exception>
     /// <exception cref="ArgumentException"><see cref="BrowserWindowOptions.Modal"/> without a parent.</exception>
     /// <exception cref="NotSupportedException">An option CEF cannot honour, such as <see cref="DefaultFontFamily.Math"/>.</exception>
-    public BrowserWindow(BrowserWindowOptions? options = null)
+    public BrowserWindow(BrowserWindowOptions? options = null) : this(options, opener: null)
+    {
+    }
+
+    // A popup's window waits for CEF to create its browser view (AdoptPopupView) instead of creating one.
+    private BrowserWindow(BrowserWindowOptions? options, BrowserWindow? opener)
     {
         if (!OrielApp.Current.IsReady) throw new InvalidOperationException("Create windows after OrielApp.Ready.");
 
@@ -235,8 +246,15 @@ public sealed unsafe class BrowserWindow
             _readyToShowRaised = true;
             ReadyToShow?.Invoke(this, EventArgs.Empty);
         };
-        _client = new ClientHandler(WebContents.Display, WebContents.Load, WebContents.JsDialog, WebContents.Request, WebContents.Command);
-        _viewDelegate = new BrowserViewDelegate { BrowserCreated = OnBrowserCreated, BrowserDestroyed = OnBrowserDestroyed };
+        _client = new ClientHandler(WebContents.Display, WebContents.Load, WebContents.JsDialog, WebContents.Request, WebContents.Command,
+            new LifeSpanHandler { BeforePopup = OnBeforePopup, PopupAborted = OnPopupAborted });
+        _viewDelegate = new BrowserViewDelegate
+        {
+            BrowserCreated = OnBrowserCreated,
+            BrowserDestroyed = OnBrowserDestroyed,
+            PopupDelegate = client => s_pendingPopups.TryGetValue(client, out var pending) ? (nint)pending.Window._viewDelegate.Native : 0,
+            PopupViewCreated = OnPopupViewCreated,
+        };
         _windowDelegate = new WindowDelegate
         {
             Created = OnWindowCreated,
@@ -255,6 +273,11 @@ public sealed unsafe class BrowserWindow
             Modal = _options.Modal,
         };
 
+        if (opener is not null)
+        {
+            _opener = opener;
+            return;
+        }
         CefThread.InvokeOnUi(() =>
         {
             if (_options.Parent is { _window: null }) throw new InvalidOperationException("The parent window is closed.");
@@ -281,12 +304,97 @@ public sealed unsafe class BrowserWindow
         _browserView = CefNative.cef_browser_view_create(_client.Native, &url, &settings, null, null, _viewDelegate.Native);
         CefString.Clear(&url);
         ClearWebPreferenceStrings(&settings);
+        OpenWindow();
+    }
 
+    private void OpenWindow()
+    {
         lock (s_openGate) s_open.Add(this);
         _options.Parent?._children.Add(this);
         NativeObject.AddRef(_windowDelegate.Native);
         _window = CefNative.cef_window_create_top_level(_windowDelegate.Native);
     }
+
+    // UI thread, inside CEF's on_before_popup: asks the page's handler, then prepares the window CEF's popup will live in.
+    private cef_client_t* OnBeforePopup(PopupRequest request, cef_popup_features_t* features, cef_browser_settings_t* settings)
+    {
+        var details = new WindowOpenDetails(request.Url, request.FrameName, FeaturesOf(features), DispositionOf(request.Disposition))
+        {
+            UserGesture = request.UserGesture,
+        };
+        var response = WebContents.DecideWindowOpen(details);
+        if (!response.IsAllowed) return null;
+
+        var options = response.OverrideBrowserWindowOptions ?? PopupOptionsFrom(features, WebContents.Preferences);
+        BrowserWindow popup;
+        try { popup = new BrowserWindow(options, opener: this) { _outlivesOpener = response.OutlivesOpener }; }
+        catch (Exception e) when (e is ArgumentException or NotSupportedException or InvalidOperationException)
+        {
+            Console.Error.WriteLine($"[Oriel] Blocked a window the page opened: {e.Message}");
+            return null;
+        }
+        settings->background_color = popup._backgroundColor is null ? settings->background_color : ParseColor(popup._backgroundColor);
+        ApplyWebPreferences(settings, popup._options.WebPreferences);
+        s_pendingPopups[(nint)popup._client.Native] = (popup, request.PopupId, details);
+        return popup._client.Native;
+    }
+
+    private static void OnPopupAborted(int popupId)
+    {
+        foreach (var (client, pending) in s_pendingPopups.ToArray())
+            if (pending.PopupId == popupId) s_pendingPopups.Remove(client);
+    }
+
+    // The popup's view arrives with the delegate PopupDelegate chose, which identifies the waiting window.
+    private bool OnPopupViewCreated(nint popupView, nint popupDelegate)
+    {
+        foreach (var (client, pending) in s_pendingPopups.ToArray())
+        {
+            if ((nint)pending.Window._viewDelegate.Native != popupDelegate) continue;
+            s_pendingPopups.Remove(client);
+            var popup = pending.Window;
+            NativeObject.AddRef((void*)popupView);
+            popup._browserView = (cef_browser_view_t*)popupView;
+            popup.WebContents.MarkOpenedByPage();
+            if (!popup._outlivesOpener) _popups.Add(popup);
+            popup.OpenWindow();
+            WebContents.RaiseDidCreateWindow(new DidCreateWindowEventArgs(popup, pending.Details));
+            return true;
+        }
+        return false;
+    }
+
+    /// <summary>The options of a window a page opens with no override: the opener's web preferences, and the size
+    /// and position the page asked for, which like a browser's are the page area's.</summary>
+    internal static BrowserWindowOptions PopupOptionsFrom(cef_popup_features_t* features, WebPreferences openerPreferences)
+    {
+        var options = new BrowserWindowOptions { WebPreferences = openerPreferences };
+        if (features->widthSet != 0) options = options with { Width = features->width, UseContentSize = true };
+        if (features->heightSet != 0) options = options with { Height = features->height, UseContentSize = true };
+        if (features->xSet != 0 && features->ySet != 0) options = options with { X = features->x, Y = features->y };
+        return options;
+    }
+
+    /// <summary>Electron's <c>features</c> string, rebuilt from what CEF parsed: position and size only.</summary>
+    internal static string FeaturesOf(cef_popup_features_t* features)
+    {
+        var parts = new List<string>();
+        if (features->xSet != 0) parts.Add($"left={features->x}");
+        if (features->ySet != 0) parts.Add($"top={features->y}");
+        if (features->widthSet != 0) parts.Add($"width={features->width}");
+        if (features->heightSet != 0) parts.Add($"height={features->height}");
+        return string.Join(',', parts);
+    }
+
+    /// <summary>Electron's disposition for CEF's.</summary>
+    internal static WindowOpenDisposition DispositionOf(cef_window_open_disposition_t disposition) => disposition switch
+    {
+        cef_window_open_disposition_t.CEF_WOD_CURRENT_TAB => WindowOpenDisposition.Default,
+        cef_window_open_disposition_t.CEF_WOD_NEW_FOREGROUND_TAB => WindowOpenDisposition.ForegroundTab,
+        cef_window_open_disposition_t.CEF_WOD_NEW_BACKGROUND_TAB => WindowOpenDisposition.BackgroundTab,
+        cef_window_open_disposition_t.CEF_WOD_NEW_POPUP or cef_window_open_disposition_t.CEF_WOD_NEW_WINDOW => WindowOpenDisposition.NewWindow,
+        _ => WindowOpenDisposition.Other,
+    };
 
     private static void ApplyWebPreferences(cef_browser_settings_t* settings, WebPreferences preferences)
     {
@@ -851,6 +959,9 @@ public sealed unsafe class BrowserWindow
         // macOS closes child windows with their parent; Linux does not. Destroy, as Windows does with owned
         // windows: a child that vetoed would outlive its parent.
         foreach (var child in _children.ToArray()) child.Destroy();
+        // As Electron: windows the page opened close with it unless they asked to outlive it.
+        foreach (var popup in _popups.ToArray()) popup.Destroy();
+        _opener?._popups.Remove(this);
         Closed?.Invoke(this, EventArgs.Empty);
         if (s_open.Count == 0) OrielApp.Current.OnAllWindowsClosed();
     }
