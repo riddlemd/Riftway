@@ -75,6 +75,10 @@ public sealed record BrowserWindowOptions
     /// Electron's <c>skipTaskbar</c>.</summary>
     public bool SkipTaskbar { get; init; }
 
+    /// <summary>What Windows 11 22H2 and later draws behind the window; null leaves the system default. Windows only:
+    /// ignored on macOS and Linux. Electron's <c>backgroundMaterial</c>.</summary>
+    public BackgroundMaterial? BackgroundMaterial { get; init; }
+
     /// <summary>Whether the window stays above other windows.</summary>
     public bool AlwaysOnTop { get; init; }
 
@@ -953,6 +957,57 @@ public sealed unsafe class BrowserWindow
         return WindowsTaskbar.SetOverlayIcon(hwnd, pixels, width, height, description);
     }
 
+    /// <summary>Sets the window's App User Model ID and relaunch details, which decide how the taskbar groups and pins
+    /// it; empty options are left as they are. Windows only: does nothing on macOS and Linux.
+    /// Electron's <c>win.setAppDetails()</c>.</summary>
+    public void SetAppDetails(AppDetailsOptions options)
+    {
+        ArgumentNullException.ThrowIfNull(options);
+        var values = AppDetails.Plan(options);
+        Command(w =>
+        {
+            if (OperatingSystem.IsWindows() && values.Count > 0 && !WindowsWindow.SetAppUserModel(Hwnd(w), values))
+                Console.Error.WriteLine("[Oriel] The window's property store did not take the app details.");
+        });
+    }
+
+    /// <summary>Shows only <paramref name="region"/> of the window (DIPs, from the client area's top left) in its
+    /// taskbar thumbnail; an empty region shows the whole window. Windows only: does nothing on macOS and Linux.
+    /// Electron's <c>win.setThumbnailClip()</c>.</summary>
+    public void SetThumbnailClip(Rectangle region) => Command(w =>
+    {
+        if (!OperatingSystem.IsWindows()) return;
+        var hwnd = Hwnd(w);
+        WindowsTaskbar.SetThumbnailClip(hwnd, AppDetails.ClipToPixels(region, WindowsWindow.ScaleFactor(hwnd)), done =>
+        {
+            if (!done) Console.Error.WriteLine("[Oriel] The taskbar did not take the thumbnail clip.");
+        });
+    });
+
+    /// <summary>Sets the tooltip shown over the window's taskbar thumbnail; empty restores the title.
+    /// Windows only: does nothing on macOS and Linux. Electron's <c>win.setThumbnailToolTip()</c>.</summary>
+    public void SetThumbnailToolTip(string toolTip)
+    {
+        ArgumentNullException.ThrowIfNull(toolTip);
+        Command(w =>
+        {
+            if (OperatingSystem.IsWindows() && !WindowsTaskbar.SetThumbnailToolTip(Hwnd(w), toolTip))
+                Console.Error.WriteLine("[Oriel] The taskbar did not take the thumbnail tooltip.");
+        });
+    }
+
+    /// <summary>Sets what Windows 11 22H2 and later draws behind the window. Windows only: does nothing on macOS and
+    /// Linux. Electron's <c>win.setBackgroundMaterial()</c>.</summary>
+    /// <remarks>DWM holds the material, but CEF paints the whole window opaque, title bar included, so it does not
+    /// show yet, even under a transparent page and <see cref="BrowserWindowOptions.BackgroundColor"/>.</remarks>
+    public void SetBackgroundMaterial(BackgroundMaterial material) => Command(w => ApplyBackgroundMaterial(w, material));
+
+    private static void ApplyBackgroundMaterial(cef_window_t* w, BackgroundMaterial material)
+    {
+        if (OperatingSystem.IsWindows() && !WindowsWindow.SetBackdrop(Hwnd(w), BackgroundMaterials.ToBackdrop(material)))
+            Console.Error.WriteLine("[Oriel] DWM did not take the background material (it needs Windows 11 22H2).");
+    }
+
     // The shell creates the button on the first show, whether at creation or from Show(); later shows keep it removed.
     private void ApplySkipTaskbar(cef_window_t* w, bool restore = false)
     {
@@ -1082,6 +1137,7 @@ public sealed unsafe class BrowserWindow
             window->@base.@base.set_background_color(&window->@base.@base, argb);
             _browserView->@base.set_background_color(&_browserView->@base, argb);
         }
+        if (_options.BackgroundMaterial is { } material) ApplyBackgroundMaterial(window, material);
 
         if (UsesSimpleFullScreen && OperatingSystem.IsMacOS())
             _routedNSWindow = MacWindow.RouteFullScreenToggle((nint)window->get_window_handle(window), () => SetSimpleFullScreen(!IsSimpleFullScreen));

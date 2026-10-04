@@ -23,7 +23,8 @@ public enum TaskbarProgressState
 }
 
 /// <summary>A window's taskbar button on Windows: progress, overlay icon, flashing, and whether it has one.</summary>
-/// <remarks>UI thread only: <c>ITaskbarList3</c> is apartment-threaded, and Chromium's UI thread is already an STA.
+/// <remarks>UI thread only. Chromium's UI thread is in the MTA, so it reaches the apartment-threaded <c>ITaskbarList3</c>
+/// through a proxy.
 /// The shell ignores calls made before the window's button exists, so call these once the window is shown.</remarks>
 [SupportedOSPlatform("windows")]
 public static unsafe class WindowsTaskbar
@@ -38,6 +39,8 @@ public static unsafe class WindowsTaskbar
     private const int SetProgressValue = 9;
     private const int SetProgressState = 10;
     private const int SetOverlayIconSlot = 18;
+    private const int SetThumbnailTooltipSlot = 19;
+    private const int SetThumbnailClipSlot = 20;
 
     private static void* s_taskbar;
     private static bool s_unavailable;
@@ -86,6 +89,51 @@ public static unsafe class WindowsTaskbar
         return taskbar is not null && ((delegate* unmanaged<void*, nint, nint, char*, int>)Slot(taskbar, SetOverlayIconSlot))(taskbar, hwnd, 0, null) >= 0;
     }
 
+    /// <summary>Sets the tooltip on the window's taskbar thumbnail; empty restores the window title.
+    /// False if the shell refused.</summary>
+    public static bool SetThumbnailToolTip(nint hwnd, string toolTip)
+    {
+        var taskbar = Taskbar();
+        if (taskbar is null) return false;
+        fixed (char* text = toolTip)
+            return ((delegate* unmanaged<void*, nint, char*, int>)Slot(taskbar, SetThumbnailTooltipSlot))(taskbar, hwnd, text) >= 0;
+    }
+
+    /// <summary>Shows only <paramref name="clip"/> (client-area pixels) in the taskbar thumbnail, or the whole window
+    /// when null; <paramref name="done"/> gets false if the shell refused. Asynchronous, in call order.</summary>
+    public static void SetThumbnailClip(nint hwnd, (int Left, int Top, int Right, int Bottom)? clip, Action<bool> done)
+    {
+        lock (s_clipQueue)
+        {
+            s_clipThread ??= StartClipThread();
+            s_clipQueue.Add(() =>
+            {
+                var taskbar = s_clipTaskbar;
+                var rect = clip is { } c ? new Rect { Left = c.Left, Top = c.Top, Right = c.Right, Bottom = c.Bottom } : default;
+                done(taskbar is not null && ((delegate* unmanaged<void*, nint, Rect*, int>)Slot(taskbar, SetThumbnailClipSlot))(taskbar, hwnd, clip is null ? null : &rect) >= 0);
+            });
+        }
+    }
+
+    // A NULL clip, which clears it, fails with RPC_X_NULL_REF_POINTER through the proxy the MTA UI thread gets,
+    // so clips go to an STA thread that owns its own instance and calls it directly.
+    private static readonly System.Collections.Concurrent.BlockingCollection<Action> s_clipQueue = [];
+    private static Thread? s_clipThread;
+    private static void* s_clipTaskbar;
+
+    private static Thread StartClipThread()
+    {
+        var thread = new Thread(() =>
+        {
+            s_clipTaskbar = Create();
+            // Blocking waits on an STA thread pump COM messages.
+            foreach (var work in s_clipQueue.GetConsumingEnumerable()) work();
+        }) { IsBackground = true, Name = "Oriel taskbar clip" };
+        thread.SetApartmentState(ApartmentState.STA);
+        thread.Start();
+        return thread;
+    }
+
     /// <summary>Flashes the title bar and taskbar button a few times, leaving the button highlighted until the
     /// window is activated; or stops. Chromium's <c>FlashFrame</c>, which Electron uses.</summary>
     public static void FlashFrame(nint hwnd, bool flash)
@@ -103,17 +151,19 @@ public static unsafe class WindowsTaskbar
     private static void* Taskbar()
     {
         if (s_taskbar is not null || s_unavailable) return s_taskbar;
+        s_taskbar = Create();
+        // No shell (Server Core, some kiosks): every taskbar call becomes a no-op.
+        s_unavailable = s_taskbar is null;
+        return s_taskbar;
+    }
+
+    private static void* Create()
+    {
         void* taskbar;
         var clsid = s_clsidTaskbarList;
         var iid = s_iidTaskbarList3;
-        if (CoCreateInstance(&clsid, null, InprocServer, &iid, &taskbar) < 0
-            || ((delegate* unmanaged<void*, int>)Slot(taskbar, HrInit))(taskbar) < 0)
-        {
-            // No shell (Server Core, some kiosks): every taskbar call becomes a no-op.
-            s_unavailable = true;
-            return null;
-        }
-        return s_taskbar = taskbar;
+        if (CoCreateInstance(&clsid, null, InprocServer, &iid, &taskbar) < 0) return null;
+        return ((delegate* unmanaged<void*, int>)Slot(taskbar, HrInit))(taskbar) < 0 ? null : taskbar;
     }
 
     private static void* Slot(void* com, int index) => (*(void***)com)[index];
@@ -166,6 +216,15 @@ public static unsafe class WindowsTaskbar
         public uint Flags;
         public uint Count;
         public uint Timeout;
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct Rect
+    {
+        public int Left;
+        public int Top;
+        public int Right;
+        public int Bottom;
     }
 
     [StructLayout(LayoutKind.Sequential)]

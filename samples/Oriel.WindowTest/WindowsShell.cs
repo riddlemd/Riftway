@@ -89,6 +89,14 @@ static unsafe class WindowsShell
         return names;
     }
 
+    /// <summary>The window's App User Model property, read back from its property store.</summary>
+    internal static string? AppUserModel(nint hwnd, Oriel.Cef.Platform.AppUserModelProperty property)
+        => OperatingSystem.IsWindows() ? Oriel.Cef.Platform.WindowsWindow.GetAppUserModel(hwnd, property) : null;
+
+    /// <summary>The window's system backdrop, read back from DWM.</summary>
+    internal static Oriel.Cef.Platform.WindowsBackdrop? Backdrop(nint hwnd)
+        => OperatingSystem.IsWindows() ? Oriel.Cef.Platform.WindowsWindow.GetBackdrop(hwnd) : null;
+
     private static void* Slot(void* com, int index) => (*(void***)com)[index];
 
     private static void Release(void* com)

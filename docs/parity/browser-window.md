@@ -14,8 +14,8 @@ Event naming: Electron `'x'` → past-tense .NET event (`focus`→`Focused`, `cl
 
 | Area | Done | Partial | Missing |
 |---|---|---|---|
-| Constructor options (52 BaseWindow, 1 BrowserWindow, 46 webPreferences) | 28 | 5 | 66 |
-| Methods (~137) | 29 | 6 | ~102 |
+| Constructor options (52 BaseWindow, 1 BrowserWindow, 46 webPreferences) | 28 | 6 | 65 |
+| Methods (~137) | 32 | 7 | ~98 |
 | Events (35) | 14 | 0 | 21 |
 | Static methods (5) | 0 | 0 | 5 |
 
@@ -32,6 +32,11 @@ Event naming: Electron `'x'` → past-tense .NET event (`focus`→`Focused`, `cl
   `SetOverlayIcon` (PNG/JPEG path). OS: Windows `ITaskbarList3` and `FlashWindowEx` (`WindowsTaskbar`); macOS the Dock tile
   (`MacDock`: a progress bar over the icon, `requestUserAttention:`); Linux X11 (`X11Window`: the urgency hint,
   `_NET_WM_STATE_SKIP_TASKBAR`). Gaps: Linux progress, macOS error/paused colours, `setThumbarButtons` (DRIFT W20–W23).
+- Windows only, as in Electron: `SetAppDetails` (`AppDetailsOptions`: the window property store's
+  `PKEY_AppUserModel_*`), `SetThumbnailClip` and `SetThumbnailToolTip` (`ITaskbarList3`; clips run on an STA thread
+  because the shell's proxy rejects the NULL clip that clears them), `BackgroundMaterial` option and
+  `SetBackgroundMaterial` (`DWMWA_SYSTEMBACKDROP_TYPE`, Windows 11 22H2+). The material is set but hidden behind CEF's
+  opaque painting (DRIFT W24); `titleBarOverlay` is missing (W25).
 - `getNativeWindowHandle` (`W.get_window_handle`: the content `NSView`, `HWND` or X11 `Window`).
 - webContents: `LoadFile` (query, hash), `Reload`, `GetUrl`, `GetTitle`, `did-start-loading`, `did-stop-loading`,
   `did-finish-load`, `did-fail-load`.

@@ -198,6 +198,7 @@ async Task RunAsync(BrowserWindow win, BrowserWindow simple)
     await NavigationAsync();
     await FramesAsync();
     await TaskbarAsync(win);
+    await WindowsApisAsync();
 
     // Closing cancelled once: the window must survive the first close.
     var closingCount = 0;
@@ -1091,6 +1092,62 @@ async Task TaskbarAsync(BrowserWindow win)
     await Task.Delay(2500);
     Check("FlashFrame(false) stops it", WindowsShell.Count(WindowsShell.FlashCode, hwnd) == flashes, $"{flashes} -> {WindowsShell.Count(WindowsShell.FlashCode, hwnd)}");
     tb.Destroy();
+    await Task.Delay(300);
+}
+
+async Task WindowsApisAsync()
+{
+    if (!OperatingSystem.IsWindows()) return;
+
+    var app = System.Diagnostics.Process.GetCurrentProcess().ProcessName;
+    int? Buttons() => WindowsShell.TaskbarNames().FirstOrDefault(n => n.StartsWith(app + " - ", StringComparison.Ordinal)) is { } name
+        && System.Text.RegularExpressions.Regex.Match(name[(app.Length + 3)..], @"\d+") is { Success: true } m ? int.Parse(m.Value) : null;
+
+    // The property store is the read-back; the taskbar moving the window out of the app's group shows the shell used it.
+    var w = new BrowserWindow(new BrowserWindowOptions { Title = "Oriel window test: app details", Width = 300, Height = 200, BackgroundMaterial = BackgroundMaterial.Tabbed });
+    await Task.Delay(1500);
+    var hwnd = w.GetNativeWindowHandle();
+    var grouped = Buttons();
+    w.SetAppDetails(new AppDetailsOptions
+    {
+        AppId = "Riddlemd.Oriel.WindowTest.Details",
+        AppIconPath = Environment.ProcessPath,
+        AppIconIndex = 0,
+        RelaunchCommand = $"\"{Environment.ProcessPath}\" --relaunched",
+        RelaunchDisplayName = "Oriel details test",
+    });
+    string? Read(AppUserModelProperty p) => WindowsShell.AppUserModel(hwnd, p);
+    Check("SetAppDetails sets the App User Model ID (property store)", Eventually(() => Read(AppUserModelProperty.Id) == "Riddlemd.Oriel.WindowTest.Details", step), Read(AppUserModelProperty.Id));
+    Check("SetAppDetails sets the relaunch command, name and icon",
+        Read(AppUserModelProperty.RelaunchCommand) == $"\"{Environment.ProcessPath}\" --relaunched"
+        && Read(AppUserModelProperty.RelaunchDisplayNameResource) == "Oriel details test"
+        && Read(AppUserModelProperty.RelaunchIconResource) == $"{Environment.ProcessPath},0",
+        $"{Read(AppUserModelProperty.RelaunchCommand)} | {Read(AppUserModelProperty.RelaunchDisplayNameResource)} | {Read(AppUserModelProperty.RelaunchIconResource)}");
+    Check("a new App User Model ID moves the window out of the app's taskbar group", Eventually(() => Buttons() == grouped - 1, step), $"{grouped} -> {Buttons()}");
+    w.SetAppDetails(new AppDetailsOptions { RelaunchDisplayName = "Renamed" });
+    Check("SetAppDetails leaves options it is not given",
+        Eventually(() => Read(AppUserModelProperty.RelaunchDisplayNameResource) == "Renamed", step) && Read(AppUserModelProperty.Id) == "Riddlemd.Oriel.WindowTest.Details",
+        $"{Read(AppUserModelProperty.Id)} | {Read(AppUserModelProperty.RelaunchDisplayNameResource)}");
+
+    // DWM reads the backdrop back. Chromium already gives its windows Mica, so the option is checked with Tabbed.
+    Check("the BackgroundMaterial option sets the backdrop (DWM read-back)", WindowsShell.Backdrop(hwnd) == WindowsBackdrop.TabbedWindow, WindowsShell.Backdrop(hwnd));
+    w.SetBackgroundMaterial(BackgroundMaterial.Acrylic);
+    Check("SetBackgroundMaterial(Acrylic) sets the transient-window backdrop", Eventually(() => WindowsShell.Backdrop(hwnd) == WindowsBackdrop.TransientWindow, step), WindowsShell.Backdrop(hwnd));
+    w.SetBackgroundMaterial(BackgroundMaterial.None);
+    Check("SetBackgroundMaterial(None) removes it", Eventually(() => WindowsShell.Backdrop(hwnd) == WindowsBackdrop.None, step), WindowsShell.Backdrop(hwnd));
+
+    // ITaskbarList3's thumbnail calls have no read-back; only a refusal is visible.
+    var refusals = new StringWriter();
+    var stderr = Console.Error;
+    Console.SetError(refusals);
+    w.SetThumbnailToolTip("Oriel thumbnail tooltip");
+    w.SetThumbnailClip(new Rectangle(0, 0, 100, 50));
+    w.SetThumbnailClip(default);
+    w.SetThumbnailToolTip("");
+    await Task.Delay(500);
+    Console.SetError(stderr);
+    Check("the shell takes the thumbnail clip and tooltip (weak: no read-back)", refusals.ToString().Length == 0, refusals.ToString().Trim());
+    w.Destroy();
     await Task.Delay(300);
 }
 // A 16x16 red PNG, written once to a temp file.
