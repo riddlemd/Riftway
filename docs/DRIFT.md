@@ -61,6 +61,9 @@ Entries marked _(branch `x`)_ are on that branch and not yet in `main`.
 | W21 | `setOverlayIcon(overlay: NativeImage \| null, description)` | Takes a PNG/JPEG file path or null | Module: `NativeImage` (M5) | Overload taking `NativeImage` |
 | W22 | `setThumbarButtons` (Windows) | Missing | Module: `NativeImage` for the icons; the clicks also need the window's `WM_COMMAND` (`THBN_CLICKED`) routed back | `ITaskbarList3::ThumbBarAddButtons` and a subclassed `HWND`, after `NativeImage` |
 | W23 | `setProgressBar(NaN)` is unspecified (Electron casts it to an arbitrary value) | Removes the bar | Design | None |
+| W27 | `setBounds`, `setContentBounds`, `setSize`, `setContentSize`, `setPosition` take `animate` (macOS only) | No `animate` argument; changes are immediate | Todo: not yet implemented | `NSWindow setFrame:display:animate:` through the Objective-C runtime |
+| W28 | `win.loadFile()` and `win.reload()` | Missing on `BrowserWindow`; `WebContents.LoadFile` and `WebContents.Reload` exist (`BrowserWindow.LoadUrl` exists) | Todo: not yet implemented | Forward to `WebContents` |
+| W29 | `setAlwaysOnTop(flag, level, relativeLevel)` | Takes `flag` only | Todo: not yet implemented | macOS: `NSWindow.level`; Windows and Linux ignore `level` in Electron |
 
 ## window.open
 
@@ -101,6 +104,7 @@ Entries marked _(branch `x`)_ are on that branch and not yet in `main`.
 | C6 | `executeJavaScript` resolves a structured clone | JSON only (`JsonNode?`); undefined is null | Design: DevTools `Runtime.evaluate` returns JSON | Typed overloads |
 | C7 | `sendInputEvent` wheel, `mouseEnter`/`mouseLeave`/`contextMenu` types | Keyboard and mouse down/up/move only | Todo | DevTools `Input.dispatchMouseEvent` `mouseWheel` |
 | C8 | `context-menu` params `frame`, `linkText`, `altText`, `selectionRect`, `menuSourceType`, `formControlType`, `referrerPolicy`, `suggestedFilename`, `selectionStartOffset` | Missing | CEF: `cef_context_menu_params_t` lacks them; `frame`: CEF names the frame by its own identifier, which no DevTools frame id matches (WebFrameMain is built on DevTools) | Patch; or read the element under the point with JS for text/alt; Module for `frame` |
+| C10 | `loadFile(path, { query, search, hash })` | `LoadFile(path, query, hash)`; no `search` | Todo: not yet implemented | Append the raw string as the URL's query |
 
 ## Menu / MenuItem
 

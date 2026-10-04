@@ -12,12 +12,18 @@ Event naming: Electron `'x'` → past-tense .NET event (`focus`→`Focused`, `cl
 
 ## Summary
 
-| Area | Done | Partial | Missing |
-|---|---|---|---|
-| Constructor options (52 BaseWindow, 1 BrowserWindow, 46 webPreferences) | 28 | 5 | 66 |
-| Methods (~137) | 29 | 6 | ~102 |
-| Events (35) | 14 | 0 | 21 |
-| Static methods (5) | 0 | 0 | 5 |
+Counted from the Checklist at the end: `BaseWindow` and `BrowserWindow` are one union list (a `BrowserWindow` item is also a
+`BaseWindow` one). Percentages are over the non-n/a items; the second counts a partial item as half.
+
+| Area | Items | Done | Partial | Missing | n/a | % done | % done + partial/2 |
+|---|---|---|---|---|---|---|---|
+| BaseWindow + BrowserWindow options | 54 | 25 | 2 | 27 | 0 | 46.3% | 48.1% |
+| webPreferences | 46 | 9 | 3 | 27 | 7 | 23.1% | 26.9% |
+| Instance methods | 143 | 54 | 12 | 71 | 6 | 39.4% | 43.8% |
+| Instance properties | 24 | 11 | 0 | 13 | 0 | 45.8% | 45.8% |
+| Events | 35 | 12 | 4 | 19 | 0 | 34.3% | 40.0% |
+| Static methods | 6 | 4 | 0 | 1 | 1 | 80.0% | 80.0% |
+| **Total** | 308 | 115 | 21 | 158 | 14 | 39.1% | 42.7% |
 
 ## Done since the audit
 
@@ -129,3 +135,346 @@ verified blocked; Chrome's default context menu, with its Inspect item, is no lo
 
 `nodeIntegration*`, `webviewTag`, `enableWebSQL`, `v8CacheOptions` and other Node/`<webview>` preferences;
 deprecated `BrowserView` methods and `enableDeprecatedPaste`.
+
+## Checklist
+
+One row per Electron v44.5.1 item. Status: done, partial (exists with a documented gap; DRIFT.md id in the note), missing, n/a.
+Parameters in brackets are optional in Electron. `webContents` members are in [web-contents.md](web-contents.md).
+
+### Constructor options (`BaseWindowConstructorOptions` + `BrowserWindowConstructorOptions`)
+
+| Electron | Oriel | Status | Note |
+|---|---|---|---|
+| `width` | `BrowserWindowOptions.Width` | done |  |
+| `height` | `BrowserWindowOptions.Height` | done |  |
+| `x` | `BrowserWindowOptions.X` | done |  |
+| `y` | `BrowserWindowOptions.Y` | done |  |
+| `useContentSize` | `UseContentSize` | done |  |
+| `center` | `Center` | done |  |
+| `minWidth` | `MinWidth` | done |  |
+| `minHeight` | `MinHeight` | done |  |
+| `maxWidth` | `MaxWidth` | done |  |
+| `maxHeight` | `MaxHeight` | done |  |
+| `resizable` | `Resizable` | done |  |
+| `movable` | — | missing |  |
+| `minimizable` | `Minimizable` | done |  |
+| `maximizable` | `Maximizable` | done |  |
+| `closable` | `Closable` | done | Honoured on Linux too (W10, superset). |
+| `focusable` | — | missing |  |
+| `alwaysOnTop` | `AlwaysOnTop` | done |  |
+| `fullscreen` | `FullScreen` | done |  |
+| `fullscreenable` | — | missing |  |
+| `simpleFullscreen` | `SimpleFullScreen` | done | macOS only, as in Electron. |
+| `skipTaskbar` | `SkipTaskbar` | done |  |
+| `hiddenInMissionControl` | — | missing |  |
+| `kiosk` | — | missing |  |
+| `name` | — | missing |  |
+| `windowStatePersistence` | — | missing |  |
+| `title` | `Title` | done |  |
+| `icon` | `Icon` | partial | File path only, no NativeImage (W3). |
+| `show` | `Show` | done |  |
+| `frame` | `Frame` | done |  |
+| `parent` | `Parent` | done |  |
+| `modal` | `Modal` | partial | Linux parent keeps input under window managers that ignore the modal hint (W5). |
+| `acceptFirstMouse` | — | missing |  |
+| `disableAutoHideCursor` | — | missing |  |
+| `autoHideMenuBar` | `AutoHideMenuBar` | done |  |
+| `enableLargerThanScreen` | — | missing |  |
+| `backgroundColor` | `BackgroundColor` | done |  |
+| `hasShadow` | — | missing |  |
+| `opacity` | — | missing |  |
+| `darkTheme` | — | missing |  |
+| `transparent` | — | missing |  |
+| `type` | — | missing |  |
+| `visualEffectState` | — | missing |  |
+| `titleBarStyle` | — | missing |  |
+| `titleBarOverlay` | — | missing |  |
+| `accentColor` | — | missing |  |
+| `trafficLightPosition` | — | missing |  |
+| `roundedCorners` | — | missing |  |
+| `thickFrame` | — | missing |  |
+| `vibrancy` | — | missing |  |
+| `backgroundMaterial` | — | missing |  |
+| `zoomToPageWidth` | — | missing |  |
+| `tabbingIdentifier` | — | missing |  |
+| `webPreferences (BrowserWindow)` | `WebPreferences` | done | Per-option status in the next table. |
+| `paintWhenInitiallyHidden (BrowserWindow)` | — | missing |  |
+
+### webPreferences
+
+| Electron | Oriel | Status | Note |
+|---|---|---|---|
+| `devTools` | `DevTools` | done |  |
+| `nodeIntegration` | — | n/a | Node.js |
+| `nodeIntegrationInWorker` | — | n/a | Node.js |
+| `nodeIntegrationInSubFrames` | — | n/a | Node.js |
+| `preload` | `Preload` | done |  |
+| `sandbox` | — | missing | Process-wide in CEF (W13). |
+| `session` | — | missing | Needs the Session module. |
+| `partition` | — | missing | Needs the Session module. |
+| `zoomFactor` | `ZoomFactor` | partial | Re-applies to an origin whose zoom was reset to 0 (W15). |
+| `zoomMode` | — | missing |  |
+| `javascript` | `Javascript` | done |  |
+| `webSecurity` | — | missing | Process-wide in CEF (W13). |
+| `allowRunningInsecureContent` | — | missing | Process-wide in CEF (W13). |
+| `images` | `Images` | done |  |
+| `imageAnimationPolicy` | — | missing |  |
+| `textAreasAreResizable` | `TextAreasAreResizable` | done |  |
+| `webgl` | `WebGL` | done |  |
+| `plugins` | — | missing |  |
+| `experimentalFeatures` | — | missing | Process-wide in CEF (W13). |
+| `scrollBounce` | — | missing |  |
+| `enableBlinkFeatures` | — | missing | Process-wide in CEF (W13). |
+| `disableBlinkFeatures` | — | missing | Process-wide in CEF (W13). |
+| `defaultFontFamily` | `DefaultFontFamily` | partial | All families but `math`, which throws (W11). |
+| `defaultFontSize` | `DefaultFontSize` | done |  |
+| `defaultMonospaceFontSize` | `DefaultMonospaceFontSize` | done |  |
+| `minimumFontSize` | `MinimumFontSize` | missing | Property exists but throws NotSupportedException (W12). |
+| `defaultEncoding` | `DefaultEncoding` | missing | Property exists but throws NotSupportedException (W12). |
+| `backgroundThrottling` | — | missing |  |
+| `offscreen` | — | missing |  |
+| `contextIsolation` | — | partial | Always on; `false` is not offered (W14). |
+| `webviewTag` | — | n/a | <webview> |
+| `additionalArguments` | — | missing |  |
+| `safeDialogs` | — | missing |  |
+| `safeDialogsMessage` | — | missing |  |
+| `disableDialogs` | `DisableDialogs` | done |  |
+| `navigateOnDragDrop` | — | missing |  |
+| `autoplayPolicy` | — | missing | Process-wide in CEF (W13). |
+| `disableHtmlFullscreenWindowResize` | — | missing |  |
+| `accessibleTitle` | — | missing |  |
+| `spellcheck` | — | missing | Needs the Session module. |
+| `enableWebSQL` | — | n/a | Not applicable (listed in "Not applicable"). |
+| `v8CacheOptions` | — | n/a | Node/V8 option. |
+| `enablePreferredSizeMode` | — | missing |  |
+| `transparent` | — | missing |  |
+| `enableDeprecatedPaste` | — | n/a | Deprecated. |
+| `focusOnNavigation` | — | missing |  |
+
+### Instance methods (`BaseWindow` and `BrowserWindow`, union)
+
+| Electron | Oriel | Status | Note |
+|---|---|---|---|
+| `setContentView(view)` | — | missing | No View module. |
+| `getContentView()` | — | missing | No View module. |
+| `destroy()` | `Destroy` | done |  |
+| `close()` | `Close` | done |  |
+| `focus()` | `Focus` | done |  |
+| `blur()` | `Blur` | done |  |
+| `isFocused()` | `IsFocused` | done |  |
+| `isDestroyed()` | `IsDestroyed` | done |  |
+| `show()` | `Show` | done |  |
+| `showInactive()` | — | missing | OS. |
+| `hide()` | `Hide` | done |  |
+| `isVisible()` | `IsVisible` | done |  |
+| `isModal()` | `IsModal` | done |  |
+| `maximize()` | `Maximize` | done |  |
+| `unmaximize()` | `Unmaximize` | done |  |
+| `isMaximized()` | `IsMaximized` | done |  |
+| `minimize()` | `Minimize` | done |  |
+| `restore()` | `Restore` | done |  |
+| `isMinimized()` | `IsMinimized` | done |  |
+| `setFullScreen(flag)` | `SetFullScreen` | done |  |
+| `isFullScreen()` | `IsFullScreen` | done |  |
+| `setSimpleFullScreen(flag)` | `SetSimpleFullScreen` | done |  |
+| `isSimpleFullScreen()` | `IsSimpleFullScreen` | done |  |
+| `isNormal()` | — | missing |  |
+| `setAspectRatio(aspectRatio, extraSize)` | — | missing |  |
+| `setBackgroundColor(color)` | `SetBackgroundColor` | done |  |
+| `previewFile(path, displayName)` | — | missing |  |
+| `closeFilePreview()` | — | missing |  |
+| `setBounds(bounds, animate)` | `SetBounds` | partial | No `animate` argument (macOS-only parameter). |
+| `getBounds()` | `GetBounds` | done |  |
+| `getBackgroundColor()` | `GetBackgroundColor` | done |  |
+| `setContentBounds(bounds, animate)` | `SetContentBounds` | partial | No `animate` argument (macOS-only parameter). |
+| `getContentBounds()` | `GetContentBounds` | done |  |
+| `getNormalBounds()` | — | missing |  |
+| `setEnabled(enable)` | — | missing |  |
+| `isEnabled()` | — | missing |  |
+| `setSize(width, height, animate)` | `SetSize` | partial | No `animate` argument (macOS-only parameter). |
+| `getSize()` | `GetSize` | done |  |
+| `setContentSize(width, height, animate)` | `SetContentSize` | partial | No `animate` argument (macOS-only parameter). |
+| `getContentSize()` | `GetContentSize` | done |  |
+| `setMinimumSize(width, height)` | `SetMinimumSize` | done |  |
+| `getMinimumSize()` | `GetMinimumSize` | done |  |
+| `setMaximumSize(width, height)` | `SetMaximumSize` | done |  |
+| `getMaximumSize()` | `GetMaximumSize` | done |  |
+| `setResizable(resizable)` | `SetResizable` | done |  |
+| `isResizable()` | `IsResizable` | done |  |
+| `setMovable(movable)` | — | missing |  |
+| `isMovable()` | — | missing |  |
+| `setMinimizable(minimizable)` | `SetMinimizable` | done |  |
+| `isMinimizable()` | `IsMinimizable` | done |  |
+| `setMaximizable(maximizable)` | `SetMaximizable` | done |  |
+| `isMaximizable()` | `IsMaximizable` | done |  |
+| `setFullScreenable(fullscreenable)` | — | missing |  |
+| `isFullScreenable()` | — | missing |  |
+| `setClosable(closable)` | `SetClosable` | done |  |
+| `isClosable()` | `IsClosable` | done |  |
+| `setHiddenInMissionControl(hidden)` | — | missing |  |
+| `isHiddenInMissionControl()` | — | missing |  |
+| `setAlwaysOnTop(flag, level, relativeLevel)` | `SetAlwaysOnTop` | partial | No `level` or `relativeLevel`. |
+| `isAlwaysOnTop()` | `IsAlwaysOnTop` | done |  |
+| `moveAbove(mediaSourceId)` | — | missing |  |
+| `moveTop()` | — | missing |  |
+| `center()` | `Center` | done |  |
+| `setPosition(x, y, animate)` | `SetPosition` | partial | No `animate` argument (macOS-only parameter). |
+| `getPosition()` | `GetPosition` | done |  |
+| `setTitle(title)` | `SetTitle` | done |  |
+| `getTitle()` | `GetTitle` | done |  |
+| `setSheetOffset(offsetY, offsetX)` | — | missing |  |
+| `flashFrame(flag)` | `FlashFrame` | done |  |
+| `setSkipTaskbar(skip)` | `SetSkipTaskbar` | done |  |
+| `setKiosk(flag)` | — | missing | OS. |
+| `isKiosk()` | — | missing |  |
+| `isTabletMode()` | — | missing |  |
+| `getMediaSourceId()` | — | missing |  |
+| `getNativeWindowHandle()` | `GetNativeWindowHandle` | done | Returns `nint`, not a Buffer (S6). |
+| `hookWindowMessage(message, callback)` | — | missing |  |
+| `isWindowMessageHooked(message)` | — | missing |  |
+| `unhookWindowMessage(message)` | — | missing |  |
+| `unhookAllWindowMessages()` | — | missing |  |
+| `setRepresentedFilename(filename)` | — | missing |  |
+| `getRepresentedFilename()` | — | missing |  |
+| `setDocumentEdited(edited)` | — | missing |  |
+| `isDocumentEdited()` | — | missing |  |
+| `focusOnWebView()` | — | missing |  |
+| `blurWebView()` | — | missing |  |
+| `capturePage(rect, opts)` | — | missing | Needs NativeImage. |
+| `loadURL(url, options)` | `LoadUrl` | partial | Returns Task; `baseURLForDataURL` throws, `UploadFile` offset/length throw, no client hints, reload drops options (C1, C2, C3, C5). |
+| `loadFile(filePath, options)` | `WebContents.LoadFile` | partial | Only on WebContents, no BrowserWindow shortcut; `query` and `hash`, no `search`. |
+| `reload()` | `WebContents.Reload` | partial | Only on WebContents, no BrowserWindow shortcut. |
+| `setMenu(menu)` | `SetMenu` | done | Drawn by CEF Views on Windows/Linux (W16). |
+| `removeMenu()` | `RemoveMenu` | done |  |
+| `setProgressBar(progress, options)` | `SetProgressBar` | partial | No Linux progress; macOS error/paused show as plain bar (W20). |
+| `setOverlayIcon(overlay, description)` | `SetOverlayIcon` | partial | File path, not NativeImage (W21). |
+| `invalidateShadow()` | — | missing |  |
+| `setHasShadow(hasShadow)` | — | missing |  |
+| `hasShadow()` | — | missing |  |
+| `setOpacity(opacity)` | — | missing |  |
+| `getOpacity()` | — | missing |  |
+| `setShape(rects)` | — | missing |  |
+| `setThumbarButtons(buttons)` | — | missing | W22. |
+| `setThumbnailClip(region)` | — | missing |  |
+| `setThumbnailToolTip(toolTip)` | — | missing |  |
+| `setAppDetails(options)` | — | missing |  |
+| `setAccentColor(accentColor)` | — | missing |  |
+| `getAccentColor()` | — | missing |  |
+| `showDefinitionForSelection()` | — | missing |  |
+| `setIcon(icon)` | `SetIcon` | partial | File path (PNG/JPEG), Windows and Linux only, no NativeImage (W3). |
+| `setWindowButtonVisibility(visible)` | — | missing |  |
+| `setAutoHideMenuBar(hide)` | `AutoHideMenuBar (set)` | done |  |
+| `isMenuBarAutoHide()` | `AutoHideMenuBar (get)` | done |  |
+| `setMenuBarVisibility(visible)` | `SetMenuBarVisibility` | done |  |
+| `isMenuBarVisible()` | `IsMenuBarVisible` | done |  |
+| `isSnapped()` | — | missing |  |
+| `setVisibleOnAllWorkspaces(visible, options)` | — | missing |  |
+| `isVisibleOnAllWorkspaces()` | — | missing |  |
+| `setIgnoreMouseEvents(ignore, options)` | — | missing |  |
+| `setContentProtection(enable)` | — | missing |  |
+| `isContentProtected()` | — | missing |  |
+| `setFocusable(focusable)` | — | missing |  |
+| `isFocusable()` | — | missing |  |
+| `setParentWindow(parent)` | — | missing | W8. |
+| `getParentWindow()` | `GetParentWindow` | done |  |
+| `getChildWindows()` | `GetChildWindows` | done |  |
+| `setAutoHideCursor(autoHide)` | — | missing |  |
+| `selectPreviousTab()` | — | missing |  |
+| `selectNextTab()` | — | missing |  |
+| `showAllTabs()` | — | missing |  |
+| `mergeAllWindows()` | — | missing |  |
+| `moveTabToNewWindow()` | — | missing |  |
+| `toggleTabBar()` | — | missing |  |
+| `addTabbedWindow(window)` | — | missing |  |
+| `setVibrancy(type, options)` | — | missing |  |
+| `setBackgroundMaterial(material)` | — | missing |  |
+| `setWindowButtonPosition(position)` | — | missing |  |
+| `getWindowButtonPosition()` | — | missing |  |
+| `setTouchBar(touchBar)` | — | missing |  |
+| `setBrowserView(browserView)` | — | n/a | Deprecated. |
+| `getBrowserView()` | — | n/a | Deprecated. |
+| `addBrowserView(browserView)` | — | n/a | Deprecated. |
+| `removeBrowserView(browserView)` | — | n/a | Deprecated. |
+| `setTopBrowserView(browserView)` | — | n/a | Deprecated. |
+| `getBrowserViews()` | — | n/a | Deprecated. |
+| `setTitleBarOverlay(options)` | — | missing |  |
+
+### Instance properties
+
+| Electron | Oriel | Status | Note |
+|---|---|---|---|
+| `webContents` | `WebContents` | done |  |
+| `id` | `Id` | done |  |
+| `contentView` | — | missing | No View module. |
+| `tabbingIdentifier` | — | missing |  |
+| `autoHideMenuBar` | `AutoHideMenuBar` | done |  |
+| `simpleFullScreen` | `SetSimpleFullScreen / IsSimpleFullScreen` | done |  |
+| `fullScreen` | `SetFullScreen / IsFullScreen` | done |  |
+| `focusable` | — | missing |  |
+| `visibleOnAllWorkspaces` | — | missing |  |
+| `shadow` | — | missing |  |
+| `menuBarVisible` | `SetMenuBarVisibility / IsMenuBarVisible` | done |  |
+| `kiosk` | — | missing |  |
+| `documentEdited` | — | missing |  |
+| `representedFilename` | — | missing |  |
+| `title` | `SetTitle / GetTitle` | done |  |
+| `minimizable` | `SetMinimizable / IsMinimizable` | done |  |
+| `maximizable` | `SetMaximizable / IsMaximizable` | done |  |
+| `fullScreenable` | — | missing |  |
+| `resizable` | `SetResizable / IsResizable` | done |  |
+| `closable` | `SetClosable / IsClosable` | done |  |
+| `movable` | — | missing |  |
+| `excludedFromShownWindowsMenu` | — | missing |  |
+| `accessibleTitle` | — | missing |  |
+| `snapped` | — | missing |  |
+
+### Instance events
+
+| Electron | Oriel | Status | Note |
+|---|---|---|---|
+| `page-title-updated` | `PageTitleUpdated` | done |  |
+| `close` | `Closing` | done | CancelEventArgs. |
+| `closed` | `Closed` | done |  |
+| `query-session-end` | — | missing |  |
+| `session-end` | — | missing |  |
+| `unresponsive` | — | missing |  |
+| `responsive` | — | missing |  |
+| `blur` | `Blurred` | done |  |
+| `focus` | `Focused` | done |  |
+| `show` | `Shown` | partial | Fires only from Show(), not when the OS shows the window (W1). |
+| `hide` | `Hidden` | partial | Fires only from Hide(), not when the OS hides the window (W1). |
+| `ready-to-show` | `ReadyToShow` | done |  |
+| `maximize` | `Maximized` | done |  |
+| `unmaximize` | `Unmaximized` | done |  |
+| `minimize` | `Minimized` | partial | Polled every 250 ms (W2). |
+| `restore` | `Restored` | partial | Polled every 250 ms (W2). |
+| `will-resize` | — | missing |  |
+| `resize` | `Resized` | done |  |
+| `resized` | — | missing |  |
+| `will-move` | — | missing |  |
+| `move` | `Moved` | done |  |
+| `moved` | — | missing |  |
+| `enter-full-screen` | `EnteredFullScreen` | done |  |
+| `leave-full-screen` | `LeftFullScreen` | done |  |
+| `enter-html-full-screen` | — | missing |  |
+| `leave-html-full-screen` | — | missing |  |
+| `always-on-top-changed` | — | missing |  |
+| `app-command` | — | missing |  |
+| `swipe` | — | missing |  |
+| `rotate-gesture` | — | missing |  |
+| `sheet-begin` | — | missing |  |
+| `sheet-end` | — | missing |  |
+| `new-window-for-tab` | — | missing |  |
+| `system-context-menu` | — | missing |  |
+| `persisted-state-restored` | — | missing |  |
+
+### Static methods
+
+| Electron | Oriel | Status | Note |
+|---|---|---|---|
+| `getAllWindows()` | `GetAllWindows` | done |  |
+| `getFocusedWindow()` | `GetFocusedWindow` | done |  |
+| `fromId(id)` | `FromId` | done |  |
+| `fromWebContents(webContents)` | `FromWebContents` | done |  |
+| `fromBrowserView(browserView)` | — | n/a | Deprecated. |
+| `clearPersistedState(name)` | — | missing |  |

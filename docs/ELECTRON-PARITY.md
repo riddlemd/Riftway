@@ -3,6 +3,22 @@
 Oriel mirrors Electron's whole API surface. Reference: **Electron v44.5.1** (`docs/api/` in
 electron/electron). When Electron adds or changes a module, this table changes with it.
 
+## Progress
+
+Recounted 2026-10-04 against `src/Oriel`. Update these figures when a row or checklist item changes.
+
+| Measure | Done | Partial | Not started | Total |
+|---|---|---|---|---|
+| Module rows below | 1 | 13 | 53 | 67 |
+| M2 rows | 1 | 12 | 8 | 21 |
+
+The 67 rows include `BrowserView` (deprecated, never implemented; counted as not started).
+
+| Checklist | Applicable items | Done | Partial | Missing | % done | % done + partial/2 |
+|---|---|---|---|---|---|---|
+| [BrowserWindow](parity/browser-window.md) (with `BaseWindow`) | 294 | 115 | 21 | 158 | 39.1% | 42.7% |
+| [webContents](parity/web-contents.md) (with `navigationHistory`, `WebFrameMain`) | 230 | 52 | 15 | 163 | 22.6% | 25.9% |
+
 **Source** — where the implementation comes from:
 
 - **CEF**: CEF's C API or the DevTools protocol through it; Oriel wraps it.
@@ -19,7 +35,7 @@ Where an implemented module differs from Electron, the difference and its reason
 
 | Electron | Oriel | Source | Wave | Status |
 |---|---|---|---|---|
-| `app` | `OrielApp` | CEF + OS | M2 | partial: ready, window-all-closed, second-instance, before-quit, will-quit, quit, exit, enableSandbox |
+| `app` | `OrielApp` | CEF + OS | M2 | partial: `ready`, `window-all-closed`, `second-instance`, `before-quit`, `will-quit`, `quit()`, `exit()`, `enableSandbox`, `isReady`, `name`; no `quit` event (see DRIFT.md) |
 | `process` | `OrielProcess` | .NET + CEF | M2 | — |
 | `CommandLine` (`app.commandLine`) | `OrielApp.CommandLine` | CEF | M2 | — |
 | Command-line switches | same switches | CEF | M2 | — |
@@ -34,12 +50,12 @@ Where an implemented module differs from Electron, the difference and its reason
 
 ## Windows and views
 
-Detailed item-by-item status: [parity/browser-window.md](parity/browser-window.md).
+Detailed item-by-item status: [parity/browser-window.md](parity/browser-window.md) (`BaseWindow` items are counted there with `BrowserWindow`).
 
 | Electron | Oriel | Source | Wave | Status |
 |---|---|---|---|---|
 | `BaseWindow` | `BaseWindow` | CEF (Views) | M2 | — |
-| `BrowserWindow` | `BrowserWindow` | CEF (Views) | M2 | partial: ~60 of ~300 items, see parity/browser-window.md |
+| `BrowserWindow` | `BrowserWindow` | CEF (Views) | M2 | partial: 115 of 294 applicable items done (39.1%), see parity/browser-window.md |
 | `View` | `View` | CEF (Views panel) | M2 | — |
 | `WebContentsView` | `WebContentsView` | CEF (Views browser view) | M2 | — |
 | `ImageView` | `ImageView` | CEF + .NET | M5 | — |
@@ -52,9 +68,11 @@ Detailed item-by-item status: [parity/browser-window.md](parity/browser-window.m
 
 ## Web contents and frames
 
+Detailed item-by-item status, including `navigationHistory` and `WebFrameMain`: [parity/web-contents.md](parity/web-contents.md).
+
 | Electron | Oriel | Source | Wave | Status |
 |---|---|---|---|---|
-| `webContents` | `WebContents` | CEF | M2 | partial: loadURL, send |
+| `webContents` | `WebContents` | CEF | M2 | partial: 52 of 230 applicable items done (22.6%) across `webContents`, `navigationHistory` and `WebFrameMain`, see parity/web-contents.md; `loadURL`/`loadFile`/`reload`, `send`, IPC, window-open handler, context menu, input events, zoom, user agent, DevTools |
 | `webFrameMain` | `WebFrameMain` | CEF | M2 | partial: frame tree, url/origin/name, `executeJavaScript`, `reload`, `send`, IPC `senderFrame`; in-process frames only (see DRIFT.md) |
 | `NavigationHistory` | `NavigationHistory` | CEF | M2 | partial: back/forward, index/offset moves, entries, clear; no `removeEntryAtIndex` or `restore` (see DRIFT.md) |
 | `Debugger` (`webContents.debugger`) | `Debugger` (DevTools protocol) | CEF | M2 | — |
@@ -66,9 +84,9 @@ Detailed item-by-item status: [parity/browser-window.md](parity/browser-window.m
 
 | Electron | Oriel | Source | Wave | Status |
 |---|---|---|---|---|
-| `ipcMain` | `IpcMain` | CEF | M2 | done: handle, handleOnce, on, once, removeHandler, removeListener, removeAllListeners, event.reply, event.senderFrame |
-| `ipcRenderer` | `oriel.ipcRenderer` in the page | CEF | M2 | done: invoke, send, on, once, off, removeListener, removeAllListeners |
-| `contextBridge` | `oriel.contextBridge` (isolated world) | CEF | M2 | done: exposeInMainWorld (methods return promises; function args one level deep) |
+| `ipcMain` | `IpcMain` | CEF | M2 | partial: handle, handleOnce, on, once, removeHandler, removeListener, removeAllListeners, event.reply, event.senderFrame; no `event.returnValue` (see DRIFT.md) |
+| `ipcRenderer` | `oriel.ipcRenderer` in the page | CEF | M2 | partial: invoke, send, on, once, off, removeListener, removeAllListeners; no `sendSync`, `sendToHost`, `postMessage` (see DRIFT.md) |
+| `contextBridge` | `oriel.contextBridge` (isolated world) | CEF | M2 | partial: exposeInMainWorld (methods return promises; function args one level deep); no `exposeInIsolatedWorld` (see DRIFT.md) |
 | `ipcMainServiceWorker` | `IpcMainServiceWorker` | CEF | M6 | — |
 
 ## Session and network
@@ -76,7 +94,7 @@ Detailed item-by-item status: [parity/browser-window.md](parity/browser-window.m
 | Electron | Oriel | Source | Wave | Status |
 |---|---|---|---|---|
 | `session` | `Session` | CEF | M2 core, M6 rest | — |
-| `protocol` | `Protocol` | CEF | M2 | — |
+| `protocol` | `Protocol` | CEF | M2 | partial: `handle`, `unhandle`, `isProtocolHandled`, `registerSchemesAsPrivileged`; global, not per session; no `intercept*` or legacy `register*Protocol` (see DRIFT.md) |
 | `Cookies` | `Cookies` | CEF | M6 | — |
 | `WebRequest` | `WebRequest` | CEF | M6 | — |
 | `DownloadItem` | `DownloadItem` | CEF | M6 | — |
