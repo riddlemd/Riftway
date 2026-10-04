@@ -416,6 +416,14 @@ async Task ScreenAsync(BrowserWindow win)
         System.Diagnostics.Process.Start("/usr/bin/xdotool", "mousemove 321 234")!.WaitForExit();
         Check("GetCursorScreenPoint follows the X pointer", Eventually(() => Screen.GetCursorScreenPoint() == new Point(321, 234), step), Screen.GetCursorScreenPoint());
     }
+    if (OperatingSystem.IsWindows())
+    {
+        // SetCursorPos takes physical pixels; GetCursorScreenPoint answers in DIPs.
+        var target = new Point(321, 234);
+        var moved = WinCursor.SetCursorPos(target.X, target.Y);
+        var expected = Screen.ScreenToDipPoint(target);
+        Check("GetCursorScreenPoint follows SetCursorPos", moved && Eventually(() => Screen.GetCursorScreenPoint() == expected, step), $"{Screen.GetCursorScreenPoint()} vs {expected} (pixels {target})");
+    }
     if (OperatingSystem.IsMacOS())
     {
         var cursor = Screen.GetCursorScreenPoint();
@@ -483,10 +491,19 @@ async Task DialogsAsync(BrowserWindow win)
             X($"windowactivate --sync {id} mousemove --window {id} {geometry["WIDTH"] - 50} {geometry["HEIGHT"] - 28} click 1");
             return true;
         }
+        if (OperatingSystem.IsWindows())
+        {
+            // IFileDialog is a top-level #32770 titled by Title; IDOK presses its default button (Save / Open / Select Folder).
+            var hwnd = (nint)0;
+            if (!Eventually(() => (hwnd = WinDialog.FindWindowW("#32770", title)) != 0 && WinDialog.IsWindowVisible(hwnd), step)) return false;
+            // Its shell view fills in after the window shows; IDOK before that can be dropped.
+            Thread.Sleep(1000);
+            return WinDialog.PostMessageW(hwnd, 0x0111 /* WM_COMMAND */, accept ? 1 /* IDOK */ : 2 /* IDCANCEL */, 0);
+        }
         return false;
     }
 
-    if (!OperatingSystem.IsMacOS() && !OperatingSystem.IsLinux()) return;
+    if (!OperatingSystem.IsMacOS() && !OperatingSystem.IsLinux() && !OperatingSystem.IsWindows()) return;
 
     var save = Dialog.ShowSaveDialogAsync(win, new SaveDialogOptions { Title = "Oriel save test", DefaultPath = target, Filters = [new("Text", "txt")] });
     Check("save dialog opens and accepts", Answer("Oriel save test", accept: true));
@@ -594,4 +611,16 @@ static class MacPanel
         }
         return 0;
     }
+}
+
+static class WinCursor
+{
+    [System.Runtime.InteropServices.DllImport("user32.dll")] internal static extern bool SetCursorPos(int x, int y);
+}
+
+static class WinDialog
+{
+    [System.Runtime.InteropServices.DllImport("user32.dll", CharSet = System.Runtime.InteropServices.CharSet.Unicode)] internal static extern nint FindWindowW(string? className, string title);
+    [System.Runtime.InteropServices.DllImport("user32.dll")] internal static extern bool IsWindowVisible(nint hwnd);
+    [System.Runtime.InteropServices.DllImport("user32.dll")] internal static extern bool PostMessageW(nint hwnd, uint message, nint wParam, nint lParam);
 }
