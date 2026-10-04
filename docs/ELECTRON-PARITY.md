@@ -11,6 +11,8 @@ electron/electron). When Electron adds or changes a module, this table changes w
 - **Patch**: needs a change to Chromium or CEF, carried in Oriel's CEF build.
 - **Pack**: packaging and tooling, not runtime API.
 
+Where an implemented module differs from Electron, the difference and its reason are in [DRIFT.md](DRIFT.md).
+
 **Wave** — the milestone that delivers it (see [PLAN.md](PLAN.md)). Status is `—` until work starts.
 
 ## Processes and lifecycle
@@ -41,7 +43,7 @@ Detailed item-by-item status: [parity/browser-window.md](parity/browser-window.m
 | `View` | `View` | CEF (Views panel) | M2 | — |
 | `WebContentsView` | `WebContentsView` | CEF (Views browser view) | M2 | — |
 | `ImageView` | `ImageView` | CEF + .NET | M5 | — |
-| `win.setSimpleFullScreen` (macOS) | `BrowserWindow.SetSimpleFullScreen` | OS | M2 | — (needed: native full screen blacks out other displays on macOS) |
+| `win.setSimpleFullScreen` (macOS) | `BrowserWindow.SetSimpleFullScreen` | OS | M2 | done (native full screen blacks out other displays on macOS) |
 | `BrowserView` (deprecated) | not implemented; use `WebContentsView` | — | — | — |
 | `<webview>` tag | `<webview>` | Patch | M7 | — |
 | `window.open` handling | `WebContents.SetWindowOpenHandler` | CEF | M2 | — |

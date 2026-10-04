@@ -2,7 +2,7 @@
 
 Cross-platform work. Platform-specific items: [linux-todo.md](linux-todo.md), [windows-todo.md](windows-todo.md),
 [mac-todo.md](mac-todo.md). Milestones are in [PLAN.md](PLAN.md); Electron coverage in
-[ELECTRON-PARITY.md](ELECTRON-PARITY.md).
+[ELECTRON-PARITY.md](ELECTRON-PARITY.md); every difference from Electron, with its reason, in [DRIFT.md](DRIFT.md).
 
 ## M2 core
 
@@ -19,9 +19,16 @@ Cross-platform work. Platform-specific items: [linux-todo.md](linux-todo.md), [w
   - [ ] `opacity`, `hasShadow`, `setIgnoreMouseEvents`, content protection, `setKiosk`, `will-*` events
   - [ ] Accuracy gaps: `Shown`/`Hidden` fire only from `Show()`/`Hide()`; `SetIcon` takes a path, not a `NativeImage`
 - [x] webContents: `executeJavaScript`, DevTools open/close/toggle, zoom factor/level, `setUserAgent`/`getUserAgent`
+- [x] File `Dialog` (branch `dialog`) and `Screen` (branch `screen`); gaps in [DRIFT.md](DRIFT.md)
 - [ ] Remaining M2 modules: `BaseWindow`, `View`, `WebContentsView`, `WebFrameMain`, `NavigationHistory`,
-      `Debugger`, core `Session`, file `Dialog`, `Screen`, command line, `window.open` handling
+      `Debugger`, core `Session`, command line, `window.open` handling
 - [ ] `Protocol`: `AllowServiceWorkers` and `CodeCache` privileges throw `NotSupportedException`
+
+## Tests
+
+- [ ] Flaky WindowTest checks: macOS native full screen, minimize and modal focus fail on some runs while the
+      Mac is in use (also on unchanged `main`); Linux "simple full screen restores the bounds" was off by a few pixels
+      once under openbox. Make them robust (wait for the transition, retry activation) or mark them as environment-bound.
 
 ## Runtime and codecs
 
@@ -30,11 +37,6 @@ Cross-platform work. Platform-specific items: [linux-todo.md](linux-todo.md), [w
       DCHECK (`thread_cache_internal.h:162`). Rebuild with `is_official_build=true` (as stock), or at least
       `dcheck_always_on=false`, then re-run the drop-in probe (7 H.264/AAC checks, all failing on stock as expected).
       API headers are byte-identical to stock; dependencies match. Ask before deleting the ~150 GB tree.
-
-## Docs
-
-- [ ] README status still says pre-alpha M1; M2 IPC, Protocol and BrowserWindow parity batch 1 have landed.
-- [ ] PLAN.md risk "macOS full screen blacks out other displays" still reads as unsolved; `SimpleFullScreen` exists now.
 
 ## Later milestones
 
