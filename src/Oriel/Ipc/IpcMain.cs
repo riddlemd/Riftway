@@ -7,14 +7,18 @@ namespace Oriel;
 /// <summary>A message from a page: Electron's <c>IpcMainEvent</c>.</summary>
 public class IpcMainEvent
 {
-    internal IpcMainEvent(WebContents sender, IReadOnlyList<JsonElement> args)
+    internal IpcMainEvent(WebContents sender, WebFrameMain? senderFrame, IReadOnlyList<JsonElement> args)
     {
         Sender = sender;
+        SenderFrame = senderFrame;
         Args = args;
     }
 
     /// <summary>The web contents that sent the message.</summary>
     public WebContents Sender { get; }
+
+    /// <summary>The frame that sent the message, or null if it has gone. Electron's <c>event.senderFrame</c>.</summary>
+    public WebFrameMain? SenderFrame { get; }
 
     /// <summary>The message arguments, as sent by the page.</summary>
     public IReadOnlyList<JsonElement> Args { get; }
@@ -23,7 +27,7 @@ public class IpcMainEvent
 /// <summary>An <c>ipcRenderer.invoke</c> call: Electron's <c>IpcMainInvokeEvent</c>.</summary>
 public sealed class IpcMainInvokeEvent : IpcMainEvent
 {
-    internal IpcMainInvokeEvent(WebContents sender, IReadOnlyList<JsonElement> args) : base(sender, args) { }
+    internal IpcMainInvokeEvent(WebContents sender, WebFrameMain? senderFrame, IReadOnlyList<JsonElement> args) : base(sender, senderFrame, args) { }
 }
 
 /// <summary>Messages from pages to the main process: Electron's <c>ipcMain</c>.</summary>
@@ -83,12 +87,12 @@ public static class IpcMain
         }
     }
 
-    internal static void DispatchSend(WebContents sender, string channel, IReadOnlyList<JsonElement> args)
+    internal static void DispatchSend(WebContents sender, WebFrameMain? senderFrame, string channel, IReadOnlyList<JsonElement> args)
     {
         Action<IpcMainEvent>[] listeners;
         lock (s_gate) listeners = s_listeners.TryGetValue(channel, out var list) ? [.. list] : [];
 
-        var e = new IpcMainEvent(sender, args);
+        var e = new IpcMainEvent(sender, senderFrame, args);
         foreach (var listener in listeners)
         {
             try { listener(e); }
@@ -97,7 +101,7 @@ public static class IpcMain
     }
 
     internal static async Task<(bool Ok, JsonNode? Value, string? Error)> DispatchInvokeAsync(
-        WebContents sender, string channel, IReadOnlyList<JsonElement> args)
+        WebContents sender, WebFrameMain? senderFrame, string channel, IReadOnlyList<JsonElement> args)
     {
         Func<IpcMainInvokeEvent, CancellationToken, Task<JsonNode?>>? handler;
         lock (s_gate) s_handlers.TryGetValue(channel, out handler);
@@ -107,7 +111,7 @@ public static class IpcMain
 
         try
         {
-            return (true, await handler(new IpcMainInvokeEvent(sender, args), sender.DestroyedToken).ConfigureAwait(false), null);
+            return (true, await handler(new IpcMainInvokeEvent(sender, senderFrame, args), sender.DestroyedToken).ConfigureAwait(false), null);
         }
         catch (Exception ex)
         {

@@ -194,6 +194,7 @@ async Task RunAsync(BrowserWindow win, BrowserWindow simple)
     await WindowOpenAsync(win);
     await LoadAndSizeAsync(win);
     await NavigationAsync();
+    await FramesAsync();
     await TaskbarAsync(win);
 
     // Closing cancelled once: the window must survive the first close.
@@ -1055,6 +1056,55 @@ static string OverlayPng()
     var path = Path.Combine(Path.GetTempPath(), "oriel-overlay-test.png");
     File.WriteAllBytes(path, Convert.FromBase64String("iVBORw0KGgoAAAANSUhEUgAAABAAAAAQCAYAAAAf8/9hAAAAAXNSR0IArs4c6QAAAARnQU1BAACxjwv8YQUAAAAJcEhZcwAADsMAAA7DAcdvqGQAAAAdSURBVDhPY7gjJ/efEsyALkAqHjVg1IBRAwaLAQDHMhcfPZpcYgAAAABJRU5ErkJggg=="));
     return path;
+}
+
+async Task FramesAsync()
+{
+    var dir = Directory.CreateTempSubdirectory("oriel-frames-").FullName;
+    var preload = Path.Combine(dir, "preload.js");
+    // Runs in every frame: lets each frame send, and remember what it was sent.
+    File.WriteAllText(preload, "oriel.contextBridge.exposeInMainWorld('bridge', { send: (m) => oriel.ipcRenderer.send('frame-test', m), listen: () => oriel.ipcRenderer.on('to-frame', (_e, v) => document.title = 'got:' + v) });");
+    var page = Path.Combine(dir, "frames.html");
+    File.WriteAllText(page, "<!doctype html><title>top</title><iframe name=a srcdoc=\"<title>a</title><iframe name=b srcdoc='<title>b</title>'></iframe>\"></iframe>");
+    var host = new BrowserWindow(new BrowserWindowOptions { Title = "Oriel window test: frames", Width = 400, Height = 300, WebPreferences = new WebPreferences { Preload = preload } });
+    Fires(h => host.WebContents.DidFinishLoad += h, h => host.WebContents.DidFinishLoad -= h, () => host.WebContents.LoadFile(page), step);
+
+    var main = host.WebContents.MainFrame;
+    Check("MainFrame is the page's top frame", main is { Parent: null } && main.Url == new Uri(page).AbsoluteUri && main.Top == main, main?.Url);
+    Check("Frames lists the iframe", Eventually(() => main!.Frames is [{ Name: "a" }], step), string.Join(",", main!.Frames.Select(f => f.Name)));
+    var a = main.Frames[0];
+    Check("a nested iframe has its parent and top", Eventually(() => a.Frames is [{ Name: "b" } b] && b.Parent == a && b.Top == main, step));
+    Check("FramesInSubtree includes the frame itself", main.FramesInSubtree.Select(f => f.Name).SequenceEqual(["", "a", "b"]), string.Join(",", main.FramesInSubtree.Select(f => f.Name)));
+    Check("the same frame is the same object", main.Frames[0] == a && host.WebContents.MainFrame == main);
+
+    var ran = await a.ExecuteJavaScriptAsync("window.name");
+    Check("ExecuteJavaScriptAsync runs in that frame", ran?.ToString() == "a", ran);
+
+    // IPC: the sender frame is the iframe; Send reaches only the frame it is called on.
+    WebFrameMain? sender = null;
+    using var heard = new ManualResetEventSlim();
+    Action<IpcMainEvent> onMessage = e => { sender = e.SenderFrame; heard.Set(); };
+    IpcMain.On("frame-test", onMessage);
+    await a.ExecuteJavaScriptAsync("bridge.send('hello'); 1");
+    Check("IpcMainEvent.SenderFrame is the frame that sent", await Task.Run(() => heard.Wait(step)) && sender == a, sender?.Name);
+    IpcMain.RemoveListener("frame-test", onMessage);
+    await a.ExecuteJavaScriptAsync("bridge.listen(); 1");
+    await main.ExecuteJavaScriptAsync("bridge.listen(); 1");
+    a.Send("to-frame", "hi");
+    Check("WebFrameMain.Send reaches that frame only", Eventually(() => a.ExecuteJavaScriptAsync("document.title").Result?.ToString() == "got:hi", step)
+        && (await main.ExecuteJavaScriptAsync("document.title"))?.ToString() == "top");
+
+    await main.ExecuteJavaScriptAsync("document.querySelector('iframe').remove(); 1");
+    Check("a removed frame is detached", Eventually(() => a.Detached && a.IsDestroyed() && main.Frames.Count == 0, step));
+    Check("script in a detached frame fails", await Task.Run(async () =>
+    {
+        try { await a.ExecuteJavaScriptAsync("1"); return false; }
+        catch (InvalidOperationException) { return true; }
+    }));
+
+    host.Destroy();
+    await Task.Delay(300);
+    Directory.Delete(dir, recursive: true);
 }
 
 app.Ready += (_, _) =>
