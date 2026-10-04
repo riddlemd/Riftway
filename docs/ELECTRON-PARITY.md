@@ -116,8 +116,8 @@ Detailed item-by-item status, including `navigationHistory` and `WebFrameMain`: 
 | `Notification` | `Notification` | OS | M5 | — |
 | `globalShortcut` | `GlobalShortcut` | OS | M5 | — |
 | `Dock` (`app.dock`, macOS) | `OrielApp.Dock` | OS | M5 | done: `setBadge`, `getBadge`, `bounce`, `cancelBounce`, `downloadFinished`, `hide`, `show` (as `ShowAsync`), `isVisible`, `setMenu`, `getMenu`, `setIcon` |
-| `clipboard` / `ClipboardItem` | `Clipboard` / `ClipboardItem` | OS | M5 | — |
-| `shell` | `Shell` | OS | M5 | — |
+| `clipboard` / `ClipboardItem` | `Clipboard` / `ClipboardItem` | OS | M5 | partial: Windows (text, HTML, RTF, image, bookmark, has, availableFormats, clear, write, buffers); macOS and Linux throw; no `ClipboardItem` (branch `shell-clipboard`) |
+| `shell` | `Shell` | OS | M5 | partial: Windows (openExternal, openPath, showItemInFolder, trashItem, beep, shortcut links); macOS and Linux throw (branch `shell-clipboard`) |
 | `nativeImage` | `NativeImage` | CEF + .NET | M5 | partial: PNG/JPEG through CEF, raw bitmaps, data URLs, `@Nx` files, crop, resize, representations; window icon, overlay and thumbar buttons take it; gaps in DRIFT B1-B5 (no `createThumbnailFromPath`, one resize filter, template images unused, no ICO) |
 | `nativeTheme` | `NativeTheme` | OS + CEF | M5 | — |
 | `powerMonitor` | `PowerMonitor` | OS | M5 | — |

@@ -263,6 +263,8 @@ async Task RunAsync(BrowserWindow win, BrowserWindow simple)
     await MenuRolesAsync(win);
     await WebContentsMethodsAsync();
     await MessageBoxTest.RunAsync(win, Check, step);
+    await ShellAsync();
+    await ClipboardAsync();
 
     // Closing cancelled once: the window must survive the first close.
     var closingCount = 0;
@@ -2436,6 +2438,150 @@ async Task WindowsApisAsync()
     Check("the shell takes the thumbnail clip and tooltip (weak: no read-back)", refusals.ToString().Length == 0, refusals.ToString().Trim());
     w.Destroy();
     await Task.Delay(300);
+}
+
+async Task ShellAsync()
+{
+    if (!OperatingSystem.IsWindows())
+    {
+        Check("Shell throws PlatformNotSupportedException off Windows", Throws<PlatformNotSupportedException>(Shell.Beep));
+        return;
+    }
+
+    var dir = Path.Combine(Path.GetTempPath(), "oriel-shell-" + Path.GetRandomFileName());
+    Directory.CreateDirectory(dir);
+    var file = Path.Combine(dir, "shown.txt");
+    File.WriteAllText(file, "oriel");
+
+    // Shortcuts: every field round-trips through the .lnk; update changes only what it is given.
+    var link = Path.Combine(dir, "test.lnk");
+    var toast = Guid.NewGuid();
+    var details = new ShortcutDetails
+    {
+        Target = Environment.ProcessPath, Cwd = dir, Args = "--from-shortcut \"a b\"", Description = "Oriel shortcut test",
+        Icon = Environment.ProcessPath, IconIndex = 0, AppUserModelId = "Riddlemd.Oriel.WindowTest.Shortcut", ToastActivatorClsid = toast,
+    };
+    Check("WriteShortcutLink creates a shortcut", Shell.WriteShortcutLink(link, details) && File.Exists(link));
+    var read = Shell.ReadShortcutLink(link);
+    Check("ReadShortcutLink reads every field back", read == details, read);
+    Check("WriteShortcutLink(Update) changes only the given fields",
+        Shell.WriteShortcutLink(link, ShortcutLinkOperation.Update, new ShortcutDetails { Description = "Updated" }) && Shell.ReadShortcutLink(link) == details with { Description = "Updated" },
+        Shell.ReadShortcutLink(link));
+    Check("WriteShortcutLink(Replace) needs an existing shortcut", !Shell.WriteShortcutLink(Path.Combine(dir, "missing.lnk"), ShortcutLinkOperation.Replace, details) && !File.Exists(Path.Combine(dir, "missing.lnk")));
+    Check("ReadShortcutLink of a file that is not a shortcut throws", Throws<IOException>(() => Shell.ReadShortcutLink(file)));
+
+    // Explorer windows the checks open are found and closed through Shell.Application.
+    Shell.ShowItemInFolder(file);
+    Check("ShowItemInFolder opens the folder with the item selected", Eventually(() => WindowsShell.ExplorerWindows().Any(w => w.Folder.Equals(dir, StringComparison.OrdinalIgnoreCase) && w.Selected.Contains("shown.txt")), TimeSpan.FromSeconds(10)),
+        string.Join("; ", WindowsShell.ExplorerWindows().Select(w => $"{w.Folder} [{string.Join(",", w.Selected)}]")));
+    WindowsShell.CloseExplorerAt(dir);
+    Check("OpenPathAsync opens a folder in Explorer", await Shell.OpenPathAsync(dir) == "" && Eventually(() => WindowsShell.ExplorerWindows().Any(w => w.Folder.Equals(dir, StringComparison.OrdinalIgnoreCase)), TimeSpan.FromSeconds(10)));
+    WindowsShell.CloseExplorerAt(dir);
+    var reason = await Shell.OpenPathAsync(Path.Combine(dir, "missing"));
+    Check("OpenPathAsync of a missing path reports why", reason == "Failed to open path", reason);
+    await Shell.OpenExternalAsync(new Uri(dir).AbsoluteUri);
+    Check("OpenExternalAsync opens a file: URL with its handler", Eventually(() => WindowsShell.ExplorerWindows().Any(w => w.Folder.Equals(dir, StringComparison.OrdinalIgnoreCase)), TimeSpan.FromSeconds(10)));
+    WindowsShell.CloseExplorerAt(dir);
+    Exception? refused = null;
+    try { await Shell.OpenExternalAsync("oriel-no-such-scheme:hello"); } catch (InvalidOperationException e) { refused = e; }
+    Check("OpenExternalAsync refuses a scheme with no handler before running anything", refused?.Message == "Invalid URL scheme", refused?.Message);
+    refused = null;
+    try { await Shell.OpenExternalAsync("not a url"); } catch (InvalidOperationException e) { refused = e; }
+    Check("OpenExternalAsync refuses an invalid URL", refused is not null, refused?.Message);
+
+    // TrashItem: the file leaves its folder and is found in the Recycle Bin, then purged from there.
+    var doomed = Path.Combine(dir, "trash-me.txt");
+    File.WriteAllText(doomed, "bin");
+    Exception? trashError = null;
+    try { await Shell.TrashItemAsync(doomed); } catch (IOException e) { trashError = e; }
+    var recycled = WindowsShell.RecycledCopyOf(doomed);
+    Check("TrashItemAsync moves the file to the Recycle Bin", trashError is null && !File.Exists(doomed) && recycled is not null, trashError?.Message ?? recycled);
+    if (recycled is not null) WindowsShell.Purge(recycled);
+    Check("TrashItemAsync of a missing path throws", await ThrowsAsync<IOException>(() => Shell.TrashItemAsync(Path.Combine(dir, "missing.txt"))));
+
+    // No read-back for the sound.
+    Shell.Beep();
+    Directory.Delete(dir, recursive: true);
+}
+
+async Task ClipboardAsync()
+{
+    if (!OperatingSystem.IsWindows())
+    {
+        Check("Clipboard throws PlatformNotSupportedException off Windows", Throws<PlatformNotSupportedException>(() => Clipboard.ReadText()));
+        return;
+    }
+
+    // Windows PowerShell in another process reads and writes the clipboard independently of Oriel's code.
+    var outFile = Path.Combine(Path.GetTempPath(), "oriel-clipboard-" + Path.GetRandomFileName());
+    string Ps(string script)
+    {
+        var wrapped = "Add-Type -AssemblyName System.Windows.Forms, System.Drawing; $o = & { " + script + " }; [IO.File]::WriteAllText('" + outFile + "', [string]$o, [Text.Encoding]::UTF8)";
+        var psi = new System.Diagnostics.ProcessStartInfo("powershell.exe") { UseShellExecute = false, CreateNoWindow = true };
+        foreach (var arg in new[] { "-NoProfile", "-STA", "-Command", wrapped }) psi.ArgumentList.Add(arg);
+        System.Diagnostics.Process.Start(psi)!.WaitForExit();
+        return File.Exists(outFile) ? File.ReadAllText(outFile).TrimStart('﻿') : "";
+    }
+
+    // The user's text is put back at the end; other formats on the clipboard are lost.
+    var saved = Clipboard.ReadText();
+
+    Clipboard.WriteText("Oriel héllo ✓");
+    Check("WriteText reaches other apps", Ps("Get-Clipboard -Raw") == "Oriel héllo ✓", Ps("Get-Clipboard -Raw"));
+    Ps("Set-Clipboard -Value 'from PowerShell é'");
+    Check("ReadText reads another app's text", Clipboard.ReadText() == "from PowerShell é", Clipboard.ReadText());
+
+    Clipboard.WriteHtml("<b>bold é</b>");
+    // WinForms decodes CF_HTML in the ANSI code page; undoing that gives the bytes, sliced at Oriel's own byte offsets.
+    var fragment = Ps("$s = [Windows.Forms.Clipboard]::GetText('Html'); $b = [Text.Encoding]::Default.GetBytes($s); $t = [Text.Encoding]::ASCII.GetString($b); $f = [int]([regex]::Match($t, 'StartFragment:(\\d+)').Groups[1].Value); $e = [int]([regex]::Match($t, 'EndFragment:(\\d+)').Groups[1].Value); [Text.Encoding]::UTF8.GetString($b, $f, $e - $f)");
+    Check("WriteHtml puts UTF-8 CF_HTML whose offsets frame the fragment", fragment == "<b>bold é</b>", fragment);
+    // A MemoryStream makes WinForms write the bytes as given: real UTF-8, as CF_HTML requires.
+    Ps("$h = \"Version:0.9`r`nStartHTML:-1`r`nEndHTML:-1`r`nStartFragment:-1`r`nEndFragment:-1`r`n<html><body><!--StartFragment--><i>italic ü</i><!--EndFragment--></body></html>\"; $d = New-Object Windows.Forms.DataObject; $d.SetData('HTML Format', (New-Object IO.MemoryStream (,[Text.Encoding]::UTF8.GetBytes($h)))); [Windows.Forms.Clipboard]::SetDataObject($d, $true)");
+    Check("ReadHtml reads another app's fragment", Clipboard.ReadHtml() == "<i>italic ü</i>", Clipboard.ReadHtml());
+
+    Clipboard.WriteRtf(@"{\rtf1\ansi Oriel {\b RTF}}");
+    Check("WriteRtf reaches other apps", Ps("[Windows.Forms.Clipboard]::GetText('Rtf')").Contains(@"{\b RTF}"), Ps("[Windows.Forms.Clipboard]::GetText('Rtf')"));
+    Ps(@"[Windows.Forms.Clipboard]::SetText('{\rtf1\ansi from {\i PS}}', 'Rtf')");
+    Check("ReadRtf reads another app's RTF", Clipboard.ReadRtf().Contains(@"from {\i PS}"), Clipboard.ReadRtf());
+
+    // Images: a 4x4 green square out, a 3x2 red bitmap in, through System.Drawing.
+    var green = new byte[4 * 4 * 4];
+    for (var i = 0; i < green.Length; i += 4) (green[i], green[i + 1], green[i + 2], green[i + 3]) = (0, 200, 0, 255);
+    Clipboard.WriteImage(NativeImage.CreateFromBitmap(green, new NativeImageBitmapOptions { Width = 4, Height = 4 }));
+    var seen = Ps("$i = [Windows.Forms.Clipboard]::GetImage(); $p = $i.GetPixel(1, 1); \"$($i.Width)x$($i.Height) $($p.R),$($p.G),$($p.B)\"");
+    Check("WriteImage reaches other apps", seen == "4x4 0,200,0", seen);
+    Check("Has(image/png) after WriteImage", Clipboard.Has("image/png") && !Clipboard.Has("text/plain"), string.Join(",", Clipboard.AvailableFormats()));
+    Ps("$b = New-Object Drawing.Bitmap 3, 2; for ($x = 0; $x -lt 3; $x++) { for ($y = 0; $y -lt 2; $y++) { $b.SetPixel($x, $y, [Drawing.Color]::FromArgb(255, 210, 10, 20)) } }; [Windows.Forms.Clipboard]::SetImage($b)");
+    var image = Clipboard.ReadImage();
+    var px = image.ToBitmap();
+    Check("ReadImage reads another app's bitmap", image.GetSize() == (3, 2) && px.Length == 24 && (px[0], px[1], px[2], px[3]) == (20, 10, 210, 255), $"{image.GetSize()} {string.Join(",", px.Take(4))}");
+
+    // Bookmark: Chromium's Windows format, title and URL on two lines.
+    Clipboard.WriteBookmark("Oriel", "https://example.com/oriel");
+    var url = Ps("$m = [Windows.Forms.Clipboard]::GetData('UniformResourceLocatorW'); [Text.Encoding]::Unicode.GetString($m.ToArray()).TrimEnd([char]0)");
+    Check("WriteBookmark writes UniformResourceLocatorW", url == "Oriel\nhttps://example.com/oriel", url.Replace("\n", "\\n"));
+    Check("ReadBookmark reads it back", Clipboard.ReadBookmark() == new ClipboardBookmark("Oriel", "https://example.com/oriel"), Clipboard.ReadBookmark());
+
+    // Write puts every part in one go; Has, AvailableFormats and Clear agree with another app.
+    Clipboard.Write(new ClipboardData { Text = "plain part", Html = "<u>html part</u>", Rtf = @"{\rtf1 rtf part}" });
+    Check("Write puts text, HTML and RTF together", Clipboard.ReadText() == "plain part" && Clipboard.ReadHtml() == "<u>html part</u>" && Clipboard.ReadRtf().Contains("rtf part")
+        && Ps("Get-Clipboard -Raw") == "plain part", $"{Clipboard.ReadText()} | {Clipboard.ReadHtml()} | {Clipboard.ReadRtf()}");
+    Check("AvailableFormats lists them in Electron's MIME names", Clipboard.AvailableFormats().SequenceEqual(["text/plain", "text/html", "text/rtf"]), string.Join(",", Clipboard.AvailableFormats()));
+    Check("Has answers per format", Clipboard.Has("text/html") && !Clipboard.Has("image/png"));
+    Clipboard.WriteBuffer("Oriel/Test", [1, 2, 3, 250]);
+    Check("WriteBuffer registers a custom format other apps see", Clipboard.ReadBuffer("Oriel/Test").SequenceEqual(new byte[] { 1, 2, 3, 250 }) && Ps("[Windows.Forms.Clipboard]::GetDataObject().GetFormats() -join ','").Split(',').Contains("Oriel/Test"),
+        Ps("[Windows.Forms.Clipboard]::GetDataObject().GetFormats() -join ','"));
+    Clipboard.Clear();
+    Check("Clear empties it for every app", Clipboard.AvailableFormats().Count == 0 && Ps("[Windows.Forms.Clipboard]::GetDataObject().GetFormats().Count") == "0", Ps("[Windows.Forms.Clipboard]::GetDataObject().GetFormats() -join ','"));
+
+    if (saved.Length > 0) Clipboard.WriteText(saved);
+    File.Delete(outFile);
+}
+
+static async Task<bool> ThrowsAsync<T>(Func<Task> act) where T : Exception
+{
+    try { await act(); return false; }
+    catch (T) { return true; }
 }
 
 async Task NativeImageAsync()
