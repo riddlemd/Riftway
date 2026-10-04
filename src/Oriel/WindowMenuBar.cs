@@ -43,6 +43,8 @@ internal sealed unsafe class WindowMenuBar
     /// <summary>Lays the window out as the bar above <paramref name="browserView"/>, which takes the rest.</summary>
     internal void Attach(cef_window_t* window, cef_browser_view_t* browserView)
     {
+        // The window delegate releases its argument after on_window_created, which frees this wrapper.
+        NativeObject.AddRef(window);
         _window = window;
         var vertical = new cef_box_layout_settings_t { size = (nuint)sizeof(cef_box_layout_settings_t) };
         var layout = window->@base.set_to_box_layout(&window->@base, &vertical);
@@ -64,6 +66,7 @@ internal sealed unsafe class WindowMenuBar
     internal void Detach()
     {
         if (_panel is not null) NativeObject.Release(_panel);
+        if (_window is not null) NativeObject.Release(_window);
         _panel = null;
         _window = null;
         SetMenu(null);
