@@ -72,6 +72,15 @@ Entries marked _(branch `x`)_ are on that branch and not yet in `main`.
 | O4 | A popup's first page loads once, with the preload | When it commits before Oriel's runtime and preload are registered over DevTools, it is reloaded once so they run: the page loads twice, and a POST target is untested | CEF: the popup's browser exists only as it starts loading; there is no about:blank start as for other windows | Patch, or register before the first commit (DevTools auto-attach) |
 | O5 | `width`/`height` from features | Size the page area (`UseContentSize`), as browsers treat them; not compared with Electron | Unknown | Check Electron |
 
+## webFrameMain
+
+| ID | Electron | Oriel | Why | Possible resolution |
+|---|---|---|---|---|
+| F1 | Every frame runs script and receives messages, cross-site iframes included | A frame in another process (a cross-site iframe, with site isolation) is listed but cannot run script, `send` or `reload` | CEF/DevTools: out-of-process frames are separate DevTools targets, which Oriel does not attach to | DevTools `Target.setAutoAttach` with flattened sessions |
+| F2 | `frameTreeNodeId`, `processId`, `routingId`, `osProcessId`, `visibilityState`, `postMessage`, `collectJavaScriptCallStack`, the `dom-ready` event; `webFrameMain.fromId` / `fromFrameToken` | Missing; `frameToken` is Chromium's DevTools frame token | Todo, or CEF: the numeric ids are not exposed | Add what DevTools gives (`Page.domContentEventFired`, frame lookup by token) |
+| F3 | `webContents.focusedFrame` | Missing | CEF: the focused frame comes as a CEF frame, which cannot be matched to a DevTools frame id | Track focus in the page (`focusin`) |
+| F4 | `webContents.mainFrame` always exists | Null until the page's frame tree has been read, just after the window is created | Design: frames come from DevTools | None |
+
 ## navigationHistory
 
 | ID | Electron | Oriel | Why | Possible resolution |
@@ -91,7 +100,7 @@ Entries marked _(branch `x`)_ are on that branch and not yet in `main`.
 | C5 | A reload repeats the `loadURL` options | Likely a plain request (untested) | Todo | Keep the options with the navigation entry |
 | C6 | `executeJavaScript` resolves a structured clone | JSON only (`JsonNode?`); undefined is null | Design: DevTools `Runtime.evaluate` returns JSON | Typed overloads |
 | C7 | `sendInputEvent` wheel, `mouseEnter`/`mouseLeave`/`contextMenu` types | Keyboard and mouse down/up/move only | Todo | DevTools `Input.dispatchMouseEvent` `mouseWheel` |
-| C8 | `context-menu` params `frame`, `linkText`, `altText`, `selectionRect`, `menuSourceType`, `formControlType`, `referrerPolicy`, `suggestedFilename`, `selectionStartOffset` | Missing | CEF: `cef_context_menu_params_t` lacks them; `frame` needs `WebFrameMain` | Patch; or read the element under the point with JS for text/alt; Module for `frame` |
+| C8 | `context-menu` params `frame`, `linkText`, `altText`, `selectionRect`, `menuSourceType`, `formControlType`, `referrerPolicy`, `suggestedFilename`, `selectionStartOffset` | Missing | CEF: `cef_context_menu_params_t` lacks them; `frame`: CEF names the frame by its own identifier, which no DevTools frame id matches (WebFrameMain is built on DevTools) | Patch; or read the element under the point with JS for text/alt; Module for `frame` |
 
 ## Menu / MenuItem
 
@@ -133,7 +142,7 @@ Entries marked _(branch `x`)_ are on that branch and not yet in `main`.
 |---|---|---|---|---|
 | I1 | Structured clone (Map, Set, Date, ArrayBuffer, ...) | JSON only | Design: messages cross through DevTools bindings as JSON | Typed serializers for the common types |
 | I2 | `ipcRenderer.once/off/removeAllListeners/sendSync/sendToHost/postMessage` | Missing; listeners get `{ sender }`, not an `IpcRendererEvent` | Todo (`sendSync` and `postMessage` may be CEF-blocked) | Add the simple ones; investigate the rest |
-| I3 | `ipcMain.once/handleOnce/off/removeAllListeners`, `event.reply`, `event.returnValue`, `senderFrame` | Missing | Todo (`senderFrame` is Module: `WebFrameMain`) | Add |
+| I3 | `ipcMain.once/handleOnce/off/removeAllListeners`, `event.reply`, `event.returnValue` | Missing (`senderFrame` is done) | Todo | Add |
 | I4 | `contextBridge` exposes live objects and nested functions | Values are copied once and frozen; only top-level functions, which return promises; callbacks one level deep; no `exposeInIsolatedWorld` | Design/CEF: worlds share only the DOM, so values cross as JSON | Deeper proxying |
 | I5 | `protocol.handle` takes and returns Fetch `Request`/`Response` | `ProtocolRequest` → `Task<ProtocolResponse>`; Oriel answers `Range` itself | Design | None |
 | I6 | Privileges `allowServiceWorkers`, `codeCache` | Throw `NotSupportedException` | CEF: no service workers or V8 code cache for custom schemes | Patch |

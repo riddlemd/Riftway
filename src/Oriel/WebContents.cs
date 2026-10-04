@@ -289,7 +289,10 @@ public sealed unsafe class WebContents
     /// <returns>The value as JSON; null for <c>undefined</c> or <c>null</c>.</returns>
     /// <exception cref="JavaScriptException">The code threw or its promise rejected.</exception>
     /// <exception cref="InvalidOperationException">The page has closed.</exception>
-    public Task<JsonNode?> ExecuteJavaScriptAsync(string code, bool userGesture = false)
+    public Task<JsonNode?> ExecuteJavaScriptAsync(string code, bool userGesture = false) => EvaluateAsync(code, userGesture, null);
+
+    /// <summary>Evaluates <paramref name="code"/> in <paramref name="frame"/>'s main world, or the main frame's when null.</summary>
+    internal Task<JsonNode?> EvaluateAsync(string code, bool userGesture, FrameState? frame)
     {
         ArgumentNullException.ThrowIfNull(code);
         var completion = new TaskCompletionSource<JsonNode?>(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -301,16 +304,26 @@ public sealed unsafe class WebContents
                 completion.TrySetException(new InvalidOperationException("The page has closed."));
                 return;
             }
+            if (frame is { Detached: true } or { DefaultContext: null })
+            {
+                registration.Dispose();
+                completion.TrySetException(new InvalidOperationException("The frame has no script context here: it is detached, not loaded yet, or in another process."));
+                return;
+            }
             _devTools.Send("Runtime.evaluate", w =>
             {
                 w.WriteString("expression", code);
+                if (frame?.DefaultContext is { } context) w.WriteNumber("contextId", context);
                 w.WriteBoolean("awaitPromise", true);
                 w.WriteBoolean("returnByValue", true);
                 w.WriteBoolean("userGesture", userGesture);
             }, (result, error) =>
             {
                 registration.Dispose();
-                if (error is not null) completion.TrySetException(new JavaScriptException(error));
+                // A frame's context can go between the check above and DevTools running the script.
+                if (error is not null && frame is not null && error.Contains("Cannot find context", StringComparison.Ordinal))
+                    completion.TrySetException(new InvalidOperationException("The frame has no script context here: it is detached, not loaded yet, or in another process."));
+                else if (error is not null) completion.TrySetException(new JavaScriptException(error));
                 else if (result.TryGetProperty("exceptionDetails", out var details)) completion.TrySetException(new JavaScriptException(DescribeException(details)));
                 else completion.TrySetResult(result.GetProperty("result").TryGetProperty("value", out var value) ? JsonNode.Parse(value.GetRawText()) : null);
             });
@@ -629,6 +642,7 @@ public sealed unsafe class WebContents
         {
             var frame = result.GetProperty("frameTree").GetProperty("frame");
             _mainFrameId = frame.GetProperty("id").GetString();
+            AddFrameTree(result.GetProperty("frameTree"));
             _ready = true;
             // A page-opened window starts on its real page, which can commit before the scripts above are registered
             // and would then run without Oriel's runtime or the preload. Reloading keeps window.opener.
@@ -653,6 +667,9 @@ public sealed unsafe class WebContents
         _browser = null;
         _ready = false;
         _isolatedContext = null;
+        foreach (var frame in _frames.Values) frame.Detached = true;
+        _frames.Clear();
+        _contextFrames.Clear();
     }
 
     private void OnDevToolsEvent(string method, JsonElement parameters)
@@ -663,8 +680,24 @@ public sealed unsafe class WebContents
                 OnIpcMessage(parameters.GetProperty("executionContextId").GetInt32(), parameters.GetProperty("payload").GetString()!);
                 break;
 
+            case "Page.frameAttached":
+                var attached = parameters.GetProperty("frameId").GetString()!;
+                if (!_frames.ContainsKey(attached))
+                    _frames[attached] = new FrameState { Id = attached, ParentId = parameters.GetProperty("parentFrameId").GetString() };
+                break;
+
+            case "Page.frameNavigated":
+                UpdateFrame(parameters.GetProperty("frame"));
+                break;
+
+            // A swap moves the frame to another process, where it still exists; only a removal ends it.
+            case "Page.frameDetached" when parameters.TryGetProperty("reason", out var reason) && reason.GetString() == "remove":
+                if (_frames.Remove(parameters.GetProperty("frameId").GetString()!, out var detached)) detached.Detached = true;
+                break;
+
             case "Runtime.executionContextCreated":
                 var context = parameters.GetProperty("context");
+                TrackContext(context);
                 if (context.GetProperty("name").GetString() == IsolatedWorld &&
                     context.GetProperty("auxData").GetProperty("frameId").GetString() == _mainFrameId)
                 {
@@ -674,9 +707,20 @@ public sealed unsafe class WebContents
                 }
                 break;
 
-            case "Runtime.executionContextDestroyed" when parameters.GetProperty("executionContextId").GetInt32() == _isolatedContext:
+            case "Runtime.executionContextDestroyed":
+                var gone = parameters.GetProperty("executionContextId").GetInt32();
+                if (gone == _isolatedContext) _isolatedContext = null;
+                if (_contextFrames.Remove(gone, out var owner) && _frames.TryGetValue(owner, out var ownerFrame))
+                {
+                    if (ownerFrame.DefaultContext == gone) ownerFrame.DefaultContext = null;
+                    if (ownerFrame.IsolatedContext == gone) ownerFrame.IsolatedContext = null;
+                }
+                break;
+
             case "Runtime.executionContextsCleared":
                 _isolatedContext = null;
+                _contextFrames.Clear();
+                foreach (var frame in _frames.Values) frame.DefaultContext = frame.IsolatedContext = null;
                 break;
         }
     }
@@ -691,7 +735,7 @@ public sealed unsafe class WebContents
         switch (root.GetProperty("t").GetString())
         {
             case "send":
-                IpcMain.DispatchSend(this, channel, args);
+                IpcMain.DispatchSend(this, FrameForContext(context), channel, args);
                 break;
 
             case "invoke":
@@ -703,7 +747,7 @@ public sealed unsafe class WebContents
 
     // ContinueWith rather than await: an unsafe class cannot contain async methods.
     private Task ReplyAsync(int context, int id, string channel, JsonElement[] args)
-        => IpcMain.DispatchInvokeAsync(this, channel, args).ContinueWith(
+        => IpcMain.DispatchInvokeAsync(this, FrameForContext(context), channel, args).ContinueWith(
             completed =>
             {
                 var (ok, value, error) = completed.Result;
@@ -711,6 +755,61 @@ public sealed unsafe class WebContents
                 CefThread.RunOnUi(() => Deliver(context, reply));
             },
             TaskScheduler.Default);
+
+    // The page's frames by DevTools frame id, which (unlike CEF's frame identifiers) is what DevTools events and
+    // execution contexts name; UI thread only.
+    private readonly Dictionary<string, FrameState> _frames = [];
+    private readonly Dictionary<int, string> _contextFrames = [];
+
+    /// <summary>The top frame of the page. Electron's <c>webContents.mainFrame</c>; null until the page exists.</summary>
+    public WebFrameMain? MainFrame => CefThread.InvokeOnUi(() => _mainFrameId is { } id && _frames.TryGetValue(id, out var frame) ? WrapperOf(frame) : null);
+
+    internal WebFrameMain WrapperOf(FrameState frame) => frame.Wrapper ??= new WebFrameMain(this, frame);
+
+    internal WebFrameMain? ParentOf(FrameState frame)
+        => CefThread.InvokeOnUi(() => frame.ParentId is { } parent && _frames.TryGetValue(parent, out var p) ? WrapperOf(p) : null);
+
+    internal IReadOnlyList<WebFrameMain> ChildrenOf(FrameState frame)
+        => CefThread.InvokeOnUi(() => (IReadOnlyList<WebFrameMain>)[.. _frames.Values.Where(f => f.ParentId == frame.Id && !f.Detached).Select(WrapperOf)]);
+
+    internal T ReadFrame<T>(Func<T> read) => CefThread.InvokeOnUi(read);
+
+    /// <summary>Sends to the preload of one frame; ignored while it has none (not loaded, or in another process).</summary>
+    internal void SendToFrame(FrameState frame, string message) => CefThread.RunOnUi(() =>
+    {
+        if (frame.IsolatedContext is { } context) Deliver(context, message);
+    });
+
+    private WebFrameMain? FrameForContext(int context)
+        => _contextFrames.TryGetValue(context, out var id) && _frames.TryGetValue(id, out var frame) ? WrapperOf(frame) : null;
+
+    private void AddFrameTree(JsonElement node)
+    {
+        UpdateFrame(node.GetProperty("frame"));
+        if (node.TryGetProperty("childFrames", out var children))
+            foreach (var child in children.EnumerateArray()) AddFrameTree(child);
+    }
+
+    private void UpdateFrame(JsonElement frame)
+    {
+        var id = frame.GetProperty("id").GetString()!;
+        if (!_frames.TryGetValue(id, out var state)) _frames[id] = state = new FrameState { Id = id };
+        state.ParentId = frame.TryGetProperty("parentId", out var parent) ? parent.GetString() : null;
+        state.Url = frame.GetProperty("url").GetString() + (frame.TryGetProperty("urlFragment", out var fragment) ? fragment.GetString() : "");
+        state.Name = frame.TryGetProperty("name", out var name) ? name.GetString() ?? string.Empty : string.Empty;
+        state.Origin = frame.TryGetProperty("securityOrigin", out var origin) ? origin.GetString() ?? string.Empty : string.Empty;
+    }
+
+    private void TrackContext(JsonElement context)
+    {
+        if (!context.TryGetProperty("auxData", out var aux) || !aux.TryGetProperty("frameId", out var frameId)) return;
+        var id = frameId.GetString()!;
+        var contextId = context.GetProperty("id").GetInt32();
+        _contextFrames[contextId] = id;
+        if (!_frames.TryGetValue(id, out var frame)) _frames[id] = frame = new FrameState { Id = id };
+        if (aux.TryGetProperty("isDefault", out var isDefault) && isDefault.GetBoolean()) frame.DefaultContext = contextId;
+        else if (context.GetProperty("name").GetString() == IsolatedWorld) frame.IsolatedContext = contextId;
+    }
 
     // Runs in the isolated world's context, so only Oriel's preload runtime can receive it.
     private void Deliver(int context, string message)
