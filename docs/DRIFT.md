@@ -68,6 +68,14 @@ Entries marked _(branch `x`)_ are on that branch and not yet in `main`.
 | O4 | A popup's first page loads once, with the preload | When it commits before Oriel's runtime and preload are registered over DevTools, it is reloaded once so they run: the page loads twice, and a POST target is untested | CEF: the popup's browser exists only as it starts loading; there is no about:blank start as for other windows | Patch, or register before the first commit (DevTools auto-attach) |
 | O5 | `width`/`height` from features | Size the page area (`UseContentSize`), as browsers treat them; not compared with Electron | Unknown | Check Electron |
 
+## navigationHistory
+
+| ID | Electron | Oriel | Why | Possible resolution |
+|---|---|---|---|---|
+| N1 | `removeEntryAtIndex`, `restore` (entries with `pageState`) | Missing; entries have only `url` and `title` | CEF: no way to remove or restore entries, and no page state | Patch |
+| N2 | `goToIndex`, `goToOffset` move the history directly | Through the page's own `history.go(n)`, so they do nothing in a page with `Javascript = false` | CEF: only one-step `go_back` / `go_forward` | Patch, or step repeatedly |
+| N3 | A window's history starts with its first page | Same, by resetting the history after the first page loads, which drops the about:blank Oriel starts on; until a first page loads successfully, that entry is there | Design: the preload is registered over DevTools on about:blank before the real page | Register before the first navigation without a document |
+
 ## webContents
 
 | ID | Electron | Oriel | Why | Possible resolution |

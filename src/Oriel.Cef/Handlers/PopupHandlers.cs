@@ -70,3 +70,35 @@ public sealed unsafe class LifeSpanHandler
         NativeObject.Release(browser);
     }
 }
+
+/// <summary>One page in a browser's back/forward list.</summary>
+/// <param name="Url">The page's URL.</param>
+/// <param name="Title">The page's title.</param>
+/// <param name="IsCurrent">Whether it is the page showing.</param>
+public sealed record NavigationEntrySnapshot(string Url, string Title, bool IsCurrent);
+
+/// <summary><c>cef_navigation_entry_visitor_t</c>: collects a browser's back/forward list. On the UI thread CEF visits
+/// every entry before <c>get_navigation_entries</c> returns.</summary>
+public sealed unsafe class NavigationEntryVisitor
+{
+    public NavigationEntryVisitor()
+    {
+        Native = NativeObject.Create<cef_navigation_entry_visitor_t>(this);
+        Native->visit = &Visit;
+    }
+
+    public cef_navigation_entry_visitor_t* Native { get; }
+
+    /// <summary>The entries visited so far, oldest first.</summary>
+    public List<NavigationEntrySnapshot> Entries { get; } = [];
+
+    [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])]
+    private static int Visit(cef_navigation_entry_visitor_t* self, cef_navigation_entry_t* entry, int current, int index, int total)
+    {
+        var owner = NativeObject.Owner<NavigationEntryVisitor>(self);
+        if (entry->is_valid(entry) != 0)
+            owner.Entries.Add(new NavigationEntrySnapshot(CefString.ReadUserFree(entry->get_url(entry)), CefString.ReadUserFree(entry->get_title(entry)), current != 0));
+        NativeObject.Release(entry);
+        return 1;
+    }
+}

@@ -60,6 +60,11 @@ public sealed unsafe class WebContents
             LoadEnded = (isMain, _) =>
             {
                 if (!isMain) return;
+                if (_navigated && !_bootstrapForgotten)
+                {
+                    _bootstrapForgotten = true;
+                    _devTools.Send("Page.resetNavigationHistory");
+                }
                 Raise(DidFinishLoad);
                 if (_navigated) CompleteLoad(null);
             },
@@ -327,7 +332,7 @@ public sealed unsafe class WebContents
         finally { NativeObject.Release(host); }
     });
 
-    private T QueryHost<T>(HostQuery<T> query, T whenClosed) => CefThread.InvokeOnUi(() =>
+    internal T QueryHost<T>(HostQuery<T> query, T whenClosed) => CefThread.InvokeOnUi(() =>
     {
         if (_browser is null) return whenClosed;
         var host = _browser->get_host(_browser);
@@ -337,7 +342,40 @@ public sealed unsafe class WebContents
 
     private delegate void HostAction(cef_browser_host_t* host);
 
-    private delegate T HostQuery<out T>(cef_browser_host_t* host);
+    internal delegate T HostQuery<out T>(cef_browser_host_t* host);
+
+    internal delegate void BrowserAction(cef_browser_t* browser);
+
+    /// <summary>Runs <paramref name="action"/> on the UI thread while the browser exists.</summary>
+    internal void WithBrowser(BrowserAction action) => CefThread.RunOnUi(() =>
+    {
+        if (_browser is not null) action(_browser);
+    });
+
+    /// <summary>Runs script in the main frame's own world; UI thread, browser present.</summary>
+    internal void RunInMainFrame(string code)
+    {
+        var frame = _browser->get_main_frame(_browser);
+        cef_string_utf16_t script = default, url = default;
+        CefString.Set(&script, code);
+        frame->execute_java_script(frame, &script, &url, 0);
+        CefString.Clear(&script);
+        NativeObject.Release(frame);
+    }
+
+    /// <summary>Keeps only the page showing in the back/forward list.</summary>
+    internal void ResetHistory() => CefThread.RunOnUi(() =>
+    {
+        if (_browser is not null) _devTools.Send("Page.resetNavigationHistory");
+    });
+
+    /// <summary>The page's back/forward list. Electron's <c>webContents.navigationHistory</c>.</summary>
+    public NavigationHistory NavigationHistory => _navigationHistory ??= new NavigationHistory(this);
+
+    private NavigationHistory? _navigationHistory;
+
+    // The about:blank a window starts on would otherwise stay in its history, behind the first real page.
+    private bool _bootstrapForgotten;
 
     /// <summary>The page's title. Electron's <c>webContents.getTitle()</c>.</summary>
     public string GetTitle() => CefThread.InvokeOnUi(() => _title);
