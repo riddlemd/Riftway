@@ -64,6 +64,10 @@ Entries marked _(branch `x`)_ are on that branch and not yet in `main`.
 | W27 | `setBounds`, `setContentBounds`, `setSize`, `setContentSize`, `setPosition` take `animate` (macOS only) | No `animate` argument; changes are immediate | Todo: not yet implemented | `NSWindow setFrame:display:animate:` through the Objective-C runtime |
 | W28 | `win.loadFile()` and `win.reload()` | Missing on `BrowserWindow`; `WebContents.LoadFile` and `WebContents.Reload` exist (`BrowserWindow.LoadUrl` exists) | Todo: not yet implemented | Forward to `WebContents` |
 | W29 | `setAlwaysOnTop(flag, level, relativeLevel)` | Takes `flag` only | Todo: not yet implemented | macOS: `NSWindow.level`; Windows and Linux ignore `level` in Electron |
+| W30 | `showInactive`, `opacity`/`setOpacity`, `setIgnoreMouseEvents`, `setContentProtection` and the `will-resize`/`will-move` events work on macOS too (`opacity` also on Linux) | Windows only: elsewhere `ShowInactive` shows and focuses, the opacity is stored but not shown, the others do nothing and the events never come _(branch `window-polish`)_ | OS | macOS: `orderFront:` without key, `alphaValue`, `ignoresMouseEvents`, `sharingType`, `windowWillResize:`/`windowWillMove:`; Linux: `_NET_WM_WINDOW_OPACITY` |
+| W31 | `hasShadow: false` takes the shadow away | Windows: only a frameless window loses DWM's shadow; a framed window keeps it, because DWM draws it with the frame and turning that off breaks the title bar; macOS and Linux: stored only _(branch `window-polish`)_ | OS | macOS: `NSWindow.hasShadow` |
+| W32 | `setIgnoreMouseEvents(true, { forward: true })` still delivers mouse moves to the page | `Forward` is ignored _(branch `window-polish`)_ | Todo | A low-level mouse hook forwarding moves, as Electron does on Windows |
+| W33 | `kiosk` on macOS also hides the Dock and menu bar and blocks app switching | Full screen on every OS _(branch `window-polish`)_ | OS | macOS presentation options |
 
 ## nativeImage
 

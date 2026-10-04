@@ -1,0 +1,158 @@
+using System.Runtime.InteropServices;
+using System.Runtime.Versioning;
+
+namespace Oriel.Cef.Platform;
+
+/// <summary>Win32 window styles behind Electron's Windows window options: opacity,
+/// click-through, capture exclusion and the restored ("normal") bounds.</summary>
+/// <remarks>UI thread only. Rectangles are screen pixels.</remarks>
+[SupportedOSPlatform("windows")]
+public static unsafe class WindowsWindowStyle
+{
+    private const int GwlExStyle = -20;
+    private const uint WsExLayered = 0x00080000;
+    private const uint WsExTransparent = 0x00000020;
+    private const uint LwaAlpha = 0x2;
+    private const uint WdaNone = 0;
+    private const uint WdaExcludeFromCapture = 0x11;
+    private const uint MonitorDefaultToNearest = 2;
+
+    /// <summary>Makes the window layered and sets its alpha, 0 to 255, as Electron does on Windows.</summary>
+    public static bool SetAlpha(nint hwnd, byte alpha)
+    {
+        SetExStyle(hwnd, ExStyle(hwnd) | WsExLayered);
+        return SetLayeredWindowAttributes(hwnd, 0, alpha, LwaAlpha) != 0;
+    }
+
+    /// <summary>The layered window's alpha, or null if the window is not layered with one.</summary>
+    public static byte? GetAlpha(nint hwnd)
+    {
+        if ((ExStyle(hwnd) & WsExLayered) == 0) return null;
+        byte alpha;
+        uint flags;
+        return GetLayeredWindowAttributes(hwnd, null, &alpha, &flags) != 0 && (flags & LwaAlpha) != 0 ? alpha : null;
+    }
+
+    /// <summary>Lets mouse input pass through the window to what is below, or stops it. <paramref name="keepLayered"/>
+    /// keeps <c>WS_EX_LAYERED</c> when the window has an opacity.</summary>
+    public static void SetClickThrough(nint hwnd, bool ignore, bool keepLayered)
+    {
+        var style = ExStyle(hwnd);
+        style = ignore ? style | WsExTransparent | WsExLayered : style & ~(WsExTransparent | WsExLayered);
+        if (keepLayered) style |= WsExLayered;
+        var becameLayered = (ExStyle(hwnd) & WsExLayered) == 0 && (style & WsExLayered) != 0;
+        SetExStyle(hwnd, style);
+        // A layered window without attributes is not drawn at all.
+        if (becameLayered) SetLayeredWindowAttributes(hwnd, 0, 255, LwaAlpha);
+    }
+
+    /// <summary>Whether mouse input passes through the window.</summary>
+    public static bool IsClickThrough(nint hwnd) => (ExStyle(hwnd) & WsExTransparent) != 0;
+
+    /// <summary>Hides the window from screen capture and recording, or shows it again. False if Windows refused.</summary>
+    public static bool SetExcludedFromCapture(nint hwnd, bool exclude)
+        => SetWindowDisplayAffinity(hwnd, exclude ? WdaExcludeFromCapture : WdaNone) != 0;
+
+    /// <summary>Whether the window is hidden from capture, from <c>GetWindowDisplayAffinity</c>.</summary>
+    public static bool IsExcludedFromCapture(nint hwnd)
+    {
+        uint affinity;
+        return GetWindowDisplayAffinity(hwnd, &affinity) != 0 && affinity != WdaNone;
+    }
+
+    /// <summary>The bounds the window has when neither maximized, minimized nor full screen, in screen pixels.</summary>
+    /// <remarks>Win32 gives them in workspace coordinates, offset by a taskbar at the top or left; this undoes that.</remarks>
+    public static (int X, int Y, int Width, int Height)? GetNormalBounds(nint hwnd)
+    {
+        var placement = new WindowPlacement { Length = (uint)sizeof(WindowPlacement) };
+        if (GetWindowPlacement(hwnd, &placement) == 0) return null;
+        var r = placement.NormalPosition;
+        var monitor = MonitorFromRect(&r, MonitorDefaultToNearest);
+        var info = new MonitorInfo { Size = (uint)sizeof(MonitorInfo) };
+        var (dx, dy) = GetMonitorInfoW(monitor, &info) != 0 ? (info.Work.Left - info.Monitor.Left, info.Work.Top - info.Monitor.Top) : (0, 0);
+        return (r.Left + dx, r.Top + dy, r.Right - r.Left, r.Bottom - r.Top);
+    }
+
+    /// <summary>The window's bounds in screen pixels.</summary>
+    public static (int X, int Y, int Width, int Height) GetBounds(nint hwnd)
+    {
+        Rect r;
+        GetWindowRect(hwnd, &r);
+        return (r.Left, r.Top, r.Right - r.Left, r.Bottom - r.Top);
+    }
+
+    /// <summary>Gives a frameless window DWM's shadow or takes it away. False if DWM refused.</summary>
+    /// <remarks>The shadow, and Windows 11's one-pixel border, need both DWM's non-client rendering and a frame margin
+    /// extended into the client area; any margin brings them back as they were, and Chromium does not restore its own.
+    /// A framed window's shadow cannot go without its frame going too.</remarks>
+    public static bool SetFramelessShadow(nint hwnd, bool shadow)
+    {
+        var policy = shadow ? 0 /* DWMNCRP_USEWINDOWSTYLE */ : 1 /* DWMNCRP_DISABLED */;
+        if (DwmSetWindowAttribute(hwnd, 2 /* DWMWA_NCRENDERING_POLICY */, &policy, sizeof(int)) < 0) return false;
+        // MARGINS is left, right, top, bottom.
+        var margins = new Rect { Bottom = shadow ? 1 : 0 };
+        return DwmExtendFrameIntoClientArea(hwnd, &margins) >= 0;
+    }
+
+    /// <summary>Whether DWM renders the window's non-client area (<c>DWMWA_NCRENDERING_ENABLED</c>).</summary>
+    public static bool IsDwmNonClientRendering(nint hwnd)
+    {
+        int enabled;
+        return DwmGetWindowAttribute(hwnd, 1 /* DWMWA_NCRENDERING_ENABLED */, &enabled, sizeof(int)) >= 0 && enabled != 0;
+    }
+
+    /// <summary>Puts the window above other non-topmost windows without activating it.</summary>
+    public static void BringToTopInactive(nint hwnd)
+        => SetWindowPos(hwnd, 0 /* HWND_TOP */, 0, 0, 0, 0, 0x1 /* SWP_NOSIZE */ | 0x2 /* SWP_NOMOVE */ | 0x10 /* SWP_NOACTIVATE */);
+
+    /// <summary>The top-level window that contains <paramref name="hwnd"/>.</summary>
+    public static nint Root(nint hwnd) => GetAncestor(hwnd, 2 /* GA_ROOT */);
+
+    private static uint ExStyle(nint hwnd) => (uint)(long)GetWindowLongPtrW(hwnd, GwlExStyle);
+
+    private static void SetExStyle(nint hwnd, uint style) => SetWindowLongPtrW(hwnd, GwlExStyle, (nint)style);
+
+    [StructLayout(LayoutKind.Sequential)]
+    internal struct Rect
+    {
+        public int Left;
+        public int Top;
+        public int Right;
+        public int Bottom;
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct WindowPlacement
+    {
+        public uint Length;
+        public uint Flags;
+        public uint ShowCmd;
+        public int MinX, MinY, MaxX, MaxY;
+        public Rect NormalPosition;
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct MonitorInfo
+    {
+        public uint Size;
+        public Rect Monitor;
+        public Rect Work;
+        public uint Flags;
+    }
+
+    [DllImport("user32.dll")] private static extern nint GetWindowLongPtrW(nint hwnd, int index);
+    [DllImport("user32.dll")] private static extern nint SetWindowLongPtrW(nint hwnd, int index, nint value);
+    [DllImport("user32.dll")] private static extern int SetLayeredWindowAttributes(nint hwnd, uint key, byte alpha, uint flags);
+    [DllImport("user32.dll")] private static extern int GetLayeredWindowAttributes(nint hwnd, uint* key, byte* alpha, uint* flags);
+    [DllImport("user32.dll")] private static extern int SetWindowDisplayAffinity(nint hwnd, uint affinity);
+    [DllImport("user32.dll")] private static extern int GetWindowDisplayAffinity(nint hwnd, uint* affinity);
+    [DllImport("user32.dll")] private static extern int GetWindowPlacement(nint hwnd, WindowPlacement* placement);
+    [DllImport("user32.dll")] private static extern nint MonitorFromRect(Rect* rect, uint flags);
+    [DllImport("user32.dll")] private static extern int GetMonitorInfoW(nint monitor, MonitorInfo* info);
+    [DllImport("user32.dll")] private static extern int GetWindowRect(nint hwnd, Rect* rect);
+    [DllImport("user32.dll")] private static extern nint GetAncestor(nint hwnd, uint flags);
+    [DllImport("user32.dll")] private static extern int SetWindowPos(nint hwnd, nint after, int x, int y, int cx, int cy, uint flags);
+    [DllImport("dwmapi.dll")] private static extern int DwmExtendFrameIntoClientArea(nint hwnd, Rect* margins);
+    [DllImport("dwmapi.dll")] private static extern int DwmSetWindowAttribute(nint hwnd, uint attribute, void* value, uint size);
+    [DllImport("dwmapi.dll")] private static extern int DwmGetWindowAttribute(nint hwnd, uint attribute, void* value, uint size);
+}

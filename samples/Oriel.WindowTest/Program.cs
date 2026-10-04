@@ -200,6 +200,7 @@ async Task RunAsync(BrowserWindow win, BrowserWindow simple)
     await TaskbarAsync(win);
     await WindowsApisAsync();
     await NativeImageAsync();
+    await WindowPolishAsync(win);
 
     // Closing cancelled once: the window must survive the first close.
     var closingCount = 0;
@@ -1150,6 +1151,177 @@ async Task WindowsApisAsync()
     Check("the shell takes the thumbnail clip and tooltip (weak: no read-back)", refusals.ToString().Length == 0, refusals.ToString().Trim());
     w.Destroy();
     await Task.Delay(300);
+}
+
+async Task WindowPolishAsync(BrowserWindow win)
+{
+    // Windows only so far; Win32 reads each setting back.
+    if (!OperatingSystem.IsWindows()) return;
+
+    BrowserWindow Solid(string title, string colour, int x, int y, int width, int height, bool show = true, bool frame = true, double opacity = 1, bool kiosk = false)
+    {
+        var b = new BrowserWindow(new BrowserWindowOptions { Title = title, X = x, Y = y, Width = width, Height = height, Show = show, Frame = frame, Opacity = opacity, Kiosk = kiosk, BackgroundColor = colour });
+        _ = b.LoadUrl($"data:text/html,<body style='margin:0;background:{Uri.EscapeDataString(colour)}'></body>");
+        return b;
+    }
+    static string Rgb((byte R, byte G, byte B) c) => $"{c.R},{c.G},{c.B}";
+    // The display is colour-managed: pure red reads about (238, 0, 0), blue (55, 0, 255), green (92, 255, 0).
+    static bool IsRed((byte R, byte G, byte B) c) => c.R > 200 && c.G < 60 && c.B < 60;
+    static bool IsGreen((byte R, byte G, byte B) c) => c.G > 200 && c.R < 140 && c.B < 60;
+    static bool IsBlue((byte R, byte G, byte B) c) => c.B > 200 && c.R < 100 && c.G < 60;
+    (int X, int Y) Centre(BrowserWindow b) { var (x, y, w, h) = WindowsShell.Bounds(b.GetNativeWindowHandle()); return (x + w / 2, y + h / 2 + 10); }
+
+    // A white backdrop under the test windows makes blending and shadows measurable.
+    var backdrop = Solid("Oriel window test: backdrop", "#FFFFFF", 80, 80, 700, 500);
+    await Task.Delay(1500);
+
+    // ShowInactive: visible, painted, and the foreground window is unchanged.
+    var foreground = WindowsShell.Foreground();
+    var shownCount = 0;
+    var inactive = Solid("Oriel window test: show inactive", "#FF0000", 120, 120, 300, 200, show: false);
+    inactive.Shown += (_, _) => shownCount++;
+    await Task.Delay(800);
+    inactive.ShowInactive();
+    var ih = inactive.GetNativeWindowHandle();
+    Check("ShowInactive shows the window and raises Shown", Eventually(() => inactive.IsVisible && shownCount == 1, step), $"visible={inactive.IsVisible} shown={shownCount}");
+    await Task.Delay(1000);
+    Check("ShowInactive leaves the foreground window alone", WindowsShell.Foreground() == foreground && WindowsShell.Foreground() != ih, $"{foreground} -> {WindowsShell.Foreground()} (window {ih})");
+    Check("a window shown inactive paints its page", Eventually(() => IsRed(WindowsShell.ScreenPixel(Centre(inactive).X, Centre(inactive).Y)), step), Rgb(WindowsShell.ScreenPixel(Centre(inactive).X, Centre(inactive).Y)));
+
+    // CEF activates a window created hidden, and a window that starts a load; Electron does neither.
+    var front = WindowsShell.Foreground();
+    var hiddenOne = Solid("Oriel window test: created hidden", "#00FF00", 500, 120, 200, 150, show: false);
+    await Task.Delay(1500);
+    Check("a window created hidden does not take the foreground", WindowsShell.Foreground() == front && !hiddenOne.IsVisible, $"{front} -> {WindowsShell.Foreground()} (window {hiddenOne.GetNativeWindowHandle()})");
+    _ = hiddenOne.LoadUrl("data:text/html,again");
+    await Task.Delay(1000);
+    Check("LoadUrl in a hidden window does not take the foreground", WindowsShell.Foreground() == front, $"{front} -> {WindowsShell.Foreground()}");
+    hiddenOne.Destroy();
+    _ = inactive.LoadUrl("data:text/html,<body style='margin:0;background:%23FF0000'></body>");
+    await Task.Delay(1000);
+    Check("LoadUrl in a background window does not bring it to the front", WindowsShell.Foreground() == front, $"{front} -> {WindowsShell.Foreground()} (window {ih})");
+
+    // Opacity: the layered alpha reads back, and the red page blends with the white backdrop.
+    var faded = Solid("Oriel window test: opacity", "#FF0000", 450, 350, 300, 200, opacity: 0.5);
+    await Task.Delay(1500);
+    var fh = faded.GetNativeWindowHandle();
+    var blended = WindowsShell.ScreenPixel(Centre(faded).X, Centre(faded).Y);
+    Check("the Opacity option makes the window layered at that alpha", WindowsShell.Alpha(fh) == 127 && faded.GetOpacity() == 0.5, $"{WindowsShell.Alpha(fh)} {faded.GetOpacity()}");
+    Check("a half-opaque red window over white shows pink", blended.R > 200 && blended.G is > 90 and < 170 && blended.B is > 90 and < 170, Rgb(blended));
+    faded.SetOpacity(0.25);
+    Check("SetOpacity changes the alpha", Eventually(() => WindowsShell.Alpha(fh) == 63, step) && faded.GetOpacity() == 0.25, $"{WindowsShell.Alpha(fh)} {faded.GetOpacity()}");
+    faded.SetOpacity(3);
+    Check("SetOpacity clamps to 1", Eventually(() => WindowsShell.Alpha(fh) == 255, step) && faded.GetOpacity() == 1, $"{WindowsShell.Alpha(fh)} {faded.GetOpacity()}");
+    faded.SetOpacity(0.5);
+    await Task.Delay(300);
+
+    // Click-through: the window stops taking the mouse, and keeps its opacity when it takes it again.
+    var (fx, fy) = Centre(faded);
+    Check("before SetIgnoreMouseEvents the window takes the mouse", WindowsShell.RootAt(fx, fy) == fh, $"{WindowsShell.RootAt(fx, fy)} vs {fh}");
+    faded.SetIgnoreMouseEvents(true);
+    Check("SetIgnoreMouseEvents(true) passes the mouse to the window below", Eventually(() => WindowsShell.ClickThrough(fh) && WindowsShell.RootAt(fx, fy) != fh, step), $"{WindowsShell.RootAt(fx, fy)} vs {fh}");
+    faded.SetIgnoreMouseEvents(false);
+    Check("SetIgnoreMouseEvents(false) takes it back and keeps the opacity", Eventually(() => WindowsShell.RootAt(fx, fy) == fh, step) && WindowsShell.Alpha(fh) == 127, $"{WindowsShell.RootAt(fx, fy)} alpha={WindowsShell.Alpha(fh)}");
+    var clicky = Solid("Oriel window test: click-through, opaque", "#00FF00", 450, 120, 200, 150);
+    await Task.Delay(1500);
+    var ch = clicky.GetNativeWindowHandle();
+    var (cx, cy) = Centre(clicky);
+    clicky.SetIgnoreMouseEvents(true);
+    await Task.Delay(300);
+    var opaqueThrough = WindowsShell.RootAt(cx, cy) != ch;
+    var opaquePainted = WindowsShell.ScreenPixel(cx, cy);
+    clicky.SetIgnoreMouseEvents(false);
+    Check("an opaque click-through window still draws, and is no longer layered after", opaqueThrough && IsGreen(opaquePainted) && Eventually(() => WindowsShell.Alpha(ch) is null, step), $"through={opaqueThrough} {Rgb(opaquePainted)} alpha={WindowsShell.Alpha(ch)}");
+    clicky.Destroy();
+    faded.Destroy();
+
+    // Content protection: capture sees what is behind the window.
+    var secret = Solid("Oriel window test: content protection", "#0000FF", 200, 200, 300, 200);
+    await Task.Delay(1500);
+    var (sx, sy) = Centre(secret);
+    var before = Rgb(WindowsShell.ScreenPixel(sx, sy));
+    secret.SetContentProtection(true);
+    Check("SetContentProtection(true) hides the window from capture", IsBlue(WindowsShell.ScreenPixel(sx, sy)) && Eventually(() => secret.IsContentProtected() && !IsBlue(WindowsShell.ScreenPixel(sx, sy)), step), $"{before} -> {Rgb(WindowsShell.ScreenPixel(sx, sy))} protected={secret.IsContentProtected()}");
+    secret.SetContentProtection(false);
+    Check("SetContentProtection(false) shows it again", Eventually(() => !secret.IsContentProtected() && IsBlue(WindowsShell.ScreenPixel(sx, sy)), step), Rgb(WindowsShell.ScreenPixel(sx, sy)));
+    secret.Destroy();
+
+    // Shadow: a frameless window darkens the backdrop just below it, until the shadow is taken away.
+    var flat = Solid("Oriel window test: shadow", "#FF0000", 220, 160, 300, 200, frame: false);
+    await Task.Delay(1500);
+    var lh = flat.GetNativeWindowHandle();
+    // 8 px below the window against the backdrop's white beside it, at the same height, out of the shadow's reach.
+    (byte R, byte G, byte B) Below() { var (x, y, w, h) = WindowsShell.Bounds(lh); return WindowsShell.ScreenPixel(x + w / 2, y + h + 8); }
+    var white = WindowsShell.ScreenPixel(WindowsShell.Bounds(lh).X - 60, WindowsShell.Bounds(lh).Y + WindowsShell.Bounds(lh).Height + 8).R;
+    var shaded = Below();
+    flat.SetHasShadow(false);
+    Check("SetHasShadow(false) removes a frameless window's shadow", shaded.R < white - 20 && Eventually(() => Below().R >= white - 3, step) && !flat.GetHasShadow(), $"white={white} {Rgb(shaded)} -> {Rgb(Below())}");
+    flat.SetHasShadow(true);
+    Check("SetHasShadow(true) brings it back", Eventually(() => Below().R < white - 20, step) && flat.GetHasShadow(), $"white={white} {Rgb(Below())}");
+    flat.Destroy();
+    var framed = Solid("Oriel window test: framed shadow", "#FF0000", 220, 160, 300, 200);
+    await Task.Delay(1200);
+    framed.SetHasShadow(false);
+    await Task.Delay(300);
+    Check("a framed window keeps its frame (and DWM's shadow) under SetHasShadow(false)", WindowsShell.NcRendering(framed.GetNativeWindowHandle()) && !framed.GetHasShadow());
+    framed.Destroy();
+
+    // GetNormalBounds: the restored bounds survive maximize and minimize.
+    var normal = Solid("Oriel window test: normal bounds", "#FFFF00", 240, 180, 320, 220);
+    await Task.Delay(1500);
+    var placed = normal.GetBounds();
+    Check("GetNormalBounds is the bounds of a normal window", normal.GetNormalBounds() == placed, $"{normal.GetNormalBounds()} vs {placed}");
+    normal.Maximize();
+    Check("GetNormalBounds keeps the restored bounds while maximized", Eventually(() => normal.IsMaximized, step) && normal.GetNormalBounds() == placed && normal.GetBounds() != placed, $"{normal.GetNormalBounds()} vs {placed}");
+    normal.Restore();
+    await Task.Delay(500);
+    normal.Minimize();
+    Check("GetNormalBounds keeps the restored bounds while minimized", Eventually(() => normal.IsMinimized, step) && normal.GetNormalBounds() == placed, $"{normal.GetNormalBounds()} vs {placed}");
+    normal.Restore();
+    await Task.Delay(500);
+
+    // WillMove and WillResize: a real drag of the title bar and corner, then WM_SIZING for an edge.
+    var nh = normal.GetNativeWindowHandle();
+    var moves = new List<Rectangle>();
+    var cancelMove = true;
+    normal.WillMove += (_, e) => { moves.Add(e.NewBounds); e.Cancel = cancelMove; };
+    var (nx, ny, nw, nhh) = WindowsShell.Bounds(nh);
+    WindowsShell.Drag(nx + 60, ny + 15, nx + 160, ny + 75);
+    Check("a cancelled WillMove keeps the window where it is", moves.Count > 0 && WindowsShell.Bounds(nh) == (nx, ny, nw, nhh), $"{moves.Count} moves, {WindowsShell.Bounds(nh)} vs {(nx, ny, nw, nhh)}");
+    Check("WillMove reports the bounds the drag proposed", moves.Count > 0 && moves[^1].X > placed.X && moves[^1].Width == placed.Width, moves.Count > 0 ? moves[^1] : null);
+    cancelMove = false;
+    WindowsShell.Drag(nx + 60, ny + 15, nx + 160, ny + 75);
+    var moved = WindowsShell.Bounds(nh);
+    Check("an uncancelled WillMove lets the drag move the window", moved.X > nx + 50 && moved.Width == nw, $"{(nx, ny)} -> {moved}");
+    var resizes = new List<WillResizeEventArgs>();
+    var cancelResize = true;
+    normal.WillResize += (_, e) => { resizes.Add(e); e.Cancel = cancelResize; };
+    WindowsShell.Drag(moved.X + moved.Width - 2, moved.Y + moved.Height - 2, moved.X + moved.Width + 80, moved.Y + moved.Height + 60);
+    Check("a cancelled WillResize keeps the size; the edge is bottom-right", resizes.Count > 0 && WindowsShell.Bounds(nh) == moved && resizes[^1].Edge == ResizeEdge.BottomRight && resizes[^1].NewBounds.Width > placed.Width,
+        $"{resizes.Count} resizes, {WindowsShell.Bounds(nh)} vs {moved}, {(resizes.Count > 0 ? $"{resizes[^1].Edge} {resizes[^1].NewBounds}" : "")}");
+    cancelResize = false;
+    WindowsShell.Drag(moved.X + moved.Width - 2, moved.Y + moved.Height - 2, moved.X + moved.Width + 80, moved.Y + moved.Height + 60);
+    Check("an uncancelled WillResize lets the drag resize the window", WindowsShell.Bounds(nh).Width > moved.Width + 40, $"{moved} -> {WindowsShell.Bounds(nh)}");
+    resizes.Clear();
+    cancelResize = true;
+    var now = WindowsShell.Bounds(nh);
+    var left = WindowsShell.SendDrag(nh, 3 /* WMSZ_TOP */, (now.X, now.Y - 40, now.X + now.Width, now.Y + now.Height));
+    Check("WM_SIZING on the top edge reports Top, and cancelling restores the rectangle", resizes.Count == 1 && resizes[0].Edge == ResizeEdge.Top && left == (now.X, now.Y, now.X + now.Width, now.Y + now.Height),
+        $"{resizes.Count} {(resizes.Count > 0 ? resizes[0].Edge : null)} {left}");
+    normal.Destroy();
+
+    // Kiosk: full screen on the window's display, and back.
+    var kiosk = Solid("Oriel window test: kiosk", "#000000", 260, 200, 300, 200, kiosk: true);
+    Check("the Kiosk option opens full screen", Eventually(() => kiosk.IsFullScreen && kiosk.IsKiosk(), step) && kiosk.GetBounds() == Screen.GetDisplayMatching(kiosk.GetBounds()).Bounds, $"{kiosk.IsFullScreen} {kiosk.GetBounds()}");
+    kiosk.SetKiosk(false);
+    Check("SetKiosk(false) leaves full screen", Eventually(() => !kiosk.IsFullScreen && !kiosk.IsKiosk(), step), $"{kiosk.IsFullScreen} {kiosk.GetBounds()}");
+    kiosk.SetKiosk(true);
+    Check("SetKiosk(true) enters it again", Eventually(() => kiosk.IsFullScreen && kiosk.IsKiosk(), step));
+    kiosk.Destroy();
+    inactive.Destroy();
+    backdrop.Destroy();
+    win.Focus();
+    await Task.Delay(500);
 }
 
 async Task NativeImageAsync()
