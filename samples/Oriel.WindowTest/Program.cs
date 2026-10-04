@@ -1227,6 +1227,43 @@ async Task TitleBarAsync(BrowserWindow win)
         $"{Rgb(WindowsShell.ScreenPixel(Button(0).X, Button(0).Y))} {overlaid.GetTitleBarOverlayBounds()}");
     var shrunk = WindowsShell.ScreenPixel(Button(0).X, Button(0, 30).Y);
     Check("the page shows below the shorter overlay (its blue drag strip)", IsBlue(shrunk), Rgb(shrunk));
+    // Snap layouts: Windows asks what is under the pointer, and the drawn maximize button answers HTMAXBUTTON.
+    const int HtMaxButton = 9;
+    var (mx, my) = (Button(1).X + 17, Button(1).Y + 8);
+    Check("the maximize button answers HTMAXBUTTON, its neighbours do not", WindowsShell.HitTest(oh, mx, my) == HtMaxButton && WindowsShell.HitTest(oh, Button(0).X + 17, my) == HtClient,
+        $"{WindowsShell.HitTest(oh, mx, my)} {WindowsShell.HitTest(oh, Button(0).X + 17, my)}");
+    var maxResting = WindowsShell.ScreenPixel(Button(1).X, Button(1).Y);
+    var below = (X: mx, Y: WindowsShell.Bounds(oh).Y + 150);
+    static bool IsYellow((byte R, byte G, byte B) c) => c.R > 200 && c.G > 200 && c.B < 100;
+    var pageBelow = WindowsShell.ScreenPixel(below.X, below.Y);
+    WindowsShell.Hover(mx - 4, my);
+    WindowsShell.Hover(mx, my);
+    var maxHovered = WindowsShell.ScreenPixel(Button(1).X, Button(1).Y);
+    Check("the maximize button shows its hover through HTMAXBUTTON", maxHovered.R > maxResting.R + 8 && maxHovered.G > maxResting.G + 8, $"{Rgb(maxResting)} -> {Rgb(maxHovered)}");
+    Check("hovering it opens Windows 11's snap layouts over the page", IsYellow(pageBelow) && Eventually(() => !IsYellow(WindowsShell.ScreenPixel(below.X, below.Y)), TimeSpan.FromSeconds(4)),
+        $"{Rgb(pageBelow)} -> {Rgb(WindowsShell.ScreenPixel(below.X, below.Y))}");
+    WindowsShell.Hover(WindowsShell.Bounds(oh).X + 60, WindowsShell.Bounds(oh).Y + 200);
+    await Task.Delay(800);
+
+    // The buttons follow the window's flags: a disabled one takes no clicks and offers no snap layouts.
+    overlaid.SetMaximizable(false);
+    await Task.Delay(300);
+    WindowsShell.Click(Button(1).X, Button(1).Y + 8);
+    Check("SetMaximizable(false) disables the maximize button", WindowsShell.HitTest(oh, mx, my) != HtMaxButton && !overlaid.IsMaximized, $"hit={WindowsShell.HitTest(oh, mx, my)} maximized={overlaid.IsMaximized}");
+    overlaid.SetMaximizable(true);
+    overlaid.SetMinimizable(false);
+    await Task.Delay(300);
+    WindowsShell.Click(Button(0).X, Button(0).Y + 8);
+    Check("SetMinimizable(false) disables the minimize button", !overlaid.IsMinimized);
+    overlaid.SetMinimizable(true);
+    overlaid.SetClosable(false);
+    await Task.Delay(300);
+    WindowsShell.Click(Button(2).X, Button(2).Y + 8);
+    await Task.Delay(500);
+    Check("SetClosable(false) disables the close button", !closed && !overlaid.IsDestroyed);
+    overlaid.SetClosable(true);
+    await Task.Delay(300);
+
     WindowsShell.Click(Button(1).X, Button(1).Y + 8);
     Check("the maximize button maximizes", Eventually(() => overlaid.IsMaximized, step));
     WindowsShell.Click(Button(1).X, Button(1).Y + 8);
@@ -1252,6 +1289,26 @@ async Task TitleBarAsync(BrowserWindow win)
     var caption = WindowsWindowStyle.CaptionHeight(plain.GetNativeWindowHandle());
     Check("an overlay without a height takes the system caption height", plain.GetTitleBarOverlayBounds().Height == caption && caption is > 20 and < 50, $"{plain.GetTitleBarOverlayBounds()} caption={caption}");
     plain.Destroy();
+
+    // SetParentWindow: Win32's owner, read back, and Oriel's parent/child bookkeeping with it.
+    var owner = new BrowserWindow(new BrowserWindowOptions { Title = "Oriel window test: new parent", X = 200, Y = 200, Width = 400, Height = 300 });
+    var owned = new BrowserWindow(new BrowserWindowOptions { Title = "Oriel window test: reparented", X = 260, Y = 260, Width = 300, Height = 200 });
+    await Task.Delay(1200);
+    var (ph, ch) = (owner.GetNativeWindowHandle(), owned.GetNativeWindowHandle());
+    owned.SetParentWindow(owner);
+    Check("SetParentWindow makes the parent the Win32 owner", WindowsWindowStyle.GetOwner(ch) == ph, $"{WindowsWindowStyle.GetOwner(ch)} vs {ph}");
+    Check("SetParentWindow updates GetParentWindow and GetChildWindows", owned.GetParentWindow() == owner && owner.GetChildWindows().Contains(owned));
+    Check("a window cannot become the parent of its own parent", Throws<ArgumentException>(() => owner.SetParentWindow(owned)) && Throws<ArgumentException>(() => owned.SetParentWindow(owned)));
+    owned.SetParentWindow(null);
+    Check("SetParentWindow(null) makes it top-level again", WindowsWindowStyle.GetOwner(ch) == 0 && owned.GetParentWindow() is null && owner.GetChildWindows().Count == 0, WindowsWindowStyle.GetOwner(ch));
+    owned.SetParentWindow(owner);
+    owner.Destroy();
+    Check("a window given a parent later closes with it", Eventually(() => owned.IsDestroyed, step));
+    var modalParent = new BrowserWindow(new BrowserWindowOptions { Title = "Oriel window test: modal's parent", Width = 300, Height = 200 });
+    var modal = new BrowserWindow(new BrowserWindowOptions { Title = "Oriel window test: modal", Width = 200, Height = 150, Parent = modalParent, Modal = true });
+    await Task.Delay(800);
+    Check("a modal window keeps its parent", Throws<InvalidOperationException>(() => modal.SetParentWindow(null)));
+    modalParent.Destroy();
     win.Focus();
     await Task.Delay(300);
 }

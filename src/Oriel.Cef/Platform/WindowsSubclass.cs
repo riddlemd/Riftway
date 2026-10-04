@@ -8,6 +8,22 @@ namespace Oriel.Cef.Platform;
 /// Win32's <c>THBF_</c> flags.</summary>
 public readonly record struct ThumbButton(uint Id, nint Icon, string? Tooltip, uint Flags);
 
+/// <summary>What the pointer did on a drawn maximize button that answers <c>HTMAXBUTTON</c>.</summary>
+public enum MaximizeButtonEvent
+{
+    /// <summary>The pointer moved onto or over it.</summary>
+    Hover,
+
+    /// <summary>The pointer left it.</summary>
+    Leave,
+
+    /// <summary>The left button went down on it.</summary>
+    Press,
+
+    /// <summary>The left button came up on it.</summary>
+    Click,
+}
+
 /// <summary>Routes a window's messages that CEF does not surface to callbacks: thumbnail toolbar clicks
 /// (<c>WM_COMMAND</c> with <c>THBN_CLICKED</c>) and the user's move and resize drags (<c>WM_MOVING</c>, <c>WM_SIZING</c>).</summary>
 /// <remarks>UI thread only: a subclass belongs to the thread that owns the window.</remarks>
@@ -28,6 +44,10 @@ public static unsafe class WindowsSubclass
         public Action<int>? ThumbClick;
         public Func<int, (int Left, int Top, int Right, int Bottom), bool>? Sizing;
         public Func<(int Left, int Top, int Right, int Bottom), bool>? Moving;
+        public Func<int, int, bool>? OverMaximize;
+        public Action<MaximizeButtonEvent>? MaximizeEvent;
+        public Func<int, int, bool>? TransparentAt;
+        public bool TrackingLeave;
     }
 
     /// <summary>Calls <paramref name="onClick"/> with the button id whenever a thumbnail button of
@@ -44,6 +64,28 @@ public static unsafe class WindowsSubclass
     /// returning true keeps it where it is. False if the window could not be subclassed.</summary>
     public static bool RouteMoving(nint hwnd, Func<(int Left, int Top, int Right, int Bottom), bool> onMoving)
         => Hook(hwnd) is { } hooks && (hooks.Moving = onMoving) is not null;
+
+    /// <summary>Makes the top-level window <paramref name="hwnd"/> answer <c>HTMAXBUTTON</c> where
+    /// <paramref name="overMaximize"/> (screen pixels) says a drawn maximize button is, so Windows 11 offers snap layouts
+    /// there, and reports the pointer and clicks on it, which then no longer reach Chromium.
+    /// False if the window could not be subclassed.</summary>
+    public static bool RouteMaximizeButton(nint hwnd, Func<int, int, bool> overMaximize, Action<MaximizeButtonEvent> onEvent)
+    {
+        if (Hook(hwnd) is not { } hooks) return false;
+        hooks.OverMaximize = overMaximize;
+        hooks.MaximizeEvent = onEvent;
+        return true;
+    }
+
+    /// <summary>Makes the child window <paramref name="hwnd"/> answer <c>HTTRANSPARENT</c> where <paramref name="at"/>
+    /// (screen pixels) says, so the hit test goes on to its parent. False if the window could not be subclassed.</summary>
+    /// <remarks>Chromium's page window covers the whole client area, overlay included, and takes the mouse first.</remarks>
+    public static bool PassHitTestToParent(nint hwnd, Func<int, int, bool> at)
+    {
+        if (Hook(hwnd) is not { } hooks) return false;
+        hooks.TransparentAt = at;
+        return true;
+    }
 
     /// <summary>Runs <paramref name="action"/> and leaves the foreground where it was: a top-level window
     /// <paramref name="hwnd"/> that was not in front does not stay there. False if the window could not be subclassed.</summary>
@@ -94,6 +136,35 @@ public static unsafe class WindowsSubclass
                         if (GetForegroundWindow() == hwnd) SetForegroundWindow(previous);
                     });
                 }
+                if (message == WmNcHitTest && hooks.TransparentAt is { } transparentAt && transparentAt(ScreenX(lParam), ScreenY(lParam)))
+                    return HtTransparent;
+                if (hooks.OverMaximize is { } overMaximize && hooks.MaximizeEvent is { } maximizeEvent)
+                {
+                    if (message == WmNcHitTest && overMaximize(ScreenX(lParam), ScreenY(lParam))) return HtMaxButton;
+                    var onButton = wParam == HtMaxButton;
+                    switch (message)
+                    {
+                        case WmNcMouseMove when onButton:
+                            if (!hooks.TrackingLeave)
+                            {
+                                var track = new TrackMouseEventNative { Size = (uint)sizeof(TrackMouseEventNative), Flags = TmeLeave | TmeNonClient, Hwnd = hwnd };
+                                hooks.TrackingLeave = TrackMouseEvent(&track) != 0;
+                            }
+                            maximizeEvent(MaximizeButtonEvent.Hover);
+                            return 0;
+                        case WmNcMouseMove:
+                        case WmNcMouseLeave:
+                            hooks.TrackingLeave = false;
+                            maximizeEvent(MaximizeButtonEvent.Leave);
+                            break;
+                        case WmNcLButtonDown or WmNcLButtonDblClk when onButton:
+                            maximizeEvent(MaximizeButtonEvent.Press);
+                            return 0;
+                        case WmNcLButtonUp when onButton:
+                            maximizeEvent(MaximizeButtonEvent.Click);
+                            return 0;
+                    }
+                }
                 if (message == WmWindowPosChanging && hooks.NoActivate)
                     ((WindowPosNative*)lParam)->Flags |= SwpNoActivate;
                 if (message == WmCommand && ((wParam >> 16) & 0xFFFF) == ThbnClicked && hooks.ThumbClick is { } onClick)
@@ -130,6 +201,23 @@ public static unsafe class WindowsSubclass
     }
 
     private const uint WmWindowPosChanging = 0x0046;
+    private const uint WmNcHitTest = 0x0084, WmNcMouseMove = 0x00A0, WmNcLButtonDown = 0x00A1, WmNcLButtonUp = 0x00A2;
+    private const uint WmNcLButtonDblClk = 0x00A3, WmNcMouseLeave = 0x02A2;
+    private const nint HtMaxButton = 9, HtTransparent = -1;
+    private const uint TmeLeave = 0x2, TmeNonClient = 0x10;
+
+    // Screen coordinates packed into lParam as signed 16-bit values.
+    private static int ScreenX(nint lParam) => (short)(lParam & 0xFFFF);
+    private static int ScreenY(nint lParam) => (short)((lParam >> 16) & 0xFFFF);
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct TrackMouseEventNative
+    {
+        public uint Size;
+        public uint Flags;
+        public nint Hwnd;
+        public uint HoverTime;
+    }
     private const uint WmActivate = 0x0006;
     private const uint SwpNoActivate = 0x0010;
 
@@ -153,6 +241,7 @@ public static unsafe class WindowsSubclass
 
     [DllImport("user32.dll")] private static extern int GetWindowRect(nint hwnd, RectNative* rect);
     [DllImport("user32.dll")] private static extern nint GetForegroundWindow();
+    [DllImport("user32.dll")] private static extern int TrackMouseEvent(TrackMouseEventNative* track);
     [DllImport("user32.dll")] private static extern int SetForegroundWindow(nint hwnd);
     [DllImport("comctl32.dll")] private static extern int SetWindowSubclass(nint hwnd, delegate* unmanaged<nint, uint, nint, nint, nuint, nuint, nint> proc, nuint id, nuint data);
     [DllImport("comctl32.dll")] private static extern int RemoveWindowSubclass(nint hwnd, delegate* unmanaged<nint, uint, nint, nint, nuint, nuint, nint> proc, nuint id);

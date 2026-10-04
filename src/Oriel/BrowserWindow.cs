@@ -268,6 +268,8 @@ public sealed unsafe class BrowserWindow
     private nint _routedNSWindow;
     // Touched only on the UI thread.
     private readonly List<BrowserWindow> _children = [];
+    // The option until SetParentWindow changes it.
+    private BrowserWindow? _parent;
     // Popups this window's page opened, closed with it unless they outlive it; UI thread only.
     private readonly List<BrowserWindow> _popups = [];
     // Popups allowed by on_before_popup whose view CEF has not created yet, by the client CEF will use.
@@ -297,6 +299,7 @@ public sealed unsafe class BrowserWindow
         if (_options.WebPreferences.ZoomFactor <= 0) throw new ArgumentOutOfRangeException(nameof(options), "ZoomFactor must be greater than 0.");
 
         Id = Interlocked.Increment(ref s_nextId);
+        _parent = _options.Parent;
         _closable = _options.Closable;
         _skipTaskbar = _options.SkipTaskbar;
         _opacity = WindowPolish.ClampOpacity(_options.Opacity);
@@ -351,7 +354,7 @@ public sealed unsafe class BrowserWindow
             Frameless = IsFrameless,
             MinimumSize = new cef_size_t { width = _options.MinWidth, height = _options.MinHeight },
             MaximumSize = new cef_size_t { width = _options.MaxWidth, height = _options.MaxHeight },
-            Parent = _options.Parent is { } parent ? () => (nint)parent._window : null,
+            Parent = _parent is { } parent ? () => (nint)parent._window : null,
             Modal = _options.Modal,
             Accelerator = commandId => _menuBar?.OnAccelerator(commandId) ?? false,
             KeyEvent = keyEvent => _menuBar?.OnKeyEvent(keyEvent) ?? false,
@@ -397,7 +400,7 @@ public sealed unsafe class BrowserWindow
     {
         lock (s_openGate) s_open.Add(this);
         Menu.ApplicationMenuChanged += _applicationMenuChanged;
-        _options.Parent?._children.Add(this);
+        _parent?._children.Add(this);
         NativeObject.AddRef(_windowDelegate.Native);
         _window = CefNative.cef_window_create_top_level(_windowDelegate.Native);
     }
@@ -535,7 +538,35 @@ public sealed unsafe class BrowserWindow
     public static BrowserWindow? FromId(int id) => GetAllWindows().FirstOrDefault(w => w.Id == id);
 
     /// <summary>The window this one belongs to, or null. Electron's <c>win.getParentWindow()</c>.</summary>
-    public BrowserWindow? GetParentWindow() => _options.Parent;
+    public BrowserWindow? GetParentWindow() => CefThread.InvokeOnUi(() => _parent);
+
+    /// <summary>Makes <paramref name="parent"/> this window's parent, or makes it a top-level window again: it stays above
+    /// the parent and closes with it. Windows only. Electron's <c>win.setParentWindow()</c>.</summary>
+    /// <exception cref="PlatformNotSupportedException">macOS or Linux: CEF sets the parent only when it creates the window.</exception>
+    /// <exception cref="ArgumentException">The parent is this window or one of its children.</exception>
+    /// <exception cref="InvalidOperationException">The window is modal, whose parent is fixed, or the parent is closed.</exception>
+    public void SetParentWindow(BrowserWindow? parent)
+    {
+        if (!OperatingSystem.IsWindows())
+            throw new PlatformNotSupportedException("SetParentWindow is Windows only: CEF sets a window's parent when it creates it.");
+        if (_options.Modal) throw new InvalidOperationException("A modal window keeps the parent it was created with.");
+        CefThread.InvokeOnUi(() =>
+        {
+            if (parent is not null && Ancestry(parent).Contains(this))
+                throw new ArgumentException("A window cannot be its own parent or the parent of one of its ancestors.", nameof(parent));
+            if (parent is { _window: null }) throw new InvalidOperationException("The parent window is closed.");
+            _parent?._children.Remove(this);
+            _parent = parent;
+            parent?._children.Add(this);
+            if (OperatingSystem.IsWindows() && _window is not null) WindowsWindowStyle.SetOwner(Hwnd(_window), parent is null ? 0 : Hwnd(parent._window));
+            return true;
+        });
+    }
+
+    private static IEnumerable<BrowserWindow> Ancestry(BrowserWindow window)
+    {
+        for (BrowserWindow? w = window; w is not null; w = w._parent) yield return w;
+    }
 
     /// <summary>The open windows that belong to this one. Electron's <c>win.getChildWindows()</c>.</summary>
     public IReadOnlyList<BrowserWindow> GetChildWindows() => CefThread.InvokeOnUi(() => (IReadOnlyList<BrowserWindow>)[.. _children]);
@@ -833,6 +864,13 @@ public sealed unsafe class BrowserWindow
         _titleBarOverlay = new TitleBarOverlayView(this);
         _titleBarOverlay.Attach(w, _titleBarColors.Color, _titleBarColors.Symbol, height);
         _titleBarOverlay.SetMaximized(w->is_maximized(w) != 0);
+        UpdateCaptionButtons();
+        if (OperatingSystem.IsWindows())
+        {
+            var overlay = _titleBarOverlay;
+            WindowsSubclass.RouteMaximizeButton(Hwnd(w), overlay.IsOverMaximize, overlay.OnMaximizeEvent);
+            PassMaximizeHitTests(w);
+        }
     }
 
     private void SetDraggableRegionsOn(cef_window_t* w, IReadOnlyList<DraggableRegion> regions)
@@ -1052,19 +1090,34 @@ public sealed unsafe class BrowserWindow
     public bool IsResizable => Query(_ => _windowDelegate.Resizable, false);
 
     /// <summary>Lets the window be minimized, or stops. Electron's <c>win.setMinimizable()</c>.</summary>
-    public void SetMinimizable(bool flag) => Command(_ => _windowDelegate.Minimizable = flag);
+    public void SetMinimizable(bool flag) => Command(_ =>
+    {
+        _windowDelegate.Minimizable = flag;
+        UpdateCaptionButtons();
+    });
 
     /// <summary>Whether the window can be minimized. Electron's <c>win.isMinimizable()</c>.</summary>
     public bool IsMinimizable => Query(_ => _windowDelegate.Minimizable, false);
 
     /// <summary>Lets the window be maximized, or stops. Electron's <c>win.setMaximizable()</c>.</summary>
-    public void SetMaximizable(bool flag) => Command(_ => _windowDelegate.Maximizable = flag);
+    public void SetMaximizable(bool flag) => Command(_ =>
+    {
+        _windowDelegate.Maximizable = flag;
+        UpdateCaptionButtons();
+    });
 
     /// <summary>Whether the window can be maximized. Electron's <c>win.isMaximizable()</c>.</summary>
     public bool IsMaximizable => Query(_ => _windowDelegate.Maximizable, false);
 
     /// <summary>Lets the user close the window, or stops; code can still close it. Electron's <c>win.setClosable()</c>.</summary>
-    public void SetClosable(bool flag) => Command(_ => _closable = flag);
+    public void SetClosable(bool flag) => Command(_ =>
+    {
+        _closable = flag;
+        UpdateCaptionButtons();
+    });
+
+    // Electron's overlay disables the buttons the window does not allow.
+    private void UpdateCaptionButtons() => _titleBarOverlay?.SetEnabled(_windowDelegate.Minimizable, _windowDelegate.Maximizable, _closable);
 
     /// <summary>Whether the user can close the window. Electron's <c>win.isClosable()</c>.</summary>
     public bool IsClosable => Query(_ => _closable, false);
@@ -1484,9 +1537,19 @@ public sealed unsafe class BrowserWindow
     // state is also polled while the window is open.
     private static readonly TimeSpan s_statePoll = TimeSpan.FromMilliseconds(250);
 
+    // Chromium's page window covers the overlay and takes the hit test first; it can be recreated, so this repeats.
+    [System.Runtime.Versioning.SupportedOSPlatform("windows")]
+    private void PassMaximizeHitTests(cef_window_t* w)
+    {
+        if (_titleBarOverlay is not { } overlay) return;
+        foreach (var page in WindowsWindowStyle.ChildrenOfClass(Hwnd(w), "Chrome_RenderWidgetHostHWND"))
+            WindowsSubclass.PassHitTestToParent(page, overlay.IsOverMaximize);
+    }
+
     private void PollState()
     {
         if (_window is null) return;
+        if (OperatingSystem.IsWindows()) PassMaximizeHitTests(_window);
         RaiseStateChanges();
         CefThread.PostUiDelayed(PollState, s_statePoll);
     }
@@ -1542,7 +1605,7 @@ public sealed unsafe class BrowserWindow
         _window = null;
 
         lock (s_openGate) s_open.Remove(this);
-        _options.Parent?._children.Remove(this);
+        _parent?._children.Remove(this);
         // macOS closes child windows with their parent; Linux does not. Destroy, as Windows does with owned
         // windows: a child that vetoed would outlive its parent.
         foreach (var child in _children.ToArray()) child.Destroy();

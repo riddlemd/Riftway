@@ -12,6 +12,7 @@ internal sealed unsafe class TitleBarOverlayView
     private readonly cef_label_button_t*[] _buttons = new cef_label_button_t*[3];
     private readonly ButtonDelegate[] _delegates = new ButtonDelegate[3];
     private readonly cef_button_state_t[] _states = new cef_button_state_t[3];
+    private readonly bool[] _enabled = [true, true, true];
     private PanelDelegate? _panelDelegate;
     private cef_panel_t* _panel;
     private cef_overlay_controller_t* _controller;
@@ -75,6 +76,46 @@ internal sealed unsafe class TitleBarOverlayView
         _controller->size_to_preferred_size(_controller);
     }
 
+    /// <summary>Enables the buttons the window allows; a disabled button greys its symbol and takes no clicks.</summary>
+    internal void SetEnabled(bool minimizable, bool maximizable, bool closable)
+    {
+        bool[] enabled = [minimizable, maximizable, closable];
+        for (var i = 0; i < _buttons.Length; i++)
+        {
+            if (_buttons[i] is null) continue;
+            var view = (cef_view_t*)_buttons[i];
+            view->set_enabled(view, enabled[i] ? 1 : 0);
+            _enabled[i] = enabled[i];
+            Paint(i);
+        }
+    }
+
+    /// <summary>Whether a screen point in pixels is on the maximize button while it is enabled.</summary>
+    internal bool IsOverMaximize(int x, int y)
+    {
+        if (_buttons[1] is null || !_enabled[1] || _controller is null || _controller->is_visible(_controller) == 0) return false;
+        var view = (cef_view_t*)_buttons[1];
+        var b = view->get_bounds_in_screen(view);
+        var r = Screen.DipToScreenRect(_owner, new Rectangle(b.x, b.y, b.width, b.height));
+        return x >= r.X && x < r.X + r.Width && y >= r.Y && y < r.Y + r.Height;
+    }
+
+    /// <summary>The pointer on the maximize button as Windows reports it once it answers <c>HTMAXBUTTON</c>; the
+    /// button no longer sees the mouse itself, so its look and click follow from here.</summary>
+    internal void OnMaximizeEvent(Oriel.Cef.Platform.MaximizeButtonEvent e)
+    {
+        var button = _buttons[1];
+        if (button is null || !_enabled[1]) return;
+        var state = e switch
+        {
+            Oriel.Cef.Platform.MaximizeButtonEvent.Hover => _states[1] == cef_button_state_t.CEF_BUTTON_STATE_PRESSED ? cef_button_state_t.CEF_BUTTON_STATE_PRESSED : cef_button_state_t.CEF_BUTTON_STATE_HOVERED,
+            Oriel.Cef.Platform.MaximizeButtonEvent.Press => cef_button_state_t.CEF_BUTTON_STATE_PRESSED,
+            _ => cef_button_state_t.CEF_BUTTON_STATE_NORMAL,
+        };
+        if (state != _states[1]) button->@base.set_state(&button->@base, state);
+        if (e == Oriel.Cef.Platform.MaximizeButtonEvent.Click) Press(1);
+    }
+
     /// <summary>Swaps maximize for restore while the window is maximized.</summary>
     internal void SetMaximized(bool maximized)
     {
@@ -125,6 +166,7 @@ internal sealed unsafe class TitleBarOverlayView
         var view = (cef_view_t*)button;
         view->set_background_color(view, _states[index] switch
         {
+            _ when !_enabled[index] => normal,
             cef_button_state_t.CEF_BUTTON_STATE_HOVERED => hover,
             cef_button_state_t.CEF_BUTTON_STATE_PRESSED => pressed,
             _ => normal,
@@ -135,6 +177,7 @@ internal sealed unsafe class TitleBarOverlayView
         SetImage(button, cef_button_state_t.CEF_BUTTON_STATE_NORMAL, glyph, _symbol);
         SetImage(button, cef_button_state_t.CEF_BUTTON_STATE_HOVERED, glyph, active);
         SetImage(button, cef_button_state_t.CEF_BUTTON_STATE_PRESSED, glyph, active);
+        SetImage(button, cef_button_state_t.CEF_BUTTON_STATE_DISABLED, glyph, TitleBar.Blend(_color, _symbol, TitleBar.DisabledSymbol));
     }
 
     // set_image takes the image's one reference.

@@ -121,6 +121,26 @@ public static unsafe class WindowsWindowStyle
     // COLORREF is 0x00BBGGRR.
     private static uint Argb(uint colorRef) => 0xFF000000 | ((colorRef & 0xFF) << 16) | (colorRef & 0xFF00) | ((colorRef >> 16) & 0xFF);
 
+    /// <summary>Makes <paramref name="owner"/> the window's owner, or none: the window stays above it, minimizes with it
+    /// and is not in the taskbar on its own. The top-level form of a parent; <c>GWLP_HWNDPARENT</c>.</summary>
+    public static void SetOwner(nint hwnd, nint owner) => SetWindowLongPtrW(hwnd, -8 /* GWLP_HWNDPARENT */, owner);
+
+    /// <summary>The window's owner, or 0.</summary>
+    public static nint GetOwner(nint hwnd) => GetWindow(hwnd, 4 /* GW_OWNER */);
+
+    /// <summary>The window's direct children of window class <paramref name="className"/>.</summary>
+    public static List<nint> ChildrenOfClass(nint hwnd, string className)
+    {
+        var found = new List<nint>();
+        var name = stackalloc char[256];
+        for (var child = FindWindowExW(hwnd, 0, null, null); child != 0; child = FindWindowExW(hwnd, child, null, null))
+        {
+            var length = GetClassNameW(child, name, 256);
+            if (new ReadOnlySpan<char>(name, length).SequenceEqual(className)) found.Add(child);
+        }
+        return found;
+    }
+
     /// <summary>The top-level window that contains <paramref name="hwnd"/>.</summary>
     public static nint Root(nint hwnd) => GetAncestor(hwnd, 2 /* GA_ROOT */);
 
@@ -167,6 +187,9 @@ public static unsafe class WindowsWindowStyle
     [DllImport("user32.dll")] private static extern int GetMonitorInfoW(nint monitor, MonitorInfo* info);
     [DllImport("user32.dll")] private static extern int GetWindowRect(nint hwnd, Rect* rect);
     [DllImport("user32.dll")] private static extern nint GetAncestor(nint hwnd, uint flags);
+    [DllImport("user32.dll")] private static extern nint GetWindow(nint hwnd, uint command);
+    [DllImport("user32.dll")] private static extern nint FindWindowExW(nint parent, nint after, char* className, char* title);
+    [DllImport("user32.dll")] private static extern int GetClassNameW(nint hwnd, char* name, int max);
     [DllImport("user32.dll")] private static extern uint GetDpiForWindow(nint hwnd);
     [DllImport("user32.dll")] private static extern int GetSystemMetricsForDpi(int index, uint dpi);
     [DllImport("user32.dll")] private static extern uint GetSysColor(int index);

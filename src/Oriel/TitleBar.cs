@@ -39,6 +39,9 @@ internal static class TitleBar
     /// <summary>Windows' caption button width in DIPs.</summary>
     internal const int ButtonWidth = 46;
 
+    /// <summary>How much of the symbol colour a disabled button's symbol keeps over the background.</summary>
+    internal const double DisabledSymbol = 0.4;
+
     /// <summary>Windows 11's close button background under the pointer.</summary>
     internal const uint CloseHover = 0xFFC42B1C;
 

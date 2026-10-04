@@ -19,11 +19,11 @@ Counted from the Checklist at the end: `BaseWindow` and `BrowserWindow` are one 
 |---|---|---|---|---|---|---|---|
 | BaseWindow + BrowserWindow options | 54 | 26 | 7 | 21 | 0 | 48.1% | 54.6% |
 | webPreferences | 46 | 11 | 3 | 25 | 7 | 28.2% | 32.1% |
-| Instance methods | 143 | 65 | 18 | 54 | 6 | 47.4% | 54.0% |
+| Instance methods | 143 | 65 | 19 | 53 | 6 | 47.4% | 54.4% |
 | Instance properties | 24 | 11 | 2 | 11 | 0 | 45.8% | 50.0% |
 | Events | 35 | 12 | 6 | 17 | 0 | 34.3% | 42.9% |
 | Static methods | 6 | 4 | 0 | 1 | 1 | 80.0% | 80.0% |
-| **Total** | 308 | 129 | 36 | 129 | 14 | 43.9% | 50.0% |
+| **Total** | 308 | 129 | 37 | 128 | 14 | 43.9% | 50.2% |
 
 ## Done since the audit
 
@@ -115,6 +115,12 @@ Counted from the Checklist at the end: `BaseWindow` and `BrowserWindow` are one 
   screen; defaults from `COLOR_BTNFACE`/`COLOR_BTNTEXT` and the system caption height), `GetTitleBarOverlayBounds`.
   Gaps: DRIFT W34–W37.
 
+- Title bar follow-ups (branch `title-bar-2`): the overlay's buttons follow `Minimizable`/`Maximizable`/`Closable`
+  (disabled, greyed symbol); Windows 11 snap layouts over the drawn maximize button: the window answers `HTMAXBUTTON`,
+  Chromium's page window passes that hit test up (`HTTRANSPARENT`), and the non-client hover, press and click drive
+  the button. `SetParentWindow` on Windows (`GWLP_HWNDPARENT`), keeping `GetParentWindow`/`GetChildWindows` and
+  closing with the new parent.
+
 ## Next, by importance
 
 1. Remaining webPreferences:
@@ -128,8 +134,8 @@ Counted from the Checklist at the end: `BaseWindow` and `BrowserWindow` are one 
      `accessibleTitle`, `scrollBounce`, `imageAnimationPolicy`, `zoomMode`, `focusOnNavigation`,
      `enablePreferredSizeMode`, `disableHtmlFullscreenWindowResize`, `additionalArguments`.
    - `contextIsolation` is always on; `false` is not offered.
-2. `setParentWindow` — CEF Views sets the parent only at creation, so this needs OS code (`addChildWindow:`, an owner
-   `HWND`, `XSetTransientForHint`).
+2. `setParentWindow` on macOS and Linux — CEF Views sets the parent only at creation; `addChildWindow:`,
+   `XSetTransientForHint` (W8).
 3. `titleBarStyle` on macOS, `trafficLightPosition`, the Window Controls Overlay page API (W34, W37) — OS, Patch.
 4. `showInactive`, `opacity`, `setIgnoreMouseEvents`, content protection, `will-resize`/`will-move` on macOS and Linux (W30) — OS.
 5. Window state persistence (`windowStatePersistence`, `getNormalBounds`, `persisted-state-restored`) — Oriel.
@@ -209,7 +215,7 @@ Parameters in brackets are optional in Electron. `webContents` members are in [w
 | `type` | — | missing |  |
 | `visualEffectState` | — | missing |  |
 | `titleBarStyle` | `TitleBarStyle` | partial | Windows (and Linux, unchecked): anything but `Default` is frameless; macOS keeps its title bar (W37). |
-| `titleBarOverlay` | `TitleBarOverlay` | partial | Windows: Views buttons docked top right; no page API (W34), opaque colours (W35), no snap layouts (W36). |
+| `titleBarOverlay` | `TitleBarOverlay` | partial | Windows: Views buttons docked top right; no page API (W34), opaque colours (W35); snap layouts through `HTMAXBUTTON`, buttons follow the window's flags. |
 | `accentColor` | — | missing |  |
 | `trafficLightPosition` | — | missing |  |
 | `roundedCorners` | — | missing |  |
@@ -396,7 +402,7 @@ Parameters in brackets are optional in Electron. `webContents` members are in [w
 | `isContentProtected()` | `IsContentProtected` | partial | Windows only for now (W30). |
 | `setFocusable(focusable)` | — | missing |  |
 | `isFocusable()` | — | missing |  |
-| `setParentWindow(parent)` | — | missing | W8. |
+| `setParentWindow(parent)` | `SetParentWindow` | partial | Windows: `GWLP_HWNDPARENT` with Oriel's parent/child bookkeeping; macOS and Linux throw (W8). |
 | `getParentWindow()` | `GetParentWindow` | done |  |
 | `getChildWindows()` | `GetChildWindows` | done |  |
 | `setAutoHideCursor(autoHide)` | — | missing |  |
