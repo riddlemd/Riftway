@@ -184,6 +184,60 @@ static unsafe class WindowsShell
     [DllImport("gdi32.dll")] private static extern int GetDIBits(nint dc, nint bitmap, uint start, uint lines, void* bits, BitmapInfoHeader* info, uint usage);
     [DllImport("gdi32.dll")] private static extern int DeleteObject(nint obj);
 
+    /// <summary>Open Explorer windows as (folder path, selected item names, window object), from Shell.Application.</summary>
+    internal static List<(string Folder, List<string> Selected, dynamic Window)> ExplorerWindows()
+    {
+        var found = new List<(string, List<string>, dynamic)>();
+        dynamic shell = Activator.CreateInstance(OperatingSystem.IsWindows() ? Type.GetTypeFromProgID("Shell.Application")! : throw new PlatformNotSupportedException())!;
+        foreach (var window in shell.Windows())
+        {
+            try
+            {
+                string? url = window.LocationURL;
+                if (url is null || !url.StartsWith("file:", StringComparison.OrdinalIgnoreCase)) continue;
+                var folder = new Uri(url).LocalPath;
+                var selected = new List<string>();
+                foreach (var item in window.Document.SelectedItems()) selected.Add((string)item.Name);
+                found.Add((folder, selected, window));
+            }
+            // Windows that are closing, or not Explorer, answer with errors.
+            catch (Exception) { }
+        }
+        return found;
+    }
+
+    /// <summary>Closes every Explorer window showing <paramref name="folder"/>.</summary>
+    internal static void CloseExplorerAt(string folder)
+    {
+        foreach (var (path, _, window) in ExplorerWindows())
+            if (string.Equals(Path.TrimEndingDirectorySeparator(path), Path.TrimEndingDirectorySeparator(folder), StringComparison.OrdinalIgnoreCase))
+                window.Quit();
+    }
+
+    /// <summary>The Recycle Bin's file for an item that was <paramref name="originalPath"/>, or null.</summary>
+    internal static string? RecycledCopyOf(string originalPath)
+    {
+        dynamic shell = Activator.CreateInstance(OperatingSystem.IsWindows() ? Type.GetTypeFromProgID("Shell.Application")! : throw new PlatformNotSupportedException())!;
+        var bin = shell.Namespace(10 /* ssfBITBUCKET */);
+        foreach (var item in bin.Items())
+        {
+            // Detail 1 is the folder the item was deleted from.
+            string name = item.Name, from = bin.GetDetailsOf(item, 1);
+            if (string.Equals(Path.Combine(from, name), originalPath, StringComparison.OrdinalIgnoreCase)
+                || string.Equals(Path.Combine(from, name), Path.ChangeExtension(originalPath, null), StringComparison.OrdinalIgnoreCase))
+                return (string)item.Path;
+        }
+        return null;
+    }
+
+    /// <summary>Deletes a recycled item for good: its <c>$R</c> file and the <c>$I</c> record beside it.</summary>
+    internal static void Purge(string recycledPath)
+    {
+        File.Delete(recycledPath);
+        var info = Path.Combine(Path.GetDirectoryName(recycledPath)!, "$I" + Path.GetFileName(recycledPath)[2..]);
+        File.Delete(info);
+    }
+
     private static void* Slot(void* com, int index) => (*(void***)com)[index];
 
     private static void Release(void* com)

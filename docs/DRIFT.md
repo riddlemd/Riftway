@@ -166,6 +166,23 @@ Entries marked _(branch `x`)_ are on that branch and not yet in `main`.
 | E10 | `webRequest`, permission handlers, downloads (`will-download`), spellchecker, `preconnect`, certificate verify proc, extensions, `getPreloads`/`registerPreloadScript` | Missing | Todo: CEF has handlers for most (resource request, permission, download, certificate) | Later Session work (M6) |
 | E11 | Session events (`will-download`, `select-*-device`, ...) | None | Todo: with E10 | With E10 |
 
+## shell
+
+| ID | Electron | Oriel | Why | Possible resolution |
+|---|---|---|---|---|
+| H1 | `shell` on macOS and Linux | Windows only: macOS and Linux throw `PlatformNotSupportedException` behind `IShellBackend` _(branch `shell-clipboard`)_ | OS | macOS `NSWorkspace`; Linux `xdg-open`, the FreeDesktop trash and file manager D-Bus interfaces |
+| H2 | `openExternal` options `activate` (macOS) and `logUsage` (Windows) | `Activate` is accepted and ignored on Windows; no `logUsage` _(branch `shell-clipboard`)_ | OS; Todo | `logUsage`: Windows' shell execute usage logging flag |
+| H3 | `writeShortcutLink` documents `target` as required for create and replace, without saying what happens otherwise | A missing target on create or replace throws `ArgumentException` (unverified against Electron) _(branch `shell-clipboard`)_ | Design | Match Electron once checked |
+
+## clipboard
+
+| ID | Electron | Oriel | Why | Possible resolution |
+|---|---|---|---|---|
+| K1 | `clipboard` on macOS and Linux | Windows only: macOS and Linux throw `PlatformNotSupportedException` behind `IClipboardBackend` _(branch `shell-clipboard`)_ | OS | macOS `NSPasteboard`; Linux X11 selections or the Wayland data device |
+| K2 | The `type` argument (`selection`, Linux's primary selection) on every read and write | Missing _(branch `shell-clipboard`)_ | OS | Add with the Linux backend |
+| K3 | `readFindText`/`writeFindText` (macOS), `ClipboardItem` in the renderer | Missing _(branch `shell-clipboard`)_ | OS; Module | Add with the macOS backend |
+| K4 | `availableFormats()` lists whatever the clipboard holds | The four MIME types Oriel maps (`text/plain`, `text/html`, `text/rtf`, `image/png`); bookmarks and custom formats are not listed _(branch `shell-clipboard`)_ | Unknown: Chromium's list on Windows is unchecked | Compare with Electron on Windows |
+
 ## IPC, contextBridge, protocol
 
 | ID | Electron | Oriel | Why | Possible resolution |
