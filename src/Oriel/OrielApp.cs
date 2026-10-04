@@ -1,3 +1,4 @@
+using System.ComponentModel;
 using System.Reflection;
 using Oriel.Cef;
 using Oriel.Cef.Handlers;
@@ -35,7 +36,14 @@ public sealed unsafe class OrielApp
     /// <c>second-instance</c>. With no handler the existing windows come to the front.</summary>
     public event EventHandler<SecondInstanceEventArgs>? SecondInstance;
 
-    /// <summary>The last window closed. With no handler the application quits. Electron's <c>window-all-closed</c>.</summary>
+    /// <summary>The application is about to close its windows to quit; cancel to keep running. Electron's <c>before-quit</c>.</summary>
+    public event EventHandler<CancelEventArgs>? BeforeQuit;
+
+    /// <summary>Every window has closed for a quit; cancel to keep running. Electron's <c>will-quit</c>.</summary>
+    public event EventHandler<CancelEventArgs>? WillQuit;
+
+    /// <summary>The last window closed. With no handler the application quits. Not raised while quitting.
+    /// Electron's <c>window-all-closed</c>.</summary>
     public event EventHandler? WindowAllClosed;
 
     /// <summary>Creates the process's application.</summary>
@@ -117,20 +125,58 @@ public sealed unsafe class OrielApp
 
         CefNative.cef_run_message_loop();
         CefNative.cef_shutdown();
-        return 0;
+        return _exitCode;
     }
 
     /// <summary>Ends <see cref="Run"/> once open windows have closed. Electron's <c>app.quit()</c>.</summary>
     /// <remarks>May be called from any thread once the application is ready.</remarks>
+    /// <remarks>As Electron: raises <see cref="BeforeQuit"/>, closes every window (each may still cancel with
+    /// <see cref="BrowserWindow.Closing"/>, which cancels the quit), then raises <see cref="WillQuit"/>.</remarks>
     public void Quit()
     {
         // CEF only quits from the UI thread; called anywhere else, cef_quit_message_loop does nothing.
-        if (IsReady) CefThread.RunOnUi(CefNative.cef_quit_message_loop);
+        if (IsReady) CefThread.RunOnUi(QuitOnUi);
     }
+
+    /// <summary>Quits at once with <paramref name="exitCode"/>: no events, windows not asked. Electron's <c>app.exit()</c>.</summary>
+    /// <remarks>May be called from any thread once the application is ready.</remarks>
+    public void Exit(int exitCode = 0)
+    {
+        if (!IsReady) return;
+        _exitCode = exitCode;
+        CefThread.RunOnUi(CefNative.cef_quit_message_loop);
+    }
+
+    private int _exitCode;
+    private bool _quitting;
+
+    private void QuitOnUi()
+    {
+        if (_quitting) return;
+        var before = new CancelEventArgs();
+        BeforeQuit?.Invoke(this, before);
+        if (before.Cancel) return;
+        _quitting = true;
+        var windows = BrowserWindow.GetAllWindows();
+        if (windows.Count == 0) FinishQuit();
+        else foreach (var window in windows) window.Close();
+    }
+
+    private void FinishQuit()
+    {
+        var will = new CancelEventArgs();
+        WillQuit?.Invoke(this, will);
+        _quitting = false;
+        if (!will.Cancel) CefNative.cef_quit_message_loop();
+    }
+
+    /// <summary>A window refused to close; a quit in progress stops, as in Electron.</summary>
+    internal void OnCloseCancelled() => _quitting = false;
 
     internal void OnAllWindowsClosed()
     {
-        if (WindowAllClosed is { } handler) handler(this, EventArgs.Empty);
+        if (_quitting) FinishQuit();
+        else if (WindowAllClosed is { } handler) handler(this, EventArgs.Empty);
         else Quit();
     }
 

@@ -19,7 +19,7 @@ Where an implemented module differs from Electron, the difference and its reason
 
 | Electron | Oriel | Source | Wave | Status |
 |---|---|---|---|---|
-| `app` | `OrielApp` | CEF + OS | M2 | partial: ready, window-all-closed, second-instance, quit, enableSandbox |
+| `app` | `OrielApp` | CEF + OS | M2 | partial: ready, window-all-closed, second-instance, before-quit, will-quit, quit, exit, enableSandbox |
 | `process` | `OrielProcess` | .NET + CEF | M2 | — |
 | `CommandLine` (`app.commandLine`) | `OrielApp.CommandLine` | CEF | M2 | — |
 | Command-line switches | same switches | CEF | M2 | — |
@@ -66,8 +66,8 @@ Detailed item-by-item status: [parity/browser-window.md](parity/browser-window.m
 
 | Electron | Oriel | Source | Wave | Status |
 |---|---|---|---|---|
-| `ipcMain` | `IpcMain` | CEF | M2 | done: handle, on, removeHandler, removeListener |
-| `ipcRenderer` | `oriel.ipcRenderer` in the page | CEF | M2 | done: invoke, send, on, removeListener |
+| `ipcMain` | `IpcMain` | CEF | M2 | done: handle, handleOnce, on, once, removeHandler, removeListener, removeAllListeners, event.reply, event.senderFrame |
+| `ipcRenderer` | `oriel.ipcRenderer` in the page | CEF | M2 | done: invoke, send, on, once, off, removeListener, removeAllListeners |
 | `contextBridge` | `oriel.contextBridge` (isolated world) | CEF | M2 | done: exposeInMainWorld (methods return promises; function args one level deep) |
 | `ipcMainServiceWorker` | `IpcMainServiceWorker` | CEF | M6 | — |
 

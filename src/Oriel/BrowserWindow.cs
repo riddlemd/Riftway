@@ -1111,11 +1111,19 @@ public sealed unsafe class BrowserWindow
 
         var fromCode = _closeFromCode;
         _closeFromCode = false;
-        if (!_closable && !fromCode) return false;
+        if (!_closable && !fromCode)
+        {
+            OrielApp.Current.OnCloseCancelled();
+            return false;
+        }
 
         var args = new CancelEventArgs();
         Closing?.Invoke(this, args);
-        if (args.Cancel) return false;
+        if (args.Cancel)
+        {
+            OrielApp.Current.OnCloseCancelled();
+            return false;
+        }
 
         // Lets the page run beforeunload first; the window closes once the browser has gone.
         var host = browser->get_host(browser);
@@ -1124,7 +1132,11 @@ public sealed unsafe class BrowserWindow
         return canClose;
     }
 
-    private void OnActivationChanged(bool active) => (active ? Focused : Blurred)?.Invoke(this, EventArgs.Empty);
+    private void OnActivationChanged(bool active)
+    {
+        if (!active) _menuBar?.OnWindowBlurred();
+        (active ? Focused : Blurred)?.Invoke(this, EventArgs.Empty);
+    }
 
     // CEF reports no minimize/restore of its own, and on macOS minimizing changes no bounds, so the
     // state is also polled while the window is open.
