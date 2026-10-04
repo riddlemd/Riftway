@@ -150,6 +150,15 @@ public sealed record WebPreferences
     /// <summary>Suppresses the page's <c>alert</c>, <c>confirm</c> and <c>prompt</c>: they return at once
     /// (<c>confirm</c> false, <c>prompt</c> null). Electron's <c>disableDialogs</c>.</summary>
     public bool DisableDialogs { get; init; }
+
+    /// <summary>The session the page uses; overrides <see cref="Partition"/>. Null uses <see cref="Partition"/>.
+    /// Electron's <c>session</c>.</summary>
+    public Session? Session { get; init; }
+
+    /// <summary>The page's session by name, as <see cref="Oriel.Session.FromPartition"/>: <c>persist:</c><i>name</i>
+    /// is kept on disk, any other name in memory. Null or empty uses <see cref="Oriel.Session.DefaultSession"/>.
+    /// Electron's <c>partition</c>.</summary>
+    public string? Partition { get; init; }
 }
 
 /// <summary>Fonts for CSS's generic font families; null keeps Chromium's choice. Electron's <c>defaultFontFamily</c>.</summary>
@@ -253,7 +262,11 @@ public sealed unsafe class BrowserWindow
         _closable = _options.Closable;
         _skipTaskbar = _options.SkipTaskbar;
         _backgroundColor = _options.BackgroundColor;
-        WebContents = new WebContents(_options.WebPreferences.Preload is { } preload ? File.ReadAllText(preload) : null, _options.WebPreferences);
+        var session = _options.WebPreferences.Session ?? Session.FromPartition(_options.WebPreferences.Partition ?? "");
+        // CEF gives a popup its opener's request context, whatever the options say.
+        if (opener is not null && session != opener.WebContents.Session)
+            throw new InvalidOperationException("A window a page opens must use its opener's session.");
+        WebContents = new WebContents(_options.WebPreferences.Preload is { } preload ? File.ReadAllText(preload) : null, _options.WebPreferences, session);
         WebContents.PageTitleUpdated += (_, e) => PageTitleUpdated?.Invoke(this, e);
         WebContents.TitleApplied = SetTitle;
         WebContents.DidFinishLoad += (_, _) =>
@@ -329,7 +342,9 @@ public sealed unsafe class BrowserWindow
 
         NativeObject.AddRef(_client.Native);
         NativeObject.AddRef(_viewDelegate.Native);
-        _browserView = CefNative.cef_browser_view_create(_client.Native, &url, &settings, null, null, _viewDelegate.Native);
+        // Null is the global context, which the default session wraps.
+        var context = WebContents.Session.IsDefault ? null : WebContents.Session.AddRefNative();
+        _browserView = CefNative.cef_browser_view_create(_client.Native, &url, &settings, null, context, _viewDelegate.Native);
         CefString.Clear(&url);
         ClearWebPreferenceStrings(&settings);
         OpenWindow();

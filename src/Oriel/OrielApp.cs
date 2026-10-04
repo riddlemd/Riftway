@@ -20,6 +20,9 @@ public sealed unsafe class OrielApp
 
     internal static OrielApp? CurrentOrNull => s_current;
 
+    /// <summary>CEF's root cache path: the default session's data, and the parent of every persistent session's.</summary>
+    internal static string? DataDirectory { get; private set; }
+
     /// <summary>The application's name; also names its data directory.</summary>
     public string Name { get; }
 
@@ -98,7 +101,7 @@ public sealed unsafe class OrielApp
         if (exitCode >= 0) return exitCode;
 
         // Without Create, Linux answers "" when ~/.config does not exist yet, and CEF rejects the relative path.
-        var dataDirectory = Path.Combine(
+        var dataDirectory = DataDirectory = Path.Combine(
             Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData, Environment.SpecialFolderOption.Create), Name);
         var settings = new cef_settings_t
         {
@@ -215,8 +218,9 @@ public sealed unsafe class OrielApp
 
     private void OnContextInitialized()
     {
-        ForgetZoomLevels();
-        AllowPopups();
+        var global = CefNative.cef_request_context_get_global_context();
+        Session.ApplyElectronDefaults(global);
+        NativeObject.Release(global);
         // Before Ready, so the first window's page can already load from a custom scheme.
         Protocol.OnContextInitialized();
         IsReady = true;
@@ -227,31 +231,6 @@ public sealed unsafe class OrielApp
             Menu.SetDefaultApplicationMenuIfUnset();
             MacApplicationMenu.Install();
         }
-    }
-
-    // Electron has no popup blocker: window.open works without a user gesture, and WebContents.SetWindowOpenHandler decides.
-    private static void AllowPopups()
-    {
-        var context = CefNative.cef_request_context_get_global_context();
-        context->set_content_setting(context, null, null, cef_content_setting_types_t.CEF_CONTENT_SETTING_TYPE_POPUPS,
-            cef_content_setting_values_t.CEF_CONTENT_SETTING_VALUE_ALLOW);
-        NativeObject.Release(context);
-    }
-
-    // Chrome-style profiles save each origin's zoom across launches; Electron keeps zoom for the session only.
-    private static void ForgetZoomLevels()
-    {
-        var context = CefNative.cef_request_context_get_global_context();
-        var value = CefNative.cef_value_create();
-        value->set_dictionary(value, CefNative.cef_dictionary_value_create());
-        cef_string_utf16_t name = default, error = default;
-        CefString.Set(&name, "partition.per_host_zoom_levels");
-        var manager = (cef_preference_manager_t*)context;
-        if (manager->set_preference(manager, &name, value, &error) == 0)
-            Console.Error.WriteLine($"[Oriel] Could not reset saved zoom levels: {CefString.Read(&error)}");
-        CefString.Clear(&name);
-        CefString.Clear(&error);
-        NativeObject.Release(context);
     }
 }
 
