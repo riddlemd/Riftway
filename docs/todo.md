@@ -25,11 +25,14 @@ Cross-platform work. Platform-specific items: [linux-todo.md](linux-todo.md), [w
       `Debugger`, core `Session`, command line
 - [x] `window.open` handling: `SetWindowOpenHandler`, `DidCreateWindow` (branch `window-open`)
 - [ ] Menus: Alt+letter mnemonics and the Alt toggle never fire (DRIFT W19): handle Alt in a `cef_keyboard_handler_t`
-- [ ] macOS: `Width`/`Height` give a window a title bar taller than asked (DRIFT W18)
-- [ ] `OrielApp.Quit()` does nothing off the UI thread (DRIFT A4)
+- [x] macOS: `Width`/`Height` gave a window a title bar taller than asked (was DRIFT W18)
+- [x] `OrielApp.Quit()` from any thread (was DRIFT A4)
 - [ ] `Protocol`: `AllowServiceWorkers` and `CodeCache` privileges throw `NotSupportedException`
 
 ## Tests
+
+- [x] Screen checks at 125% scaling (Windows): Chromium floors when converting, so the checks tolerate one pixel
+      (re-run at 125% on the laptop to confirm)
 
 - [ ] Flaky WindowTest checks: macOS native full screen, minimize and modal focus fail on some runs while the
       Mac is in use (also on unchanged `main`); Linux "simple full screen restores the bounds" was off by a few pixels

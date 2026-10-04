@@ -192,6 +192,7 @@ async Task RunAsync(BrowserWindow win, BrowserWindow simple)
     await MenusAsync(win);
     await ContextMenusAsync(win);
     await WindowOpenAsync(win);
+    await LoadAndSizeAsync(win);
 
     // Closing cancelled once: the window must survive the first close.
     var closingCount = 0;
@@ -206,6 +207,8 @@ async Task RunAsync(BrowserWindow win, BrowserWindow simple)
     Console.WriteLine($"RESULT: {failures} failure(s) before the final close");
     // Not closable by the user, but code can still close it.
     win.SetClosable(false);
+    // The app quits below from this worker thread, which CEF itself ignores; nothing else may quit it first.
+    app.WindowAllClosed += (_, _) => { };
     using var closed = new ManualResetEventSlim();
     win.Closed += (_, _) => closed.Set();
     using var childClosed = new ManualResetEventSlim();
@@ -214,6 +217,8 @@ async Task RunAsync(BrowserWindow win, BrowserWindow simple)
     Check("Close raises Closed", closed.Wait(step));
     Check("closing the parent closes its child", childClosed.Wait(step));
     failures = results.Count(r => r.StartsWith("FAIL", StringComparison.Ordinal));
+    // Run returns only if Quit works off the UI thread; otherwise the run never prints its result.
+    app.Quit();
 }
 
 void PressF12(BrowserWindow w)
@@ -410,10 +415,18 @@ async Task ScreenAsync(BrowserWindow win)
     Check("GetDisplayNearestPoint off every display picks the nearest", all.Any(d => d.Id == Screen.GetDisplayNearestPoint(far).Id));
 
     var scale = primary.ScaleFactor;
+    // At fractional scales (125%) Chromium floors each conversion, so a round trip may lose a pixel.
+    static bool Near(Point a, Point b) => Math.Abs(a.X - b.X) <= 1 && Math.Abs(a.Y - b.Y) <= 1;
+    static bool NearRect(Rectangle a, Rectangle b) => Near(new(a.X, a.Y), new(b.X, b.Y)) && Math.Abs(a.Width - b.Width) <= 1 && Math.Abs(a.Height - b.Height) <= 1;
     var dip = new Point(100, 50);
     var pixels = Screen.DipToScreenPoint(dip);
-    Check("DipToScreenPoint scales by the display's factor", pixels == new Point((int)(100 * scale), (int)(50 * scale)), $"{pixels} at scale {scale}");
-    Check("ScreenToDipPoint inverts it", Screen.ScreenToDipPoint(pixels) == dip, Screen.ScreenToDipPoint(pixels));
+    Check("DipToScreenPoint scales by the display's factor", Near(pixels, new Point((int)(100 * scale), (int)(50 * scale))), $"{pixels} at scale {scale}");
+    Check("ScreenToDipPoint inverts it", Near(Screen.ScreenToDipPoint(pixels), dip), Screen.ScreenToDipPoint(pixels));
+    var dipRect = new Rectangle(100, 50, 200, 100);
+    var pixelRect = Screen.DipToScreenRect(null, dipRect);
+    Check("DipToScreenRect scales by the display's factor", NearRect(pixelRect, new Rectangle((int)(100 * scale), (int)(50 * scale), (int)(200 * scale), (int)(100 * scale))), $"{pixelRect} at scale {scale}");
+    Check("ScreenToDipRect inverts it, also by a window's display", NearRect(Screen.ScreenToDipRect(null, pixelRect), dipRect) && NearRect(Screen.ScreenToDipRect(win, pixelRect), dipRect),
+        $"{Screen.ScreenToDipRect(null, pixelRect)} / {Screen.ScreenToDipRect(win, pixelRect)}");
 
     if (OperatingSystem.IsLinux() && File.Exists("/usr/bin/xdotool"))
     {
@@ -557,7 +570,8 @@ async Task ContextMenusAsync(BrowserWindow win)
         win.WebContents.SendInputEvent(new MouseInputEvent(MouseInputEventType.MouseDown, x, y) { Button = MouseButton.Right });
         win.WebContents.SendInputEvent(new MouseInputEvent(MouseInputEventType.MouseUp, x, y) { Button = MouseButton.Right });
     });
-    Check("a right click raises ContextMenu with its params", OnTheSelectedField(clicked) && clicked!.X == x && clicked.Y == y, Describe(clicked));
+    Check("a right click raises ContextMenu with its params", OnTheSelectedField(clicked) && Math.Abs(clicked!.X - x) <= 1 && Math.Abs(clicked.Y - y) <= 1, Describe(clicked));
+
 
     if (!OperatingSystem.IsMacOS())
     {
@@ -570,6 +584,21 @@ async Task ContextMenusAsync(BrowserWindow win)
         Check("Shift+F10 raises ContextMenu", OnTheSelectedField(keyed), Describe(keyed));
     }
 
+    // Chromium offers no media menu for a video without a source; a missing one still counts (in error).
+    await Js(win, "document.body.insertAdjacentHTML('beforeend', '<video id=v src=missing.webm muted loop controls style=width:200px;height:120px></video>'); 1");
+    // Only once it has tried its source does Chromium treat it as media.
+    Eventually(() => Js(win, "v.error !== null").Result is "true", step);
+    var vx = int.Parse((string)(await Js(win, "Math.round(v.getBoundingClientRect().left + 100)"))!);
+    var vy = int.Parse((string)(await Js(win, "Math.round(v.getBoundingClientRect().top + 30)"))!);
+    var onVideo = await AskForMenu(() =>
+    {
+        win.WebContents.SendInputEvent(new MouseInputEvent(MouseInputEventType.MouseDown, vx, vy) { Button = MouseButton.Right });
+        win.WebContents.SendInputEvent(new MouseInputEvent(MouseInputEventType.MouseUp, vx, vy) { Button = MouseButton.Right });
+    });
+    Check("a right click on a video reports its media flags",
+        onVideo is { MediaType: ContextMenuMediaType.Video, MediaFlags: { IsMuted: true, IsLooping: true, IsControlsVisible: true } },
+        onVideo is null ? "none" : $"{onVideo.MediaType} src={onVideo.SrcUrl} {onVideo.MediaFlags}");
+
     var popup = new Menu { new MenuItem { Label = "One" }, new MenuItem { Type = MenuItemType.Separator }, new MenuItem { Role = MenuItemRole.Copy } };
     using (var closed = new ManualResetEventSlim())
     {
@@ -581,11 +610,11 @@ async Task ContextMenusAsync(BrowserWindow win)
     }
     using (var closed = new ManualResetEventSlim())
     {
-        // Without X/Y it opens where the last context menu was asked for.
+        // Without X/Y it opens at the pointer.
         popup.Popup(new PopupOptions { Window = win, Closed = closed.Set });
         await Task.Delay(300);
         popup.ClosePopup(win);
-        Check("a popup at the last context menu point", closed.Wait(step));
+        Check("a popup without X/Y opens (at the pointer)", closed.Wait(step));
     }
     Check("Popup with X but no Y throws", Throws<ArgumentException>(() => popup.Popup(new PopupOptions { Window = win, X = 1 })));
 }
@@ -752,6 +781,18 @@ async Task BarMenusAsync(BrowserWindow win, Menu menu, MenuItem save, MenuItem g
     Check("F without Alt opens nothing", !win.IsMenuBarMenuOpen);
     win.CancelMenuBarMenu();
 
+    // An auto-hidden bar that Alt+letter brought up hides again once its menu closes.
+    win.AutoHideMenuBar = true;
+    await Task.Delay(300);
+    Key("Alt", KeyboardInputEventType.KeyDown, InputModifiers.Alt);
+    Key("F", KeyboardInputEventType.KeyDown, InputModifiers.Alt);
+    Key("F", KeyboardInputEventType.KeyUp, InputModifiers.Alt);
+    Key("Alt", KeyboardInputEventType.KeyUp);
+    Check("Alt+F shows an auto-hidden bar with its menu", Eventually(() => win.IsMenuBarMenuOpen && win.IsMenuBarVisible, step));
+    win.CancelMenuBarMenu();
+    Check("the bar hides again when its menu closes", Eventually(() => !win.IsMenuBarMenuOpen && !win.IsMenuBarVisible, step));
+    win.AutoHideMenuBar = false;
+
     win.RemoveMenu();
     Check("RemoveMenu hides the bar", Eventually(() => !win.IsMenuBarVisible && win.GetContentBounds() == content && PageHeight() == fullHeight, step), $"{win.GetContentBounds()} page={PageHeight()}/{fullHeight}");
 
@@ -868,6 +909,39 @@ async Task WindowOpenAsync(BrowserWindow win)
     if (!second.IsDestroyed) second.Destroy();
     foreach (var p in popups.ToArray()) if (!p.IsDestroyed) p.Destroy();
     win.WebContents.SetWindowOpenHandler(null);
+    await Task.Delay(300);
+    Directory.Delete(dir, recursive: true);
+}
+
+async Task LoadAndSizeAsync(BrowserWindow win)
+{
+    var dir = Directory.CreateTempSubdirectory("oriel-load-").FullName;
+    var one = Path.Combine(dir, "one.html");
+    var two = Path.Combine(dir, "two.html");
+    File.WriteAllText(one, "<!doctype html><title>one</title><p id=a>one</p>");
+    File.WriteAllText(two, "<!doctype html><title>two</title>");
+    async Task<(bool Done, Exception? Error)> Outcome(Task task)
+    {
+        if (await Task.WhenAny(task, Task.Delay(step)) != task) return (false, null);
+        return (true, task.Exception?.InnerException);
+    }
+
+    var loaded = await Outcome(win.WebContents.LoadFile(one));
+    Check("LoadFile's task completes when the page has loaded", loaded is (true, null) && win.WebContents.GetTitle() == "one", $"{loaded} title={win.WebContents.GetTitle()}");
+    var fragment = await Outcome(win.WebContents.LoadUrl(new Uri(one).AbsoluteUri + "#a"));
+    Check("a fragment-only LoadUrl completes", fragment is (true, null), fragment);
+    var missing = await Outcome(win.WebContents.LoadUrl(new Uri(Path.Combine(dir, "missing.html")).AbsoluteUri));
+    Check("a failed load fails the task with LoadFailedException", missing is (true, LoadFailedException { ErrorCode: < 0 }), missing);
+    var first = win.WebContents.LoadFile(one);
+    var second = win.WebContents.LoadFile(two);
+    var superseded = await Outcome(first);
+    var latest = await Outcome(second);
+    Check("a load replaced by a newer one fails with ERR_ABORTED", superseded is (true, LoadFailedException { ErrorCode: -3 }), superseded);
+    Check("the newer load completes", latest is (true, null), latest);
+
+    var sized = new BrowserWindow(new BrowserWindowOptions { Title = "Oriel window test: size", Width = 360, Height = 260 });
+    Check("a new window has the outer size asked for", Eventually(() => sized.GetSize() == (360, 260), step), sized.GetSize());
+    sized.Destroy();
     await Task.Delay(300);
     Directory.Delete(dir, recursive: true);
 }

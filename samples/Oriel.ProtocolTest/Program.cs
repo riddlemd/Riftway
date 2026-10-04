@@ -95,7 +95,7 @@ async Task RunLoadUrlChecks(List<(string Name, bool Pass, string Detail)> result
     async Task<(ProtocolRequest Request, string PageUserAgent)> Load(string url, LoadUrlOptions? options = null)
     {
         var step = new Uri(url).Query;
-        window!.LoadUrl(url, options);
+        _ = window!.LoadUrl(url, options);
         var userAgent = await NavPage(step).Task.WaitAsync(TimeSpan.FromSeconds(10));
         return (navRequests[step].Last(), userAgent);
     }
@@ -134,14 +134,14 @@ async Task RunLoadUrlChecks(List<(string Name, bool Pass, string Detail)> result
         $"header={Header(plain, "User-Agent")} navigator={plainAgent}");
 
     // The first request may already be under way when the second load cancels it.
-    window.LoadUrl("app://test/nav?step=superseded", new LoadUrlOptions { ExtraHeaders = "X-One: stale" });
+    _ = window.LoadUrl("app://test/nav?step=superseded", new LoadUrlOptions { ExtraHeaders = "X-One: stale" });
     var (superseded, _) = await Load("app://test/nav?step=superseded");
     Check("loadURL superseded by a plain loadURL of that URL: the plain request has no options", Header(superseded, "X-One") is null,
         $"requests={navRequests["?step=superseded"].Count} X-One={Header(superseded, "X-One")}");
 
     // A fragment-only load stays in the document and makes no request, so its options stay pending.
     await Load("app://test/nav?step=fragment");
-    window.LoadUrl("app://test/nav?step=fragment#a", new LoadUrlOptions { ExtraHeaders = "X-One: fragment" });
+    _ = window.LoadUrl("app://test/nav?step=fragment#a", new LoadUrlOptions { ExtraHeaders = "X-One: fragment" });
     await NavPage("#fetched").Task.WaitAsync(TimeSpan.FromSeconds(10));
     var fetched = navRequests["?step=fragment"].Last();
     Check("pending loadURL options skip the page's own fetch of that URL", Header(fetched, "X-One") is null, Header(fetched, "X-One"));
@@ -159,7 +159,7 @@ async Task RunLoadUrlChecks(List<(string Name, bool Pass, string Detail)> result
         $"requests={again.Length} X-One={string.Join(",", again.Select(r => Header(r, "X-One") ?? "-"))}");
 
     // A javascript: URL makes no request, so its options stay pending while the page navigates elsewhere.
-    window.LoadUrl("javascript:location.href='app://test/nav?step=after-js'", new LoadUrlOptions { ExtraHeaders = "X-One: js" });
+    _ = window.LoadUrl("javascript:location.href='app://test/nav?step=after-js'", new LoadUrlOptions { ExtraHeaders = "X-One: js" });
     await NavPage("?step=after-js").Task.WaitAsync(TimeSpan.FromSeconds(10));
     var afterJs = navRequests["?step=after-js"].Last();
     Check("loadURL options never reach another URL's navigation", Header(afterJs, "X-One") is null, Header(afterJs, "X-One"));

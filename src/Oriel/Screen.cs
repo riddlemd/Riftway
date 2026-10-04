@@ -115,6 +115,38 @@ public static unsafe class Screen
         return new Point(p.x, p.y);
     });
 
+    /// <summary>Converts a rectangle in physical screen pixels to DIPs, by the scale of <paramref name="window"/>'s display,
+    /// or of the display the rectangle overlaps most. Electron's <c>screen.screenToDipRect()</c>.</summary>
+    /// <exception cref="InvalidOperationException">Before <see cref="OrielApp.Ready"/>.</exception>
+    public static Rectangle ScreenToDipRect(BrowserWindow? window, Rectangle rect) => OnUi(() => ConvertRect(window, rect, toPixels: false));
+
+    /// <summary>Converts a rectangle in screen DIPs to physical pixels, by the scale of <paramref name="window"/>'s display,
+    /// or of the display the rectangle overlaps most. Electron's <c>screen.dipToScreenRect()</c>.</summary>
+    /// <exception cref="InvalidOperationException">Before <see cref="OrielApp.Ready"/>.</exception>
+    public static Rectangle DipToScreenRect(BrowserWindow? window, Rectangle rect) => OnUi(() => ConvertRect(window, rect, toPixels: true));
+
+    // Both corners through one display, so the rectangle keeps a single scale even where it spans displays.
+    private static Rectangle ConvertRect(BrowserWindow? window, Rectangle rect, bool toPixels)
+    {
+        var key = window?.GetBounds() is { Width: > 0 } bounds ? bounds : rect;
+        var match = new cef_rect_t { x = key.X, y = key.Y, width = key.Width, height = key.Height };
+        var display = CefNative.cef_display_get_matching_bounds(&match, window is null && !toPixels ? 1 : 0);
+        var topLeft = new cef_point_t { x = rect.X, y = rect.Y };
+        var bottomRight = new cef_point_t { x = rect.X + rect.Width, y = rect.Y + rect.Height };
+        if (toPixels)
+        {
+            display->convert_point_to_pixels(display, &topLeft);
+            display->convert_point_to_pixels(display, &bottomRight);
+        }
+        else
+        {
+            display->convert_point_from_pixels(display, &topLeft);
+            display->convert_point_from_pixels(display, &bottomRight);
+        }
+        NativeObject.Release(display);
+        return new Rectangle(topLeft.x, topLeft.y, bottomRight.x - topLeft.x, bottomRight.y - topLeft.y);
+    }
+
     // Per display: CEF's screen-wide converters only convert on Windows.
     private static Point FromPixels(Point point)
     {

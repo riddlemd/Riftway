@@ -510,12 +510,12 @@ public sealed unsafe class BrowserWindow
     /// <summary>Whether a menu bar is showing; always false on macOS. Electron's <c>win.isMenuBarVisible()</c>.</summary>
     public bool IsMenuBarVisible => Query(_ => _menuBar?.IsVisible ?? false, false);
 
-    /// <summary>Shows <paramref name="menu"/> at a point in the page, by default where the last context menu was asked for.</summary>
+    /// <summary>Shows <paramref name="menu"/> at a point in the page, by default at the pointer.</summary>
     internal void ShowPopup(Menu menu, int? x, int? y, Action? closed) => Command(w =>
     {
-        var (px, py) = x is { } ax && y is { } ay ? (ax, ay) : WebContents.LastContextMenuPoint ?? (0, 0);
         var content = ContentBoundsOn(w);
-        var screen = new cef_point_t { x = content.X + px, y = content.Y + py };
+        var at = x is { } ax && y is { } ay ? new Point(content.X + ax, content.Y + ay) : Screen.GetCursorScreenPoint();
+        var screen = new cef_point_t { x = at.X, y = at.Y };
         var popupDelegate = new MenuModelDelegate { CommandExecuted = id => menu.FindByCommandId(id)?.Activate(this), Closed = closed };
         NativeObject.AddRef(popupDelegate.Native);
         var model = CefNative.cef_menu_model_create(popupDelegate.Native);
@@ -596,7 +596,7 @@ public sealed unsafe class BrowserWindow
 
     /// <summary>Navigates the window's page. Electron's <c>win.loadURL()</c>.</summary>
     /// <inheritdoc cref="Oriel.WebContents.LoadUrl" path="/param|/exception"/>
-    public void LoadUrl(string url, LoadUrlOptions? options = null) => WebContents.LoadUrl(url, options);
+    public Task LoadUrl(string url, LoadUrlOptions? options = null) => WebContents.LoadUrl(url, options);
 
     /// <summary>Shows and focuses the window. Electron's <c>win.show()</c>.</summary>
     public void Show() => Command(w =>
@@ -956,6 +956,19 @@ public sealed unsafe class BrowserWindow
         else
         {
             window->center_window(window, &size);
+            // macOS sizes the page area here, not the window: the window would come out a title bar taller.
+            var centred = ToRectangle(window->@base.@base.get_bounds_in_screen(&window->@base.@base));
+            if (centred.Width != _options.Width || centred.Height != _options.Height)
+            {
+                var exact = new cef_rect_t
+                {
+                    x = centred.X + (centred.Width - _options.Width) / 2,
+                    y = centred.Y + (centred.Height - _options.Height) / 2,
+                    width = _options.Width,
+                    height = _options.Height,
+                };
+                window->@base.@base.set_bounds(&window->@base.@base, &exact);
+            }
         }
 
         cef_string_utf16_t title = default;

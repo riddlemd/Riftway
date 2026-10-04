@@ -37,6 +37,71 @@ public enum ContextMenuMediaType
 public sealed record ContextMenuEditFlags(bool CanUndo, bool CanRedo, bool CanCut, bool CanCopy, bool CanPaste, bool CanDelete,
     bool CanSelectAll, bool CanEditRichly);
 
+/// <summary>The state of the media element under the pointer; Electron's <c>mediaFlags</c>.</summary>
+public sealed record ContextMenuMediaFlags
+{
+    /// <summary>The media failed to load. Electron's <c>inError</c>.</summary>
+    public bool InError { get; init; }
+
+    /// <summary>Electron's <c>isPaused</c>.</summary>
+    public bool IsPaused { get; init; }
+
+    /// <summary>Electron's <c>isMuted</c>.</summary>
+    public bool IsMuted { get; init; }
+
+    /// <summary>Electron's <c>canSave</c>.</summary>
+    public bool CanSave { get; init; }
+
+    /// <summary>Electron's <c>hasAudio</c>.</summary>
+    public bool HasAudio { get; init; }
+
+    /// <summary>Electron's <c>isLooping</c>.</summary>
+    public bool IsLooping { get; init; }
+
+    /// <summary>The controls are showing. Electron's <c>isControlsVisible</c>.</summary>
+    public bool IsControlsVisible { get; init; }
+
+    /// <summary>Electron's <c>canToggleControls</c>.</summary>
+    public bool CanToggleControls { get; init; }
+
+    /// <summary>Electron's <c>canPrint</c>.</summary>
+    public bool CanPrint { get; init; }
+
+    /// <summary>Electron's <c>canRotate</c>.</summary>
+    public bool CanRotate { get; init; }
+
+    /// <summary>Electron's <c>canShowPictureInPicture</c>.</summary>
+    public bool CanShowPictureInPicture { get; init; }
+
+    /// <summary>Electron's <c>isShowingPictureInPicture</c>.</summary>
+    public bool IsShowingPictureInPicture { get; init; }
+
+    /// <summary>Electron's <c>canLoop</c>.</summary>
+    public bool CanLoop { get; init; }
+
+    /// <summary>The flags from CEF's <c>cef_context_menu_media_state_flags_t</c> bits.</summary>
+    internal static ContextMenuMediaFlags From(Oriel.Cef.Interop.cef_context_menu_media_state_flags_t flags)
+    {
+        bool Has(Oriel.Cef.Interop.cef_context_menu_media_state_flags_t flag) => (flags & flag) != 0;
+        return new ContextMenuMediaFlags
+        {
+            InError = Has(Oriel.Cef.Interop.cef_context_menu_media_state_flags_t.CM_MEDIAFLAG_IN_ERROR),
+            IsPaused = Has(Oriel.Cef.Interop.cef_context_menu_media_state_flags_t.CM_MEDIAFLAG_PAUSED),
+            IsMuted = Has(Oriel.Cef.Interop.cef_context_menu_media_state_flags_t.CM_MEDIAFLAG_MUTED),
+            IsLooping = Has(Oriel.Cef.Interop.cef_context_menu_media_state_flags_t.CM_MEDIAFLAG_LOOP),
+            CanSave = Has(Oriel.Cef.Interop.cef_context_menu_media_state_flags_t.CM_MEDIAFLAG_CAN_SAVE),
+            HasAudio = Has(Oriel.Cef.Interop.cef_context_menu_media_state_flags_t.CM_MEDIAFLAG_HAS_AUDIO),
+            CanToggleControls = Has(Oriel.Cef.Interop.cef_context_menu_media_state_flags_t.CM_MEDIAFLAG_CAN_TOGGLE_CONTROLS),
+            IsControlsVisible = Has(Oriel.Cef.Interop.cef_context_menu_media_state_flags_t.CM_MEDIAFLAG_CONTROLS),
+            CanPrint = Has(Oriel.Cef.Interop.cef_context_menu_media_state_flags_t.CM_MEDIAFLAG_CAN_PRINT),
+            CanRotate = Has(Oriel.Cef.Interop.cef_context_menu_media_state_flags_t.CM_MEDIAFLAG_CAN_ROTATE),
+            CanShowPictureInPicture = Has(Oriel.Cef.Interop.cef_context_menu_media_state_flags_t.CM_MEDIAFLAG_CAN_PICTURE_IN_PICTURE),
+            IsShowingPictureInPicture = Has(Oriel.Cef.Interop.cef_context_menu_media_state_flags_t.CM_MEDIAFLAG_PICTURE_IN_PICTURE),
+            CanLoop = Has(Oriel.Cef.Interop.cef_context_menu_media_state_flags_t.CM_MEDIAFLAG_CAN_LOOP),
+        };
+    }
+}
+
 /// <summary>Where and on what the user asked for a context menu; Electron's <c>context-menu</c> event parameters.</summary>
 /// <remarks>Oriel shows no context menu of its own, as Electron: handle <see cref="WebContents.ContextMenu"/>
 /// and call <see cref="Menu.Popup"/> to show one.</remarks>
@@ -87,6 +152,9 @@ public sealed record ContextMenuParams
     /// <summary>Spelling suggestions for <see cref="MisspelledWord"/>.</summary>
     public IReadOnlyList<string> DictionarySuggestions { get; init; } = [];
 
+    /// <summary>The state of the media under the pointer, if any. Electron's <c>mediaFlags</c>.</summary>
+    public ContextMenuMediaFlags MediaFlags { get; init; } = new();
+
     /// <summary>Which editing commands apply.</summary>
     public ContextMenuEditFlags EditFlags { get; init; } = new(false, false, false, false, false, false, false, false);
 }
@@ -97,8 +165,7 @@ public sealed record PopupOptions
     /// <summary>The window to show the menu in; defaults to the focused window.</summary>
     public BrowserWindow? Window { get; init; }
 
-    /// <summary>Horizontal position in the window's page, in DIPs; with <see cref="Y"/>. Defaults to where the
-    /// window's last context menu was asked for (Electron uses the pointer), else the page's top-left.</summary>
+    /// <summary>Horizontal position in the window's page, in DIPs; with <see cref="Y"/>. Defaults to the pointer.</summary>
     public int? X { get; init; }
 
     /// <summary>Vertical position in the window's page, in DIPs; with <see cref="X"/>.</summary>

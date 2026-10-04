@@ -121,7 +121,12 @@ public sealed unsafe class OrielApp
     }
 
     /// <summary>Ends <see cref="Run"/> once open windows have closed. Electron's <c>app.quit()</c>.</summary>
-    public void Quit() => CefNative.cef_quit_message_loop();
+    /// <remarks>May be called from any thread once the application is ready.</remarks>
+    public void Quit()
+    {
+        // CEF only quits from the UI thread; called anywhere else, cef_quit_message_loop does nothing.
+        if (IsReady) CefThread.RunOnUi(CefNative.cef_quit_message_loop);
+    }
 
     internal void OnAllWindowsClosed()
     {
