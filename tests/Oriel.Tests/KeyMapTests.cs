@@ -14,6 +14,10 @@ public sealed class KeyMapTests
     [InlineData("return", false, "Enter", "Enter", 13)]
     [InlineData("Up", false, "ArrowUp", "ArrowUp", 38)]
     [InlineData("Space", false, " ", "Space", 32)]
+    [InlineData("Alt", false, "Alt", "AltLeft", 18)]
+    [InlineData("Control", false, "Control", "ControlLeft", 17)]
+    [InlineData("Shift", true, "Shift", "ShiftLeft", 16)]
+    [InlineData("Meta", false, "Meta", "MetaLeft", 91)]
     public void Resolve_MapsElectronNames(string name, bool shift, string key, string code, int vk)
         => Assert.Equal(new KeyMap.Key(key, code, vk), KeyMap.Resolve(name, shift));
 

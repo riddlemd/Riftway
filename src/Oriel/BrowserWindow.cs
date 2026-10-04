@@ -244,7 +244,7 @@ public sealed unsafe class BrowserWindow
             ReadyToShow?.Invoke(this, EventArgs.Empty);
         };
         _client = new ClientHandler(WebContents.Display, WebContents.Load, WebContents.JsDialog, WebContents.Request, WebContents.Command,
-            WebContents.ContextMenuRequests);
+            WebContents.ContextMenuRequests, new KeyboardHandler(keyEvent => _menuBar?.OnKeyEvent(keyEvent) ?? false));
         if (!OperatingSystem.IsMacOS())
         {
             _menuBar = new WindowMenuBar(this) { AutoHide = _options.AutoHideMenuBar };
@@ -426,6 +426,12 @@ public sealed unsafe class BrowserWindow
 
     /// <summary>Opens the menu bar's menu at <paramref name="index"/> as a click would; false if there is none.</summary>
     internal bool TriggerMenuBarItem(int index) => Query(_ => _menuBar?.TriggerMenu(index) ?? false, false);
+
+    /// <summary>Whether a menu bar menu is open.</summary>
+    internal bool IsMenuBarMenuOpen => Query(_ => _menuBar?.IsMenuOpen ?? false, false);
+
+    /// <summary>Closes an open menu bar menu.</summary>
+    internal void CancelMenuBarMenu() => Command(_ => _menuBar?.CancelMenu());
 
     /// <summary>The page set its title; cancel to keep the window's title. Electron's <c>page-title-updated</c>.</summary>
     public event EventHandler<PageTitleUpdatedEventArgs>? PageTitleUpdated;

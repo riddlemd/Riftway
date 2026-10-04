@@ -157,12 +157,14 @@ public sealed unsafe class ClientHandler
     private readonly RequestHandler? _request;
     private readonly CommandHandler? _command;
     private readonly ContextMenuHandler? _contextMenu;
+    private readonly KeyboardHandler? _keyboard;
 
     public ClientHandler(DisplayHandler? display = null, LoadHandler? load = null, JsDialogHandler? jsDialog = null, RequestHandler? request = null,
-        CommandHandler? command = null, ContextMenuHandler? contextMenu = null)
+        CommandHandler? command = null, ContextMenuHandler? contextMenu = null, KeyboardHandler? keyboard = null)
     {
         _command = command;
         _contextMenu = contextMenu;
+        _keyboard = keyboard;
         _display = display;
         _load = load;
         _jsDialog = jsDialog;
@@ -174,9 +176,18 @@ public sealed unsafe class ClientHandler
         if (request is not null) Native->get_request_handler = &GetRequestHandler;
         if (command is not null) Native->get_command_handler = &GetCommandHandler;
         if (contextMenu is not null) Native->get_context_menu_handler = &GetContextMenuHandler;
+        if (keyboard is not null) Native->get_keyboard_handler = &GetKeyboardHandler;
     }
 
     public cef_client_t* Native { get; }
+
+    [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])]
+    private static cef_keyboard_handler_t* GetKeyboardHandler(cef_client_t* self)
+    {
+        var handler = NativeObject.Owner<ClientHandler>(self)._keyboard!.Native;
+        NativeObject.AddRef(handler);
+        return handler;
+    }
 
     [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])]
     private static cef_context_menu_handler_t* GetContextMenuHandler(cef_client_t* self)

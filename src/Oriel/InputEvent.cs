@@ -43,7 +43,8 @@ public enum InputModifiers
 /// <param name="Type">Down, up or a typed character.</param>
 /// <param name="KeyCode">An Electron accelerator key name: <c>A</c>–<c>Z</c>, <c>0</c>–<c>9</c>, <c>F1</c>–<c>F24</c>,
 /// <c>Space</c>, <c>Enter</c>, <c>Tab</c>, <c>Backspace</c>, <c>Delete</c>, <c>Escape</c>, <c>Up</c>, <c>Down</c>,
-/// <c>Left</c>, <c>Right</c>, <c>Home</c>, <c>End</c>, <c>PageUp</c>, <c>PageDown</c>, <c>Insert</c>; for
+/// <c>Left</c>, <c>Right</c>, <c>Home</c>, <c>End</c>, <c>PageUp</c>, <c>PageDown</c>, <c>Insert</c>, and the modifier keys
+/// <c>Shift</c>, <c>Control</c>, <c>Alt</c>, <c>Meta</c>; for
 /// <see cref="KeyboardInputEventType.Char"/>, any single character.</param>
 public sealed record KeyboardInputEvent(KeyboardInputEventType Type, string KeyCode)
 {
@@ -117,6 +118,10 @@ internal static class KeyMap
         ["PageUp"] = new("PageUp", "PageUp", 33),
         ["PageDown"] = new("PageDown", "PageDown", 34),
         ["Insert"] = new("Insert", "Insert", 45),
+        ["Shift"] = new("Shift", "ShiftLeft", 16),
+        ["Control"] = new("Control", "ControlLeft", 17),
+        ["Alt"] = new("Alt", "AltLeft", 18),
+        ["Meta"] = new("Meta", "MetaLeft", 91),
     };
 
     /// <exception cref="ArgumentException">Not a key name this map knows.</exception>

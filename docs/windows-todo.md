@@ -22,3 +22,4 @@ General items: [todo.md](todo.md). Windows work runs on the Windows laptop.
       (d5e0b6b). Its `is_visible` filter has no covering check.
 - [x] Run the window-menu and context-menu checks on Windows (pass, after the menu-bar reference fix)
 - [ ] windows-arm64: untested
+- [ ] Run the Alt-key menu checks on Windows (Alt toggles an auto-hidden bar, Alt+F opens File; pass on Linux)
