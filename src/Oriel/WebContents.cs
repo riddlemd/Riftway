@@ -608,6 +608,8 @@ public sealed unsafe class WebContents
         _devTools.Attach(browser);
 
         _devTools.Send("Page.enable");
+        // Per-frame DOMContentLoaded for dom-ready.
+        _devTools.Send("Page.setLifecycleEventsEnabled", w => w.WriteBoolean("enabled", true));
         _devTools.Send("Browser.getVersion", onResult: (result, error) =>
         {
             if (error is null) _defaultUserAgent = result.GetProperty("userAgent").GetString();
@@ -686,6 +688,12 @@ public sealed unsafe class WebContents
                     _frames[attached] = new FrameState { Id = attached, ParentId = parameters.GetProperty("parentFrameId").GetString() };
                 break;
 
+            case "Page.lifecycleEvent" when parameters.GetProperty("name").GetString() == "DOMContentLoaded":
+                var readyId = parameters.GetProperty("frameId").GetString()!;
+                if (_frames.TryGetValue(readyId, out var ready)) ready.Wrapper?.RaiseDomReady();
+                if (readyId == _mainFrameId && _navigated) DomReady?.Invoke(this, EventArgs.Empty);
+                break;
+
             case "Page.frameNavigated":
                 UpdateFrame(parameters.GetProperty("frame"));
                 break;
@@ -760,6 +768,10 @@ public sealed unsafe class WebContents
     // execution contexts name; UI thread only.
     private readonly Dictionary<string, FrameState> _frames = [];
     private readonly Dictionary<int, string> _contextFrames = [];
+
+    /// <summary>The main frame's document has been parsed: its DOM is ready, though images may still load.
+    /// Electron's <c>dom-ready</c>.</summary>
+    public event EventHandler? DomReady;
 
     /// <summary>The top frame of the page. Electron's <c>webContents.mainFrame</c>; null until the page exists.</summary>
     public WebFrameMain? MainFrame => CefThread.InvokeOnUi(() => _mainFrameId is { } id && _frames.TryGetValue(id, out var frame) ? WrapperOf(frame) : null);

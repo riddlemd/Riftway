@@ -125,6 +125,8 @@ internal sealed unsafe class WindowMenuBar
         if (!isDown) return false;
         _altAlone = false;
         var alt = (key->modifiers & (uint)cef_event_flags_t.EVENTFLAG_ALT_DOWN) != 0;
+        // Typing into the page puts an Alt-shown bar away again.
+        if (!alt && AutoHide && _shownByAlt && !IsMenuOpen) SetShown(false);
         if (!alt || key->windows_key_code is < 'A' or > 'Z') return false;
         if (!_mnemonics.TryGetValue((char)key->windows_key_code, out var index)) return false;
         if (AutoHide && !Shown)
@@ -234,6 +236,12 @@ internal sealed unsafe class WindowMenuBar
 
     // An auto-hidden bar that Alt brought up goes away again once its menu has been used, as in Electron.
     private bool _shownByAlt;
+
+    /// <summary>The window lost focus: an auto-hidden bar that Alt brought up goes away, as in Electron.</summary>
+    internal void OnWindowBlurred()
+    {
+        if (AutoHide && _shownByAlt && !IsMenuOpen) SetShown(false);
+    }
 
     private void OnMenuClosed()
     {

@@ -30,6 +30,12 @@ public sealed class WebFrameMain
         _state = state;
     }
 
+    /// <summary>The frame's document has been parsed; raised on the UI thread for each document the frame loads.
+    /// Electron's <c>dom-ready</c>.</summary>
+    public event EventHandler? DomReady;
+
+    internal void RaiseDomReady() => DomReady?.Invoke(this, EventArgs.Empty);
+
     /// <summary>Identifies the frame for its lifetime; Chromium's DevTools frame token. Electron's <c>frameToken</c>.</summary>
     public string FrameToken => _state.Id;
 

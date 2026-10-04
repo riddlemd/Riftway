@@ -20,6 +20,14 @@ public class IpcMainEvent
     /// <summary>The frame that sent the message, or null if it has gone. Electron's <c>event.senderFrame</c>.</summary>
     public WebFrameMain? SenderFrame { get; }
 
+    /// <summary>Sends a message back to the frame that sent this one (its <c>ipcRenderer.on(channel)</c>).
+    /// Electron's <c>event.reply()</c>.</summary>
+    public void Reply(string channel, params JsonNode?[] args)
+    {
+        if (SenderFrame is { } frame) frame.Send(channel, args);
+        else Sender.Send(channel, args);
+    }
+
     /// <summary>The message arguments, as sent by the page.</summary>
     public IReadOnlyList<JsonElement> Args { get; }
 }
@@ -36,7 +44,7 @@ public static class IpcMain
 {
     private static readonly Lock s_gate = new();
     private static readonly Dictionary<string, Func<IpcMainInvokeEvent, CancellationToken, Task<JsonNode?>>> s_handlers = [];
-    private static readonly Dictionary<string, List<Action<IpcMainEvent>>> s_listeners = [];
+    private static readonly Dictionary<string, List<(Action<IpcMainEvent> Listener, bool Once)>> s_listeners = [];
 
     /// <summary>Answers <c>ipcRenderer.invoke(channel, ...)</c>; a thrown exception rejects the page's promise.</summary>
     /// <remarks>The token is cancelled when the sending page is destroyed, since nobody can receive the answer.</remarks>
@@ -60,6 +68,31 @@ public static class IpcMain
         Handle(channel, (e, _) => Task.FromResult(handler(e)));
     }
 
+    /// <summary>Answers the next <c>ipcRenderer.invoke(channel, ...)</c> only, then removes itself.
+    /// Electron's <c>ipcMain.handleOnce()</c>.</summary>
+    /// <exception cref="InvalidOperationException">The channel already has a handler.</exception>
+    public static void HandleOnce(string channel, Func<IpcMainInvokeEvent, CancellationToken, Task<JsonNode?>> handler)
+    {
+        ArgumentNullException.ThrowIfNull(handler);
+        Func<IpcMainInvokeEvent, CancellationToken, Task<JsonNode?>>? once = null;
+        once = (e, token) =>
+        {
+            lock (s_gate)
+            {
+                if (s_handlers.TryGetValue(channel, out var current) && current == once) s_handlers.Remove(channel);
+            }
+            return handler(e, token);
+        };
+        Handle(channel, once);
+    }
+
+    /// <inheritdoc cref="HandleOnce(string, Func{IpcMainInvokeEvent, CancellationToken, Task{JsonNode}})"/>
+    public static void HandleOnce(string channel, Func<IpcMainInvokeEvent, JsonNode?> handler)
+    {
+        ArgumentNullException.ThrowIfNull(handler);
+        HandleOnce(channel, (e, _) => Task.FromResult(handler(e)));
+    }
+
     /// <summary>Removes the handler for <paramref name="channel"/>, if any.</summary>
     public static void RemoveHandler(string channel)
     {
@@ -67,14 +100,30 @@ public static class IpcMain
     }
 
     /// <summary>Listens for <c>ipcRenderer.send(channel, ...)</c>.</summary>
-    public static void On(string channel, Action<IpcMainEvent> listener)
+    public static void On(string channel, Action<IpcMainEvent> listener) => AddListener(channel, listener, once: false);
+
+    /// <summary>Listens for the next <c>ipcRenderer.send(channel, ...)</c> only. Electron's <c>ipcMain.once()</c>.</summary>
+    public static void Once(string channel, Action<IpcMainEvent> listener) => AddListener(channel, listener, once: true);
+
+    /// <summary>Removes every listener for <paramref name="channel"/>, or for every channel when it is null.
+    /// Electron's <c>ipcMain.removeAllListeners()</c>.</summary>
+    public static void RemoveAllListeners(string? channel = null)
+    {
+        lock (s_gate)
+        {
+            if (channel is null) s_listeners.Clear();
+            else s_listeners.Remove(channel);
+        }
+    }
+
+    private static void AddListener(string channel, Action<IpcMainEvent> listener, bool once)
     {
         ArgumentNullException.ThrowIfNull(channel);
         ArgumentNullException.ThrowIfNull(listener);
         lock (s_gate)
         {
             if (!s_listeners.TryGetValue(channel, out var list)) s_listeners[channel] = list = [];
-            list.Add(listener);
+            list.Add((listener, once));
         }
     }
 
@@ -83,14 +132,19 @@ public static class IpcMain
     {
         lock (s_gate)
         {
-            if (s_listeners.TryGetValue(channel, out var list)) list.Remove(listener);
+            if (s_listeners.TryGetValue(channel, out var list) && list.FindIndex(l => l.Listener == listener) is >= 0 and var at) list.RemoveAt(at);
         }
     }
 
     internal static void DispatchSend(WebContents sender, WebFrameMain? senderFrame, string channel, IReadOnlyList<JsonElement> args)
     {
         Action<IpcMainEvent>[] listeners;
-        lock (s_gate) listeners = s_listeners.TryGetValue(channel, out var list) ? [.. list] : [];
+        lock (s_gate)
+        {
+            listeners = s_listeners.TryGetValue(channel, out var list) ? [.. list.Select(l => l.Listener)] : [];
+            // Once-listeners leave before they run, so a message they trigger does not reach them again.
+            list?.RemoveAll(l => l.Once);
+        }
 
         var e = new IpcMainEvent(sender, senderFrame, args);
         foreach (var listener in listeners)

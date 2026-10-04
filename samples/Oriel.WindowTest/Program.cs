@@ -10,6 +10,8 @@ var results = new List<string>();
 var step = TimeSpan.FromSeconds(5);
 var simpleReady = false;
 BrowserWindow? childAlive = null;
+var willQuit = 0;
+void countWillQuit(object? _, CancelEventArgs e) => willQuit++;
 
 void Check(string name, bool pass, object? detail = null)
 {
@@ -205,6 +207,25 @@ async Task RunAsync(BrowserWindow win, BrowserWindow simple)
     await Task.Delay(1500);
     Check("Closing can cancel", closingCount == 1 && !win.IsDestroyed, $"closing={closingCount} destroyed={win.IsDestroyed}");
     win.Closing -= veto;
+
+    // Quit, cancelled two ways: by BeforeQuit, and by a window refusing to close (Electron's quit flow).
+    var beforeQuit = 0;
+    EventHandler<CancelEventArgs> cancelQuit = (_, e) => { beforeQuit++; e.Cancel = true; };
+    app.BeforeQuit += cancelQuit;
+    app.Quit();
+    await Task.Delay(1000);
+    Check("BeforeQuit can cancel a quit", beforeQuit == 1 && !win.IsDestroyed, $"before={beforeQuit} destroyed={win.IsDestroyed}");
+    app.BeforeQuit -= cancelQuit;
+    var refused = 0;
+    EventHandler<CancelEventArgs> refuse = (_, e) => { refused++; e.Cancel = true; };
+    // Every window refuses: a quit closes windows until one refuses, and later checks still need these open.
+    var open = BrowserWindow.GetAllWindows();
+    foreach (var w in open) w.Closing += refuse;
+    app.WillQuit += countWillQuit;
+    app.Quit();
+    await Task.Delay(1500);
+    Check("a window refusing to close cancels the quit", refused >= 1 && open.All(w => !w.IsDestroyed) && willQuit == 0, $"refused={refused} willQuit={willQuit}");
+    foreach (var w in open) w.Closing -= refuse;
 
     failures = results.Count(r => r.StartsWith("FAIL", StringComparison.Ordinal));
     Console.WriteLine($"RESULT: {failures} failure(s) before the final close");
@@ -770,6 +791,19 @@ async Task BarMenusAsync(BrowserWindow win, Menu menu, MenuItem save, MenuItem g
     Check("Alt shows an auto-hidden bar", Eventually(() => win.IsMenuBarVisible, step));
     PressAlt();
     Check("Alt again hides it", Eventually(() => !win.IsMenuBarVisible, step));
+    PressAlt();
+    Eventually(() => win.IsMenuBarVisible, step);
+    Key("A", KeyboardInputEventType.KeyDown);
+    Key("A", KeyboardInputEventType.KeyUp);
+    Check("typing into the page hides an Alt-shown bar", Eventually(() => !win.IsMenuBarVisible, step));
+    PressAlt();
+    Eventually(() => win.IsMenuBarVisible, step);
+    var thief = new BrowserWindow(new BrowserWindowOptions { Title = "Oriel window test: focus thief", Width = 200, Height = 150 });
+    thief.Focus();
+    Check("losing focus hides an Alt-shown bar", Eventually(() => !win.IsMenuBarVisible, step));
+    thief.Destroy();
+    win.Focus();
+    await Task.Delay(300);
     win.AutoHideMenuBar = false;
     Key("Alt", KeyboardInputEventType.KeyDown, InputModifiers.Alt);
     Key("F", KeyboardInputEventType.KeyDown, InputModifiers.Alt);
@@ -1119,11 +1153,25 @@ async Task FramesAsync()
     var dir = Directory.CreateTempSubdirectory("oriel-frames-").FullName;
     var preload = Path.Combine(dir, "preload.js");
     // Runs in every frame: lets each frame send, and remember what it was sent.
-    File.WriteAllText(preload, "oriel.contextBridge.exposeInMainWorld('bridge', { send: (m) => oriel.ipcRenderer.send('frame-test', m), listen: () => oriel.ipcRenderer.on('to-frame', (_e, v) => document.title = 'got:' + v) });");
+    File.WriteAllText(preload, string.Join("\n",
+        "const { ipcRenderer } = oriel;",
+        "let onceCount = 0;",
+        "const offListener = () => document.title = 'off-listener-ran';",
+        "oriel.contextBridge.exposeInMainWorld('bridge', {",
+        "  send: (m) => ipcRenderer.send('frame-test', m),",
+        "  ask: () => ipcRenderer.invoke('ask'),",
+        "  listen: () => ipcRenderer.on('to-frame', (_e, v) => document.title = 'got:' + v),",
+        "  listenOnce: () => ipcRenderer.once('count', () => document.title = 'once:' + (++onceCount)),",
+        "  listenThenOff: () => { ipcRenderer.on('off-test', offListener); ipcRenderer.off('off-test', offListener); },",
+        "  removeAll: () => ipcRenderer.removeAllListeners('to-frame'),",
+        "});"));
     var page = Path.Combine(dir, "frames.html");
     File.WriteAllText(page, "<!doctype html><title>top</title><iframe name=a srcdoc=\"<title>a</title><iframe name=b srcdoc='<title>b</title>'></iframe>\"></iframe>");
     var host = new BrowserWindow(new BrowserWindowOptions { Title = "Oriel window test: frames", Width = 400, Height = 300, WebPreferences = new WebPreferences { Preload = preload } });
+    var domReady = 0;
+    host.WebContents.DomReady += (_, _) => Interlocked.Increment(ref domReady);
     Fires(h => host.WebContents.DidFinishLoad += h, h => host.WebContents.DidFinishLoad -= h, () => host.WebContents.LoadFile(page), step);
+    Check("WebContents.DomReady is raised for the page", Eventually(() => domReady == 1, step), domReady);
 
     var main = host.WebContents.MainFrame;
     Check("MainFrame is the page's top frame", main is { Parent: null } && main.Url == new Uri(page).AbsoluteUri && main.Top == main, main?.Url);
@@ -1133,6 +1181,13 @@ async Task FramesAsync()
     Check("FramesInSubtree includes the frame itself", main.FramesInSubtree.Select(f => f.Name).SequenceEqual(["", "a", "b"]), string.Join(",", main.FramesInSubtree.Select(f => f.Name)));
     Check("the same frame is the same object", main.Frames[0] == a && host.WebContents.MainFrame == main);
 
+    using (var frameReady = new ManualResetEventSlim())
+    {
+        a.DomReady += (_, _) => frameReady.Set();
+        a.Reload();
+        Check("WebFrameMain.DomReady is raised when the frame loads", await Task.Run(() => frameReady.Wait(step)));
+        Eventually(() => a.ExecuteJavaScriptAsync("1").Status != TaskStatus.Faulted, step);
+    }
     var ran = await a.ExecuteJavaScriptAsync("window.name");
     Check("ExecuteJavaScriptAsync runs in that frame", ran?.ToString() == "a", ran);
 
@@ -1144,6 +1199,42 @@ async Task FramesAsync()
     await a.ExecuteJavaScriptAsync("bridge.send('hello'); 1");
     Check("IpcMainEvent.SenderFrame is the frame that sent", await Task.Run(() => heard.Wait(step)) && sender == a, sender?.Name);
     IpcMain.RemoveListener("frame-test", onMessage);
+
+    // ipcMain.once, handleOnce, removeAllListeners and event.reply.
+    var onceHeard = 0;
+    IpcMain.Once("frame-test", _ => Interlocked.Increment(ref onceHeard));
+    await a.ExecuteJavaScriptAsync("bridge.send(1); bridge.send(2); 1");
+    await Task.Delay(500);
+    Check("IpcMain.Once hears one message only", onceHeard == 1, onceHeard);
+    IpcMain.HandleOnce("ask", _ => System.Text.Json.Nodes.JsonValue.Create("first"));
+    var firstAsk = await a.ExecuteJavaScriptAsync("bridge.ask()");
+    var secondAsk = await a.ExecuteJavaScriptAsync("bridge.ask().then(() => 'answered', e => 'rejected')");
+    Check("IpcMain.HandleOnce answers once, then no handler", firstAsk?.ToString() == "first" && secondAsk?.ToString() == "rejected", $"{firstAsk} {secondAsk}");
+    var cleared = 0;
+    IpcMain.On("frame-test", _ => Interlocked.Increment(ref cleared));
+    IpcMain.RemoveAllListeners("frame-test");
+    await a.ExecuteJavaScriptAsync("bridge.send(3); 1");
+    await Task.Delay(500);
+    Check("IpcMain.RemoveAllListeners", cleared == 0, cleared);
+    await a.ExecuteJavaScriptAsync("bridge.listen(); 1");
+    Action<IpcMainEvent> replyBack = e => e.Reply("to-frame", "pong");
+    IpcMain.On("frame-test", replyBack);
+    await a.ExecuteJavaScriptAsync("bridge.send(4); 1");
+    Check("IpcMainEvent.Reply answers the frame that sent", Eventually(() => a.ExecuteJavaScriptAsync("document.title").Result?.ToString() == "got:pong", step));
+    IpcMain.RemoveListener("frame-test", replyBack);
+
+    // The page side: ipcRenderer.once, off and removeAllListeners.
+    await a.ExecuteJavaScriptAsync("bridge.listenOnce(); bridge.listenThenOff(); 1");
+    a.Send("count");
+    a.Send("count");
+    a.Send("off-test");
+    await Task.Delay(500);
+    Check("ipcRenderer.once hears one message; off removes a listener", (await a.ExecuteJavaScriptAsync("document.title"))?.ToString() == "once:1",
+        await a.ExecuteJavaScriptAsync("document.title"));
+    await a.ExecuteJavaScriptAsync("bridge.removeAll(); document.title = 'cleared'; 1");
+    a.Send("to-frame", "late");
+    await Task.Delay(500);
+    Check("ipcRenderer.removeAllListeners", (await a.ExecuteJavaScriptAsync("document.title"))?.ToString() == "cleared", await a.ExecuteJavaScriptAsync("document.title"));
     await a.ExecuteJavaScriptAsync("bridge.listen(); 1");
     await main.ExecuteJavaScriptAsync("bridge.listen(); 1");
     a.Send("to-frame", "hi");
@@ -1187,6 +1278,12 @@ app.Ready += (_, _) =>
 };
 
 app.Run();
+if (failures >= 0)
+{
+    // Checked once Run has returned: the final Quit must have raised WillQuit on its way out.
+    Check("WillQuit is raised when the app quits", willQuit == 1, willQuit);
+    failures = results.Count(r => r.StartsWith("FAIL", StringComparison.Ordinal));
+}
 Console.WriteLine(failures < 0 ? "RESULT: did not finish" : $"RESULT: {failures} failure(s)");
 return failures;
 

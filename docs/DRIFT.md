@@ -36,7 +36,7 @@ Entries marked _(branch `x`)_ are on that branch and not yet in `main`.
 |---|---|---|---|---|
 | A1 | `app.enableSandbox()` on every OS | Linux only; `Run()` throws `PlatformNotSupportedException` on macOS and Windows | OS/packaging: CEF forces `--no-sandbox` whenever `browser_subprocess_path` is set (Windows), and the macOS helper does not link the sandbox library | Windows: the `bootstrap.exe` layout (probe passed, see windows-todo.md). macOS: native helper + `cef_sandbox` |
 | A2 | Several instances may run; `requestSingleInstanceLock()` opts in to one | Always single instance per data directory: a second launch exits and the first gets `SecondInstance` | CEF: Chrome-style profiles lock their data directory | Per-instance cache paths when the lock is not requested; `RequestSingleInstanceLock` |
-| A3 | `will-quit`, `before-quit`, `quit` events; `quit()` closes windows first | `Quit()` ends the message loop directly; no quit events | Todo | Close windows (with `Closing`), then quit; raise the events |
+| A3 | `quit` event with the exit code | Missing; `BeforeQuit`, `WillQuit` and the window-closing quit flow are done | Todo | Raise it after the message loop ends |
 
 ## BrowserWindow
 
@@ -56,7 +56,7 @@ Entries marked _(branch `x`)_ are on that branch and not yet in `main`.
 | W14 | `contextIsolation: false` | Always on | Design: the preload runs in an isolated world by construction | None planned |
 | W15 | `zoomFactor` | Re-applies to an origin whose zoom was reset to 0 | Todo | Track explicit resets |
 | W16 | `isMenuBarVisible()` etc. on Windows/Linux; `setMenu` on macOS sets nothing; Windows uses a native Win32 menu bar | Same API; the bar is drawn by CEF Views: on Windows a plain strip following the system theme, without mnemonic underlines and with different padding and hover | CEF: Views windows have no native menu bar | Style the bar (colours, font, underlines) to match the OS |
-| W17 | Alt shows an auto-hidden bar until the menu is used or focus moves on | Hidden again when its menu closes, or on Alt; not when focus moves back to the page without using a menu | Todo | Hide on focus loss and on a click into the page |
+| W17 | Alt shows an auto-hidden bar until the user moves on | Hidden again on Alt, when its menu closes, when a key goes to the page, or on focus loss; a mouse click into the page does not hide it | Todo: the window sees no page mouse events | Hide on the page's mousedown, through the preload |
 | W20 | `setProgressBar` on Linux (Unity launcher progress); error and paused colours on macOS | Linux shows no progress; macOS shows error and paused as the plain Dock bar | OS: Linux progress is desktop-specific (D-Bus `com.canonical.Unity.LauncherEntry`); `NSProgressIndicator` has no colours | D-Bus launcher entry on Linux; a drawn bar on macOS |
 | W21 | `setOverlayIcon(overlay: NativeImage \| null, description)` | Takes a PNG/JPEG file path or null | Module: `NativeImage` (M5) | Overload taking `NativeImage` |
 | W22 | `setThumbarButtons` (Windows) | Missing | Module: `NativeImage` for the icons; the clicks also need the window's `WM_COMMAND` (`THBN_CLICKED`) routed back | `ITaskbarList3::ThumbBarAddButtons` and a subclassed `HWND`, after `NativeImage` |
@@ -77,7 +77,7 @@ Entries marked _(branch `x`)_ are on that branch and not yet in `main`.
 | ID | Electron | Oriel | Why | Possible resolution |
 |---|---|---|---|---|
 | F1 | Every frame runs script and receives messages, cross-site iframes included | A frame in another process (a cross-site iframe, with site isolation) is listed but cannot run script, `send` or `reload` | CEF/DevTools: out-of-process frames are separate DevTools targets, which Oriel does not attach to | DevTools `Target.setAutoAttach` with flattened sessions |
-| F2 | `frameTreeNodeId`, `processId`, `routingId`, `osProcessId`, `visibilityState`, `postMessage`, `collectJavaScriptCallStack`, the `dom-ready` event; `webFrameMain.fromId` / `fromFrameToken` | Missing; `frameToken` is Chromium's DevTools frame token | Todo, or CEF: the numeric ids are not exposed | Add what DevTools gives (`Page.domContentEventFired`, frame lookup by token) |
+| F2 | `frameTreeNodeId`, `processId`, `routingId`, `osProcessId`, `visibilityState`, `postMessage`, `collectJavaScriptCallStack`; `webFrameMain.fromId` / `fromFrameToken` | Missing; `frameToken` is Chromium's DevTools frame token | Todo, or CEF: the numeric ids are not exposed | Add what DevTools gives (frame lookup by token) |
 | F3 | `webContents.focusedFrame` | Missing | CEF: the focused frame comes as a CEF frame, which cannot be matched to a DevTools frame id | Track focus in the page (`focusin`) |
 | F4 | `webContents.mainFrame` always exists | Null until the page's frame tree has been read, just after the window is created | Design: frames come from DevTools | None |
 
@@ -141,8 +141,8 @@ Entries marked _(branch `x`)_ are on that branch and not yet in `main`.
 | ID | Electron | Oriel | Why | Possible resolution |
 |---|---|---|---|---|
 | I1 | Structured clone (Map, Set, Date, ArrayBuffer, ...) | JSON only | Design: messages cross through DevTools bindings as JSON | Typed serializers for the common types |
-| I2 | `ipcRenderer.once/off/removeAllListeners/sendSync/sendToHost/postMessage` | Missing; listeners get `{ sender }`, not an `IpcRendererEvent` | Todo (`sendSync` and `postMessage` may be CEF-blocked) | Add the simple ones; investigate the rest |
-| I3 | `ipcMain.once/handleOnce/off/removeAllListeners`, `event.reply`, `event.returnValue` | Missing (`senderFrame` is done) | Todo | Add |
+| I2 | `ipcRenderer.sendSync/sendToHost/postMessage`; listeners get an `IpcRendererEvent` | Missing; listeners get `{ sender }`. `once`, `off` and `removeAllListeners` are done | CEF/DevTools: no synchronous path from the page to the main process | `postMessage` over the binding; `sendSync` needs a Patch |
+| I3 | `event.returnValue` (answers `sendSync`) | Missing; `ipcMain.once`, `handleOnce`, `removeAllListeners` and `event.reply` are done (`off` is `RemoveListener`) | Follows I2 | With `sendSync` |
 | I4 | `contextBridge` exposes live objects and nested functions | Values are copied once and frozen; only top-level functions, which return promises; callbacks one level deep; no `exposeInIsolatedWorld` | Design/CEF: worlds share only the DOM, so values cross as JSON | Deeper proxying |
 | I5 | `protocol.handle` takes and returns Fetch `Request`/`Response` | `ProtocolRequest` → `Task<ProtocolResponse>`; Oriel answers `Range` itself | Design | None |
 | I6 | Privileges `allowServiceWorkers`, `codeCache` | Throw `NotSupportedException` | CEF: no service workers or V8 code cache for custom schemes | Patch |

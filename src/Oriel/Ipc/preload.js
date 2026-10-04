@@ -41,8 +41,32 @@
       channelListeners.get(channel).add(listener);
       return ipcRenderer;
     },
+    // A once wrapper remembers its listener, so removeListener(channel, listener) also removes it.
+    once(channel, listener) {
+      const wrapper = (...args) => {
+        ipcRenderer.removeListener(channel, wrapper);
+        listener(...args);
+      };
+      wrapper.listener = listener;
+      return ipcRenderer.on(channel, wrapper);
+    },
     removeListener(channel, listener) {
-      channelListeners.get(channel)?.delete(listener);
+      const listeners = channelListeners.get(channel);
+      if (!listeners) return ipcRenderer;
+      for (const registered of [...listeners]) {
+        if (registered === listener || registered.listener === listener) {
+          listeners.delete(registered);
+          break;
+        }
+      }
+      return ipcRenderer;
+    },
+    off(channel, listener) {
+      return ipcRenderer.removeListener(channel, listener);
+    },
+    removeAllListeners(channel) {
+      if (channel === undefined) channelListeners.clear();
+      else channelListeners.delete(channel);
       return ipcRenderer;
     },
   });
