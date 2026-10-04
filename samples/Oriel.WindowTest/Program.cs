@@ -170,6 +170,7 @@ async Task RunAsync(BrowserWindow win, BrowserWindow simple)
 
     await WebPreferencesAsync(win);
     await ParentAndModalAsync(win);
+    await DialogsAsync(win);
 
     // Closing cancelled once: the window must survive the first close.
     var closingCount = 0;
@@ -362,6 +363,78 @@ async Task ParentAndModalAsync(BrowserWindow win)
     childAlive = child;
 }
 
+async Task DialogsAsync(BrowserWindow win)
+{
+    var dir = Directory.CreateTempSubdirectory("oriel-dialog-").FullName;
+    var target = Path.Combine(dir, "saved.txt");
+    static string Real(string path) => Path.GetFullPath(new FileInfo(path).Directory!.ResolveLinkTarget(true)?.FullName ?? path);
+    static bool SamePath(string a, string b) => a.Length > 0 && b.Length > 0 && string.Equals(
+        Path.Combine(Real(Path.GetDirectoryName(a)!), Path.GetFileName(a)), Path.Combine(Real(Path.GetDirectoryName(b)!), Path.GetFileName(b)), StringComparison.Ordinal);
+
+    // Answers the dialog the way a user would: macOS through the panel itself, Linux through X key presses.
+    bool Answer(string title, bool accept)
+    {
+        if (OperatingSystem.IsMacOS())
+        {
+            // The panel's UI loads out of process after its window appears; answering earlier can be lost.
+            if (!Eventually(() => Oriel.Cef.CefThread.InvokeOnUi(() => MacPanel.Find() != 0), step)) return false;
+            Thread.Sleep(1000);
+            return Oriel.Cef.CefThread.InvokeOnUi(() => MacPanel.Answer(accept));
+        }
+        if (OperatingSystem.IsLinux() && File.Exists("/usr/bin/xdotool"))
+        {
+            // GTK's dialog is its own X window. Chromium sets no default button, so Return does not accept:
+            // press Escape to cancel, or click the bottom-right button (Save / Open / Upload) to accept, as a user would.
+            string X(string args)
+            {
+                var p = System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo("/usr/bin/timeout", "10 /usr/bin/xdotool " + args) { RedirectStandardOutput = true })!;
+                var output = p.StandardOutput.ReadToEnd();
+                p.WaitForExit();
+                return p.ExitCode == 0 ? output.Trim() : "";
+            }
+            var id = X($"search --sync --name \"{title}\"").Split('\n')[0];
+            if (id.Length == 0) return false;
+            if (!accept)
+            {
+                X($"windowactivate --sync {id} key --clearmodifiers Escape");
+                return true;
+            }
+            var geometry = X($"getwindowgeometry --shell {id}").Split('\n').Select(l => l.Split('=')).Where(kv => kv.Length == 2).ToDictionary(kv => kv[0], kv => int.Parse(kv[1]));
+            X($"windowactivate --sync {id} mousemove --window {id} {geometry["WIDTH"] - 50} {geometry["HEIGHT"] - 28} click 1");
+            return true;
+        }
+        return false;
+    }
+
+    if (!OperatingSystem.IsMacOS() && !OperatingSystem.IsLinux()) return;
+
+    var save = Dialog.ShowSaveDialogAsync(win, new SaveDialogOptions { Title = "Oriel save test", DefaultPath = target, Filters = [new("Text", "txt")] });
+    Check("save dialog opens and accepts", Answer("Oriel save test", accept: true));
+    var saved = await Task.WhenAny(save, Task.Delay(step)) == save ? save.Result : null;
+    Check("ShowSaveDialogAsync returns the chosen path", saved is { Canceled: false } && SamePath(saved.FilePath, target), saved);
+
+    var open = Dialog.ShowOpenDialogAsync(win, new OpenDialogOptions { Title = "Oriel open test", DefaultPath = dir });
+    Check("open dialog opens and cancels", Answer("Oriel open test", accept: false));
+    var opened = await Task.WhenAny(open, Task.Delay(step)) == open ? open.Result : null;
+    Check("a cancelled open dialog reports Canceled and no paths", opened is { Canceled: true, FilePaths.Count: 0 }, opened);
+
+    var folder = Dialog.ShowOpenDialogAsync(win, new OpenDialogOptions { Title = "Oriel folder test", DefaultPath = dir, Properties = OpenDialogProperties.OpenDirectory });
+    Check("folder dialog opens and accepts", Answer("Oriel folder test", accept: true));
+    var chosen = await Task.WhenAny(folder, Task.Delay(step)) == folder ? folder.Result : null;
+    Check("OpenDirectory returns the directory it started in", chosen is { Canceled: false, FilePaths: [var only] } && Real(only) == Real(dir),
+        chosen is null ? "none" : string.Join(",", chosen.FilePaths));
+
+    Check("Sync dialogs refuse the UI thread",
+        Oriel.Cef.CefThread.InvokeOnUi(() => Throws<InvalidOperationException>(() => Dialog.ShowSaveDialogSync(win, new SaveDialogOptions()))));
+    Directory.Delete(dir, recursive: true);
+}
+
+static bool Throws<T>(Action act) where T : Exception
+{
+    try { act(); return false; }
+    catch (T) { return true; }
+}
+
 app.Ready += (_, _) =>
 {
     var win = new BrowserWindow(new BrowserWindowOptions
@@ -388,3 +461,42 @@ app.Ready += (_, _) =>
 app.Run();
 Console.WriteLine(failures < 0 ? "RESULT: did not finish" : $"RESULT: {failures} failure(s)");
 return failures;
+
+static class MacPanel
+{
+    private const string ObjC = "/usr/lib/libobjc.A.dylib";
+    [System.Runtime.InteropServices.DllImport(ObjC)] private static extern nint objc_getClass(string name);
+    [System.Runtime.InteropServices.DllImport(ObjC)] private static extern nint sel_registerName(string name);
+    [System.Runtime.InteropServices.DllImport(ObjC, EntryPoint = "objc_msgSend")] private static extern nint Send(nint receiver, nint selector);
+    [System.Runtime.InteropServices.DllImport(ObjC, EntryPoint = "objc_msgSend")] private static extern nint Send(nint receiver, nint selector, nint arg);
+    [System.Runtime.InteropServices.DllImport(ObjC, EntryPoint = "objc_msgSend")] private static extern void SendEnd(nint receiver, nint selector, nint sheet, nint code);
+
+    /// <summary>Answers the visible open or save sheet with OK or Cancel; false while none shows. Main thread only.</summary>
+    internal static bool Answer(bool accept)
+    {
+        var panel = Find();
+        if (panel == 0) return false;
+        // The panel's controls run out of process and ignore posted events; ending its sheet is what its buttons do.
+        var parent = Send(panel, sel_registerName("sheetParent"));
+        if (parent == 0) return false;
+        SendEnd(parent, sel_registerName("endSheet:returnCode:"), panel, accept ? 1 : 0);
+        return true;
+    }
+
+    /// <summary>The visible open or save panel, or 0. Main thread only.</summary>
+    internal static nint Find()
+    {
+        var app = Send(objc_getClass("NSApplication"), sel_registerName("sharedApplication"));
+        var windows = Send(app, sel_registerName("windows"));
+        var savePanel = objc_getClass("NSSavePanel");
+        var count = (int)Send(windows, sel_registerName("count"));
+        for (var i = 0; i < count; i++)
+        {
+            var window = Send(windows, sel_registerName("objectAtIndex:"), i);
+            if (Send(window, sel_registerName("isKindOfClass:"), savePanel) == 0) continue;
+            if ((byte)Send(window, sel_registerName("isVisible")) == 0) continue;
+            return window;
+        }
+        return 0;
+    }
+}

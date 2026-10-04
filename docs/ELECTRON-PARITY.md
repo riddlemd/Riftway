@@ -89,7 +89,7 @@ Detailed item-by-item status: [parity/browser-window.md](parity/browser-window.m
 
 | Electron | Oriel | Source | Wave | Status |
 |---|---|---|---|---|
-| `dialog` (file dialogs) | `Dialog` | CEF | M2 | — |
+| `dialog` (file dialogs) | `Dialog` | CEF | M2 | partial: open (files, several files, a directory) and save dialogs, async and sync (see DRIFT.md) |
 | `dialog` (message boxes, error box, certificate trust) | `Dialog` | OS | M5 | — |
 | `Menu` / `MenuItem` (app menu, context menus) | `Menu` / `MenuItem` | OS + CEF | M5 | — |
 | `Tray` | `Tray` | OS | M5 | — |
