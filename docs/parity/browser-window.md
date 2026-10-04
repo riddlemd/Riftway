@@ -14,8 +14,8 @@ Event naming: Electron `'x'` → past-tense .NET event (`focus`→`Focused`, `cl
 
 | Area | Done | Partial | Missing |
 |---|---|---|---|
-| Constructor options (52 BaseWindow, 1 BrowserWindow, 46 webPreferences) | 28 | 6 | 65 |
-| Methods (~137) | 32 | 7 | ~98 |
+| Constructor options (52 BaseWindow, 1 BrowserWindow, 46 webPreferences) | 28 | 5 | 66 |
+| Methods (~137) | 30 | 6 | ~101 |
 | Events (35) | 14 | 0 | 21 |
 | Static methods (5) | 0 | 0 | 5 |
 
@@ -26,12 +26,13 @@ Event naming: Electron `'x'` → past-tense .NET event (`focus`→`Focused`, `cl
   minimum/maximum size.
 - Sizes: `GetSize`, `GetPosition`, `Get/SetContentBounds`, `Get/SetContentSize`, `UseContentSize`, `Center` options.
 - `PageTitleUpdated` (window and webContents; window title follows the page unless cancelled), `ReadyToShow`.
-- `BackgroundColor` option, `Set/GetBackgroundColor`; `Icon` option, `SetIcon` (PNG/JPEG).
+- `BackgroundColor` option, `Set/GetBackgroundColor`; `Icon` (path) and `IconImage` options, `SetIcon` (path or
+  `NativeImage`, every scale factor). The `Icon` option was ignored before `native-image`.
 - `Destroy`.
 - Taskbar: `SetProgressBar` (`ProgressBarOptions.Mode`), `FlashFrame`, `SetSkipTaskbar` and the `SkipTaskbar` option,
-  `SetOverlayIcon` (PNG/JPEG path). OS: Windows `ITaskbarList3` and `FlashWindowEx` (`WindowsTaskbar`); macOS the Dock tile
+  `SetOverlayIcon` (`NativeImage`; the path overload is gone, so `null` is unambiguous), `SetThumbarButtons` (Windows: Windows `ITaskbarList3` and `FlashWindowEx` (`WindowsTaskbar`); macOS the Dock tile
   (`MacDock`: a progress bar over the icon, `requestUserAttention:`); Linux X11 (`X11Window`: the urgency hint,
-  `_NET_WM_STATE_SKIP_TASKBAR`). Gaps: Linux progress, macOS error/paused colours, `setThumbarButtons` (DRIFT W20–W23).
+  `_NET_WM_STATE_SKIP_TASKBAR`). Gaps: Linux progress, macOS error/paused colours (DRIFT W20, W23).
 - Windows only, as in Electron: `SetAppDetails` (`AppDetailsOptions`: the window property store's
   `PKEY_AppUserModel_*`), `SetThumbnailClip` and `SetThumbnailToolTip` (`ITaskbarList3`; clips run on an STA thread
   because the shell's proxy rejects the NULL clip that clears them), `BackgroundMaterial` option and
@@ -114,7 +115,7 @@ Event naming: Electron `'x'` → past-tense .NET event (`focus`→`Focused`, `cl
 6. `opacity`, `hasShadow`, `setIgnoreMouseEvents`, content protection, `setKiosk`, `will-*`/`resized`/`moved` events — OS.
 
 Accuracy gaps in done items: `Shown`/`Hidden` fire only from `Show()`/`Hide()`, not when the OS shows or hides the
-window; `SetIcon` takes a file path, not Electron's `NativeImage` (that module comes later); `devTools: false` blocks
+window; `devTools: false` blocks
 `OpenDevTools` and, through `cef_command_handler_t`, Chrome's DevTools commands (F12 is live in a Views window and is
 verified blocked; Chrome's default context menu, with its Inspect item, is no longer shown);
 `zoomFactor` re-applies on an origin whose zoom was explicitly reset to 0.

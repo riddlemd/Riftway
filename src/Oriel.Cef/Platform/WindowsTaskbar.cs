@@ -38,6 +38,8 @@ public static unsafe class WindowsTaskbar
     private const int DeleteTab = 5;
     private const int SetProgressValue = 9;
     private const int SetProgressState = 10;
+    private const int ThumbBarAddButtonsSlot = 15;
+    private const int ThumbBarUpdateButtonsSlot = 16;
     private const int SetOverlayIconSlot = 18;
     private const int SetThumbnailTooltipSlot = 19;
     private const int SetThumbnailClipSlot = 20;
@@ -80,6 +82,34 @@ public static unsafe class WindowsTaskbar
         }
         // The taskbar keeps its own copy.
         finally { DestroyIcon(icon); }
+    }
+
+    /// <summary>Adds <paramref name="buttons"/> to the window's thumbnail toolbar (<paramref name="add"/>, once per
+    /// window) or updates them. False if the shell refused.</summary>
+    /// <remarks>The shell keeps using the icons, so destroy them only after they are replaced.</remarks>
+    public static bool SetThumbButtons(nint hwnd, ReadOnlySpan<ThumbButton> buttons, bool add)
+    {
+        var taskbar = Taskbar();
+        if (taskbar is null) return false;
+        var native = stackalloc ThumbButtonNative[buttons.Length];
+        for (var i = 0; i < buttons.Length; i++)
+        {
+            var b = buttons[i];
+            native[i] = new ThumbButtonNative { Mask = ThbIcon | ThbTooltip | ThbFlags, Id = b.Id, Icon = b.Icon, Flags = b.Flags };
+            var tip = (b.Tooltip ?? "").AsSpan();
+            tip[..Math.Min(tip.Length, 259)].CopyTo(new Span<char>(native[i].Tip, 260));
+        }
+        return ((delegate* unmanaged<void*, nint, uint, ThumbButtonNative*, int>)Slot(taskbar, add ? ThumbBarAddButtonsSlot : ThumbBarUpdateButtonsSlot))(taskbar, hwnd, (uint)buttons.Length, native) >= 0;
+    }
+
+    /// <summary>An icon from <paramref name="bgra"/> (straight alpha, top row first), or 0; free it with
+    /// <see cref="DestroyIconHandle"/>.</summary>
+    public static nint CreateIconHandle(ReadOnlySpan<byte> bgra, int width, int height) => CreateIcon(bgra, width, height);
+
+    /// <summary>Frees an icon from <see cref="CreateIconHandle"/>; 0 is ignored.</summary>
+    public static void DestroyIconHandle(nint icon)
+    {
+        if (icon != 0) DestroyIcon(icon);
     }
 
     /// <summary>Removes the overlay icon. False if the shell refused.</summary>
@@ -216,6 +246,21 @@ public static unsafe class WindowsTaskbar
         public uint Flags;
         public uint Count;
         public uint Timeout;
+    }
+
+    private const uint ThbIcon = 2;
+    private const uint ThbTooltip = 4;
+    private const uint ThbFlags = 8;
+
+    [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)]
+    private struct ThumbButtonNative
+    {
+        public uint Mask;
+        public uint Id;
+        public uint Bitmap;
+        public nint Icon;
+        public fixed char Tip[260];
+        public uint Flags;
     }
 
     [StructLayout(LayoutKind.Sequential)]

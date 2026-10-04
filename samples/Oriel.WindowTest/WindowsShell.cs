@@ -96,6 +96,93 @@ static unsafe class WindowsShell
     /// <summary>The window's system backdrop, read back from DWM.</summary>
     internal static Oriel.Cef.Platform.WindowsBackdrop? Backdrop(nint hwnd)
         => OperatingSystem.IsWindows() ? Oriel.Cef.Platform.WindowsWindow.GetBackdrop(hwnd) : null;
+    /// <summary>The centre pixel of the window's big or small icon as (B, G, R, A), from <c>WM_GETICON</c>; null if
+    /// the window has none.</summary>
+    internal static (byte B, byte G, byte R, byte A)? IconCentre(nint hwnd, bool big)
+    {
+        nint icon;
+        if (SendMessageTimeoutW(hwnd, 0x7F /* WM_GETICON */, big ? 1 : 2 /* ICON_BIG : ICON_SMALL2 */, 0, 2 /* SMTO_ABORTIFHUNG */, 1000, &icon) == 0 || icon == 0)
+            return null;
+        IconInfo info;
+        if (GetIconInfo(icon, &info) == 0) return null;
+        try
+        {
+            if (info.Color == 0) return null;
+            BitmapHeader bitmap;
+            if (GetObjectW(info.Color, sizeof(BitmapHeader), &bitmap) == 0) return null;
+            var header = new BitmapInfoHeader { Size = (uint)sizeof(BitmapInfoHeader), Width = bitmap.Width, Height = -bitmap.Height, Planes = 1, BitCount = 32 };
+            var pixels = new byte[bitmap.Width * bitmap.Height * 4];
+            var dc = GetDC(0);
+            try
+            {
+                fixed (byte* data = pixels)
+                    if (GetDIBits(dc, info.Color, 0, (uint)bitmap.Height, data, &header, 0) == 0) return null;
+            }
+            finally { _ = ReleaseDC(0, dc); }
+            var i = ((bitmap.Height / 2) * bitmap.Width + bitmap.Width / 2) * 4;
+            return (pixels[i], pixels[i + 1], pixels[i + 2], pixels[i + 3]);
+        }
+        finally
+        {
+            if (info.Color != 0) _ = DeleteObject(info.Color);
+            if (info.Mask != 0) _ = DeleteObject(info.Mask);
+        }
+    }
+
+    /// <summary>Sends the window the <c>WM_COMMAND</c> a click on thumbnail button <paramref name="id"/> sends.</summary>
+    internal static void ClickThumbButton(nint hwnd, int id)
+    {
+        nint result;
+        _ = SendMessageTimeoutW(hwnd, 0x0111 /* WM_COMMAND */, (0x1800 /* THBN_CLICKED */ << 16) | id, 0, 2, 1000, &result);
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct IconInfo
+    {
+        public int IsIcon;
+        public uint HotspotX;
+        public uint HotspotY;
+        public nint Mask;
+        public nint Color;
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct BitmapHeader
+    {
+        public int Type;
+        public int Width;
+        public int Height;
+        public int WidthBytes;
+        public ushort Planes;
+        public ushort BitsPixel;
+        public nint Bits;
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct BitmapInfoHeader
+    {
+        public uint Size;
+        public int Width;
+        public int Height;
+        public ushort Planes;
+        public ushort BitCount;
+        public uint Compression;
+        public uint SizeImage;
+        public int XPelsPerMeter;
+        public int YPelsPerMeter;
+        public uint ClrUsed;
+        public uint ClrImportant;
+        // Room for the colour table GetDIBits may write after the header.
+        public fixed uint Colors[256];
+    }
+
+    [DllImport("user32.dll")] private static extern nint SendMessageTimeoutW(nint hwnd, uint message, nint wParam, nint lParam, uint flags, uint timeout, nint* result);
+    [DllImport("user32.dll")] private static extern int GetIconInfo(nint icon, IconInfo* info);
+    [DllImport("user32.dll")] private static extern nint GetDC(nint hwnd);
+    [DllImport("user32.dll")] private static extern int ReleaseDC(nint hwnd, nint dc);
+    [DllImport("gdi32.dll")] private static extern int GetObjectW(nint obj, int size, void* buffer);
+    [DllImport("gdi32.dll")] private static extern int GetDIBits(nint dc, nint bitmap, uint start, uint lines, void* bits, BitmapInfoHeader* info, uint usage);
+    [DllImport("gdi32.dll")] private static extern int DeleteObject(nint obj);
 
     private static void* Slot(void* com, int index) => (*(void***)com)[index];
 

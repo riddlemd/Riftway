@@ -16,14 +16,15 @@ Cross-platform work. Platform-specific items: [linux-todo.md](linux-todo.md), [w
   - [ ] `titleBarStyle`, `titleBarOverlay`, `trafficLightPosition`
   - [x] Taskbar on Windows: `setProgressBar`, `flashFrame`, `setSkipTaskbar`/`skipTaskbar`, `setOverlayIcon`
   - [x] Taskbar on macOS (Dock progress and bounce) and Linux (urgency hint, skip taskbar)
-  - [ ] `setThumbarButtons` (needs `NativeImage`); Linux taskbar progress (desktop-specific)
+  - [x] `setThumbarButtons`, `setIcon`/`setOverlayIcon` with `NativeImage`
+  - [ ] Linux taskbar progress (desktop-specific)
   - [x] Windows: `setAppDetails`, `setThumbnailClip`, `setThumbnailToolTip`, `backgroundMaterial`/`setBackgroundMaterial`
   - [ ] Make `backgroundMaterial` visible: CEF paints over it (DRIFT W24)
   - [ ] `showInactive`
   - [x] `loadURL` options (userAgent, extraHeaders, httpReferrer, postData); `baseURLForDataURL` throws
   - [ ] Window state persistence (`getNormalBounds`, `persisted-state-restored`)
   - [ ] `opacity`, `hasShadow`, `setIgnoreMouseEvents`, content protection, `setKiosk`, `will-*` events
-  - [ ] Accuracy gaps: `Shown`/`Hidden` fire only from `Show()`/`Hide()`; `SetIcon` takes a path, not a `NativeImage`
+  - [ ] Accuracy gaps: `Shown`/`Hidden` fire only from `Show()`/`Hide()`
 - [x] webContents: `executeJavaScript`, DevTools open/close/toggle, zoom factor/level, `setUserAgent`/`getUserAgent`
 - [x] File `Dialog` and `Screen`; gaps in [DRIFT.md](DRIFT.md)
 - [x] `NavigationHistory` (`WebContents.NavigationHistory`)

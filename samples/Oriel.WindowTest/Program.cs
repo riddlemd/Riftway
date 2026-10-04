@@ -199,6 +199,7 @@ async Task RunAsync(BrowserWindow win, BrowserWindow simple)
     await FramesAsync();
     await TaskbarAsync(win);
     await WindowsApisAsync();
+    await NativeImageAsync();
 
     // Closing cancelled once: the window must survive the first close.
     var closingCount = 0;
@@ -1073,7 +1074,7 @@ async Task TaskbarAsync(BrowserWindow win)
     var refusals = new StringWriter();
     var stderr = Console.Error;
     Console.SetError(refusals);
-    tb.SetOverlayIcon(OverlayPng(), "Oriel overlay test");
+    tb.SetOverlayIcon(NativeImage.CreateFromPath(OverlayPng()), "Oriel overlay test");
     tb.SetOverlayIcon(null, "");
     await Task.Delay(500);
     Console.SetError(stderr);
@@ -1149,6 +1150,111 @@ async Task WindowsApisAsync()
     Check("the shell takes the thumbnail clip and tooltip (weak: no read-back)", refusals.ToString().Length == 0, refusals.ToString().Trim());
     w.Destroy();
     await Task.Delay(300);
+}
+
+async Task NativeImageAsync()
+{
+    // A solid premultiplied BGRA square.
+    static byte[] Solid(int size, byte b, byte g, byte r, byte a = 255)
+    {
+        var pixels = new byte[size * size * 4];
+        for (var i = 0; i < pixels.Length; i += 4) (pixels[i], pixels[i + 1], pixels[i + 2], pixels[i + 3]) = (b, g, r, a);
+        return pixels;
+    }
+    static string Centre(byte[] bgra, int size) { var i = ((size / 2) * size + size / 2) * 4; return bgra.Length != size * size * 4 ? $"{bgra.Length} bytes" : $"{bgra[i]},{bgra[i + 1]},{bgra[i + 2]},{bgra[i + 3]}"; }
+
+    // Decoding goes through CEF's codecs; the red PNG (220, 30, 30) comes from outside Oriel's encoder.
+    var dir = Path.Combine(Path.GetTempPath(), "oriel-image-" + Path.GetRandomFileName());
+    Directory.CreateDirectory(dir);
+    var red = Path.Combine(dir, "icon.png");
+    File.Copy(OverlayPng(), red);
+    var fromPath = NativeImage.CreateFromPath(red);
+    Check("CreateFromPath decodes a PNG", !fromPath.IsEmpty() && fromPath.GetSize() == (16, 16) && Centre(fromPath.ToBitmap(), 16) == "30,30,220,255", $"{fromPath.GetSize()} {Centre(fromPath.ToBitmap(), 16)}");
+    File.WriteAllBytes(Path.Combine(dir, "icon@2x.png"), NativeImage.CreateFromBitmap(Solid(32, 255, 0, 0), new NativeImageBitmapOptions { Width = 32, Height = 32 }).ToPng());
+    var hidpi = NativeImage.CreateFromPath(red);
+    Check("CreateFromPath adds an @2x sibling as scale factor 2", hidpi.GetScaleFactors().SequenceEqual([1.0, 2.0]) && hidpi.GetSize(2) == (16, 16) && Centre(hidpi.ToBitmap(2), 32) == "255,0,0,255",
+        $"{string.Join(",", hidpi.GetScaleFactors())} {hidpi.GetSize(2)} {Centre(hidpi.ToBitmap(2), 32)}");
+    Check("CreateFromPath of a missing file is empty", NativeImage.CreateFromPath(Path.Combine(dir, "missing.png")).IsEmpty());
+    var cropped = hidpi.Crop(new Rectangle(0, 0, 8, 4));
+    Check("Crop keeps every scale factor, each at its own scale", cropped.GetScaleFactors().Count == 2 && cropped.GetSize() == (8, 4) && cropped.ToBitmap(2).Length == 16 * 8 * 4, $"{cropped.GetSize()} {cropped.ToBitmap(2).Length}");
+
+    // Opaque and fully transparent pixels survive a PNG round trip exactly; partial alpha may round.
+    var mixed = Solid(4, 10, 20, 30);
+    Array.Clear(mixed, 0, 4);
+    var image = NativeImage.CreateFromBitmap(mixed, new NativeImageBitmapOptions { Width = 4, Height = 4 });
+    var png = image.ToPng();
+    Check("ToPng writes a PNG that decodes to the same pixels", png is [0x89, 0x50, 0x4E, 0x47, ..] && NativeImage.CreateFromBuffer(png).ToBitmap().SequenceEqual(mixed), png.Length);
+    var jpeg = NativeImage.CreateFromBitmap(Solid(8, 40, 80, 160), new NativeImageBitmapOptions { Width = 8, Height = 8 }).ToJpeg(95);
+    var fromJpeg = NativeImage.CreateFromBuffer(jpeg);
+    var jc = fromJpeg.ToBitmap();
+    Check("ToJpeg writes a JPEG that decodes to about the same colour", jpeg is [0xFF, 0xD8, 0xFF, ..] && fromJpeg.GetSize() == (8, 8) && jc.Length == 8 * 8 * 4 && Math.Abs(jc[0] - 40) <= 6 && Math.Abs(jc[1] - 80) <= 6 && Math.Abs(jc[2] - 160) <= 6,
+        $"{jpeg.Length} {fromJpeg.GetSize()} {(jc.Length == 8 * 8 * 4 ? Centre(jc, 8) : "no pixels")}");
+    var url = image.ToDataUrl();
+    Check("ToDataUrl and CreateFromDataUrl round-trip", url.StartsWith("data:image/png;base64,", StringComparison.Ordinal) && NativeImage.CreateFromDataUrl(url).ToBitmap().SequenceEqual(mixed), url.Length);
+    Check("CreateFromDataUrl of a non-image is empty", NativeImage.CreateFromDataUrl("data:text/plain,hello").IsEmpty());
+    Check("CreateFromBuffer takes a raw bitmap of the given size when it is not a PNG or JPEG",
+        NativeImage.CreateFromBuffer(mixed, new NativeImageBitmapOptions { Width = 4, Height = 4, ScaleFactor = 2 }) is var raw && raw.GetScaleFactors().SequenceEqual([2.0]) && raw.GetSize(2) == (2, 2)
+        && NativeImage.CreateFromBuffer([1, 2, 3]).IsEmpty());
+    var added = NativeImage.CreateEmpty();
+    added.AddRepresentation(new AddRepresentationOptions { ScaleFactor = 1, Buffer = png });
+    added.AddRepresentation(new AddRepresentationOptions { ScaleFactor = 2, DataUrl = NativeImage.CreateFromBitmap(Solid(8, 1, 2, 3), new NativeImageBitmapOptions { Width = 8, Height = 8 }).ToDataUrl() });
+    Check("AddRepresentation takes a PNG buffer and a data URL", added.GetScaleFactors().SequenceEqual([1.0, 2.0]) && added.GetSize(2) == (4, 4), string.Join(",", added.GetScaleFactors()));
+
+    // Windows reads the icon back through WM_GETICON; CEF scales it to the system size, which keeps a solid colour.
+    if (OperatingSystem.IsWindows())
+    {
+        static string Colour((byte B, byte G, byte R, byte A)? p) => p is { } c ? $"{c.B},{c.G},{c.R},{c.A}" : "none";
+        var green = NativeImage.CreateFromBitmap(Solid(32, 0, 200, 0), new NativeImageBitmapOptions { Width = 32, Height = 32 });
+        var w = new BrowserWindow(new BrowserWindowOptions { Title = "Oriel window test: icons", Width = 300, Height = 200, IconImage = green });
+        await Task.Delay(1500);
+        var hwnd = w.GetNativeWindowHandle();
+        Check("the IconImage option sets the window icon (WM_GETICON)", Colour(WindowsShell.IconCentre(hwnd, big: true)) == "0,200,0,255", Colour(WindowsShell.IconCentre(hwnd, big: true)));
+        w.SetIcon(NativeImage.CreateFromBitmap(Solid(32, 200, 0, 0), new NativeImageBitmapOptions { Width = 32, Height = 32 }));
+        Check("SetIcon(NativeImage) replaces it", Eventually(() => Colour(WindowsShell.IconCentre(hwnd, big: true)) == "200,0,0,255", step), Colour(WindowsShell.IconCentre(hwnd, big: true)));
+        w.SetIcon(red);
+        Check("SetIcon(path) still works", Eventually(() => Colour(WindowsShell.IconCentre(hwnd, big: false)) == "30,30,220,255", step), Colour(WindowsShell.IconCentre(hwnd, big: false)));
+        var pathed = new BrowserWindow(new BrowserWindowOptions { Title = "Oriel window test: icon path", Width = 300, Height = 200, Icon = red });
+        await Task.Delay(1500);
+        Check("the Icon option sets the window icon", Colour(WindowsShell.IconCentre(pathed.GetNativeWindowHandle(), big: true)) == "30,30,220,255", Colour(WindowsShell.IconCentre(pathed.GetNativeWindowHandle(), big: true)));
+        pathed.Destroy();
+
+        // The overlay has no read-back; an empty image is refused, which shows the image reaches the taskbar code.
+        var refusals = new StringWriter();
+        var stderr = Console.Error;
+        Console.SetError(refusals);
+        w.SetOverlayIcon(green, "Oriel overlay image test");
+        await Task.Delay(500);
+        var taken = refusals.ToString().Length == 0;
+        w.SetOverlayIcon(NativeImage.CreateEmpty(), "empty");
+        await Task.Delay(500);
+        Console.SetError(stderr);
+        Check("SetOverlayIcon(NativeImage) is taken, an empty image refused (weak: no read-back)", taken && refusals.ToString().Contains("overlay"), refusals.ToString().Trim());
+        w.SetOverlayIcon(null, "");
+
+        // The shell draws the thumbnail toolbar where nothing can read it; the clicks come back as WM_COMMAND.
+        var clicks = new List<string>();
+        var redIcon = NativeImage.CreateFromPath(red);
+        var addedButtons = w.SetThumbarButtons([
+            new ThumbarButton { Icon = green, Tooltip = "Play", Click = () => clicks.Add("play") },
+            new ThumbarButton { Icon = redIcon, Tooltip = "Stop", Flags = ThumbarButtonFlags.DismissOnClick, Click = () => clicks.Add("stop") },
+        ]);
+        WindowsShell.ClickThumbButton(hwnd, 1);
+        WindowsShell.ClickThumbButton(hwnd, 0);
+        Check("SetThumbarButtons adds buttons whose clicks reach their handlers", addedButtons && clicks.SequenceEqual(["stop", "play"]), $"{addedButtons} {string.Join(",", clicks)}");
+        clicks.Clear();
+        var updated = w.SetThumbarButtons([new ThumbarButton { Icon = redIcon, Click = () => clicks.Add("next") }]);
+        WindowsShell.ClickThumbButton(hwnd, 0);
+        WindowsShell.ClickThumbButton(hwnd, 1);
+        Check("a second SetThumbarButtons updates them; a removed button's handler is gone", updated && clicks.SequenceEqual(["next"]), $"{updated} {string.Join(",", clicks)}");
+        Check("SetThumbarButtons refuses more than seven", !w.SetThumbarButtons([.. Enumerable.Range(0, 8).Select(_ => new ThumbarButton { Icon = green })]));
+        clicks.Clear();
+        var cleared = w.SetThumbarButtons([]);
+        WindowsShell.ClickThumbButton(hwnd, 0);
+        Check("SetThumbarButtons([]) removes them", cleared && clicks.Count == 0, $"{cleared} {string.Join(",", clicks)}");
+        w.Destroy();
+        await Task.Delay(300);
+    }
+    Directory.Delete(dir, recursive: true);
 }
 // A 16x16 red PNG, written once to a temp file.
 static string OverlayPng()

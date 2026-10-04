@@ -68,8 +68,12 @@ public sealed record BrowserWindowOptions
     /// Electron's <c>backgroundColor</c>.</summary>
     public string? BackgroundColor { get; init; }
 
-    /// <summary>A PNG or JPEG for the window and taskbar icon (Windows, Linux).</summary>
+    /// <summary>A PNG or JPEG for the window and taskbar icon (Windows, Linux). Electron's <c>icon</c> as a path.</summary>
     public string? Icon { get; init; }
+
+    /// <summary>The window and taskbar icon as an image; wins over <see cref="Icon"/>. Electron's <c>icon</c> as a
+    /// <c>NativeImage</c>.</summary>
+    public NativeImage? IconImage { get; init; }
 
     /// <summary>Whether the window has no taskbar button (Windows, Linux; macOS has no per-window taskbar button).
     /// Electron's <c>skipTaskbar</c>.</summary>
@@ -215,6 +219,10 @@ public sealed unsafe class BrowserWindow
 
     private bool _closable;
     private bool _skipTaskbar;
+    private readonly NativeImage? _icon;
+    private bool _thumbarAdded;
+    private readonly nint[] _thumbarIcons = new nint[Thumbar.MaxButtons];
+    private readonly Action?[] _thumbarClicks = new Action?[Thumbar.MaxButtons];
     // macOS: the Dock bounce FlashFrame started, to cancel.
     private nint _attentionRequest;
     // Set by Close()/Destroy(): a close from code goes through even when the user may not close.
@@ -256,6 +264,7 @@ public sealed unsafe class BrowserWindow
         Id = Interlocked.Increment(ref s_nextId);
         _closable = _options.Closable;
         _skipTaskbar = _options.SkipTaskbar;
+        _icon = _options.IconImage ?? (_options.Icon is { } iconPath ? NativeImage.CreateFromBuffer(File.ReadAllBytes(iconPath)) : null);
         _backgroundColor = _options.BackgroundColor;
         WebContents = new WebContents(_options.WebPreferences.Preload is { } preload ? File.ReadAllText(preload) : null, _options.WebPreferences);
         WebContents.PageTitleUpdated += (_, e) => PageTitleUpdated?.Invoke(this, e);
@@ -875,16 +884,24 @@ public sealed unsafe class BrowserWindow
     public void SetIcon(string path)
     {
         ArgumentNullException.ThrowIfNull(path);
-        var bytes = File.ReadAllBytes(path);
-        Command(w =>
-        {
-            var image = LoadImage(bytes);
-            NativeObject.AddRef(image);
-            w->set_window_icon(w, image);
-            NativeObject.AddRef(image);
-            w->set_window_app_icon(w, image);
-            NativeObject.Release(image);
-        });
+        SetIcon(NativeImage.CreateFromBuffer(File.ReadAllBytes(path)));
+    }
+
+    /// <summary>Sets the window and taskbar icon, every scale factor of it (Windows, Linux). Electron's <c>win.setIcon()</c>.</summary>
+    public void SetIcon(NativeImage icon)
+    {
+        ArgumentNullException.ThrowIfNull(icon);
+        Command(w => SetIconOn(w, icon));
+    }
+
+    private static void SetIconOn(cef_window_t* w, NativeImage icon)
+    {
+        var image = icon.ToCefImage();
+        NativeObject.AddRef(image);
+        w->set_window_icon(w, image);
+        NativeObject.AddRef(image);
+        w->set_window_app_icon(w, image);
+        NativeObject.Release(image);
     }
 
     /// <summary>Shows progress on the taskbar button, from 0 to 1; below 0 removes it and above 1 shows it as
@@ -927,34 +944,28 @@ public sealed unsafe class BrowserWindow
         if (changed || skip) ApplySkipTaskbar(w, restore: !skip);
     });
 
-    /// <summary>Shows a small PNG or JPEG over the taskbar icon, with <paramref name="description"/> for screen
-    /// readers; a null path removes it. Windows only for now: does nothing on macOS and Linux.
-    /// Electron's <c>win.setOverlayIcon()</c>.</summary>
-    public void SetOverlayIcon(string? path, string description)
+    /// <summary>Shows a small image over the taskbar icon, with <paramref name="description"/> for screen readers; null
+    /// removes it. Windows only for now: does nothing on macOS and Linux. Electron's <c>win.setOverlayIcon()</c>.</summary>
+    public void SetOverlayIcon(NativeImage? overlay, string description)
     {
         ArgumentNullException.ThrowIfNull(description);
-        var bytes = path is null ? null : File.ReadAllBytes(path);
         Command(w =>
         {
             if (!OperatingSystem.IsWindows()) return;
             var hwnd = Hwnd(w);
-            var done = bytes is null ? WindowsTaskbar.ClearOverlayIcon(hwnd) : SetOverlayIconOn(hwnd, bytes, description);
+            var done = overlay is null ? WindowsTaskbar.ClearOverlayIcon(hwnd) : SetOverlayIconOn(hwnd, overlay, description);
             if (!done) Console.Error.WriteLine("[Oriel] The taskbar did not take the overlay icon.");
         });
     }
 
-    [System.Runtime.Versioning.SupportedOSPlatform("windows")]
-    private static bool SetOverlayIconOn(nint hwnd, byte[] bytes, string description)
+    /// <summary>Sets the buttons in the window's taskbar thumbnail, at most seven; an empty list removes them. False if
+    /// there are more than seven, the shell refused, or not on Windows. Electron's <c>win.setThumbarButtons()</c>.</summary>
+    /// <remarks>Call it once the window is shown: the shell adds the toolbar to an existing taskbar button.</remarks>
+    public bool SetThumbarButtons(IReadOnlyList<ThumbarButton> buttons)
     {
-        var image = LoadImage(bytes);
-        int width, height;
-        var bitmap = image->get_as_bitmap(image, 1.0f, cef_color_type_t.CEF_COLOR_TYPE_BGRA_8888, cef_alpha_type_t.CEF_ALPHA_TYPE_POSTMULTIPLIED, &width, &height);
-        NativeObject.Release(image);
-        if (bitmap is null) return false;
-        var pixels = new byte[(int)bitmap->get_size(bitmap)];
-        fixed (byte* data = pixels) bitmap->get_data(bitmap, data, (nuint)pixels.Length, 0);
-        NativeObject.Release(bitmap);
-        return WindowsTaskbar.SetOverlayIcon(hwnd, pixels, width, height, description);
+        ArgumentNullException.ThrowIfNull(buttons);
+        var plan = Thumbar.Plan(buttons);
+        return plan is not null && Query(w => OperatingSystem.IsWindows() && SetThumbarButtonsOn(w, plan), false);
     }
 
     /// <summary>Sets the window's App User Model ID and relaunch details, which decide how the taskbar groups and pins
@@ -1008,6 +1019,45 @@ public sealed unsafe class BrowserWindow
             Console.Error.WriteLine("[Oriel] DWM did not take the background material (it needs Windows 11 22H2).");
     }
 
+    [System.Runtime.Versioning.SupportedOSPlatform("windows")]
+    private bool SetThumbarButtonsOn(cef_window_t* w, (int Slot, ThumbarButton? Button, uint Flags)[] plan)
+    {
+        var hwnd = Hwnd(w);
+        if (!WindowsSubclass.RouteThumbButtonClicks(hwnd, slot => _thumbarClicks[slot]?.Invoke())) return false;
+        var icons = plan.Select(s => s.Button is { } b ? StraightIcon(b.Icon) : 0).ToArray();
+        var native = plan.Select(s => new ThumbButton((uint)s.Slot, icons[s.Slot], s.Button?.Tooltip, s.Flags)).ToArray();
+        if (!WindowsTaskbar.SetThumbButtons(hwnd, native, add: !_thumbarAdded))
+        {
+            foreach (var icon in icons) WindowsTaskbar.DestroyIconHandle(icon);
+            return false;
+        }
+        _thumbarAdded = true;
+        for (var i = 0; i < Thumbar.MaxButtons; i++)
+        {
+            WindowsTaskbar.DestroyIconHandle(_thumbarIcons[i]);
+            _thumbarIcons[i] = icons[i];
+            _thumbarClicks[i] = plan[i].Button?.Click;
+        }
+        return true;
+    }
+
+    // Electron takes the 1x representation; icon DIBs take straight alpha.
+    [System.Runtime.Versioning.SupportedOSPlatform("windows")]
+    private static nint StraightIcon(NativeImage image)
+    {
+        if (image.IsEmpty()) return 0;
+        var bitmap = ImagePixels.Unpremultiply(image.BitmapAt(1.0));
+        return WindowsTaskbar.CreateIconHandle(bitmap.Bgra, bitmap.Width, bitmap.Height);
+    }
+
+    [System.Runtime.Versioning.SupportedOSPlatform("windows")]
+    private static bool SetOverlayIconOn(nint hwnd, NativeImage overlay, string description)
+    {
+        if (overlay.IsEmpty()) return false;
+        var bitmap = ImagePixels.Unpremultiply(overlay.BitmapAt(1.0));
+        return WindowsTaskbar.SetOverlayIcon(hwnd, bitmap.Bgra, bitmap.Width, bitmap.Height, description);
+    }
+
     // The shell creates the button on the first show, whether at creation or from Show(); later shows keep it removed.
     private void ApplySkipTaskbar(cef_window_t* w, bool restore = false)
     {
@@ -1018,17 +1068,6 @@ public sealed unsafe class BrowserWindow
     }
 
     private static nint Hwnd(cef_window_t* w) => (nint)w->get_window_handle(w);
-
-    private static cef_image_t* LoadImage(byte[] bytes)
-    {
-        var image = CefNative.cef_image_create();
-        fixed (byte* data = bytes)
-        {
-            if (bytes is [0x89, 0x50, 0x4E, 0x47, ..]) image->add_png(image, 1.0f, data, (nuint)bytes.Length);
-            else image->add_jpeg(image, 1.0f, data, (nuint)bytes.Length);
-        }
-        return image;
-    }
 
     // The page area: the client area below the menu bar.
     private Rectangle ContentBoundsOn(cef_window_t* w)
@@ -1138,6 +1177,7 @@ public sealed unsafe class BrowserWindow
             _browserView->@base.set_background_color(&_browserView->@base, argb);
         }
         if (_options.BackgroundMaterial is { } material) ApplyBackgroundMaterial(window, material);
+        if (_icon is not null) SetIconOn(window, _icon);
 
         if (UsesSimpleFullScreen && OperatingSystem.IsMacOS())
             _routedNSWindow = MacWindow.RouteFullScreenToggle((nint)window->get_window_handle(window), () => SetSimpleFullScreen(!IsSimpleFullScreen));
@@ -1239,6 +1279,8 @@ public sealed unsafe class BrowserWindow
         if (_routedNSWindow != 0 && OperatingSystem.IsMacOS()) MacWindow.UnrouteFullScreenToggle(_routedNSWindow);
         Menu.ApplicationMenuChanged -= _applicationMenuChanged;
         _menuBar?.Detach();
+        if (OperatingSystem.IsWindows())
+            foreach (var icon in _thumbarIcons) WindowsTaskbar.DestroyIconHandle(icon);
         NativeObject.Release(_browserView);
         NativeObject.Release(_window);
         _browserView = null;
