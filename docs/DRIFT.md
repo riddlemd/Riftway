@@ -59,7 +59,11 @@ Entries marked _(branch `x`)_ are on that branch and not yet in `main`.
 | W15 | `zoomFactor` | Re-applies to an origin whose zoom was reset to 0 | Todo | Track explicit resets |
 | W16 | `isMenuBarVisible()` etc. on Windows/Linux; `setMenu` on macOS sets nothing; Windows uses a native Win32 menu bar | Same API; the bar is drawn by CEF Views: on Windows a plain strip following the system theme, without mnemonic underlines and with different padding and hover | CEF: Views windows have no native menu bar | Style the bar (colours, font, underlines) to match the OS |
 | W17 | Alt shows an auto-hidden bar until the menu is used | Until Alt is pressed again | Todo | Hide on menu close and on focus loss |
-| W18 | `width`/`height` are the window's outer size unless `useContentSize` | macOS: the window comes out a title bar taller than asked (260 → 288); Linux exact; Windows unchecked | Unknown: likely `center_window` sizing the client area on macOS | Size the frame from the content inset |
+| W18 | `width`/`height` are the window's outer size unless `useContentSize` | macOS: the window comes out a title bar taller than asked (260 → 288); Linux and Windows exact (Windows: 360x260 gives a 360x260 window with a 344x221 page area) | Unknown: likely `center_window` sizing the client area on macOS | Size the frame from the content inset |
+| W20 | `setProgressBar` and `flashFrame` work on macOS and Linux too (Dock progress and bounce, urgency hint); `skipTaskbar` on Linux (`_NET_WM_STATE_SKIP_TASKBAR`) | Windows only; no-ops on macOS and Linux _(branch `win-taskbar`)_ | OS | macOS: `NSDockTile`, `requestUserAttention:`; Linux: EWMH skip-taskbar and demands-attention, launcher progress over D-Bus |
+| W21 | `setOverlayIcon(overlay: NativeImage \| null, description)` | Takes a PNG/JPEG file path or null _(branch `win-taskbar`)_ | Module: `NativeImage` (M5) | Overload taking `NativeImage` |
+| W22 | `setThumbarButtons` (Windows) | Missing _(branch `win-taskbar`)_ | Module: `NativeImage` for the icons; the clicks also need the window's `WM_COMMAND` (`THBN_CLICKED`) routed back | `ITaskbarList3::ThumbBarAddButtons` and a subclassed `HWND`, after `NativeImage` |
+| W23 | `setProgressBar(NaN)` is unspecified (Electron casts it to an arbitrary value) | Removes the bar _(branch `win-taskbar`)_ | Design | None |
 
 ## window.open
 
