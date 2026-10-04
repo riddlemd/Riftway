@@ -169,6 +169,12 @@ public sealed unsafe class OrielApp
         Protocol.OnContextInitialized();
         IsReady = true;
         Ready?.Invoke(this, EventArgs.Empty);
+        // After Ready, so an app that sets its own menu there never shows the default.
+        if (OperatingSystem.IsMacOS())
+        {
+            Menu.SetDefaultApplicationMenuIfUnset();
+            MacApplicationMenu.Install();
+        }
     }
 
     // Chrome-style profiles save each origin's zoom across launches; Electron keeps zoom for the session only.

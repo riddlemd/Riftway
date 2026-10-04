@@ -92,6 +92,9 @@ public sealed record BrowserWindowOptions
     /// Electron disables the parent's input itself there, which Oriel does not yet.</remarks>
     public bool Modal { get; init; }
 
+    /// <summary>Hides the menu bar until Alt is pressed (Windows, Linux). Electron's <c>autoHideMenuBar</c>.</summary>
+    public bool AutoHideMenuBar { get; init; }
+
     /// <summary>Settings for the page. Electron's <c>webPreferences</c>.</summary>
     public WebPreferences WebPreferences { get; init; } = new();
 }
@@ -188,6 +191,11 @@ public sealed unsafe class BrowserWindow
     private readonly ClientHandler _client;
     private readonly BrowserViewDelegate _viewDelegate;
     private readonly WindowDelegate _windowDelegate;
+    // Windows and Linux only; on macOS the application menu is the menu bar.
+    private readonly WindowMenuBar? _menuBar;
+    private readonly Action<Menu?> _applicationMenuChanged;
+    private Menu? _ownMenu;
+    private bool _hasOwnMenu;
 
     private cef_browser_view_t* _browserView;
     private cef_window_t* _window;
@@ -235,7 +243,17 @@ public sealed unsafe class BrowserWindow
             _readyToShowRaised = true;
             ReadyToShow?.Invoke(this, EventArgs.Empty);
         };
-        _client = new ClientHandler(WebContents.Display, WebContents.Load, WebContents.JsDialog, WebContents.Request, WebContents.Command);
+        _client = new ClientHandler(WebContents.Display, WebContents.Load, WebContents.JsDialog, WebContents.Request, WebContents.Command,
+            WebContents.ContextMenuRequests);
+        if (!OperatingSystem.IsMacOS())
+        {
+            _menuBar = new WindowMenuBar(this) { AutoHide = _options.AutoHideMenuBar };
+            _menuBar.SetShown(!_options.AutoHideMenuBar);
+        }
+        _applicationMenuChanged = menu => Command(_ =>
+        {
+            if (!_hasOwnMenu) _menuBar?.SetMenu(menu);
+        });
         _viewDelegate = new BrowserViewDelegate { BrowserCreated = OnBrowserCreated, BrowserDestroyed = OnBrowserDestroyed };
         _windowDelegate = new WindowDelegate
         {
@@ -253,6 +271,8 @@ public sealed unsafe class BrowserWindow
             MaximumSize = new cef_size_t { width = _options.MaxWidth, height = _options.MaxHeight },
             Parent = _options.Parent is { } parent ? () => (nint)parent._window : null,
             Modal = _options.Modal,
+            Accelerator = commandId => _menuBar?.OnAccelerator(commandId) ?? false,
+            KeyEvent = keyEvent => _menuBar?.OnKeyEvent(keyEvent) ?? false,
         };
 
         CefThread.InvokeOnUi(() =>
@@ -283,6 +303,7 @@ public sealed unsafe class BrowserWindow
         ClearWebPreferenceStrings(&settings);
 
         lock (s_openGate) s_open.Add(this);
+        Menu.ApplicationMenuChanged += _applicationMenuChanged;
         _options.Parent?._children.Add(this);
         NativeObject.AddRef(_windowDelegate.Native);
         _window = CefNative.cef_window_create_top_level(_windowDelegate.Native);
@@ -347,6 +368,64 @@ public sealed unsafe class BrowserWindow
 
     /// <summary>Whether this window disables its parent while shown. Electron's <c>win.isModal()</c>.</summary>
     public bool IsModal => _options.Modal;
+
+    /// <summary>Sets the window's menu bar, replacing the application menu for this window; null removes it
+    /// (Windows, Linux). Electron's <c>win.setMenu()</c>.</summary>
+    /// <remarks>On macOS the menu bar belongs to the application: use <see cref="Menu.SetApplicationMenu"/>.</remarks>
+    public void SetMenu(Menu? menu) => CefThread.RunOnUi(() =>
+    {
+        _hasOwnMenu = true;
+        _ownMenu = menu;
+        if (_window is not null) _menuBar?.SetMenu(menu);
+    });
+
+    /// <summary>Removes the window's menu bar (Windows, Linux). Electron's <c>win.removeMenu()</c>.</summary>
+    public void RemoveMenu() => SetMenu(null);
+
+    /// <summary>Whether the menu bar stays hidden until Alt is pressed (Windows, Linux). Setting it shows or
+    /// hides the bar to match. Electron's <c>win.autoHideMenuBar</c>.</summary>
+    public bool AutoHideMenuBar
+    {
+        get => Query(_ => _menuBar?.AutoHide ?? false, false);
+        set => Command(_ =>
+        {
+            if (_menuBar is null) return;
+            _menuBar.AutoHide = value;
+            _menuBar.SetShown(!value);
+        });
+    }
+
+    /// <summary>Shows or hides the menu bar; with <see cref="AutoHideMenuBar"/>, Alt still toggles it (Windows,
+    /// Linux). Electron's <c>win.setMenuBarVisibility()</c>.</summary>
+    public void SetMenuBarVisibility(bool visible) => Command(_ => _menuBar?.SetShown(visible));
+
+    /// <summary>Whether a menu bar is showing; always false on macOS. Electron's <c>win.isMenuBarVisible()</c>.</summary>
+    public bool IsMenuBarVisible => Query(_ => _menuBar?.IsVisible ?? false, false);
+
+    /// <summary>Shows <paramref name="menu"/> at a point in the page, by default where the last context menu was asked for.</summary>
+    internal void ShowPopup(Menu menu, int? x, int? y, Action? closed) => Command(w =>
+    {
+        var (px, py) = x is { } ax && y is { } ay ? (ax, ay) : WebContents.LastContextMenuPoint ?? (0, 0);
+        var content = ContentBoundsOn(w);
+        var screen = new cef_point_t { x = content.X + px, y = content.Y + py };
+        var popupDelegate = new MenuModelDelegate { CommandExecuted = id => menu.FindByCommandId(id)?.Activate(this), Closed = closed };
+        NativeObject.AddRef(popupDelegate.Native);
+        var model = CefNative.cef_menu_model_create(popupDelegate.Native);
+        MenuModels.Fill(model, menu);
+        // The model reference passes to CEF, which keeps it, and through it the delegate, until the menu closes.
+        w->show_menu(w, model, &screen, cef_menu_anchor_position_t.CEF_MENU_ANCHOR_TOPLEFT);
+    });
+
+    /// <summary>Closes a menu shown by <see cref="ShowPopup"/>.</summary>
+    internal void ClosePopup()
+    {
+        // An open popup holds macOS in AppKit's menu loop, where a posted CEF task would wait for the menu to close.
+        if (OperatingSystem.IsMacOS()) MacMenu.PerformOnMainThread(() => { if (_window is not null) _window->cancel_menu(_window); });
+        else Command(w => w->cancel_menu(w));
+    }
+
+    /// <summary>Opens the menu bar's menu at <paramref name="index"/> as a click would; false if there is none.</summary>
+    internal bool TriggerMenuBarItem(int index) => Query(_ => _menuBar?.TriggerMenu(index) ?? false, false);
 
     /// <summary>The page set its title; cancel to keep the window's title. Electron's <c>page-title-updated</c>.</summary>
     public event EventHandler<PageTitleUpdatedEventArgs>? PageTitleUpdated;
@@ -626,7 +705,7 @@ public sealed unsafe class BrowserWindow
     public (int X, int Y) GetPosition() => GetBounds() is var b ? (b.X, b.Y) : default;
 
     /// <summary>The page area's bounds on screen, excluding title bar and frame. Electron's <c>win.getContentBounds()</c>.</summary>
-    public Rectangle GetContentBounds() => Query(w => ToRectangle(w->get_client_area_bounds_in_screen(w)), default);
+    public Rectangle GetContentBounds() => Query(ContentBoundsOn, default);
 
     /// <summary>Places the window so its page area has <paramref name="bounds"/>. Electron's <c>win.setContentBounds()</c>.</summary>
     public void SetContentBounds(Rectangle bounds) => Command(w => SetContentBoundsOn(w, bounds));
@@ -638,7 +717,7 @@ public sealed unsafe class BrowserWindow
     /// Electron's <c>win.setContentSize()</c>.</summary>
     public void SetContentSize(int width, int height) => Command(w =>
     {
-        var content = ToRectangle(w->get_client_area_bounds_in_screen(w));
+        var content = ContentBoundsOn(w);
         SetContentBoundsOn(w, content with { Width = width, Height = height });
     });
 
@@ -680,11 +759,19 @@ public sealed unsafe class BrowserWindow
         });
     }
 
-    private static void SetContentBoundsOn(cef_window_t* w, Rectangle content)
+    // The page area: the client area below the menu bar.
+    private Rectangle ContentBoundsOn(cef_window_t* w)
     {
-        // The frame is whatever the window has beyond its client area; keep it the same around the new content.
+        var client = ToRectangle(w->get_client_area_bounds_in_screen(w));
+        var bar = _menuBar?.Height ?? 0;
+        return client with { Y = client.Y + bar, Height = client.Height - bar };
+    }
+
+    private void SetContentBoundsOn(cef_window_t* w, Rectangle content)
+    {
+        // The frame is whatever the window has beyond its page area; keep it the same around the new content.
         var outer = ToRectangle(w->@base.@base.get_bounds_in_screen(&w->@base.@base));
-        var inner = ToRectangle(w->get_client_area_bounds_in_screen(w));
+        var inner = ContentBoundsOn(w);
         var rect = new cef_rect_t
         {
             x = content.X - (inner.X - outer.X),
@@ -728,8 +815,16 @@ public sealed unsafe class BrowserWindow
 
     private void OnWindowCreated(cef_window_t* window)
     {
-        NativeObject.AddRef(_browserView);
-        window->@base.add_child_view(&window->@base, (cef_view_t*)_browserView);
+        if (_menuBar is not null)
+        {
+            _menuBar.Attach(window, _browserView);
+            _menuBar.SetMenu(_hasOwnMenu ? _ownMenu : Menu.GetApplicationMenu());
+        }
+        else
+        {
+            NativeObject.AddRef(_browserView);
+            window->@base.add_child_view(&window->@base, (cef_view_t*)_browserView);
+        }
 
         var size = new cef_size_t { width = _options.Width, height = _options.Height };
         if (_options is { X: { } x, Y: { } y, Center: false })
@@ -749,7 +844,7 @@ public sealed unsafe class BrowserWindow
 
         if (_options.UseContentSize)
         {
-            var content = ToRectangle(window->get_client_area_bounds_in_screen(window));
+            var content = ContentBoundsOn(window);
             SetContentBoundsOn(window, content with { Width = _options.Width, Height = _options.Height });
         }
         if (_backgroundColor is not null)
@@ -841,6 +936,8 @@ public sealed unsafe class BrowserWindow
     private void OnWindowDestroyed(cef_window_t* window)
     {
         if (_routedNSWindow != 0 && OperatingSystem.IsMacOS()) MacWindow.UnrouteFullScreenToggle(_routedNSWindow);
+        Menu.ApplicationMenuChanged -= _applicationMenuChanged;
+        _menuBar?.Detach();
         NativeObject.Release(_browserView);
         NativeObject.Release(_window);
         _browserView = null;

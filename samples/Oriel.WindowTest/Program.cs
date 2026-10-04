@@ -1,3 +1,4 @@
+using Oriel.Cef.Platform;
 using System.ComponentModel;
 using Oriel;
 
@@ -188,6 +189,8 @@ async Task RunAsync(BrowserWindow win, BrowserWindow simple)
     await ParentAndModalAsync(win);
     await ScreenAsync(win);
     await DialogsAsync(win);
+    await MenusAsync(win);
+    await ContextMenusAsync(win);
 
     // Closing cancelled once: the window must survive the first close.
     var closingCount = 0;
@@ -509,11 +512,216 @@ async Task DialogsAsync(BrowserWindow win)
     Directory.Delete(dir, recursive: true);
 }
 
+async Task ContextMenusAsync(BrowserWindow win)
+{
+    win.Focus();
+    await Js(win, "document.body.innerHTML = '<textarea id=t>hello world</textarea>'; t.focus(); t.select(); 1");
+    async Task<ContextMenuParams?> AskForMenu(Action ask)
+    {
+        ContextMenuParams? seen = null;
+        using var asked = new ManualResetEventSlim();
+        EventHandler<ContextMenuParams> onMenu = (_, p) => { seen = p; asked.Set(); };
+        win.WebContents.ContextMenu += onMenu;
+        ask();
+        await Task.Run(() => asked.Wait(step));
+        win.WebContents.ContextMenu -= onMenu;
+        return seen;
+    }
+    static string Describe(ContextMenuParams? p) => p is null ? "none"
+        : $"at={p.X},{p.Y} editable={p.IsEditable} selection={p.SelectionText} copy={p.EditFlags.CanCopy} paste={p.EditFlags.CanPaste} page={p.PageUrl.Length > 0}";
+    static bool OnTheSelectedField(ContextMenuParams? p)
+        => p is { IsEditable: true, SelectionText: "hello world", EditFlags.CanCopy: true, EditFlags.CanPaste: true } && p.PageUrl.Length > 0;
+
+    var x = int.Parse((string)(await Js(win, "Math.round(t.getBoundingClientRect().left + 20)"))!);
+    var y = int.Parse((string)(await Js(win, "Math.round(t.getBoundingClientRect().top + 10)"))!);
+    var clicked = await AskForMenu(() =>
+    {
+        win.WebContents.SendInputEvent(new MouseInputEvent(MouseInputEventType.MouseDown, x, y) { Button = MouseButton.Right });
+        win.WebContents.SendInputEvent(new MouseInputEvent(MouseInputEventType.MouseUp, x, y) { Button = MouseButton.Right });
+    });
+    Check("a right click raises ContextMenu with its params", OnTheSelectedField(clicked) && clicked!.X == x && clicked.Y == y, Describe(clicked));
+
+    if (!OperatingSystem.IsMacOS())
+    {
+        // Shift+F10 asks for the context menu from the keyboard (not a macOS convention).
+        var keyed = await AskForMenu(() =>
+        {
+            win.WebContents.SendInputEvent(new KeyboardInputEvent(KeyboardInputEventType.KeyDown, "F10") { Modifiers = InputModifiers.Shift });
+            win.WebContents.SendInputEvent(new KeyboardInputEvent(KeyboardInputEventType.KeyUp, "F10") { Modifiers = InputModifiers.Shift });
+        });
+        Check("Shift+F10 raises ContextMenu", OnTheSelectedField(keyed), Describe(keyed));
+    }
+
+    var popup = new Menu { new MenuItem { Label = "One" }, new MenuItem { Type = MenuItemType.Separator }, new MenuItem { Role = MenuItemRole.Copy } };
+    using (var closed = new ManualResetEventSlim())
+    {
+        popup.Popup(new PopupOptions { Window = win, X = 20, Y = 20, Closed = closed.Set });
+        await Task.Delay(500);
+        Check("a popup stays open until closed", !closed.IsSet);
+        popup.ClosePopup(win);
+        Check("ClosePopup closes it and runs Closed", closed.Wait(step));
+    }
+    using (var closed = new ManualResetEventSlim())
+    {
+        // Without X/Y it opens where the last context menu was asked for.
+        popup.Popup(new PopupOptions { Window = win, Closed = closed.Set });
+        await Task.Delay(300);
+        popup.ClosePopup(win);
+        Check("a popup at the last context menu point", closed.Wait(step));
+    }
+    Check("Popup with X but no Y throws", Throws<ArgumentException>(() => popup.Popup(new PopupOptions { Window = win, X = 1 })));
+}
+
 static bool Throws<T>(Action act) where T : Exception
 {
     try { act(); return false; }
     catch (T) { return true; }
 }
+
+async Task MenusAsync(BrowserWindow win)
+{
+    var defaultMenu = Menu.GetApplicationMenu();
+    if (OperatingSystem.IsMacOS())
+        Check("macOS gets a default application menu", defaultMenu?.Items.Select(i => i.Role).SequenceEqual(
+            [MenuItemRole.AppMenu, MenuItemRole.FileMenu, MenuItemRole.EditMenu, MenuItemRole.ViewMenu, MenuItemRole.WindowMenu]) == true);
+    else
+        Check("no default application menu on Windows/Linux", defaultMenu is null && !win.IsMenuBarVisible, $"menu={defaultMenu is not null} bar={win.IsMenuBarVisible}");
+
+    var clicks = new List<string>();
+    var save = new MenuItem { Id = "save", Label = "&Save", Accelerator = "CmdOrCtrl+Shift+K", Click = (_, w) => clicks.Add($"save:{w == win}") };
+    var check = new MenuItem { Type = MenuItemType.Checkbox, Label = "Check" };
+    var radioA = new MenuItem { Type = MenuItemType.Radio, Label = "A", Checked = true };
+    var radioB = new MenuItem { Type = MenuItemType.Radio, Label = "B" };
+    var go = new MenuItem { Label = "&Go", Click = (_, w) => clicks.Add($"go:{w == win}") };
+    var file = new MenuItem { Label = "&File", Submenu = [save, new MenuItem { Type = MenuItemType.Separator }, check, radioA, radioB] };
+    var menu = OperatingSystem.IsMacOS()
+        ? new Menu { new MenuItem { Role = MenuItemRole.AppMenu }, file, new MenuItem { Role = MenuItemRole.EditMenu } }
+        : new Menu { file, new MenuItem { Role = MenuItemRole.EditMenu }, go };
+
+    if (OperatingSystem.IsMacOS()) await MacMenusAsync(win, menu, save, check, radioA, radioB, clicks);
+    else await BarMenusAsync(win, menu, save, go, clicks);
+}
+
+// Called only on macOS; the analyzer cannot see through the local functions' lambdas.
+#pragma warning disable CA1416
+async Task MacMenusAsync(BrowserWindow win, Menu menu, MenuItem save, MenuItem check, MenuItem radioA, MenuItem radioB, List<string> clicks)
+{
+    // AppKit objects are main-thread only (CEF's UI thread on macOS), and every menu change rebuilds the
+    // menu bar and frees the old NSMenus: each read resolves its menu and reads it in one UI-thread call.
+    static T Ui<T>(Func<T> func) => Oriel.Cef.CefThread.InvokeOnUi(func);
+    static string[] Titles(nint m) => [.. Enumerable.Range(0, m == 0 ? 0 : MacMenu.ItemCount(m)).Select(i => MacMenu.Title(MacMenu.ItemAt(m, i)))];
+    static nint Item(nint m, string title) => Array.IndexOf(Titles(m), title) is var i and >= 0 ? MacMenu.ItemAt(m, i) : 0;
+    static nint Sub(string title) => Item(MacMenu.MainMenu(), title) is var item and not 0 ? MacMenu.Submenu(item) : 0;
+    static string BarTitles() => Ui(() => string.Join(",", Titles(MacMenu.MainMenu())));
+    static T OnItem<T>(string menuTitle, string itemTitle, Func<nint, T> read, T missing)
+        => Ui(() => Item(Sub(menuTitle), itemTitle) is var item and not 0 ? read(item) : missing);
+    static void Choose(string menuTitle, string itemTitle) => Ui(() =>
+    {
+        var m = Sub(menuTitle);
+        MacMenu.PerformAction(m, Array.IndexOf(Titles(m), itemTitle));
+        return 0;
+    });
+
+    Check("default menu is installed natively", Eventually(() => BarTitles() == "Oriel.WindowTest,File,Edit,View,Window", step), BarTitles());
+    Check("default Edit menu: Copy sends copy: with Cmd+C", OnItem("Edit", "Copy",
+        copy => MacMenu.ActionName(copy) == "copy:" && MacMenu.KeyEquivalent(copy) == "c" && MacMenu.ModifierMask(copy) == MacMenu.CommandKeyMask, false));
+
+    Menu.SetApplicationMenu(menu);
+    Check("SetApplicationMenu replaces the menu bar", Eventually(() => BarTitles() == "Oriel.WindowTest,File,Edit", step), BarTitles());
+    Check("GetApplicationMenu", Menu.GetApplicationMenu() == menu);
+    Check("accelerator becomes the key equivalent",
+        OnItem("File", "Save", item => MacMenu.KeyEquivalent(item) == "k" && MacMenu.ModifierMask(item) == (MacMenu.CommandKeyMask | MacMenu.ShiftKeyMask), false),
+        OnItem("File", "Save", item => $"{MacMenu.KeyEquivalent(item)} {MacMenu.ModifierMask(item):X}", "missing"));
+
+    win.Focus();
+    await Task.Delay(500);
+    Choose("File", "Save");
+    Check("choosing an item runs Click with the focused window", Eventually(() => clicks.Contains("save:True"), step), string.Join(",", clicks));
+
+    Choose("File", "Check");
+    Check("a checkbox toggles when chosen", check.Checked);
+    Check("the native item shows the check", Eventually(() => OnItem("File", "Check", MacMenu.IsChecked, false), step));
+
+    Choose("File", "B");
+    Check("choosing a radio unchecks its group", radioB.Checked && !radioA.Checked, $"A={radioA.Checked} B={radioB.Checked}");
+
+    save.Enabled = false;
+    Check("disabling an item disables it natively", Eventually(() => OnItem("File", "Save", item => !MacMenu.IsEnabled(item), false), step));
+    save.Label = "Save As";
+    Check("relabelling an item updates it natively", Eventually(() => OnItem("File", "Save As", _ => true, false), step));
+    check.Visible = false;
+    Check("hiding an item hides it natively", Eventually(() => OnItem("File", "Check", MacMenu.IsHidden, false), step));
+
+    // The editing roles go along AppKit's responder chain to the page.
+    await Js(win, "document.body.innerHTML = '<p>select me</p>'; getSelection().removeAllRanges(); 1");
+    Choose("Edit", "Select All");
+    Check("Select All reaches the page", Eventually(() => Js(win, "getSelection().toString().trim()").Result is "\"select me\"", step), Js(win, "getSelection().toString()").Result);
+
+    win.SetMenu(new Menu { new MenuItem { Label = "Ignored" } });
+    await Task.Delay(300);
+    Check("window menus are ignored on macOS", !win.IsMenuBarVisible && BarTitles() == "Oriel.WindowTest,File,Edit", BarTitles());
+    Menu.SetApplicationMenu(null);
+    // AppKit keeps its own application-name menu when the main menu is cleared.
+    Check("SetApplicationMenu(null) clears the menu bar", Eventually(() => BarTitles() is "" or "Oriel.WindowTest", step), BarTitles());
+}
+
+#pragma warning restore CA1416
+
+async Task BarMenusAsync(BrowserWindow win, Menu menu, MenuItem save, MenuItem go, List<string> clicks)
+{
+    var bounds = win.GetBounds();
+    var content = win.GetContentBounds();
+    // The page's own height shows whether CEF really laid the bar out, not just Oriel's bookkeeping.
+    int PageHeight() => int.TryParse(Js(win, "innerHeight").Result as string, out var h) ? h : -1;
+    var fullHeight = PageHeight();
+    win.SetMenu(menu);
+    Check("SetMenu shows the menu bar", Eventually(() => win.IsMenuBarVisible, step));
+    Check("the bar takes room from the page, not the window",
+        Eventually(() => win.GetContentBounds() is var c && c.Height < content.Height && c.Y > content.Y && win.GetBounds() == bounds, step),
+        $"{content} -> {win.GetContentBounds()}, {bounds} -> {win.GetBounds()}");
+    Check("the page shrinks by the bar", Eventually(() => PageHeight() is var h && h > 0 && h < fullHeight, step), $"{fullHeight} -> {PageHeight()}");
+
+    Check("a bar item without a submenu acts as a button", win.TriggerMenuBarItem(2) && Eventually(() => clicks.Contains("go:True"), step), string.Join(",", clicks));
+
+    win.Focus();
+    await Task.Delay(300);
+    win.WebContents.SendInputEvent(new KeyboardInputEvent(KeyboardInputEventType.KeyDown, "K") { Modifiers = InputModifiers.Control | InputModifiers.Shift });
+    win.WebContents.SendInputEvent(new KeyboardInputEvent(KeyboardInputEventType.KeyUp, "K") { Modifiers = InputModifiers.Control | InputModifiers.Shift });
+    Check("an accelerator the page ignores runs the item", Eventually(() => clicks.Contains("save:True"), step), string.Join(",", clicks));
+
+    save.Enabled = false;
+    clicks.Clear();
+    win.WebContents.SendInputEvent(new KeyboardInputEvent(KeyboardInputEventType.KeyDown, "K") { Modifiers = InputModifiers.Control | InputModifiers.Shift });
+    win.WebContents.SendInputEvent(new KeyboardInputEvent(KeyboardInputEventType.KeyUp, "K") { Modifiers = InputModifiers.Control | InputModifiers.Shift });
+    await Task.Delay(500);
+    Check("a disabled item's accelerator does nothing", clicks.Count == 0, string.Join(",", clicks));
+    save.Enabled = true;
+
+    win.AutoHideMenuBar = true;
+    Check("AutoHideMenuBar hides the bar", Eventually(() => !win.IsMenuBarVisible && win.GetContentBounds() == content && PageHeight() == fullHeight, step), $"{win.GetContentBounds()} page={PageHeight()}/{fullHeight}");
+    Check("AutoHideMenuBar reads back", win.AutoHideMenuBar);
+    win.SetMenuBarVisibility(true);
+    Check("SetMenuBarVisibility shows it", Eventually(() => win.IsMenuBarVisible, step));
+    win.AutoHideMenuBar = false;
+    Check("clearing AutoHideMenuBar keeps it shown", Eventually(() => win.IsMenuBarVisible && !win.AutoHideMenuBar, step));
+
+    win.RemoveMenu();
+    Check("RemoveMenu hides the bar", Eventually(() => !win.IsMenuBarVisible && win.GetContentBounds() == content && PageHeight() == fullHeight, step), $"{win.GetContentBounds()} page={PageHeight()}/{fullHeight}");
+
+    Menu.SetApplicationMenu(new Menu { new MenuItem { Label = "App" } });
+    await Task.Delay(300);
+    Check("a removed menu stays removed under an application menu", !win.IsMenuBarVisible);
+    var other = new BrowserWindow(new BrowserWindowOptions { Title = "Oriel window test: app menu", Width = 300, Height = 200 });
+    Check("new windows get the application menu", Eventually(() => other.IsMenuBarVisible, step));
+    var autoHidden = new BrowserWindow(new BrowserWindowOptions { Title = "Oriel window test: auto-hide", Width = 300, Height = 200, AutoHideMenuBar = true });
+    Check("AutoHideMenuBar option starts hidden", Eventually(() => !autoHidden.IsMenuBarVisible && autoHidden.AutoHideMenuBar, step));
+    Menu.SetApplicationMenu(null);
+    Check("SetApplicationMenu(null) removes it", Eventually(() => !other.IsMenuBarVisible, step));
+    other.Destroy();
+    autoHidden.Destroy();
+    await Task.Delay(300);
+}
+
 
 app.Ready += (_, _) =>
 {

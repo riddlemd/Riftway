@@ -23,6 +23,7 @@
 
   <ItemGroup>
     <InternalsVisibleTo Include="Oriel.Tests" />
+    <InternalsVisibleTo Include="Oriel.WindowTest" />
   </ItemGroup>
 
 </Project>
