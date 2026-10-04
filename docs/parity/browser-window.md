@@ -17,13 +17,13 @@ Counted from the Checklist at the end: `BaseWindow` and `BrowserWindow` are one 
 
 | Area | Items | Done | Partial | Missing | n/a | % done | % done + partial/2 |
 |---|---|---|---|---|---|---|---|
-| BaseWindow + BrowserWindow options | 54 | 26 | 5 | 23 | 0 | 48.1% | 52.8% |
+| BaseWindow + BrowserWindow options | 54 | 26 | 7 | 21 | 0 | 48.1% | 54.6% |
 | webPreferences | 46 | 11 | 3 | 25 | 7 | 28.2% | 32.1% |
-| Instance methods | 143 | 64 | 18 | 55 | 6 | 46.7% | 53.3% |
+| Instance methods | 143 | 65 | 18 | 54 | 6 | 47.4% | 54.0% |
 | Instance properties | 24 | 11 | 2 | 11 | 0 | 45.8% | 50.0% |
 | Events | 35 | 12 | 6 | 17 | 0 | 34.3% | 42.9% |
 | Static methods | 6 | 4 | 0 | 1 | 1 | 80.0% | 80.0% |
-| **Total** | 308 | 128 | 34 | 132 | 14 | 43.5% | 49.3% |
+| **Total** | 308 | 129 | 36 | 129 | 14 | 43.9% | 50.0% |
 
 ## Done since the audit
 
@@ -43,7 +43,7 @@ Counted from the Checklist at the end: `BaseWindow` and `BrowserWindow` are one 
   `PKEY_AppUserModel_*`), `SetThumbnailClip` and `SetThumbnailToolTip` (`ITaskbarList3`; clips run on an STA thread
   because the shell's proxy rejects the NULL clip that clears them), `BackgroundMaterial` option and
   `SetBackgroundMaterial` (`DWMWA_SYSTEMBACKDROP_TYPE`, Windows 11 22H2+). The material is set but hidden behind CEF's
-  opaque painting (DRIFT W24); `titleBarOverlay` is missing (W25).
+  opaque painting (DRIFT W24).
 - `getNativeWindowHandle` (`W.get_window_handle`: the content `NSView`, `HWND` or X11 `Window`).
 - webContents: `LoadFile` (query, hash), `Reload`, `GetUrl`, `GetTitle`, `did-start-loading`, `did-stop-loading`,
   `did-finish-load`, `did-fail-load`.
@@ -108,6 +108,13 @@ Counted from the Checklist at the end: `BaseWindow` and `BrowserWindow` are one 
   Fixed on the way: CEF activated a window created hidden, and any window starting a load, taking the keyboard from
   the window in front; a window meant to be hidden now hands activation back, and loads restore the foreground.
 
+- Title bar (branch `title-bar`): `-webkit-app-region: drag`/`no-drag` in frameless windows (`cef_drag_handler_t` to
+  `W.set_draggable_regions`, offset by the page's origin; the overlay is cut out as no-drag). `TitleBarStyle` (frameless on
+  Windows and Linux), `TitleBarOverlay`/`SetTitleBarOverlay` (Windows: a CEF Views panel docked top right by
+  `W.add_overlay_view`, three 46-DIP buttons with drawn symbols, Windows 11 hover and close colours, hidden in full
+  screen; defaults from `COLOR_BTNFACE`/`COLOR_BTNTEXT` and the system caption height), `GetTitleBarOverlayBounds`.
+  Gaps: DRIFT W34–W37.
+
 ## Next, by importance
 
 1. Remaining webPreferences:
@@ -123,7 +130,7 @@ Counted from the Checklist at the end: `BaseWindow` and `BrowserWindow` are one 
    - `contextIsolation` is always on; `false` is not offered.
 2. `setParentWindow` — CEF Views sets the parent only at creation, so this needs OS code (`addChildWindow:`, an owner
    `HWND`, `XSetTransientForHint`).
-3. `titleBarStyle`, `titleBarOverlay`, `trafficLightPosition` — `D.with_standard_window_buttons`, `D.get_titlebar_height`, `W.add_overlay_view`, OS.
+3. `titleBarStyle` on macOS, `trafficLightPosition`, the Window Controls Overlay page API (W34, W37) — OS, Patch.
 4. `showInactive`, `opacity`, `setIgnoreMouseEvents`, content protection, `will-resize`/`will-move` on macOS and Linux (W30) — OS.
 5. Window state persistence (`windowStatePersistence`, `getNormalBounds`, `persisted-state-restored`) — Oriel.
 6. `resized`/`moved` events, `hasShadow` on framed windows and macOS (W31), kiosk presentation options on macOS (W33) — OS.
@@ -201,8 +208,8 @@ Parameters in brackets are optional in Electron. `webContents` members are in [w
 | `transparent` | — | missing |  |
 | `type` | — | missing |  |
 | `visualEffectState` | — | missing |  |
-| `titleBarStyle` | — | missing |  |
-| `titleBarOverlay` | — | missing |  |
+| `titleBarStyle` | `TitleBarStyle` | partial | Windows (and Linux, unchecked): anything but `Default` is frameless; macOS keeps its title bar (W37). |
+| `titleBarOverlay` | `TitleBarOverlay` | partial | Windows: Views buttons docked top right; no page API (W34), opaque colours (W35), no snap layouts (W36). |
 | `accentColor` | — | missing |  |
 | `trafficLightPosition` | — | missing |  |
 | `roundedCorners` | — | missing |  |
@@ -411,7 +418,7 @@ Parameters in brackets are optional in Electron. `webContents` members are in [w
 | `removeBrowserView(browserView)` | — | n/a | Deprecated. |
 | `setTopBrowserView(browserView)` | — | n/a | Deprecated. |
 | `getBrowserViews()` | — | n/a | Deprecated. |
-| `setTitleBarOverlay(options)` | — | missing |  |
+| `setTitleBarOverlay(options)` | `SetTitleBarOverlay` | done | Throws `InvalidOperationException` without an overlay, as Electron throws. |
 
 ### Instance properties
 

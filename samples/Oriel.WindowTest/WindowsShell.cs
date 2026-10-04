@@ -165,6 +165,32 @@ static unsafe class WindowsShell
         return (r.Left, r.Top, r.Right - r.Left, r.Bottom - r.Top);
     }
 
+    /// <summary>What the window answers <c>WM_NCHITTEST</c> for a screen point: 1 client, 2 caption.</summary>
+    internal static int HitTest(nint hwnd, int x, int y)
+    {
+        nint result;
+        _ = SendMessageTimeoutW(hwnd, 0x0084 /* WM_NCHITTEST */, 0, (nint)((y << 16) | (x & 0xFFFF)), 2, 1000, &result);
+        return (int)result;
+    }
+
+    /// <summary>Clicks the real left mouse button at a screen point.</summary>
+    internal static void Click(int x, int y)
+    {
+        _ = SetCursorPos(x, y);
+        Thread.Sleep(200);
+        mouse_event(0x0002 /* LEFTDOWN */, 0, 0, 0, 0);
+        Thread.Sleep(80);
+        mouse_event(0x0004 /* LEFTUP */, 0, 0, 0, 0);
+        Thread.Sleep(400);
+    }
+
+    /// <summary>Moves the real mouse to a screen point.</summary>
+    internal static void Hover(int x, int y)
+    {
+        _ = SetCursorPos(x, y);
+        Thread.Sleep(400);
+    }
+
     /// <summary>Drags the real mouse with the left button from one screen point to another, in steps.</summary>
     internal static void Drag(int x0, int y0, int x1, int y1)
     {

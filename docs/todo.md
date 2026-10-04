@@ -13,7 +13,8 @@ Cross-platform work. Platform-specific items: [linux-todo.md](linux-todo.md), [w
   - [ ] Remaining `webPreferences` (see the parity doc: process-wide switches, spellcheck, ...; session/partition done)
   - [x] `parent`/`modal`, `isModal`, `getChildWindows`, `getParentWindow`
   - [ ] `setParentWindow` (needs OS code: CEF sets the parent only at creation)
-  - [ ] `titleBarStyle`, `titleBarOverlay`, `trafficLightPosition`
+  - [x] Windows: `titleBarStyle`, `titleBarOverlay`/`setTitleBarOverlay`, `app-region` drag regions (branch `title-bar`)
+  - [ ] Title bar on macOS (`trafficLightPosition`, hidden styles) and the page's Window Controls Overlay API (DRIFT W34, W37)
   - [x] Taskbar on Windows: `setProgressBar`, `flashFrame`, `setSkipTaskbar`/`skipTaskbar`, `setOverlayIcon`
   - [x] Taskbar on macOS (Dock progress and bounce) and Linux (urgency hint, skip taskbar)
   - [x] `setThumbarButtons`, `setIcon`/`setOverlayIcon` with `NativeImage`

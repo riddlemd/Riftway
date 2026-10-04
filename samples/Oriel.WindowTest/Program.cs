@@ -201,6 +201,7 @@ async Task RunAsync(BrowserWindow win, BrowserWindow simple)
     await WindowsApisAsync();
     await NativeImageAsync();
     await WindowPolishAsync(win);
+    await TitleBarAsync(win);
 
     // Closing cancelled once: the window must survive the first close.
     var closingCount = 0;
@@ -1150,6 +1151,108 @@ async Task WindowsApisAsync()
     Console.SetError(stderr);
     Check("the shell takes the thumbnail clip and tooltip (weak: no read-back)", refusals.ToString().Length == 0, refusals.ToString().Trim());
     w.Destroy();
+    await Task.Delay(300);
+}
+
+async Task TitleBarAsync(BrowserWindow win)
+{
+    if (!OperatingSystem.IsWindows()) return;
+
+    // The display is colour-managed: test the dominant channel, not exact values.
+    static string Rgb((byte R, byte G, byte B) c) => $"{c.R},{c.G},{c.B}";
+    static bool IsBlue((byte R, byte G, byte B) c) => c.B > 120 && c.B > c.R + 50 && c.B > c.G + 30;
+    static bool IsGreen((byte R, byte G, byte B) c) => c.G > 120 && c.G > c.R + 50 && c.G > c.B + 30;
+    static bool IsRed((byte R, byte G, byte B) c) => c.R > 150 && c.R > c.G + 80 && c.R > c.B + 80;
+    const int HtClient = 1, HtCaption = 2;
+    const string Page = "<body style='margin:0;background:%23FFFF00'>"
+        + "<div style='-webkit-app-region:drag;height:40px;background:%230000FF'></div>"
+        + "<div style='-webkit-app-region:no-drag;position:absolute;top:5px;left:5px;width:30px;height:30px;background:%23FF0000'></div></body>";
+
+    // app-region: CEF hit-tests the page's drag rectangles as caption, minus the no-drag ones, in a frameless window only.
+    var frameless = new BrowserWindow(new BrowserWindowOptions { Title = "Oriel window test: drag regions", X = 200, Y = 200, Width = 400, Height = 250, Frame = false });
+    await frameless.LoadUrl("data:text/html," + Page);
+    var fh = frameless.GetNativeWindowHandle();
+    int Hit((int X, int Y) p) => WindowsShell.HitTest(fh, p.X, p.Y);
+    (int X, int Y) At(int dx, int dy) { var (x, y, _, _) = WindowsShell.Bounds(fh); return (x + dx, y + dy); }
+    Check("a drag region hit-tests as caption", Eventually(() => Hit(At(200, 20)) == HtCaption, step), Hit(At(200, 20)));
+    Check("a no-drag region inside it stays client", Hit(At(20, 20)) == HtClient, Hit(At(20, 20)));
+    Check("the page outside the regions stays client", Hit(At(200, 120)) == HtClient, Hit(At(200, 120)));
+    var before = WindowsShell.Bounds(fh);
+    WindowsShell.Drag(before.X + 200, before.Y + 20, before.X + 300, before.Y + 80);
+    var after = WindowsShell.Bounds(fh);
+    Check("dragging a drag region moves the window", after.X > before.X + 50 && after.Width == before.Width, $"{before} -> {after}");
+    await frameless.WebContents.ExecuteJavaScriptAsync("document.querySelector('div').style.webkitAppRegion = 'none'");
+    Check("removing the region makes it client again", Eventually(() => Hit(At(200, 20)) == HtClient, step), Hit(At(200, 20)));
+    frameless.Destroy();
+    var framed = new BrowserWindow(new BrowserWindowOptions { Title = "Oriel window test: framed drag region", X = 200, Y = 200, Width = 400, Height = 250 });
+    await framed.LoadUrl("data:text/html," + Page);
+    await Task.Delay(500);
+    var page = framed.GetContentBounds();
+    Check("a framed window ignores drag regions", WindowsShell.HitTest(framed.GetNativeWindowHandle(), page.X + 200, page.Y + 20) == HtClient, WindowsShell.HitTest(framed.GetNativeWindowHandle(), page.X + 200, page.Y + 20));
+    framed.Destroy();
+
+    // TitleBarStyle.Hidden without an overlay: no title bar, the page fills the window.
+    var hidden = new BrowserWindow(new BrowserWindowOptions { Title = "Oriel window test: hidden title bar", X = 220, Y = 220, Width = 400, Height = 250, TitleBarStyle = TitleBarStyle.Hidden });
+    await Task.Delay(1200);
+    Check("TitleBarStyle.Hidden fills the window with the page", hidden.GetContentBounds() == hidden.GetBounds() && hidden.GetTitleBarOverlayBounds() == default, $"{hidden.GetContentBounds()} vs {hidden.GetBounds()}");
+    Check("SetTitleBarOverlay without an overlay throws", Throws<InvalidOperationException>(() => hidden.SetTitleBarOverlay(new TitleBarOverlayOptions { Color = "#000000" })));
+    hidden.Destroy();
+
+    // TitleBarOverlay: buttons at the top right in the colours asked for, over the page.
+    var closed = false;
+    var overlaid = new BrowserWindow(new BrowserWindowOptions
+    {
+        Title = "Oriel window test: title bar overlay", X = 240, Y = 240, Width = 500, Height = 300, TitleBarStyle = TitleBarStyle.Hidden,
+        TitleBarOverlay = new TitleBarOverlayOptions { Color = "#2050C0", SymbolColor = "#FFFFFF", Height = 40 },
+    });
+    overlaid.Closed += (_, _) => closed = true;
+    await overlaid.LoadUrl("data:text/html," + Page);
+    await Task.Delay(800);
+    var oh = overlaid.GetNativeWindowHandle();
+    var box = overlaid.GetTitleBarOverlayBounds();
+    Check("the overlay sits at the top right, three 46-DIP buttons wide, at the height asked", box == new Rectangle(500 - 138, 0, 138, 40), box);
+    (int X, int Y) Button(int index, int dy = 0) { var (x, y, w, _) = WindowsShell.Bounds(oh); return (x + w - 138 + index * 46 + 6, y + 6 + dy); }
+    var resting = WindowsShell.ScreenPixel(Button(0).X, Button(0).Y);
+    Check("the overlay has its colour", IsBlue(resting), Rgb(resting));
+    var under = WindowsShell.ScreenPixel(Button(0).X, Button(0, 40).Y);
+    Check("the page shows just below the overlay", under.R > 150 && under.G > 150 && under.B < 100, Rgb(under));
+    WindowsShell.Hover(Button(2).X, Button(2).Y + 10);
+    Check("the close button turns red under the pointer", Eventually(() => IsRed(WindowsShell.ScreenPixel(Button(2).X, Button(2).Y)), step), Rgb(WindowsShell.ScreenPixel(Button(2).X, Button(2).Y)));
+    WindowsShell.Hover(Button(0).X, Button(0).Y + 10);
+    var hovered = WindowsShell.ScreenPixel(Button(0).X, Button(0).Y);
+    Check("a button lightens towards the symbol colour under the pointer", hovered.R > resting.R + 8 && hovered.G > resting.G + 8 && hovered.B >= resting.B, $"{Rgb(resting)} -> {Rgb(hovered)}");
+    overlaid.SetTitleBarOverlay(new TitleBarOverlayOptions { Color = "#20A050", Height = 32 });
+    WindowsShell.Hover(Button(0).X, Button(0).Y + 120);
+    Check("SetTitleBarOverlay changes the colour and height", Eventually(() => IsGreen(WindowsShell.ScreenPixel(Button(0).X, Button(0).Y)) && overlaid.GetTitleBarOverlayBounds().Height == 32, step),
+        $"{Rgb(WindowsShell.ScreenPixel(Button(0).X, Button(0).Y))} {overlaid.GetTitleBarOverlayBounds()}");
+    var shrunk = WindowsShell.ScreenPixel(Button(0).X, Button(0, 30).Y);
+    Check("the page shows below the shorter overlay (its blue drag strip)", IsBlue(shrunk), Rgb(shrunk));
+    WindowsShell.Click(Button(1).X, Button(1).Y + 8);
+    Check("the maximize button maximizes", Eventually(() => overlaid.IsMaximized, step));
+    WindowsShell.Click(Button(1).X, Button(1).Y + 8);
+    Check("the same button then restores", Eventually(() => !overlaid.IsMaximized, step));
+    await Task.Delay(500);
+    WindowsShell.Click(Button(0).X, Button(0).Y + 8);
+    Check("the minimize button minimizes", Eventually(() => overlaid.IsMinimized, step));
+    overlaid.Restore();
+    await Task.Delay(800);
+    overlaid.SetFullScreen(true);
+    await Task.Delay(1500);
+    var (fx, fy, fw, _) = WindowsShell.Bounds(oh);
+    var fullscreenCorner = WindowsShell.ScreenPixel(fx + fw - 120, fy + 6);
+    Check("the overlay hides in full screen", Eventually(() => overlaid.IsFullScreen, step) && !IsGreen(fullscreenCorner), Rgb(fullscreenCorner));
+    overlaid.SetFullScreen(false);
+    await Task.Delay(1500);
+    WindowsShell.Click(Button(2).X, Button(2).Y + 8);
+    Check("the close button closes the window", Eventually(() => closed, step));
+
+    // Defaults: the system's caption height and button colours.
+    var plain = new BrowserWindow(new BrowserWindowOptions { Title = "Oriel window test: default overlay", X = 260, Y = 260, Width = 400, Height = 250, TitleBarStyle = TitleBarStyle.Hidden, TitleBarOverlay = new() });
+    await Task.Delay(1500);
+    var caption = WindowsWindowStyle.CaptionHeight(plain.GetNativeWindowHandle());
+    Check("an overlay without a height takes the system caption height", plain.GetTitleBarOverlayBounds().Height == caption && caption is > 20 and < 50, $"{plain.GetTitleBarOverlayBounds()} caption={caption}");
+    plain.Destroy();
+    win.Focus();
     await Task.Delay(300);
 }
 

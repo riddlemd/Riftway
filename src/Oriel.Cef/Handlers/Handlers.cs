@@ -159,10 +159,13 @@ public sealed unsafe class ClientHandler
     private readonly ContextMenuHandler? _contextMenu;
     private readonly KeyboardHandler? _keyboard;
     private readonly LifeSpanHandler? _lifeSpan;
+    private readonly DragHandler? _drag;
 
     public ClientHandler(DisplayHandler? display = null, LoadHandler? load = null, JsDialogHandler? jsDialog = null, RequestHandler? request = null,
-        CommandHandler? command = null, ContextMenuHandler? contextMenu = null, KeyboardHandler? keyboard = null, LifeSpanHandler? lifeSpan = null)
+        CommandHandler? command = null, ContextMenuHandler? contextMenu = null, KeyboardHandler? keyboard = null, LifeSpanHandler? lifeSpan = null,
+        DragHandler? drag = null)
     {
+        _drag = drag;
         _command = command;
         _contextMenu = contextMenu;
         _keyboard = keyboard;
@@ -180,6 +183,15 @@ public sealed unsafe class ClientHandler
         if (contextMenu is not null) Native->get_context_menu_handler = &GetContextMenuHandler;
         if (keyboard is not null) Native->get_keyboard_handler = &GetKeyboardHandler;
         if (lifeSpan is not null) Native->get_life_span_handler = &GetLifeSpanHandler;
+        if (drag is not null) Native->get_drag_handler = &GetDragHandler;
+    }
+
+    [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])]
+    private static cef_drag_handler_t* GetDragHandler(cef_client_t* self)
+    {
+        var handler = NativeObject.Owner<ClientHandler>(self)._drag!.Native;
+        NativeObject.AddRef(handler);
+        return handler;
     }
 
     [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])]
