@@ -186,6 +186,7 @@ async Task RunAsync(BrowserWindow win, BrowserWindow simple)
 
     await WebPreferencesAsync(win);
     await ParentAndModalAsync(win);
+    await ScreenAsync(win);
 
     // Closing cancelled once: the window must survive the first close.
     var closingCount = 0;
@@ -378,6 +379,69 @@ async Task ParentAndModalAsync(BrowserWindow win)
     childAlive = child;
 }
 
+async Task ScreenAsync(BrowserWindow win)
+{
+    static bool Inside(Rectangle outer, Rectangle inner)
+        => inner.X >= outer.X && inner.Y >= outer.Y && inner.X + inner.Width <= outer.X + outer.Width && inner.Y + inner.Height <= outer.Y + outer.Height;
+    static bool Contains(Rectangle r, Point p) => p.X >= r.X && p.Y >= r.Y && p.X < r.X + r.Width && p.Y < r.Y + r.Height;
+
+    var primary = Screen.GetPrimaryDisplay();
+    Check("primary display has a size and scale", primary.Bounds.Width > 0 && primary.Bounds.Height > 0 && primary.ScaleFactor > 0, primary);
+    Check("work area lies inside the bounds", Inside(primary.Bounds, primary.WorkArea) && primary.WorkArea.Width > 0, $"{primary.WorkArea} in {primary.Bounds}");
+    if (OperatingSystem.IsLinux())
+        Check("Linux (Xvfb 1600x1000): exact primary bounds and scale", primary.Bounds == new Rectangle(0, 0, 1600, 1000) && primary.ScaleFactor == 1, primary);
+    if (OperatingSystem.IsMacOS())
+        Check("macOS: the primary display's work area leaves room for the menu bar", primary.WorkArea.Y > primary.Bounds.Y, $"{primary.WorkArea} in {primary.Bounds}");
+
+    var all = Screen.GetAllDisplays();
+    Check("GetAllDisplays includes the primary", all.Count >= 1 && all.Any(d => d.Id == primary.Id), all.Count);
+
+    var bounds = win.GetBounds();
+    var center = new Point(bounds.X + bounds.Width / 2, bounds.Y + bounds.Height / 2);
+    var nearest = Screen.GetDisplayNearestPoint(center);
+    Check("GetDisplayNearestPoint: the display under the window", Contains(nearest.Bounds, center), $"{center} on {nearest.Bounds}");
+    Check("GetDisplayMatching: the display the window overlaps", Screen.GetDisplayMatching(bounds).Id == nearest.Id);
+    var far = new Point(nearest.Bounds.X - 100_000, nearest.Bounds.Y);
+    Check("GetDisplayNearestPoint off every display picks the nearest", all.Any(d => d.Id == Screen.GetDisplayNearestPoint(far).Id));
+
+    var scale = primary.ScaleFactor;
+    var dip = new Point(100, 50);
+    var pixels = Screen.DipToScreenPoint(dip);
+    Check("DipToScreenPoint scales by the display's factor", pixels == new Point((int)(100 * scale), (int)(50 * scale)), $"{pixels} at scale {scale}");
+    Check("ScreenToDipPoint inverts it", Screen.ScreenToDipPoint(pixels) == dip, Screen.ScreenToDipPoint(pixels));
+
+    if (OperatingSystem.IsLinux() && File.Exists("/usr/bin/xdotool"))
+    {
+        System.Diagnostics.Process.Start("/usr/bin/xdotool", "mousemove 321 234")!.WaitForExit();
+        Check("GetCursorScreenPoint follows the X pointer", Eventually(() => Screen.GetCursorScreenPoint() == new Point(321, 234), step), Screen.GetCursorScreenPoint());
+    }
+    if (OperatingSystem.IsMacOS())
+    {
+        var cursor = Screen.GetCursorScreenPoint();
+        var expected = MacMouseLocation();
+        Check("GetCursorScreenPoint matches AppKit's mouse location", Math.Abs(cursor.X - expected.X) <= 1 && Math.Abs(cursor.Y - expected.Y) <= 1, $"{cursor} vs {expected}");
+    }
+
+    // Display changes cannot be made here; subscribing starts the poll and a steady setup raises nothing.
+    var raised = 0;
+    EventHandler<DisplayMetricsChangedEventArgs> onChanged = (_, _) => raised++;
+    EventHandler<DisplayEventArgs> onAdded = (_, _) => raised++;
+    Screen.DisplayMetricsChanged += onChanged;
+    Screen.DisplayAdded += onAdded;
+    await Task.Delay(2500);
+    Screen.DisplayMetricsChanged -= onChanged;
+    Screen.DisplayAdded -= onAdded;
+    Check("no display events while nothing changes", raised == 0, raised);
+}
+
+// AppKit's mouseLocation is bottom-left based; flip it by the main display's height into CEF's top-left DIPs.
+static Point MacMouseLocation()
+{
+    var location = MacInterop.MouseLocation(MacInterop.objc_getClass("NSEvent"), MacInterop.sel_registerName("mouseLocation"));
+    var main = MacInterop.CGDisplayBounds(MacInterop.CGMainDisplayID());
+    return new Point((int)Math.Floor(location.X), (int)Math.Floor(main.Height - location.Y));
+}
+
 app.Ready += (_, _) =>
 {
     var win = new BrowserWindow(new BrowserWindowOptions
@@ -404,3 +468,18 @@ app.Ready += (_, _) =>
 app.Run();
 Console.WriteLine(failures < 0 ? "RESULT: did not finish" : $"RESULT: {failures} failure(s)");
 return failures;
+
+static class MacInterop
+{
+    [System.Runtime.InteropServices.StructLayout(System.Runtime.InteropServices.LayoutKind.Sequential)]
+    internal struct NSPoint { public double X; public double Y; }
+
+    [System.Runtime.InteropServices.StructLayout(System.Runtime.InteropServices.LayoutKind.Sequential)]
+    internal struct CGRect { public double X; public double Y; public double Width; public double Height; }
+
+    [System.Runtime.InteropServices.DllImport("/usr/lib/libobjc.A.dylib")] internal static extern nint objc_getClass(string name);
+    [System.Runtime.InteropServices.DllImport("/usr/lib/libobjc.A.dylib")] internal static extern nint sel_registerName(string name);
+    [System.Runtime.InteropServices.DllImport("/usr/lib/libobjc.A.dylib", EntryPoint = "objc_msgSend")] internal static extern NSPoint MouseLocation(nint cls, nint selector);
+    [System.Runtime.InteropServices.DllImport("/System/Library/Frameworks/CoreGraphics.framework/CoreGraphics")] internal static extern uint CGMainDisplayID();
+    [System.Runtime.InteropServices.DllImport("/System/Library/Frameworks/CoreGraphics.framework/CoreGraphics")] internal static extern CGRect CGDisplayBounds(uint display);
+}
