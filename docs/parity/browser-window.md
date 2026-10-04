@@ -28,6 +28,7 @@ Event naming: Electron `'x'` → past-tense .NET event (`focus`→`Focused`, `cl
 - `PageTitleUpdated` (window and webContents; window title follows the page unless cancelled), `ReadyToShow`.
 - `BackgroundColor` option, `Set/GetBackgroundColor`; `Icon` option, `SetIcon` (PNG/JPEG).
 - `Destroy`.
+- `getNativeWindowHandle` (`W.get_window_handle`: the content `NSView`, `HWND` or X11 `Window`).
 - webContents: `LoadFile` (query, hash), `Reload`, `GetUrl`, `GetTitle`, `did-start-loading`, `did-stop-loading`,
   `did-finish-load`, `did-fail-load`.
 - `loadURL` options (`LoadUrlOptions`): `httpReferrer` (string or `Referrer` with policy), `userAgent`, `extraHeaders`,
@@ -87,8 +88,11 @@ verified blocked; the context menu's Inspect goes through the same handler but i
 ## Platform notes
 
 - **macOS full screen**: native full screen moves the window to its own Space and blacks out other
-  displays; `SimpleFullScreen` (option) / `SetSimpleFullScreen` avoid it. The title bar's green button
-  still uses native full screen even with the option set.
+  displays; `SimpleFullScreen` (option) / `SetSimpleFullScreen` avoid it. With the option set, the
+  green button, its hover menu and Window ▸ Enter Full Screen use simple full screen too: the window gets a
+  runtime subclass overriding `toggleFullScreen:`, as Electron's NSWindow subclass does. Page-initiated full
+  screen (`requestFullscreen`) also goes through `toggleFullScreen:`, so it becomes simple full screen as well
+  (untested).
 - **Minimize/restore events** are polled (250 ms) on top of bounds callbacks: CEF reports neither, and on
   macOS minimizing changes no bounds.
 

@@ -154,6 +154,22 @@ async Task RunAsync(BrowserWindow win, BrowserWindow simple)
         Check("SimpleFullScreen option: uses simple full screen on macOS", simple.IsSimpleFullScreen, simple.IsSimpleFullScreen);
     simple.SetFullScreen(false);
     Check("SimpleFullScreen option: SetFullScreen(false) leaves it", Eventually(() => !simple.IsFullScreen, step), simple.IsFullScreen);
+    Check("GetNativeWindowHandle", simple.GetNativeWindowHandle() != 0);
+    if (OperatingSystem.IsMacOS())
+    {
+        // The green button, its hover menu and Window > Enter Full Screen all send toggleFullScreen:.
+        void PressGreenButton() => Oriel.Cef.CefThread.InvokeOnUi(() =>
+        {
+            if (OperatingSystem.IsMacOS()) Oriel.Cef.Platform.MacWindow.ToggleFullScreen(simple.GetNativeWindowHandle());
+            return 0;
+        });
+        bool NativeFullScreen() => Oriel.Cef.CefThread.InvokeOnUi(() => OperatingSystem.IsMacOS() && Oriel.Cef.Platform.MacWindow.IsNativeFullScreen(simple.GetNativeWindowHandle()));
+        Check("SimpleFullScreen option: the green button enters simple full screen",
+            Fires(h => simple.EnteredFullScreen += h, h => simple.EnteredFullScreen -= h, PressGreenButton, step)
+            && simple.IsSimpleFullScreen && !NativeFullScreen(), $"simple={simple.IsSimpleFullScreen} native={NativeFullScreen()}");
+        Check("SimpleFullScreen option: the green button leaves it",
+            Fires(h => simple.LeftFullScreen += h, h => simple.LeftFullScreen -= h, PressGreenButton, step) && !simple.IsSimpleFullScreen);
+    }
     Check("ReadyToShow raised for a hidden window", Eventually(() => simpleReady, step));
     simple.SetClosable(false);
     Check("SetClosable(false)", !simple.IsClosable);

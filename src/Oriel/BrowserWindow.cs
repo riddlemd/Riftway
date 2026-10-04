@@ -78,9 +78,9 @@ public sealed record BrowserWindowOptions
     public bool FullScreen { get; init; }
 
     /// <summary>On macOS, full screen fills the display without moving to a new Space, so other displays
-    /// stay usable (native full screen blacks them out). Applies to <see cref="FullScreen"/> and
-    /// <see cref="BrowserWindow.SetFullScreen"/>; not yet to the title bar's green button. Ignored
-    /// elsewhere. Electron's <c>simpleFullscreen</c>.</summary>
+    /// stay usable (native full screen blacks them out). Applies to <see cref="FullScreen"/>,
+    /// <see cref="BrowserWindow.SetFullScreen"/>, the title bar's green button and Window ▸ Enter Full Screen.
+    /// Ignored elsewhere. Electron's <c>simpleFullscreen</c>.</summary>
     public bool SimpleFullScreen { get; init; }
 
     /// <summary>The window this one belongs to: it stays above its parent, has no taskbar button of its own,
@@ -202,6 +202,8 @@ public sealed unsafe class BrowserWindow
     private bool _closeFromCode;
     private bool _readyToShowRaised;
     private string? _backgroundColor;
+    // macOS: the NSWindow whose full-screen toggle routes to simple full screen, or 0.
+    private nint _routedNSWindow;
     // Touched only on the UI thread.
     private readonly List<BrowserWindow> _children = [];
 
@@ -500,6 +502,10 @@ public sealed unsafe class BrowserWindow
     private static bool IsMacSimpleFullScreen(cef_window_t* window)
         => MacWindow.IsSimpleFullScreen((nint)window->get_window_handle(window));
 
+    /// <summary>The native window: the content <c>NSView</c> on macOS, the <c>HWND</c> on Windows, the X11
+    /// <c>Window</c> on Linux; 0 once closed. Electron's <c>win.getNativeWindowHandle()</c>.</summary>
+    public nint GetNativeWindowHandle() => Query(w => (nint)w->get_window_handle(w), 0);
+
     /// <summary>Keeps the window above others, or stops. Electron's <c>win.setAlwaysOnTop()</c>.</summary>
     public void SetAlwaysOnTop(bool flag) => Command(w => w->set_always_on_top(w, flag ? 1 : 0));
 
@@ -753,6 +759,8 @@ public sealed unsafe class BrowserWindow
             _browserView->@base.set_background_color(&_browserView->@base, argb);
         }
 
+        if (UsesSimpleFullScreen && OperatingSystem.IsMacOS())
+            _routedNSWindow = MacWindow.RouteFullScreenToggle((nint)window->get_window_handle(window), () => SetSimpleFullScreen(!IsSimpleFullScreen));
         if (_options.AlwaysOnTop) window->set_always_on_top(window, 1);
         if (_options.Show) window->show(window);
         if (_options.FullScreen)
@@ -832,6 +840,7 @@ public sealed unsafe class BrowserWindow
 
     private void OnWindowDestroyed(cef_window_t* window)
     {
+        if (_routedNSWindow != 0 && OperatingSystem.IsMacOS()) MacWindow.UnrouteFullScreenToggle(_routedNSWindow);
         NativeObject.Release(_browserView);
         NativeObject.Release(_window);
         _browserView = null;
