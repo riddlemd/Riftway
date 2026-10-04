@@ -100,7 +100,7 @@ Detailed item-by-item status: [parity/browser-window.md](parity/browser-window.m
 | `Dock` (`app.dock`, macOS) | `OrielApp.Dock` | OS | M5 | — |
 | `clipboard` / `ClipboardItem` | `Clipboard` / `ClipboardItem` | OS | M5 | — |
 | `shell` | `Shell` | OS | M5 | — |
-| `nativeImage` | `NativeImage` | .NET | M5 | — |
+| `nativeImage` | `NativeImage` | CEF + .NET | M5 | partial: PNG/JPEG through CEF, raw bitmaps, data URLs, `@Nx` files, crop, resize, representations; window icon, overlay and thumbar buttons take it (branch `native-image`) |
 | `nativeTheme` | `NativeTheme` | OS + CEF | M5 | — |
 | `powerMonitor` | `PowerMonitor` | OS | M5 | — |
 | `powerSaveBlocker` | `PowerSaveBlocker` | OS | M5 | — |

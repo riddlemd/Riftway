@@ -44,7 +44,6 @@ Entries marked _(branch `x`)_ are on that branch and not yet in `main`.
 |---|---|---|---|---|
 | W1 | `show`/`hide` fire whenever the window is shown or hidden | Fire only from `Show()`/`Hide()` | Unknown (CEF reports no visibility change) | OS notifications, or poll like minimize |
 | W2 | `minimize`/`restore` events from the OS | Polled every 250 ms | CEF: reports neither; on macOS minimizing changes no bounds | OS notifications |
-| W3 | `setIcon` takes a `NativeImage` | Takes a PNG/JPEG file path; Windows and Linux only | Module: `NativeImage` (M5) | Overload taking `NativeImage` |
 | W5 | Modal windows disable their parent's input on Linux | The parent still takes focus under window managers that ignore the modal hint (openbox) | CEF: no input filter to block the parent | OS: X11 input shape or grab; check GNOME/KDE |
 | W7 | `openDevTools({ mode })` with docked modes | Separate window only | Unknown | CEF `show_dev_tools` with an inspector view, or `BrowserView` docking |
 | W8 | `setParentWindow` | Missing | CEF: Views sets the parent only at creation | OS: `addChildWindow:`, owner `HWND`, `XSetTransientForHint` |
@@ -58,9 +57,18 @@ Entries marked _(branch `x`)_ are on that branch and not yet in `main`.
 | W16 | `isMenuBarVisible()` etc. on Windows/Linux; `setMenu` on macOS sets nothing; Windows uses a native Win32 menu bar | Same API; the bar is drawn by CEF Views: on Windows a plain strip following the system theme, without mnemonic underlines and with different padding and hover | CEF: Views windows have no native menu bar | Style the bar (colours, font, underlines) to match the OS |
 | W17 | Alt shows an auto-hidden bar until the user moves on | Hidden again on Alt, when its menu closes, when a key goes to the page, or on focus loss; a mouse click into the page does not hide it | Todo: the window sees no page mouse events | Hide on the page's mousedown, through the preload |
 | W20 | `setProgressBar` on Linux (Unity launcher progress); error and paused colours on macOS | Linux shows no progress; macOS shows error and paused as the plain Dock bar | OS: Linux progress is desktop-specific (D-Bus `com.canonical.Unity.LauncherEntry`); `NSProgressIndicator` has no colours | D-Bus launcher entry on Linux; a drawn bar on macOS |
-| W21 | `setOverlayIcon(overlay: NativeImage \| null, description)` | Takes a PNG/JPEG file path or null | Module: `NativeImage` (M5) | Overload taking `NativeImage` |
-| W22 | `setThumbarButtons` (Windows) | Missing | Module: `NativeImage` for the icons; the clicks also need the window's `WM_COMMAND` (`THBN_CLICKED`) routed back | `ITaskbarList3::ThumbBarAddButtons` and a subclassed `HWND`, after `NativeImage` |
 | W23 | `setProgressBar(NaN)` is unspecified (Electron casts it to an arbitrary value) | Removes the bar | Design | None |
+| W26 | `icon` option takes a `NativeImage` or a path | Two options: `Icon` (path) and `IconImage` (`NativeImage`, wins over `Icon`) _(branch `native-image`)_ | Design: a C# property has one type | None |
+
+## nativeImage
+
+| ID | Electron | Oriel | Why | Possible resolution |
+|---|---|---|---|---|
+| B1 | `createThumbnailFromPath` (macOS, Windows), `createFromNamedImage` and `getNativeHandle` (macOS) | Missing _(branch `native-image`)_ | OS: Quick Look, `IShellItemImageFactory`, `NSImage` | P/Invoke per OS |
+| B2 | `resize` `quality` `good`/`better`/`best` pick Skia filters | One filter for all three: box averaging when shrinking, bilinear when enlarging _(branch `native-image`)_ | Todo | Lanczos for `best` |
+| B3 | `setTemplateImage` makes macOS tint the image in menus and the tray | Stored only; nothing in Oriel draws template images yet _(branch `native-image`)_ | Module: `Tray`, menu item icons | Apply in `Tray` and `NSMenu` items |
+| B4 | `toPNG`, `toBitmap`, `toDataURL`, `getSize`, `getAspectRatio` take `{ scaleFactor }`; `createFromPath` also reads ICO on Windows | A `double scaleFactor` parameter; PNG and JPEG only (CEF's codecs) _(branch `native-image`)_ | Design for the parameter; CEF for the formats | ICO through WIC on Windows |
+| B5 | `nativeImage` decodes with Chromium's codecs in the main process | Decoding and encoding PNG/JPEG need CEF, so after `OrielApp.Create`; raw bitmaps, crop and resize work any time _(branch `native-image`)_ | CEF: the codecs live in libcef | Managed PNG codec |
 
 ## window.open
 
