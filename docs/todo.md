@@ -14,7 +14,9 @@ Cross-platform work. Platform-specific items: [linux-todo.md](linux-todo.md), [w
   - [x] `parent`/`modal`, `isModal`, `getChildWindows`, `getParentWindow`
   - [ ] `setParentWindow` (needs OS code: CEF sets the parent only at creation)
   - [ ] `titleBarStyle`, `titleBarOverlay`, `trafficLightPosition`
-  - [ ] `showInactive`, `skipTaskbar`, `flashFrame`, `setProgressBar`
+  - [x] Taskbar on Windows: `setProgressBar`, `flashFrame`, `setSkipTaskbar`/`skipTaskbar`, `setOverlayIcon`
+  - [ ] Taskbar on macOS and Linux (no-ops today); `setThumbarButtons` (needs `NativeImage`)
+  - [ ] `showInactive`
   - [x] `loadURL` options (userAgent, extraHeaders, httpReferrer, postData); `baseURLForDataURL` throws
   - [ ] Window state persistence (`getNormalBounds`, `persisted-state-restored`)
   - [ ] `opacity`, `hasShadow`, `setIgnoreMouseEvents`, content protection, `setKiosk`, `will-*` events

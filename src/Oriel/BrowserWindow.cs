@@ -71,6 +71,10 @@ public sealed record BrowserWindowOptions
     /// <summary>A PNG or JPEG for the window and taskbar icon (Windows, Linux).</summary>
     public string? Icon { get; init; }
 
+    /// <summary>Whether the window has no taskbar button. Windows only for now: ignored on macOS and Linux.
+    /// Electron's <c>skipTaskbar</c>.</summary>
+    public bool SkipTaskbar { get; init; }
+
     /// <summary>Whether the window stays above other windows.</summary>
     public bool AlwaysOnTop { get; init; }
 
@@ -206,6 +210,7 @@ public sealed unsafe class BrowserWindow
     private bool _wasMinimized;
 
     private bool _closable;
+    private bool _skipTaskbar;
     // Set by Close()/Destroy(): a close from code goes through even when the user may not close.
     private bool _closeFromCode;
     private bool _readyToShowRaised;
@@ -244,6 +249,7 @@ public sealed unsafe class BrowserWindow
 
         Id = Interlocked.Increment(ref s_nextId);
         _closable = _options.Closable;
+        _skipTaskbar = _options.SkipTaskbar;
         _backgroundColor = _options.BackgroundColor;
         WebContents = new WebContents(_options.WebPreferences.Preload is { } preload ? File.ReadAllText(preload) : null, _options.WebPreferences);
         WebContents.PageTitleUpdated += (_, e) => PageTitleUpdated?.Invoke(this, e);
@@ -603,6 +609,7 @@ public sealed unsafe class BrowserWindow
     {
         var wasVisible = w->@base.@base.is_visible(&w->@base.@base) != 0;
         w->show(w);
+        ApplySkipTaskbar(w);
         if (!wasVisible) Shown?.Invoke(this, EventArgs.Empty);
     });
 
@@ -863,21 +870,93 @@ public sealed unsafe class BrowserWindow
     {
         ArgumentNullException.ThrowIfNull(path);
         var bytes = File.ReadAllBytes(path);
-        var isPng = bytes is [0x89, 0x50, 0x4E, 0x47, ..];
         Command(w =>
         {
-            var image = CefNative.cef_image_create();
-            fixed (byte* data = bytes)
-            {
-                if (isPng) image->add_png(image, 1.0f, data, (nuint)bytes.Length);
-                else image->add_jpeg(image, 1.0f, data, (nuint)bytes.Length);
-            }
+            var image = LoadImage(bytes);
             NativeObject.AddRef(image);
             w->set_window_icon(w, image);
             NativeObject.AddRef(image);
             w->set_window_app_icon(w, image);
             NativeObject.Release(image);
         });
+    }
+
+    /// <summary>Shows progress on the taskbar button, from 0 to 1; below 0 removes it and above 1 shows it as
+    /// indeterminate. Windows only for now: does nothing on macOS and Linux. Electron's <c>win.setProgressBar()</c>.</summary>
+    public void SetProgressBar(double progress, ProgressBarOptions? options = null)
+    {
+        var (state, percent) = ProgressBar.Map(progress, options?.Mode ?? ProgressBarMode.Normal);
+        Command(w =>
+        {
+            if (OperatingSystem.IsWindows() && !WindowsTaskbar.SetProgress(Hwnd(w), state, percent))
+                Console.Error.WriteLine("[Oriel] The taskbar did not take the progress bar.");
+        });
+    }
+
+    /// <summary>Flashes the title bar and taskbar button to get the user's attention, or stops. Windows only for now:
+    /// does nothing on macOS and Linux. Electron's <c>win.flashFrame()</c>.</summary>
+    public void FlashFrame(bool flag) => Command(w =>
+    {
+        if (OperatingSystem.IsWindows()) WindowsTaskbar.FlashFrame(Hwnd(w), flag);
+    });
+
+    /// <summary>Removes the window's taskbar button, or restores it. Windows only for now: does nothing on macOS and
+    /// Linux. Electron's <c>win.setSkipTaskbar()</c>.</summary>
+    public void SetSkipTaskbar(bool skip) => Command(w =>
+    {
+        var changed = _skipTaskbar != skip;
+        _skipTaskbar = skip;
+        if (changed || skip) ApplySkipTaskbar(w, restore: !skip);
+    });
+
+    /// <summary>Shows a small PNG or JPEG over the taskbar icon, with <paramref name="description"/> for screen
+    /// readers; a null path removes it. Windows only for now: does nothing on macOS and Linux.
+    /// Electron's <c>win.setOverlayIcon()</c>.</summary>
+    public void SetOverlayIcon(string? path, string description)
+    {
+        ArgumentNullException.ThrowIfNull(description);
+        var bytes = path is null ? null : File.ReadAllBytes(path);
+        Command(w =>
+        {
+            if (!OperatingSystem.IsWindows()) return;
+            var hwnd = Hwnd(w);
+            var done = bytes is null ? WindowsTaskbar.ClearOverlayIcon(hwnd) : SetOverlayIconOn(hwnd, bytes, description);
+            if (!done) Console.Error.WriteLine("[Oriel] The taskbar did not take the overlay icon.");
+        });
+    }
+
+    [System.Runtime.Versioning.SupportedOSPlatform("windows")]
+    private static bool SetOverlayIconOn(nint hwnd, byte[] bytes, string description)
+    {
+        var image = LoadImage(bytes);
+        int width, height;
+        var bitmap = image->get_as_bitmap(image, 1.0f, cef_color_type_t.CEF_COLOR_TYPE_BGRA_8888, cef_alpha_type_t.CEF_ALPHA_TYPE_POSTMULTIPLIED, &width, &height);
+        NativeObject.Release(image);
+        if (bitmap is null) return false;
+        var pixels = new byte[(int)bitmap->get_size(bitmap)];
+        fixed (byte* data = pixels) bitmap->get_data(bitmap, data, (nuint)pixels.Length, 0);
+        NativeObject.Release(bitmap);
+        return WindowsTaskbar.SetOverlayIcon(hwnd, pixels, width, height, description);
+    }
+
+    // The shell creates the button on the first show, whether at creation or from Show(); later shows keep it removed.
+    private void ApplySkipTaskbar(cef_window_t* w, bool restore = false)
+    {
+        if (OperatingSystem.IsWindows() && (_skipTaskbar || restore) && !WindowsTaskbar.SetSkipTaskbar(Hwnd(w), _skipTaskbar))
+            Console.Error.WriteLine("[Oriel] The taskbar did not take SkipTaskbar.");
+    }
+
+    private static nint Hwnd(cef_window_t* w) => (nint)w->get_window_handle(w);
+
+    private static cef_image_t* LoadImage(byte[] bytes)
+    {
+        var image = CefNative.cef_image_create();
+        fixed (byte* data = bytes)
+        {
+            if (bytes is [0x89, 0x50, 0x4E, 0x47, ..]) image->add_png(image, 1.0f, data, (nuint)bytes.Length);
+            else image->add_jpeg(image, 1.0f, data, (nuint)bytes.Length);
+        }
+        return image;
     }
 
     // The page area: the client area below the menu bar.
@@ -991,7 +1070,11 @@ public sealed unsafe class BrowserWindow
         if (UsesSimpleFullScreen && OperatingSystem.IsMacOS())
             _routedNSWindow = MacWindow.RouteFullScreenToggle((nint)window->get_window_handle(window), () => SetSimpleFullScreen(!IsSimpleFullScreen));
         if (_options.AlwaysOnTop) window->set_always_on_top(window, 1);
-        if (_options.Show) window->show(window);
+        if (_options.Show)
+        {
+            window->show(window);
+            ApplySkipTaskbar(window);
+        }
         if (_options.FullScreen)
         {
             if (UsesSimpleFullScreen && OperatingSystem.IsMacOS()) MacWindow.SetSimpleFullScreen((nint)window->get_window_handle(window), true);

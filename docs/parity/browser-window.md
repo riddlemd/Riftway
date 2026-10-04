@@ -14,8 +14,8 @@ Event naming: Electron `'x'` → past-tense .NET event (`focus`→`Focused`, `cl
 
 | Area | Done | Partial | Missing |
 |---|---|---|---|
-| Constructor options (52 BaseWindow, 1 BrowserWindow, 46 webPreferences) | 28 | 4 | 67 |
-| Methods (~137) | 29 | 2 | ~106 |
+| Constructor options (52 BaseWindow, 1 BrowserWindow, 46 webPreferences) | 28 | 5 | 66 |
+| Methods (~137) | 29 | 6 | ~102 |
 | Events (35) | 14 | 0 | 21 |
 | Static methods (5) | 0 | 0 | 5 |
 
@@ -28,6 +28,7 @@ Event naming: Electron `'x'` → past-tense .NET event (`focus`→`Focused`, `cl
 - `PageTitleUpdated` (window and webContents; window title follows the page unless cancelled), `ReadyToShow`.
 - `BackgroundColor` option, `Set/GetBackgroundColor`; `Icon` option, `SetIcon` (PNG/JPEG).
 - `Destroy`.
+- Taskbar, Windows only: `SetProgressBar` (`ProgressBarOptions.Mode`), `FlashFrame`, `SetSkipTaskbar` and the`n  `SkipTaskbar` option, `SetOverlayIcon` (PNG/JPEG path) — OS: `ITaskbarList3` and `FlashWindowEx` in`n  `WindowsTaskbar`. No-ops on macOS and Linux for now; `setThumbarButtons` waits on `NativeImage` (DRIFT W20–W23).
 - `getNativeWindowHandle` (`W.get_window_handle`: the content `NSView`, `HWND` or X11 `Window`).
 - webContents: `LoadFile` (query, hash), `Reload`, `GetUrl`, `GetTitle`, `did-start-loading`, `did-stop-loading`,
   `did-finish-load`, `did-fail-load`.
@@ -100,7 +101,7 @@ Event naming: Electron `'x'` → past-tense .NET event (`focus`→`Focused`, `cl
 2. `setParentWindow` — CEF Views sets the parent only at creation, so this needs OS code (`addChildWindow:`, an owner
    `HWND`, `XSetTransientForHint`).
 3. `titleBarStyle`, `titleBarOverlay`, `trafficLightPosition` — `D.with_standard_window_buttons`, `D.get_titlebar_height`, `W.add_overlay_view`, OS.
-4. `showInactive`, `skipTaskbar`, `flashFrame`, `setProgressBar` — OS.
+4. `showInactive` — OS. Taskbar on macOS and Linux (Dock progress and bounce, urgency hint,`n   `_NET_WM_STATE_SKIP_TASKBAR`, launcher progress) — OS; Windows is done.
 5. Window state persistence (`windowStatePersistence`, `getNormalBounds`, `persisted-state-restored`) — Oriel.
 6. `opacity`, `hasShadow`, `setIgnoreMouseEvents`, content protection, `setKiosk`, `will-*`/`resized`/`moved` events — OS.
 

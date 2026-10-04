@@ -57,6 +57,10 @@ Entries marked _(branch `x`)_ are on that branch and not yet in `main`.
 | W15 | `zoomFactor` | Re-applies to an origin whose zoom was reset to 0 | Todo | Track explicit resets |
 | W16 | `isMenuBarVisible()` etc. on Windows/Linux; `setMenu` on macOS sets nothing; Windows uses a native Win32 menu bar | Same API; the bar is drawn by CEF Views: on Windows a plain strip following the system theme, without mnemonic underlines and with different padding and hover | CEF: Views windows have no native menu bar | Style the bar (colours, font, underlines) to match the OS |
 | W17 | Alt shows an auto-hidden bar until the menu is used or focus moves on | Hidden again when its menu closes, or on Alt; not when focus moves back to the page without using a menu | Todo | Hide on focus loss and on a click into the page |
+| W20 | `setProgressBar` and `flashFrame` work on macOS and Linux too (Dock progress and bounce, urgency hint); `skipTaskbar` on Linux (`_NET_WM_STATE_SKIP_TASKBAR`) | Windows only; no-ops on macOS and Linux | OS | macOS: `NSDockTile`, `requestUserAttention:`; Linux: EWMH skip-taskbar and demands-attention, launcher progress over D-Bus |
+| W21 | `setOverlayIcon(overlay: NativeImage \| null, description)` | Takes a PNG/JPEG file path or null | Module: `NativeImage` (M5) | Overload taking `NativeImage` |
+| W22 | `setThumbarButtons` (Windows) | Missing | Module: `NativeImage` for the icons; the clicks also need the window's `WM_COMMAND` (`THBN_CLICKED`) routed back | `ITaskbarList3::ThumbBarAddButtons` and a subclassed `HWND`, after `NativeImage` |
+| W23 | `setProgressBar(NaN)` is unspecified (Electron casts it to an arbitrary value) | Removes the bar | Design | None |
 
 ## window.open
 

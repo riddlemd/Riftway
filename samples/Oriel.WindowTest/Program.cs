@@ -194,6 +194,7 @@ async Task RunAsync(BrowserWindow win, BrowserWindow simple)
     await WindowOpenAsync(win);
     await LoadAndSizeAsync(win);
     await NavigationAsync();
+    await TaskbarAsync(win);
 
     // Closing cancelled once: the window must survive the first close.
     var closingCount = 0;
@@ -987,6 +988,73 @@ async Task NavigationAsync()
     nav.Destroy();
     await Task.Delay(300);
     Directory.Delete(dir, recursive: true);
+}
+
+async Task TaskbarAsync(BrowserWindow win)
+{
+    // Windows only so far; the macOS and Linux methods are documented no-ops.
+    if (!OperatingSystem.IsWindows()) return;
+
+    // The shell groups an app's windows under one button named "<app> - N running windows"; DeleteTab lowers N.
+    var app = System.Diagnostics.Process.GetCurrentProcess().ProcessName;
+    int? Buttons() => WindowsShell.TaskbarNames().FirstOrDefault(n => n.StartsWith(app + " - ", StringComparison.Ordinal)) is { } name
+        && System.Text.RegularExpressions.Regex.Match(name[(app.Length + 3)..], @"\d+") is { Success: true } m ? int.Parse(m.Value) : null;
+
+    var tb = new BrowserWindow(new BrowserWindowOptions { Title = "Oriel window test: taskbar", Width = 300, Height = 200 });
+    await Task.Delay(1500);
+    var withButton = Buttons();
+    Check("the taskbar lists this app's windows (UI Automation)", withButton is > 0, withButton);
+    tb.SetSkipTaskbar(true);
+    Check("SetSkipTaskbar(true) removes the window's taskbar button", Eventually(() => Buttons() == withButton - 1, step), $"{withButton} -> {Buttons()}");
+    tb.Hide();
+    tb.Show();
+    await Task.Delay(1500);
+    Check("SkipTaskbar holds when the window is shown again", Buttons() == withButton - 1, $"{withButton} -> {Buttons()}");
+    tb.SetSkipTaskbar(false);
+    Check("SetSkipTaskbar(false) gives the button back", Eventually(() => Buttons() == withButton, step), $"{withButton} -> {Buttons()}");
+    var skipped = new BrowserWindow(new BrowserWindowOptions { Title = "Oriel window test: skip taskbar", Width = 300, Height = 200, SkipTaskbar = true });
+    await Task.Delay(1500);
+    Check("the SkipTaskbar option opens a window without a button", skipped.IsVisible && Buttons() == withButton, $"visible={skipped.IsVisible} {withButton} -> {Buttons()}");
+    skipped.Destroy();
+    var later = new BrowserWindow(new BrowserWindowOptions { Title = "Oriel window test: skip taskbar, shown later", Width = 300, Height = 200, Show = false, SkipTaskbar = true });
+    await Task.Delay(500);
+    later.Show();
+    await Task.Delay(1500);
+    Check("the SkipTaskbar option holds for a window shown later", later.IsVisible && Buttons() == withButton, $"visible={later.IsVisible} {withButton} -> {Buttons()}");
+    later.Destroy();
+
+    // ITaskbarList3 is write-only, and the shell answers S_OK to progress calls even for a wrong window, so
+    // progress has no check here. The overlay can at least fail to build its icon; Oriel logs that to stderr.
+    var refusals = new StringWriter();
+    var stderr = Console.Error;
+    Console.SetError(refusals);
+    tb.SetOverlayIcon(OverlayPng(), "Oriel overlay test");
+    tb.SetOverlayIcon(null, "");
+    await Task.Delay(500);
+    Console.SetError(stderr);
+    Check("the shell takes the overlay icon (weak: no read-back)", refusals.ToString().Length == 0, refusals.ToString().Trim());
+
+    // The shell hook's HSHELL_FLASH is the only read-back of a flash. The first comes about 0.5 s after the call;
+    // a later one can come from the shell itself, so only an early one counts.
+    WindowsShell.StartShellHook();
+    var hwnd = tb.GetNativeWindowHandle();
+    win.Focus();
+    await Task.Delay(500);
+    tb.FlashFrame(true);
+    Check("FlashFrame(true) flashes the window (HSHELL_FLASH)", Eventually(() => WindowsShell.Count(WindowsShell.FlashCode, hwnd) > 0, TimeSpan.FromMilliseconds(1500)), WindowsShell.Count(WindowsShell.FlashCode, hwnd));
+    tb.FlashFrame(false);
+    var flashes = WindowsShell.Count(WindowsShell.FlashCode, hwnd);
+    await Task.Delay(2500);
+    Check("FlashFrame(false) stops it", WindowsShell.Count(WindowsShell.FlashCode, hwnd) == flashes, $"{flashes} -> {WindowsShell.Count(WindowsShell.FlashCode, hwnd)}");
+    tb.Destroy();
+    await Task.Delay(300);
+}
+// A 16x16 red PNG, written once to a temp file.
+static string OverlayPng()
+{
+    var path = Path.Combine(Path.GetTempPath(), "oriel-overlay-test.png");
+    File.WriteAllBytes(path, Convert.FromBase64String("iVBORw0KGgoAAAANSUhEUgAAABAAAAAQCAYAAAAf8/9hAAAAAXNSR0IArs4c6QAAAARnQU1BAACxjwv8YQUAAAAJcEhZcwAADsMAAA7DAcdvqGQAAAAdSURBVDhPY7gjJ/efEsyALkAqHjVg1IBRAwaLAQDHMhcfPZpcYgAAAABJRU5ErkJggg=="));
+    return path;
 }
 
 app.Ready += (_, _) =>
