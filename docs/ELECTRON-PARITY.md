@@ -45,7 +45,7 @@ Detailed item-by-item status: [parity/browser-window.md](parity/browser-window.m
 | `BrowserView` (deprecated) | not implemented; use `WebContentsView` | — | — | — |
 | `<webview>` tag | `<webview>` | Patch | M7 | — |
 | `window.open` handling | `WebContents.SetWindowOpenHandler` | CEF | M2 | — |
-| `screen` | `Screen` | CEF | M2 | — |
+| `screen` | `Screen` | CEF | M2 | partial: displays, nearest/matching, cursor point, DIP conversion, polled display events (see DRIFT.md) |
 | `-electron-corner-smoothing` CSS | same CSS property | Patch | M7 | — |
 
 ## Web contents and frames
