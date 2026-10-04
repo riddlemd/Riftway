@@ -146,6 +146,30 @@ public sealed unsafe class WebContents
         CefThread.PostUi(() => ContextMenu?.Invoke(this, args));
     }
 
+    /// <summary>The settings this page was created with; a page it opens inherits them.</summary>
+    internal WebPreferences Preferences => _preferences;
+
+    private Func<WindowOpenDetails, WindowOpenHandlerResponse>? _windowOpenHandler;
+
+    /// <summary>Decides what happens when the page opens a window (<c>window.open</c>, a <c>target=_blank</c> link,
+    /// a shift-click). Without a handler the window opens, as a <see cref="BrowserWindow"/> with this page's web
+    /// preferences, and closes with this window. Null restores that. Electron's <c>webContents.setWindowOpenHandler()</c>.</summary>
+    /// <remarks>The handler runs on the UI thread while the page waits, so it must decide at once.</remarks>
+    public void SetWindowOpenHandler(Func<WindowOpenDetails, WindowOpenHandlerResponse>? handler) => _windowOpenHandler = handler;
+
+    /// <summary>A window this page opened was created. Electron's <c>did-create-window</c>.</summary>
+    public event EventHandler<DidCreateWindowEventArgs>? DidCreateWindow;
+
+    internal WindowOpenHandlerResponse DecideWindowOpen(WindowOpenDetails details)
+        => _windowOpenHandler is { } handler ? handler(details) ?? WindowOpenHandlerResponse.Deny : WindowOpenHandlerResponse.Allow();
+
+    internal void RaiseDidCreateWindow(DidCreateWindowEventArgs args) => DidCreateWindow?.Invoke(this, args);
+
+    /// <summary>A page opened this one: its first document is real, with no about:blank start to hide.</summary>
+    internal void MarkOpenedByPage() => _navigated = _openedByPage = true;
+
+    private bool _openedByPage;
+
     /// <summary>Opens DevTools in their own window; does nothing when <see cref="WebPreferences.DevTools"/> is
     /// false. Electron's <c>webContents.openDevTools()</c>; docked modes are not supported.</summary>
     public void OpenDevTools() => WithHost(host =>
@@ -532,8 +556,13 @@ public sealed unsafe class WebContents
         });
         _devTools.Send("Page.getFrameTree", onResult: (result, _) =>
         {
-            _mainFrameId = result.GetProperty("frameTree").GetProperty("frame").GetProperty("id").GetString();
+            var frame = result.GetProperty("frameTree").GetProperty("frame");
+            _mainFrameId = frame.GetProperty("id").GetString();
             _ready = true;
+            // A page-opened window starts on its real page, which can commit before the scripts above are registered
+            // and would then run without Oriel's runtime or the preload. Reloading keeps window.opener.
+            if (_openedByPage && frame.GetProperty("url").GetString() is { Length: > 0 } url && url != "about:blank")
+                _devTools.Send("Page.reload");
             if (_queuedLoad is { } queued)
             {
                 _queuedLoad = null;

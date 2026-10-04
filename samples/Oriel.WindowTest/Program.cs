@@ -191,6 +191,7 @@ async Task RunAsync(BrowserWindow win, BrowserWindow simple)
     await DialogsAsync(win);
     await MenusAsync(win);
     await ContextMenusAsync(win);
+    await WindowOpenAsync(win);
 
     // Closing cancelled once: the window must survive the first close.
     var closingCount = 0;
@@ -768,6 +769,108 @@ async Task BarMenusAsync(BrowserWindow win, Menu menu, MenuItem save, MenuItem g
     await Task.Delay(300);
 }
 
+
+async Task WindowOpenAsync(BrowserWindow win)
+{
+    var dir = Directory.CreateTempSubdirectory("oriel-open-").FullName;
+    var opener = Path.Combine(dir, "opener.html");
+    var popupPage = Path.Combine(dir, "popup.html");
+    File.WriteAllText(opener, "<!doctype html><title>opener</title><a id=blank href=popup.html target=_blank>blank</a>");
+    File.WriteAllText(popupPage, "<!doctype html><title>popup page</title><p>popup</p>");
+    var popupUrl = new Uri(popupPage).AbsoluteUri;
+    Fires(h => win.WebContents.DidFinishLoad += h, h => win.WebContents.DidFinishLoad -= h, () => win.WebContents.LoadFile(opener), step);
+    async Task<string?> Run(BrowserWindow w, string code, bool gesture = false)
+    {
+        var task = w.WebContents.ExecuteJavaScriptAsync(code, gesture);
+        return await Task.WhenAny(task, Task.Delay(step)) == task ? task.Result?.ToJsonString() : "timeout";
+    }
+
+    // Default: the window opens as a BrowserWindow sized by the features, and the opener hears about it.
+    DidCreateWindowEventArgs? created = null;
+    using var createdEvent = new ManualResetEventSlim();
+    EventHandler<DidCreateWindowEventArgs> onCreated = (_, e) => { created = e; createdEvent.Set(); };
+    win.WebContents.DidCreateWindow += onCreated;
+    var opened = await Run(win, "window.__popup = window.open('popup.html', 'pop', 'width=320,height=240'); window.__popup !== null");
+    Check("window.open returns a window by default", opened == "true", opened);
+    Check("DidCreateWindow is raised", await Task.Run(() => createdEvent.Wait(step)));
+    var details = created?.Details;
+    Check("details: url, frame name, features, disposition",
+        details is { FrameName: "pop", Disposition: WindowOpenDisposition.NewWindow } && details.Url == popupUrl && details.Features.Contains("width=320") && details.Features.Contains("height=240"),
+        details);
+    var popup = created?.Window;
+    Check("the popup is a BrowserWindow in GetAllWindows", popup is not null && BrowserWindow.GetAllWindows().Contains(popup));
+    if (popup is not null)
+    {
+        Check("the popup loads its page", Eventually(() => popup.WebContents.GetTitle() == "popup page", step), popup.WebContents.GetTitle());
+        Check("the features size the popup's page area", Eventually(() => popup.GetContentSize() == (320, 240), step), popup.GetContentSize());
+        Check("the popup sees its opener", await Run(popup, "window.opener !== null") == "true");
+        // file: pages are opaque origins, so the opener may only use cross-origin members such as closed.
+        Check("the opener holds a live handle to the popup", await Run(win, "window.__popup.closed") == "false", await Run(win, "window.__popup.closed"));
+        using var popupClosed = new ManualResetEventSlim();
+        popup.Closed += (_, _) => popupClosed.Set();
+        popup.Close();
+        Check("the popup closes", popupClosed.Wait(step));
+    }
+    win.WebContents.DidCreateWindow -= onCreated;
+
+    // Deny: window.open returns null and no window appears.
+    WindowOpenDetails? asked = null;
+    win.WebContents.SetWindowOpenHandler(d => { asked = d; return WindowOpenHandlerResponse.Deny; });
+    var windows = BrowserWindow.GetAllWindows().Count;
+    Check("a denied window.open returns null", await Run(win, "window.open('popup.html') === null") == "true");
+    await Task.Delay(500);
+    Check("a denied window opens nothing", BrowserWindow.GetAllWindows().Count == windows, BrowserWindow.GetAllWindows().Count);
+
+    // A target=_blank link clicked by the user asks for a foreground tab.
+    asked = null;
+    await Run(win, "document.getElementById('blank').click(); 1", gesture: true);
+    Check("a target=_blank link reaches the handler as ForegroundTab", Eventually(() => asked is { Disposition: WindowOpenDisposition.ForegroundTab, UserGesture: true }, step), asked);
+
+    // Override options; and popups close with their opener unless they outlive it.
+    var preload = Path.Combine(dir, "preload.js");
+    File.WriteAllText(preload, "oriel.contextBridge.exposeInMainWorld('probe', { ping: () => 'pong' });");
+    var second = new BrowserWindow(new BrowserWindowOptions { Title = "Oriel window test: opener", Width = 400, Height = 300, WebPreferences = new WebPreferences { Preload = preload } });
+    Fires(h => second.WebContents.DidFinishLoad += h, h => second.WebContents.DidFinishLoad -= h, () => second.WebContents.LoadFile(opener), step);
+    var popups = new List<BrowserWindow>();
+    second.WebContents.DidCreateWindow += (_, e) => { lock (popups) popups.Add(e.Window); };
+    // Without overrides a popup inherits the opener's web preferences, preload included.
+    await Run(second, "window.open('popup.html'); 1");
+    Check("a popup opens from the preloaded opener", Eventually(() => { lock (popups) return popups.Count == 1; }, step), popups.Count);
+    if (popups.Count == 1)
+    {
+        var inheriting = popups[0];
+        Check("a popup inherits the opener's preload", Eventually(() => Run(inheriting, "typeof probe").Result == "\"object\"", step), Run(inheriting, "typeof probe").Result);
+        inheriting.Destroy();
+        lock (popups) popups.Clear();
+    }
+
+    var outlive = false;
+    second.WebContents.SetWindowOpenHandler(_ => WindowOpenHandlerResponse.Allow(new BrowserWindowOptions { Width = 360, Height = 260 }, outlivesOpener: outlive));
+    await Run(second, "window.open('popup.html'); 1");
+    outlive = true;
+    await Run(second, "window.open('popup.html'); 1");
+    Check("both popups open", Eventually(() => { lock (popups) return popups.Count == 2; }, step), popups.Count);
+    if (popups.Count == 2)
+    {
+        var (closesWithOpener, outlives) = (popups[0], popups[1]);
+        var reference = new BrowserWindow(new BrowserWindowOptions { Title = "Oriel window test: reference", Width = 360, Height = 260 });
+        await Task.Delay(500);
+        Check("OverrideBrowserWindowOptions sizes the popup as the same options size a window", Eventually(() => closesWithOpener.GetSize() == reference.GetSize(), step),
+            $"popup {closesWithOpener.GetSize()} window {reference.GetSize()} asked (360, 260)");
+        reference.Destroy();
+        second.Destroy();
+        Check("a popup closes with its opener", Eventually(() => closesWithOpener.IsDestroyed, step));
+        await Task.Delay(500);
+        Check("OutlivesOpener keeps it open", !outlives.IsDestroyed);
+        outlives.Destroy();
+    }
+    // Every path closes what it opened, or the app never quits.
+    if (!second.IsDestroyed) second.Destroy();
+    foreach (var p in popups.ToArray()) if (!p.IsDestroyed) p.Destroy();
+    win.WebContents.SetWindowOpenHandler(null);
+    await Task.Delay(300);
+    Directory.Delete(dir, recursive: true);
+}
 
 app.Ready += (_, _) =>
 {
