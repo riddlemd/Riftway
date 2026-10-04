@@ -57,10 +57,25 @@ Event naming: Electron `'x'` → past-tense .NET event (`focus`→`Focused`, `cl
   modifiers), through DevTools `Input.dispatchKeyEvent`, so the browser's own shortcuts see them. Mouse and wheel
   events are not supported yet.
 
+- Window menus: `setMenu`, `removeMenu`, `autoHideMenuBar` (option and property), `setMenuBarVisibility`,
+  `isMenuBarVisible`, with the `Menu`/`MenuItem` module (`Menu.setApplicationMenu`/`getApplicationMenu`,
+  `getMenuItemById`, `append`/`insert`; types normal, separator, submenu, checkbox, radio; common roles; Electron
+  accelerators). Routes: on Windows and Linux a CEF Views bar of `cef_menu_button_t` above the page, with
+  `cef_menu_model_t` dropdowns, `W.set_accelerator`/`D.on_accelerator` for shortcuts (low priority, so the page sees
+  keys first) and `D.on_key_event` for Alt (auto-hide toggle, Alt+mnemonic); on macOS an `NSMenu` main menu (OS),
+  where editing, About and Hide roles are AppKit actions on the responder chain and everything else reaches C#
+  through a runtime-built target class. `getContentBounds` excludes the bar. macOS gets Electron's default
+  application menu (app, File, Edit, View, Window) unless the app sets one during `Ready`; unlike Electron,
+  Windows and Linux get no default bar. Webcontents gains `undo`, `redo`, `cut`, `copy`, `paste`,
+  `pasteAndMatchStyle`, `delete`, `selectAll`, `reloadIgnoringCache`. Gaps: `Menu.popup` (context menus), menu
+  item icons, sublabels, tooltips and `registerAccelerator`; most macOS-only roles (tabs, speech, recent documents,
+  `shareMenu`); the click callback gets no `KeyboardEvent`; `Command`/`Super` accelerators are ignored on Windows
+  and Linux (CEF accelerators have no such modifier); Alt shows an auto-hidden bar until pressed again, rather than
+  until the menu is used; the bar takes CEF Views' default look.
+
 ## Next, by importance
 
-1. Window menus: `setMenu/removeMenu`, `autoHideMenuBar`, menu visibility — Oriel/OS (with the `Menu` module).
-2. Remaining webPreferences:
+1. Remaining webPreferences:
    - Need other modules: `session`/`partition` and `spellcheck` (Session, request contexts), `offscreen` (offscreen
      rendering), `transparent`.
    - Process-wide in CEF (Chromium switches, not per window): `webSecurity`, `allowRunningInsecureContent`,
@@ -71,12 +86,12 @@ Event naming: Electron `'x'` → past-tense .NET event (`focus`→`Focused`, `cl
      `accessibleTitle`, `scrollBounce`, `imageAnimationPolicy`, `zoomMode`, `focusOnNavigation`,
      `enablePreferredSizeMode`, `disableHtmlFullscreenWindowResize`, `additionalArguments`.
    - `contextIsolation` is always on; `false` is not offered.
-3. `setParentWindow` — CEF Views sets the parent only at creation, so this needs OS code (`addChildWindow:`, an owner
+2. `setParentWindow` — CEF Views sets the parent only at creation, so this needs OS code (`addChildWindow:`, an owner
    `HWND`, `XSetTransientForHint`).
-4. `titleBarStyle`, `titleBarOverlay`, `trafficLightPosition` — `D.with_standard_window_buttons`, `D.get_titlebar_height`, `W.add_overlay_view`, OS.
-5. `showInactive`, `skipTaskbar`, `flashFrame`, `setProgressBar` — OS.
-6. Window state persistence (`windowStatePersistence`, `getNormalBounds`, `persisted-state-restored`) — Oriel.
-7. `opacity`, `hasShadow`, `setIgnoreMouseEvents`, content protection, `setKiosk`, `will-*`/`resized`/`moved` events — OS.
+3. `titleBarStyle`, `titleBarOverlay`, `trafficLightPosition` — `D.with_standard_window_buttons`, `D.get_titlebar_height`, `W.add_overlay_view`, OS.
+4. `showInactive`, `skipTaskbar`, `flashFrame`, `setProgressBar` — OS.
+5. Window state persistence (`windowStatePersistence`, `getNormalBounds`, `persisted-state-restored`) — Oriel.
+6. `opacity`, `hasShadow`, `setIgnoreMouseEvents`, content protection, `setKiosk`, `will-*`/`resized`/`moved` events — OS.
 
 Accuracy gaps in done items: `Shown`/`Hidden` fire only from `Show()`/`Hide()`, not when the OS shows or hides the
 window; `SetIcon` takes a file path, not Electron's `NativeImage` (that module comes later); `devTools: false` blocks

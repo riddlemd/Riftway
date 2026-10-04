@@ -16,6 +16,9 @@ public unsafe delegate void WindowCallback(cef_window_t* window);
 /// <summary>A CEF window argument handed to a managed predicate.</summary>
 public unsafe delegate bool WindowPredicate(cef_window_t* window);
 
+/// <summary>A key event handed to a managed predicate; true if handled.</summary>
+public unsafe delegate bool KeyEventPredicate(cef_key_event_t* keyEvent);
+
 /// <summary>Runs managed code called from native code: an exception escaping into CEF kills the process.</summary>
 internal static class Guard
 {
@@ -512,6 +515,8 @@ public sealed unsafe class WindowDelegate
         Native->get_initial_show_state = &GetInitialShowState;
         Native->get_parent_window = &GetParentWindow;
         Native->is_window_modal_dialog = &IsWindowModalDialog;
+        Native->on_accelerator = &OnAccelerator;
+        Native->on_key_event = &OnKeyEvent;
         // The window delegate is also its root view's delegate, which owns size limits.
         Native->@base.@base.get_minimum_size = &GetMinimumSize;
         Native->@base.@base.get_maximum_size = &GetMaximumSize;
@@ -549,6 +554,12 @@ public sealed unsafe class WindowDelegate
 
     /// <summary>Disables the parent while shown. Only applies with a <see cref="Parent"/>.</summary>
     public bool Modal { get; init; }
+
+    /// <summary>An accelerator registered with <c>set_accelerator</c> fired: its command id; true if handled.</summary>
+    public Func<int, bool>? Accelerator { get; init; }
+
+    /// <summary>A key event nothing else in the window handled; true if handled.</summary>
+    public KeyEventPredicate? KeyEvent { get; init; }
 
     /// <summary>How the window first appears.</summary>
     public cef_show_state_t InitialShowState { get; init; } = cef_show_state_t.CEF_SHOW_STATE_NORMAL;
@@ -606,6 +617,22 @@ public sealed unsafe class WindowDelegate
         var parent = owner.Parent is { } get ? (cef_window_t*)Guard.Run(get, 0) : null;
         if (parent is not null) NativeObject.AddRef(parent);
         return parent;
+    }
+
+    [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])]
+    private static int OnAccelerator(cef_window_delegate_t* self, cef_window_t* window, int commandId)
+    {
+        NativeObject.Release(window);
+        var owner = NativeObject.Owner<WindowDelegate>(self);
+        return owner.Accelerator is { } callback && Guard.Run(() => callback(commandId), false) ? 1 : 0;
+    }
+
+    [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])]
+    private static int OnKeyEvent(cef_window_delegate_t* self, cef_window_t* window, cef_key_event_t* keyEvent)
+    {
+        NativeObject.Release(window);
+        var owner = NativeObject.Owner<WindowDelegate>(self);
+        return owner.KeyEvent is { } callback && Guard.Run(() => callback(keyEvent), false) ? 1 : 0;
     }
 
     [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])]

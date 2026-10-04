@@ -259,6 +259,47 @@ public sealed unsafe class WebContents
         if (_browser is not null && _navigated) _browser->reload(_browser);
     });
 
+    /// <summary>Reloads the page, bypassing the cache. Electron's <c>webContents.reloadIgnoringCache()</c>.</summary>
+    public void ReloadIgnoringCache() => CefThread.RunOnUi(() =>
+    {
+        if (_browser is not null && _navigated) _browser->reload_ignore_cache(_browser);
+    });
+
+    /// <summary>Undoes the last edit in the focused frame. Electron's <c>webContents.undo()</c>.</summary>
+    public void Undo() => WithFocusedFrame(f => f->undo(f));
+
+    /// <summary>Redoes the last undone edit in the focused frame. Electron's <c>webContents.redo()</c>.</summary>
+    public void Redo() => WithFocusedFrame(f => f->redo(f));
+
+    /// <summary>Cuts the focused frame's selection. Electron's <c>webContents.cut()</c>.</summary>
+    public void Cut() => WithFocusedFrame(f => f->cut(f));
+
+    /// <summary>Copies the focused frame's selection. Electron's <c>webContents.copy()</c>.</summary>
+    public void Copy() => WithFocusedFrame(f => f->copy(f));
+
+    /// <summary>Pastes into the focused frame. Electron's <c>webContents.paste()</c>.</summary>
+    public void Paste() => WithFocusedFrame(f => f->paste(f));
+
+    /// <summary>Pastes as plain text into the focused frame. Electron's <c>webContents.pasteAndMatchStyle()</c>.</summary>
+    public void PasteAndMatchStyle() => WithFocusedFrame(f => f->paste_and_match_style(f));
+
+    /// <summary>Deletes the focused frame's selection. Electron's <c>webContents.delete()</c>.</summary>
+    public void Delete() => WithFocusedFrame(f => f->del(f));
+
+    /// <summary>Selects everything in the focused frame. Electron's <c>webContents.selectAll()</c>.</summary>
+    public void SelectAll() => WithFocusedFrame(f => f->select_all(f));
+
+    private void WithFocusedFrame(FrameAction action) => CefThread.RunOnUi(() =>
+    {
+        if (_browser is null) return;
+        var frame = _browser->get_focused_frame(_browser);
+        if (frame is null) return;
+        try { action(frame); }
+        finally { NativeObject.Release(frame); }
+    });
+
+    private delegate void FrameAction(cef_frame_t* frame);
+
     /// <summary>Loads a local file. Electron's <c>webContents.loadFile()</c>.</summary>
     /// <param name="path">Absolute, or relative to the current directory.</param>
     /// <param name="query">Query parameters, encoded into the URL.</param>

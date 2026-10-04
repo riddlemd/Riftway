@@ -17,6 +17,8 @@ public sealed unsafe class OrielApp
     /// <exception cref="InvalidOperationException">No application has been created.</exception>
     public static OrielApp Current => s_current ?? throw new InvalidOperationException("Call OrielApp.Create() first.");
 
+    internal static OrielApp? CurrentOrNull => s_current;
+
     /// <summary>The application's name; also names its data directory.</summary>
     public string Name { get; }
 
@@ -167,6 +169,12 @@ public sealed unsafe class OrielApp
         Protocol.OnContextInitialized();
         IsReady = true;
         Ready?.Invoke(this, EventArgs.Empty);
+        // After Ready, so an app that sets its own menu there never shows the default.
+        if (OperatingSystem.IsMacOS())
+        {
+            Menu.SetDefaultApplicationMenuIfUnset();
+            MacApplicationMenu.Install();
+        }
     }
 
     // Chrome-style profiles save each origin's zoom across launches; Electron keeps zoom for the session only.
