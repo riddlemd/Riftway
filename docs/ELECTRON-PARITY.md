@@ -122,7 +122,7 @@ Detailed item-by-item status, including `navigationHistory` and `WebFrameMain`: 
 | `nativeTheme` | `NativeTheme` | OS + CEF | M5 | — |
 | `powerMonitor` | `PowerMonitor` | OS | M5 | — |
 | `powerSaveBlocker` | `PowerSaveBlocker` | OS | M5 | — |
-| `safeStorage` | `SafeStorage` | OS | M5 | partial: Windows DPAPI (`isEncryptionAvailable`, `encryptString`, `decryptString`); no macOS or Linux (DRIFT V1-V2) |
+| `safeStorage` | `SafeStorage` | OS | M5 | partial: Windows DPAPI (`isEncryptionAvailable`, `encryptString`, `decryptString`); no macOS or Linux (DRIFT D1-D2) |
 | `systemPreferences` | `SystemPreferences` | OS | M5 | — |
 | `desktopCapturer` | `DesktopCapturer` | CEF + Patch (verify) | M5 | — |
 

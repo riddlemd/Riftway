@@ -191,8 +191,8 @@ Entries marked _(branch `x`)_ are on that branch and not yet in `main`.
 
 | ID | Electron | Oriel | Why | Possible resolution |
 |---|---|---|---|---|
-| V1 _(branch `notify-storage`)_ | Windows: Chromium's os_crypt (`v10` plus AES-256-GCM, the key wrapped by DPAPI in `Local State`) | DPAPI directly on each string, entropy `Oriel.SafeStorage`; not interchangeable with Electron's ciphertext | Design: no `Local State` key to share; DPAPI alone gives the same per-user protection | Adopt os_crypt's format if interchange matters |
-| V2 _(branch `notify-storage`)_ | macOS Keychain and Linux secret service | `IsEncryptionAvailable()` is false and encrypt/decrypt throw `PlatformNotSupportedException`; `SetUsePlainTextEncryption` and `GetSelectedStorageBackend` ("unknown") are no-ops | OS | Per-OS `ISafeStorageBackend` |
+| D1 _(branch `notify-storage`)_ | Windows: Chromium's os_crypt (`v10` plus AES-256-GCM, the key wrapped by DPAPI in `Local State`) | DPAPI directly on each string, entropy `Oriel.SafeStorage`; not interchangeable with Electron's ciphertext | Design: no `Local State` key to share; DPAPI alone gives the same per-user protection | Adopt os_crypt's format if interchange matters |
+| D2 _(branch `notify-storage`)_ | macOS Keychain and Linux secret service | `IsEncryptionAvailable()` is false and encrypt/decrypt throw `PlatformNotSupportedException`; `SetUsePlainTextEncryption` and `GetSelectedStorageBackend` ("unknown") are no-ops | OS | Per-OS `ISafeStorageBackend` |
 ## Platform and runtime
 
 | ID | Electron | Oriel | Why | Possible resolution |
