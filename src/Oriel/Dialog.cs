@@ -420,11 +420,20 @@ public static unsafe class Dialog
     /// <summary>Throws for a save option CEF's dialog cannot honour.</summary>
     internal static void RejectCefUnsupported(SaveDialogOptions options)
     {
-        Unsupported(options.ButtonLabel, nameof(SaveDialogOptions.ButtonLabel));
-        Unsupported(options.Message, nameof(SaveDialogOptions.Message));
-        Unsupported(options.NameFieldLabel, nameof(SaveDialogOptions.NameFieldLabel));
-        if (options.Properties != SaveDialogProperties.None)
-            throw new NotSupportedException($"{options.Properties} is not supported: CEF's file dialog has no option for it.");
+        if (CefUnsupportedOf(options) is [var first, ..])
+            throw new NotSupportedException($"{first} is not supported: CEF's file dialog has no option for it.");
+    }
+
+    /// <summary>The save options set that CEF's dialog cannot honour. <c>showsTagField</c> and
+    /// <c>securityScopedBookmarks</c> are macOS-only in Electron, so ignoring them elsewhere matches it.</summary>
+    internal static IReadOnlyList<string> CefUnsupportedOf(SaveDialogOptions options)
+    {
+        var names = new List<string>();
+        if (options.ButtonLabel is not null) names.Add(nameof(SaveDialogOptions.ButtonLabel));
+        if (options.Message is not null) names.Add(nameof(SaveDialogOptions.Message));
+        if (options.NameFieldLabel is not null) names.Add(nameof(SaveDialogOptions.NameFieldLabel));
+        if (options.Properties != SaveDialogProperties.None) names.Add(options.Properties.ToString());
+        return names;
     }
 
     /// <summary>CEF's accept filters: <c>Name|.ext;.ext</c> per filter. A filter for any file (<c>*</c>) adds none:

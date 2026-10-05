@@ -49,6 +49,14 @@ public sealed class DialogTests
     }
 
     [Fact]
+    public void CefUnsupportedOf_NamesWhatCefCannotShow_ButNotTheMacOnlyTagsOrBookmarks()
+        => Assert.Equal(["ButtonLabel", "Message", "NameFieldLabel", "ShowHiddenFiles"], Dialog.CefUnsupportedOf(new SaveDialogOptions
+        {
+            ButtonLabel = "Keep", Message = "m", NameFieldLabel = "n", Properties = SaveDialogProperties.ShowHiddenFiles,
+            ShowsTagField = true, SecurityScopedBookmarks = true,
+        }));
+
+    [Fact]
     public void SaveDialogOptions_ShowsTheTagFieldByDefault_AsElectron()
         => Assert.True(new SaveDialogOptions().ShowsTagField);
 
