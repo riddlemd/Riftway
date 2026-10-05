@@ -311,6 +311,44 @@ public sealed unsafe class RequestHandler
         Native->get_resource_request_handler = &GetResourceRequestHandler;
         Native->on_certificate_error = &OnCertificateError;
         Native->get_auth_credentials = &GetAuthCredentials;
+        Native->on_render_process_terminated = &OnRenderProcessTerminated;
+        Native->on_render_process_unresponsive = &OnRenderProcessUnresponsive;
+        Native->on_render_process_responsive = &OnRenderProcessResponsive;
+    }
+
+    /// <summary>The page's renderer process ended other than by the page closing: CEF's status and exit code. UI thread.</summary>
+    public Action<cef_termination_status_t, int>? RenderProcessTerminated { get; init; }
+
+    /// <summary>The renderer stopped answering input. Setting it also suppresses Chrome's "page unresponsive" dialog. UI thread.</summary>
+    public Action? RenderProcessUnresponsive { get; init; }
+
+    /// <summary>The renderer answers again after <see cref="RenderProcessUnresponsive"/>. UI thread.</summary>
+    public Action? RenderProcessResponsive { get; init; }
+
+    [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])]
+    private static void OnRenderProcessTerminated(cef_request_handler_t* self, cef_browser_t* browser, cef_termination_status_t status, int errorCode, cef_string_utf16_t* errorString)
+    {
+        if (NativeObject.Owner<RequestHandler>(self).RenderProcessTerminated is { } callback) Guard.Run(() => callback(status, errorCode));
+        NativeObject.Release(browser);
+    }
+
+    // Claiming the event and telling CEF to keep waiting is Electron's behaviour: it shows no hung-page dialog.
+    [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])]
+    private static int OnRenderProcessUnresponsive(cef_request_handler_t* self, cef_browser_t* browser, cef_unresponsive_process_callback_t* callback)
+    {
+        var handler = NativeObject.Owner<RequestHandler>(self).RenderProcessUnresponsive;
+        if (handler is not null) Guard.Run(handler);
+        if (handler is not null) callback->wait(callback);
+        NativeObject.Release(callback);
+        NativeObject.Release(browser);
+        return handler is null ? 0 : 1;
+    }
+
+    [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])]
+    private static void OnRenderProcessResponsive(cef_request_handler_t* self, cef_browser_t* browser)
+    {
+        if (NativeObject.Owner<RequestHandler>(self).RenderProcessResponsive is { } callback) Guard.Run(callback);
+        NativeObject.Release(browser);
     }
 
     /// <summary>A navigation hit an invalid certificate; the task's result trusts it. Null cancels. UI thread.</summary>
@@ -566,6 +604,24 @@ public sealed unsafe class DisplayHandler
     {
         Native = NativeObject.Create<cef_display_handler_t>(this);
         Native->on_title_change = &OnTitleChange;
+        Native->on_favicon_urlchange = &OnFaviconUrlChange;
+    }
+
+    /// <summary>The page's favicon URLs changed (all of them, in the page's order).</summary>
+    public Action<IReadOnlyList<string>>? FaviconUrlsChanged { get; init; }
+
+    [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])]
+    private static void OnFaviconUrlChange(cef_display_handler_t* self, cef_browser_t* browser, cef_string_list_t* iconUrls)
+    {
+        var urls = new List<string>();
+        for (nuint i = 0; iconUrls is not null && i < CefNative.cef_string_list_size(iconUrls); i++)
+        {
+            cef_string_utf16_t url = default;
+            if (CefNative.cef_string_list_value(iconUrls, i, &url) != 0) urls.Add(CefString.Read(&url));
+            CefString.Clear(&url);
+        }
+        if (NativeObject.Owner<DisplayHandler>(self).FaviconUrlsChanged is { } callback) Guard.Run(() => callback(urls));
+        NativeObject.Release(browser);
     }
 
     public cef_display_handler_t* Native { get; }
