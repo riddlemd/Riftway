@@ -669,19 +669,28 @@ async Task DialogsAsync(BrowserWindow win)
 {
     var dir = Directory.CreateTempSubdirectory("oriel-dialog-").FullName;
     var target = Path.Combine(dir, "saved.txt");
-    static string Real(string path) => Path.GetFullPath(new FileInfo(path).Directory!.ResolveLinkTarget(true)?.FullName ?? path);
+    // AppKit answers with resolved paths (/private/var for /var); compare the real paths.
+    static string Real(string path) => OperatingSystem.IsMacOS() && Posix.RealPath(path) is { } real ? real
+        : Path.GetFullPath(new FileInfo(path).Directory!.ResolveLinkTarget(true)?.FullName ?? path);
     static bool SamePath(string a, string b) => a.Length > 0 && b.Length > 0 && string.Equals(
         Path.Combine(Real(Path.GetDirectoryName(a)!), Path.GetFileName(a)), Path.Combine(Real(Path.GetDirectoryName(b)!), Path.GetFileName(b)), StringComparison.Ordinal);
+    static bool SameDir(string? a, string b) => a is { Length: > 0 } && Real(a) == Real(b);
+    var winNSWindow = OperatingSystem.IsMacOS() ? MacMain.Invoke(() => MacPanel.Obj(win.GetNativeWindowHandle(), "window"), step) : 0;
+    MacPanelState? panel = null;
 
-    // Answers the dialog the way a user would: macOS through the panel itself, Linux through X key presses.
-    bool Answer(string title, bool accept)
+    // Answers the dialog the way a user would: macOS through the panel itself (after reading its setup back from
+    // AppKit into `panel`), Linux through X key presses. `paths` are what a macOS user picks in a free-standing panel.
+    bool Answer(string title, bool accept, params string[] paths)
     {
         if (OperatingSystem.IsMacOS())
         {
+            panel = null;
+            // The main thread's run loop, not CEF's task queue: CEF holds its tasks back while a Sync panel runs modally.
+            if (!Eventually(() => MacMain.Invoke(() => MacPanel.Find() != 0, step), step)) return false;
             // The panel's UI loads out of process after its window appears; answering earlier can be lost.
-            if (!Eventually(() => Oriel.Cef.CefThread.InvokeOnUi(() => MacPanel.Find() != 0), step)) return false;
             Thread.Sleep(1000);
-            return Oriel.Cef.CefThread.InvokeOnUi(() => MacPanel.Answer(accept));
+            panel = MacMain.Invoke(() => MacPanel.State(MacPanel.Find()), step);
+            return MacMain.Invoke(() => MacPanel.Answer(accept, paths), step);
         }
         if (OperatingSystem.IsLinux() && File.Exists("/usr/bin/xdotool"))
         {
@@ -719,21 +728,131 @@ async Task DialogsAsync(BrowserWindow win)
 
     if (!OperatingSystem.IsMacOS() && !OperatingSystem.IsLinux() && !OperatingSystem.IsWindows()) return;
 
-    var save = Dialog.ShowSaveDialogAsync(win, new SaveDialogOptions { Title = "Oriel save test", DefaultPath = target, Filters = [new("Text", "txt")] });
+    var saveOptions = new SaveDialogOptions { Title = "Oriel save test", DefaultPath = target, Filters = [new("Text", "txt")] };
+    if (OperatingSystem.IsMacOS())
+        saveOptions = saveOptions with
+        {
+            Message = "Save the test file", ButtonLabel = "Keep", NameFieldLabel = "Call it:", ShowsTagField = false, SecurityScopedBookmarks = true,
+            Filters = [new("Text", "txt"), new("Archives", "tar.gz", ".zip", "gz"), new("Everything", "*")],
+            Properties = SaveDialogProperties.CreateDirectory | SaveDialogProperties.ShowHiddenFiles | SaveDialogProperties.TreatPackageAsDirectory,
+        };
+    var save = Dialog.ShowSaveDialogAsync(win, saveOptions);
+    if (OperatingSystem.IsMacOS())
+    {
+        Eventually(() => MacMain.Invoke(() => MacPanel.Find() != 0, step), step);
+        // Read before picking: the picks end back on the first filter, which would hide whether it applied at first.
+        var picked = MacMain.Invoke(() => $"{MacPanel.State(MacPanel.Find()).AllowedTypes} | {MacPanel.PickFormat(1)} | {MacPanel.PickFormat(2)} | {MacPanel.PickFormat(0)}", step);
+        Check("macOS: the first filter applies; picking a Format applies its types; '*' allows every type", picked == "txt | gz,zip | (all) | txt", picked);
+    }
     Check("save dialog opens and accepts", Answer("Oriel save test", accept: true));
     var saved = await Task.WhenAny(save, Task.Delay(step)) == save ? save.Result : null;
     Check("ShowSaveDialogAsync returns the chosen path", saved is { Canceled: false } && SamePath(saved.FilePath, target), saved);
+    if (OperatingSystem.IsMacOS())
+    {
+        Check("macOS: save panel set up as Electron's (title, message, prompt, name label, tags, properties)",
+            panel is { Title: "Oriel save test", Message: "Save the test file", Prompt: "Keep", NameFieldLabel: "Call it:", ShowsTagField: false,
+                ShowsHiddenFiles: true, CanCreateDirectories: true, TreatsPackagesAsDirectories: true, CanSelectHiddenExtension: true, ExtensionHidden: false }, panel);
+        Check("macOS: save panel starts in defaultPath's directory with its name", panel is { NameField: "saved.txt" } && SameDir(panel.Directory, dir), panel);
+        Check("macOS: async dialog with a window is a sheet on it", panel is { IsSheet: true } && panel.SheetParent == winNSWindow && panel.SheetParent != 0, panel);
+        Check("macOS: filters: the first one's types, a Format popup of all names", panel is { AllowedTypes: "txt", Formats: "Text,Archives,Everything", AllowsOtherTypes: false }, panel);
+        Check("macOS: securityScopedBookmarks returns the save path's bookmark, creating the file",
+            saved?.Bookmark is { Length: > 0 } mark && MacMain.Invoke(() => MacPanel.ResolveBookmark(mark), step) is { } marked && SamePath(marked, target) && File.Exists(target), saved?.Bookmark?.Length);
+    }
 
-    var open = Dialog.ShowOpenDialogAsync(win, new OpenDialogOptions { Title = "Oriel open test", DefaultPath = dir });
+    var openOptions = new OpenDialogOptions { Title = "Oriel open test", DefaultPath = dir };
+    if (OperatingSystem.IsMacOS())
+        openOptions = openOptions with
+        {
+            Message = "Pick anything", ButtonLabel = "Choose", Filters = [new("Any", "*")],
+            Properties = OpenDialogProperties.OpenFile | OpenDialogProperties.OpenDirectory | OpenDialogProperties.MultiSelections
+                | OpenDialogProperties.ShowHiddenFiles | OpenDialogProperties.NoResolveAliases | OpenDialogProperties.CreateDirectory,
+        };
+    var open = Dialog.ShowOpenDialogAsync(win, openOptions);
     Check("open dialog opens and cancels", Answer("Oriel open test", accept: false));
     var opened = await Task.WhenAny(open, Task.Delay(step)) == open ? open.Result : null;
     Check("a cancelled open dialog reports Canceled and no paths", opened is { Canceled: true, FilePaths.Count: 0 }, opened);
+    if (OperatingSystem.IsMacOS())
+    {
+        Check("macOS: open panel set up as Electron's (files and directories, several, hidden, aliases, create)",
+            panel is { Title: "Oriel open test", Message: "Pick anything", Prompt: "Choose", CanChooseFiles: true, CanChooseDirectories: true, MultipleSelection: true,
+                ShowsHiddenFiles: true, ResolvesAliases: false, CanCreateDirectories: true, TreatsPackagesAsDirectories: false, ShowsTagField: true } && SameDir(panel.Directory, dir), panel);
+        Check("macOS: a lone '*' filter sets no types and no Format popup", panel is { AllowedTypes: "(all)", Formats: "", AllowsOtherTypes: false }, panel);
+    }
 
     var folder = Dialog.ShowOpenDialogAsync(win, new OpenDialogOptions { Title = "Oriel folder test", DefaultPath = dir, Properties = OpenDialogProperties.OpenDirectory });
     Check("folder dialog opens and accepts", Answer("Oriel folder test", accept: true));
     var chosen = await Task.WhenAny(folder, Task.Delay(step)) == folder ? folder.Result : null;
-    Check("OpenDirectory returns the directory it started in", chosen is { Canceled: false, FilePaths: [var only] } && Real(only) == Real(dir),
+    Check("OpenDirectory returns the directory it started in", chosen is { Canceled: false, FilePaths: [var only] } && SameDir(only, dir),
         chosen is null ? "none" : string.Join(",", chosen.FilePaths));
+    if (OperatingSystem.IsMacOS())
+        Check("macOS: OpenDirectory alone cannot choose files, nor several; no filters allow any type",
+            panel is { CanChooseFiles: false, CanChooseDirectories: true, MultipleSelection: false, AllowedTypes: "(all)", AllowsOtherTypes: true }, panel);
+
+    if (OperatingSystem.IsMacOS())
+    {
+        var a = Path.Combine(dir, "a.txt");
+        var b = Path.Combine(dir, "b.txt");
+        File.WriteAllText(a, "a");
+        File.WriteAllText(b, "b");
+
+        var several = Dialog.ShowOpenDialogAsync(new OpenDialogOptions { Title = "Oriel several", SecurityScopedBookmarks = true, Properties = OpenDialogProperties.OpenFile | OpenDialogProperties.MultiSelections });
+        Check("macOS: window-less open dialog opens and accepts two files", Answer("Oriel several", accept: true, a, b));
+        var both = await Task.WhenAny(several, Task.Delay(step)) == several ? several.Result : null;
+        string? Resolved(IReadOnlyList<string>? marks, int i) => marks is { } m && m.Count > i ? MacMain.Invoke(() => MacPanel.ResolveBookmark(m[i]), step) : null;
+        Check("macOS: several chosen files come back in order, each with a bookmark that resolves to it",
+            both is { Canceled: false, FilePaths: [var p1, var p2], Bookmarks.Count: 2 } && SamePath(p1, a) && SamePath(p2, b)
+                && Resolved(both.Bookmarks, 0) is { } r1 && SamePath(r1, a) && Resolved(both.Bookmarks, 1) is { } r2 && SamePath(r2, b), both is null ? "none" : string.Join(",", both.FilePaths) + $" marks={both.Bookmarks?.Count}");
+        Check("macOS: window-less async dialog is a free-standing, non-modal panel", panel is { IsSheet: false, SheetParent: 0, IsModal: false }, panel);
+        Check("macOS: an empty defaultPath starts in Downloads, as Electron's GetDefaultPath",
+            SameDir(panel?.Directory, Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), "Downloads")), panel);
+
+        var cancelled = Dialog.ShowOpenDialogAsync(new OpenDialogOptions { Title = "Oriel window-less cancel", SecurityScopedBookmarks = true });
+        Check("macOS: window-less open dialog opens and cancels", Answer("Oriel window-less cancel", accept: false));
+        var none = await Task.WhenAny(cancelled, Task.Delay(step)) == cancelled ? cancelled.Result : null;
+        Check("macOS: a cancelled window-less dialog reports Canceled, no paths and no bookmarks", none is { Canceled: true, FilePaths.Count: 0, Bookmarks.Count: 0 }, none);
+
+        // A window does not close with a sheet attached; Close ends the sheet first, as Electron, so the dialog answers.
+        var sheetHost = new BrowserWindow(new BrowserWindowOptions { Title = "Oriel sheet host", Width = 500, Height = 400 });
+        Eventually(() => sheetHost.GetNativeWindowHandle() != 0, step);
+        var orphan = Dialog.ShowOpenDialogAsync(sheetHost, new OpenDialogOptions { Title = "Oriel orphan sheet" });
+        var shown = Eventually(() => MacMain.Invoke(() => MacPanel.Find() != 0, step), step);
+        Thread.Sleep(1000);
+        using (var hostClosed = new ManualResetEventSlim())
+        {
+            sheetHost.Closed += (_, _) => hostClosed.Set();
+            sheetHost.Close();
+            var answered = await Task.WhenAny(orphan, Task.Delay(step)) == orphan;
+            Check("macOS: closing a window with a dialog sheet up ends the sheet and closes the window",
+                shown && answered && hostClosed.Wait(step), $"shown={shown} answered={answered} result={(answered ? orphan.Result : null)}");
+        }
+
+        // AppKit can hand back files from a directory-only panel; Electron drops them (crbug.com/1357523).
+        var dirsOnly = Dialog.ShowOpenDialogAsync(new OpenDialogOptions { Title = "Oriel dirs only", Properties = OpenDialogProperties.OpenDirectory });
+        Check("macOS: directory-only dialog opens and accepts a file and a directory", Answer("Oriel dirs only", accept: true, a, dir));
+        var dirs = await Task.WhenAny(dirsOnly, Task.Delay(step)) == dirsOnly ? dirsOnly.Result : null;
+        Check("macOS: a directory-only dialog drops chosen files", dirs is { Canceled: false, FilePaths: [var d], Bookmarks: null } && SameDir(d, dir),
+            dirs is null ? "none" : string.Join(",", dirs.FilePaths));
+
+        var syncOpen = Task.Run(() => Oriel.Cef.CefThread.InvokeOnUi(() => Dialog.ShowOpenDialogSync(null, new OpenDialogOptions { Title = "Oriel sync open", DefaultPath = a })));
+        Check("macOS: window-less Sync open dialog opens and accepts", Answer("Oriel sync open", accept: true, a));
+        var syncOpened = await Task.WhenAny(syncOpen, Task.Delay(step)) == syncOpen ? syncOpen.Result : null;
+        Check("macOS: ShowOpenDialogSync on the UI thread returns the chosen file", syncOpened is [var s1] && SamePath(s1, a), syncOpened is null ? "none" : string.Join(",", syncOpened));
+        // An open panel reads its name field back as "Untitled" whatever it selects, so only the directory is checked.
+        Check("macOS: window-less Sync dialog is app-modal (runModal), starting in defaultPath's directory",
+            panel is { IsSheet: false, IsModal: true } && SameDir(panel.Directory, dir), panel);
+
+        var syncSave = Task.Run(() => Oriel.Cef.CefThread.InvokeOnUi(() => Dialog.ShowSaveDialogSync(win, new SaveDialogOptions { Title = "Oriel sync save", DefaultPath = Path.Combine(dir, "sync.txt") })));
+        Check("macOS: Sync save dialog with a window opens and accepts", Answer("Oriel sync save", accept: true));
+        var syncSaved = await Task.WhenAny(syncSave, Task.Delay(step)) == syncSave ? syncSave.Result : null;
+        Check("macOS: ShowSaveDialogSync returns the chosen path", syncSaved is not null && SamePath(syncSaved, Path.Combine(dir, "sync.txt")), syncSaved);
+        Check("macOS: Sync dialog with a window is a sheet with the window run modally; no hidden-extension choice",
+            panel is { IsSheet: true, CanSelectHiddenExtension: false, NameField: "sync.txt" } && panel.SheetParent == winNSWindow && panel.ModalWindow == winNSWindow, panel);
+
+        var syncCancel = Task.Run(() => Oriel.Cef.CefThread.InvokeOnUi(() => Dialog.ShowOpenDialogSync(win, new OpenDialogOptions { Title = "Oriel sync cancel", DefaultPath = dir })));
+        Check("macOS: Sync open dialog with a window opens and cancels", Answer("Oriel sync cancel", accept: false));
+        var syncCancelled = await Task.WhenAny(syncCancel, Task.Delay(step)) == syncCancel ? "done" : "pending";
+        Check("macOS: a cancelled ShowOpenDialogSync returns null", syncCancelled == "done" && syncCancel.Result is null, syncCancelled);
+    }
 
     // A download with no save path asks where to save it, with the item's dialog options, as Electron.
     var source = Path.Combine(dir, "source.txt");
@@ -763,8 +882,9 @@ async Task DialogsAsync(BrowserWindow win)
     var refused = await DownloadThroughDialog("Oriel download cancel test", Path.Combine(dir, "refused.txt"), accept: false);
     Check("cancelling the download's save dialog cancels the download", refused.State == DownloadState.Cancelled && !File.Exists(Path.Combine(dir, "refused.txt")), refused.State);
 
-    Check("Sync dialogs refuse the UI thread",
-        Oriel.Cef.CefThread.InvokeOnUi(() => Throws<InvalidOperationException>(() => Dialog.ShowSaveDialogSync(win, new SaveDialogOptions()))));
+    if (!OperatingSystem.IsMacOS())
+        Check("Sync dialogs refuse the UI thread",
+            Oriel.Cef.CefThread.InvokeOnUi(() => Throws<InvalidOperationException>(() => Dialog.ShowSaveDialogSync(win, new SaveDialogOptions()))));
     Directory.Delete(dir, recursive: true);
 }
 
@@ -2461,6 +2581,78 @@ static class MacInterop
     }
 }
 
+// Runs on the main thread through its run loop in every common mode, so it also runs inside a modal panel,
+// where CEF holds its own tasks back as Chromium does in native nested loops.
+static unsafe class MacMain
+{
+    [System.Runtime.InteropServices.StructLayout(System.Runtime.InteropServices.LayoutKind.Sequential)]
+    private struct Block
+    {
+        public nint Isa;
+        public int Flags, Reserved;
+        public nint Invoke;
+        public nint* Descriptor;
+        public nint Context;
+    }
+
+    private const string CF = "/System/Library/Frameworks/CoreFoundation.framework/CoreFoundation";
+    private static readonly nint s_stackBlock = System.Runtime.InteropServices.NativeLibrary.GetExport(System.Runtime.InteropServices.NativeLibrary.Load("/usr/lib/libSystem.B.dylib"), "_NSConcreteStackBlock");
+    private static readonly nint s_commonModes = *(nint*)System.Runtime.InteropServices.NativeLibrary.GetExport(System.Runtime.InteropServices.NativeLibrary.Load(CF), "kCFRunLoopCommonModes");
+    private static readonly nint* s_descriptor = Descriptor();
+
+    internal static T Invoke<T>(Func<T> func, TimeSpan timeout)
+    {
+        T result = default!;
+        Exception? error = null;
+        // Not disposed: after a timeout the block may still run and set it.
+        var done = new ManualResetEventSlim();
+        Action action = () =>
+        {
+            try { result = func(); }
+            catch (Exception e) { error = e; }
+            finally { done.Set(); }
+        };
+        var block = new Block { Isa = s_stackBlock, Invoke = (nint)(delegate* unmanaged<Block*, void>)&Run, Descriptor = s_descriptor, Context = System.Runtime.InteropServices.GCHandle.ToIntPtr(System.Runtime.InteropServices.GCHandle.Alloc(action)) };
+        var main = CFRunLoopGetMain();
+        CFRunLoopPerformBlock(main, s_commonModes, &block);
+        CFRunLoopWakeUp(main);
+        if (!done.Wait(timeout)) throw new TimeoutException("The main thread did not run the block.");
+        if (error is not null) throw error;
+        return result;
+    }
+
+    [System.Runtime.InteropServices.UnmanagedCallersOnly]
+    private static void Run(Block* block)
+    {
+        var handle = System.Runtime.InteropServices.GCHandle.FromIntPtr(block->Context);
+        try
+        {
+            var action = (Action)handle.Target!;
+            handle.Free();
+            action();
+        }
+        catch (Exception e) { Console.Error.WriteLine($"MacMain block failed: {e}"); }
+    }
+
+    private static nint* Descriptor()
+    {
+        var d = (nint*)System.Runtime.InteropServices.NativeMemory.AllocZeroed((nuint)(2 * sizeof(nint)));
+        d[1] = sizeof(Block);
+        return d;
+    }
+
+    [System.Runtime.InteropServices.DllImport(CF)] private static extern nint CFRunLoopGetMain();
+    [System.Runtime.InteropServices.DllImport(CF)] private static extern void CFRunLoopPerformBlock(nint loop, nint mode, Block* block);
+    [System.Runtime.InteropServices.DllImport(CF)] private static extern void CFRunLoopWakeUp(nint loop);
+}
+
+/// <summary>An open or save panel's setup, read back from AppKit while it shows.</summary>
+record MacPanelState(string? Title, string? Message, string? Prompt, string? NameFieldLabel, bool ShowsTagField,
+    bool CanChooseFiles, bool CanChooseDirectories, bool MultipleSelection, bool ShowsHiddenFiles, bool CanCreateDirectories,
+    bool ResolvesAliases, bool TreatsPackagesAsDirectories, bool CanSelectHiddenExtension, bool ExtensionHidden,
+    string? Directory, string? NameField, bool IsSheet, nint SheetParent, bool IsModal, nint ModalWindow,
+    string AllowedTypes, string Formats, bool AllowsOtherTypes);
+
 static class MacPanel
 {
     private const string ObjC = "/usr/lib/libobjc.A.dylib";
@@ -2468,18 +2660,62 @@ static class MacPanel
     [System.Runtime.InteropServices.DllImport(ObjC)] private static extern nint sel_registerName(string name);
     [System.Runtime.InteropServices.DllImport(ObjC, EntryPoint = "objc_msgSend")] private static extern nint Send(nint receiver, nint selector);
     [System.Runtime.InteropServices.DllImport(ObjC, EntryPoint = "objc_msgSend")] private static extern nint Send(nint receiver, nint selector, nint arg);
+    [System.Runtime.InteropServices.DllImport(ObjC, EntryPoint = "objc_msgSend")] private static extern nint Send(nint receiver, nint selector, nint arg, nint arg2);
     [System.Runtime.InteropServices.DllImport(ObjC, EntryPoint = "objc_msgSend")] private static extern void SendEnd(nint receiver, nint selector, nint sheet, nint code);
+    [System.Runtime.InteropServices.DllImport(ObjC, EntryPoint = "objc_msgSend")] private static extern void SendComplete(nint receiver, nint selector, nint code, nint url, nint urls);
+    [System.Runtime.InteropServices.DllImport(ObjC, EntryPoint = "objc_msgSend")] private static extern nint SendString(nint receiver, nint selector, string value);
 
-    /// <summary>Answers the visible open or save sheet with OK or Cancel; false while none shows. Main thread only.</summary>
-    internal static bool Answer(bool accept)
+    /// <summary>Answers the visible open or save panel with OK or Cancel; false while none shows. A sheet without
+    /// <paramref name="paths"/> is ended as its buttons end it; otherwise the panel completes as its out-of-process UI
+    /// does when the user accepts <paramref name="paths"/>. Main thread only.</summary>
+    internal static bool Answer(bool accept, string[] paths)
     {
         var panel = Find();
         if (panel == 0) return false;
-        // The panel's controls run out of process and ignore posted events; ending its sheet is what its buttons do.
+        // The panel's controls run out of process and ignore posted events (and ok: is unimplemented in-process).
         var parent = Send(panel, sel_registerName("sheetParent"));
-        if (parent == 0) return false;
-        SendEnd(parent, sel_registerName("endSheet:returnCode:"), panel, accept ? 1 : 0);
+        if (paths.Length == 0 && parent != 0)
+        {
+            SendEnd(parent, sel_registerName("endSheet:returnCode:"), panel, accept ? 1 : 0);
+            return true;
+        }
+        var urls = Send(objc_getClass("NSMutableArray"), sel_registerName("array"));
+        foreach (var path in paths)
+            Send(urls, sel_registerName("addObject:"), Send(objc_getClass("NSURL"), sel_registerName("fileURLWithPath:"), NSString(path)));
+        var first = paths.Length > 0 ? Send(urls, sel_registerName("objectAtIndex:"), 0) : 0;
+        // AppKit raises if a cancel carries any URLs, even an empty list.
+        SendComplete(panel, sel_registerName("completeWithReturnCode:url:urls:"), accept ? 1 : 0, accept ? first : 0, accept ? urls : 0);
         return true;
+    }
+
+    /// <summary>The panel's setup as AppKit reports it. Main thread only.</summary>
+    internal static MacPanelState State(nint panel)
+    {
+        var app = Send(objc_getClass("NSApplication"), sel_registerName("sharedApplication"));
+        var types = Obj(panel, "allowedFileTypes");
+        // A save panel throws for the open-only selectors, though it claims to respond to them.
+        var open = (byte)Send(panel, sel_registerName("isKindOfClass:"), objc_getClass("NSOpenPanel")) != 0;
+        bool OpenBool(string selector) => open && Bool(panel, selector);
+        return new MacPanelState(Text(panel, "title"), Text(panel, "message"), Text(panel, "prompt"), Text(panel, "nameFieldLabel"), Bool(panel, "showsTagField"),
+            OpenBool("canChooseFiles"), OpenBool("canChooseDirectories"), OpenBool("allowsMultipleSelection"), Bool(panel, "showsHiddenFiles"),
+            Bool(panel, "canCreateDirectories"), OpenBool("resolvesAliases"), Bool(panel, "treatsFilePackagesAsDirectories"),
+            Bool(panel, "canSelectHiddenExtension"), Bool(panel, "isExtensionHidden"),
+            Text(Obj(panel, "directoryURL"), "path"), Text(panel, "nameFieldStringValue"), Bool(panel, "isSheet"), Obj(panel, "sheetParent"),
+            Obj(app, "modalWindow") == panel, Obj(app, "modalWindow"),
+            types == 0 ? "(all)" : string.Join(",", Strings(types)), Popup(panel) is var popup and not 0 ? string.Join(",", Strings(Obj(popup, "itemTitles"))) : "",
+            Bool(panel, "allowsOtherFileTypes"));
+    }
+
+    /// <summary>Picks a Format popup item as a user does (select, then its action) and returns the panel's allowed types.</summary>
+    internal static string PickFormat(int index)
+    {
+        var panel = Find();
+        var popup = Popup(panel);
+        if (popup == 0) return "no popup";
+        Send(popup, sel_registerName("selectItemAtIndex:"), index);
+        Send(popup, sel_registerName("sendAction:to:"), Send(popup, sel_registerName("action")), Obj(popup, "target"));
+        var types = Obj(panel, "allowedFileTypes");
+        return types == 0 ? "(all)" : string.Join(",", Strings(types));
     }
 
     /// <summary>The visible open or save panel, or 0. Main thread only.</summary>
@@ -2492,11 +2728,66 @@ static class MacPanel
         for (var i = 0; i < count; i++)
         {
             var window = Send(windows, sel_registerName("objectAtIndex:"), i);
-            if (Send(window, sel_registerName("isKindOfClass:"), savePanel) == 0) continue;
+            if ((byte)Send(window, sel_registerName("isKindOfClass:"), savePanel) == 0) continue;
             if ((byte)Send(window, sel_registerName("isVisible")) == 0) continue;
             return window;
         }
         return 0;
+    }
+
+    [System.Runtime.InteropServices.DllImport(ObjC, EntryPoint = "objc_msgSend")] private static extern unsafe nint SendResolve(nint receiver, nint selector, nint data, nuint options, nint relativeTo, byte* stale, nint* error);
+
+    /// <summary>The path a base64 security-scoped bookmark resolves to, or null. Main thread only.</summary>
+    internal static unsafe string? ResolveBookmark(string base64)
+    {
+        var data = Send(Send(objc_getClass("NSData"), sel_registerName("alloc")), sel_registerName("initWithBase64EncodedString:options:"), NSString(base64), 0);
+        if (data == 0) return null;
+        byte stale = 0;
+        nint error = 0;
+        // NSURLBookmarkResolutionWithSecurityScope: only a security-scoped bookmark resolves this way.
+        var url = SendResolve(objc_getClass("NSURL"), sel_registerName("URLByResolvingBookmarkData:options:relativeToURL:bookmarkDataIsStale:error:"), data, 1 << 10, 0, &stale, &error);
+        Send(data, sel_registerName("release"));
+        return url == 0 ? null : Text(url, "path");
+    }
+
+    internal static nint Obj(nint obj, string selector) => obj != 0 && Responds(obj, selector) ? Send(obj, sel_registerName(selector)) : 0;
+
+    private static nint Popup(nint panel)
+    {
+        var subviews = Obj(Obj(panel, "accessoryView"), "subviews");
+        var popupClass = objc_getClass("NSPopUpButton");
+        for (nint i = 0, n = subviews == 0 ? 0 : Send(subviews, sel_registerName("count")); i < n; i++)
+        {
+            var view = Send(subviews, sel_registerName("objectAtIndex:"), i);
+            if ((byte)Send(view, sel_registerName("isKindOfClass:"), popupClass) != 0) return view;
+        }
+        return 0;
+    }
+
+    private static IEnumerable<string> Strings(nint array)
+    {
+        for (nint i = 0, n = Send(array, sel_registerName("count")); i < n; i++)
+            yield return Str(Send(array, sel_registerName("objectAtIndex:"), i)) ?? "";
+    }
+
+    private static bool Responds(nint obj, string selector) => (byte)Send(obj, sel_registerName("respondsToSelector:"), sel_registerName(selector)) != 0;
+    private static bool Bool(nint obj, string selector) => obj != 0 && Responds(obj, selector) && (byte)Send(obj, sel_registerName(selector)) != 0;
+    private static string? Str(nint nsString) => nsString == 0 ? null : System.Runtime.InteropServices.Marshal.PtrToStringUTF8(Send(nsString, sel_registerName("UTF8String")));
+    private static string? Text(nint obj, string selector) => Str(Obj(obj, selector));
+    private static nint NSString(string value) => SendString(objc_getClass("NSString"), sel_registerName("stringWithUTF8String:"), value);
+}
+
+static class Posix
+{
+    [System.Runtime.InteropServices.DllImport("libc", EntryPoint = "realpath")] private static extern nint realpath(string path, nint resolved);
+    [System.Runtime.InteropServices.DllImport("libc")] private static extern void free(nint p);
+
+    internal static string? RealPath(string path)
+    {
+        var p = realpath(path, 0);
+        if (p == 0) return null;
+        try { return System.Runtime.InteropServices.Marshal.PtrToStringUTF8(p); }
+        finally { free(p); }
     }
 }
 

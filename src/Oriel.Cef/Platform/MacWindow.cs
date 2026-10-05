@@ -122,6 +122,16 @@ public static unsafe class MacWindow
         SendSuperObject(&super, cmd, sender);
     }
 
+    /// <summary>Ends every sheet attached to the window behind <paramref name="contentView"/>, as Electron's
+    /// <c>NativeWindowMac::Close</c> does before closing. Main thread only.</summary>
+    public static void EndAttachedSheets(nint contentView)
+    {
+        var window = NSWindowOf(contentView);
+        if (window == 0) return;
+        for (var sheet = Send(window, Sel("attachedSheet"u8)); sheet != 0; sheet = Send(window, Sel("attachedSheet"u8)))
+            SendObject(window, Sel("endSheet:"u8), sheet);
+    }
+
     private static nint NSWindowOf(nint contentView) => contentView == 0 ? 0 : Send(contentView, Sel("window"u8));
 
     // NSRect is four doubles: arm64 returns it in registers, x64 through a hidden pointer (_stret).
