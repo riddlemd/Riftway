@@ -225,6 +225,9 @@ public sealed unsafe partial class OrielApp
     private int _exitCode;
     private bool _quitting;
 
+    /// <summary>Whether a quit is in progress: Electron's <c>Browser::is_quitting()</c>.</summary>
+    internal bool IsQuitting => _quitting;
+
     private void QuitOnUi()
     {
         if (_quitting) return;
