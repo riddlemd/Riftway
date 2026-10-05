@@ -498,9 +498,18 @@ public sealed unsafe class BrowserViewDelegate
         Native->on_browser_destroyed = &OnBrowserDestroyed;
         Native->get_delegate_for_popup_browser_view = &GetDelegateForPopupBrowserView;
         Native->on_popup_browser_view_created = &OnPopupBrowserViewCreated;
+        Native->get_browser_runtime_style = &GetBrowserRuntimeStyle;
     }
 
     public cef_browser_view_delegate_t* Native { get; }
+
+    /// <summary>The browser's runtime style. A Chrome-style window hosts at most one Chrome-style browser, so
+    /// any other browser in it must be Alloy style.</summary>
+    public cef_runtime_style_t RuntimeStyle { get; init; }
+
+    [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])]
+    private static cef_runtime_style_t GetBrowserRuntimeStyle(cef_browser_view_delegate_t* self)
+        => NativeObject.Owner<BrowserViewDelegate>(self).RuntimeStyle;
 
     /// <summary>The delegate for a page popup's view, by the client its <c>on_before_popup</c> chose; null for the
     /// same delegate as this view. Not asked for DevTools.</summary>

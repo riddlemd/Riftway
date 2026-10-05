@@ -23,6 +23,7 @@ public sealed unsafe class LifeSpanHandler
         Native = NativeObject.Create<cef_life_span_handler_t>(this);
         Native->on_before_popup = &OnBeforePopup;
         Native->on_before_popup_aborted = &OnBeforePopupAborted;
+        Native->do_close = &DoClose;
     }
 
     public cef_life_span_handler_t* Native { get; }
@@ -32,6 +33,19 @@ public sealed unsafe class LifeSpanHandler
 
     /// <summary>A popup that <see cref="BeforePopup"/> allowed will not be created after all: its id.</summary>
     public Action<int>? PopupAborted { get; init; }
+
+    /// <summary>An Alloy-style browser is ready to close: true if the handler completes the close itself (by tearing
+    /// its view down), false to send the top-level window CEF's close notification. Null answers false.</summary>
+    public Func<bool>? Closing { get; init; }
+
+    [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])]
+    private static int DoClose(cef_life_span_handler_t* self, cef_browser_t* browser)
+    {
+        var owner = NativeObject.Owner<LifeSpanHandler>(self);
+        var handled = owner.Closing is { } closing && Guard.Run(closing, false);
+        NativeObject.Release(browser);
+        return handled ? 1 : 0;
+    }
 
     // *client arrives with a transfer reference the receiver releases; a replacement must carry one CEF takes over
     // (CEF's CppToC Unwrap/Wrap). Returns 1 to block the popup.

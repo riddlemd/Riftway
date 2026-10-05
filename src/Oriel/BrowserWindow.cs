@@ -167,6 +167,19 @@ public sealed record WebPreferences
     /// is kept on disk, any other name in memory. Null or empty uses <see cref="Oriel.Session.DefaultSession"/>.
     /// Electron's <c>partition</c>.</summary>
     public string? Partition { get; init; }
+
+    internal void Validate(string paramName)
+    {
+        if (DefaultFontFamily?.Math is not null) throw new NotSupportedException("CEF has no setting for the math font family.");
+        // Chrome-style browsers take these from the profile's preferences, over the browser settings.
+        if (MinimumFontSize is not null) throw new NotSupportedException("MinimumFontSize is not supported: CEF applies the profile's value to every window.");
+        if (DefaultEncoding is not null) throw new NotSupportedException("DefaultEncoding is not supported: CEF applies the profile's value to every window.");
+        if (ZoomFactor <= 0) throw new ArgumentOutOfRangeException(paramName, "ZoomFactor must be greater than 0.");
+    }
+
+    internal Session ResolveSession() => Session ?? Oriel.Session.FromPartition(Partition ?? "");
+
+    internal string? ReadPreload() => Preload is { } preload ? File.ReadAllText(preload) : null;
 }
 
 /// <summary>Fonts for CSS's generic font families; null keeps Chromium's choice. Electron's <c>defaultFontFamily</c>.</summary>
@@ -243,10 +256,9 @@ public sealed unsafe class BrowserWindow
     // Touched only on the UI thread.
     private readonly List<BrowserWindow> _children = [];
     // Popups this window's page opened, closed with it unless they outlive it; UI thread only.
-    private readonly List<BrowserWindow> _popups = [];
     // Popups allowed by on_before_popup whose view CEF has not created yet, by the client CEF will use.
     private static readonly Dictionary<nint, (BrowserWindow Window, int PopupId, WindowOpenDetails Details)> s_pendingPopups = [];
-    private BrowserWindow? _opener;
+    private WebContents? _opener;
     private bool _outlivesOpener;
 
     /// <summary>Creates the window, shown unless <see cref="BrowserWindowOptions.Show"/> is false.</summary>
@@ -258,28 +270,36 @@ public sealed unsafe class BrowserWindow
     }
 
     // A popup's window waits for CEF to create its browser view (AdoptPopupView) instead of creating one.
-    private BrowserWindow(BrowserWindowOptions? options, BrowserWindow? opener)
+    private BrowserWindow(BrowserWindowOptions? options, WebContents? opener)
     {
         if (!OrielApp.Current.IsReady) throw new InvalidOperationException("Create windows after OrielApp.Ready.");
 
         _options = options ?? new BrowserWindowOptions();
         if (_options.Modal && _options.Parent is null) throw new ArgumentException("A modal window needs a Parent.", nameof(options));
-        if (_options.WebPreferences.DefaultFontFamily?.Math is not null) throw new NotSupportedException("CEF has no setting for the math font family.");
-        // Chrome-style browsers take these from the profile's preferences, over the browser settings.
-        if (_options.WebPreferences.MinimumFontSize is not null) throw new NotSupportedException("MinimumFontSize is not supported: CEF applies the profile's value to every window.");
-        if (_options.WebPreferences.DefaultEncoding is not null) throw new NotSupportedException("DefaultEncoding is not supported: CEF applies the profile's value to every window.");
-        if (_options.WebPreferences.ZoomFactor <= 0) throw new ArgumentOutOfRangeException(nameof(options), "ZoomFactor must be greater than 0.");
+        _options.WebPreferences.Validate(nameof(options));
 
         Id = Interlocked.Increment(ref s_nextId);
         _closable = _options.Closable;
         _skipTaskbar = _options.SkipTaskbar;
         _icon = _options.IconImage ?? (_options.Icon is { } iconPath ? NativeImage.CreateFromBuffer(File.ReadAllBytes(iconPath)) : null);
         _backgroundColor = _options.BackgroundColor;
-        var session = _options.WebPreferences.Session ?? Session.FromPartition(_options.WebPreferences.Partition ?? "");
+        var session = _options.WebPreferences.ResolveSession();
         // CEF gives a popup its opener's request context, whatever the options say.
-        if (opener is not null && session != opener.WebContents.Session)
+        if (opener is not null && session != opener.Session)
             throw new InvalidOperationException("A window a page opens must use its opener's session.");
-        WebContents = new WebContents(_options.WebPreferences.Preload is { } preload ? File.ReadAllText(preload) : null, _options.WebPreferences, session);
+        WebContents = new WebContents(_options.WebPreferences.ReadPreload(), _options.WebPreferences, session);
+        WebContents.CloseRequested = waitForBeforeUnload =>
+        {
+            if (waitForBeforeUnload) Close();
+            else Destroy();
+        };
+        ContentView = new View();
+        _pageView = new WebContentsView(WebContents);
+        CefThread.InvokeOnUi(() =>
+        {
+            ContentView.InsertChild(_pageView, 0);
+            return true;
+        });
         WebContents.PageTitleUpdated += (_, e) => PageTitleUpdated?.Invoke(this, e);
         WebContents.TitleApplied = SetTitle;
         WebContents.DidFinishLoad += (_, _) =>
@@ -290,7 +310,7 @@ public sealed unsafe class BrowserWindow
         };
         _client = new ClientHandler(WebContents.Display, WebContents.Load, WebContents.JsDialog, WebContents.Request, WebContents.Command,
             WebContents.ContextMenuRequests, new KeyboardHandler(keyEvent => _menuBar?.OnKeyEvent(keyEvent) ?? false),
-            new LifeSpanHandler { BeforePopup = OnBeforePopup, PopupAborted = OnPopupAborted });
+            new LifeSpanHandler { BeforePopup = (request, features, settings) => OpenPopup(WebContents, request, features, settings), PopupAborted = OnPopupAborted });
         if (!OperatingSystem.IsMacOS())
         {
             _menuBar = new WindowMenuBar(this) { AutoHide = _options.AutoHideMenuBar };
@@ -304,8 +324,8 @@ public sealed unsafe class BrowserWindow
         {
             BrowserCreated = OnBrowserCreated,
             BrowserDestroyed = OnBrowserDestroyed,
-            PopupDelegate = client => s_pendingPopups.TryGetValue(client, out var pending) ? (nint)pending.Window._viewDelegate.Native : 0,
-            PopupViewCreated = OnPopupViewCreated,
+            PopupDelegate = PopupDelegateFor,
+            PopupViewCreated = (view, popupDelegate) => AdoptPopupView(WebContents, view, popupDelegate),
         };
         _windowDelegate = new WindowDelegate
         {
@@ -358,6 +378,7 @@ public sealed unsafe class BrowserWindow
         // Null is the global context, which the default session wraps.
         var context = WebContents.Session.IsDefault ? null : WebContents.Session.AddRefNative();
         _browserView = CefNative.cef_browser_view_create(_client.Native, &url, &settings, null, context, _viewDelegate.Native);
+        _pageView.SetNative(_browserView);
         CefString.Clear(&url);
         ClearWebPreferenceStrings(&settings);
         OpenWindow();
@@ -373,18 +394,18 @@ public sealed unsafe class BrowserWindow
     }
 
     // UI thread, inside CEF's on_before_popup: asks the page's handler, then prepares the window CEF's popup will live in.
-    private cef_client_t* OnBeforePopup(PopupRequest request, cef_popup_features_t* features, cef_browser_settings_t* settings)
+    internal static cef_client_t* OpenPopup(WebContents opener, PopupRequest request, cef_popup_features_t* features, cef_browser_settings_t* settings)
     {
         var details = new WindowOpenDetails(request.Url, request.FrameName, FeaturesOf(features), DispositionOf(request.Disposition))
         {
             UserGesture = request.UserGesture,
         };
-        var response = WebContents.DecideWindowOpen(details);
+        var response = opener.DecideWindowOpen(details);
         if (!response.IsAllowed) return null;
 
-        var options = response.OverrideBrowserWindowOptions ?? PopupOptionsFrom(features, WebContents.Preferences);
+        var options = response.OverrideBrowserWindowOptions ?? PopupOptionsFrom(features, opener.Preferences);
         BrowserWindow popup;
-        try { popup = new BrowserWindow(options, opener: this) { _outlivesOpener = response.OutlivesOpener }; }
+        try { popup = new BrowserWindow(options, opener) { _outlivesOpener = response.OutlivesOpener }; }
         catch (Exception e) when (e is ArgumentException or NotSupportedException or InvalidOperationException)
         {
             Console.Error.WriteLine($"[Oriel] Blocked a window the page opened: {e.Message}");
@@ -396,14 +417,18 @@ public sealed unsafe class BrowserWindow
         return popup._client.Native;
     }
 
-    private static void OnPopupAborted(int popupId)
+    internal static void OnPopupAborted(int popupId)
     {
         foreach (var (client, pending) in s_pendingPopups.ToArray())
             if (pending.PopupId == popupId) s_pendingPopups.Remove(client);
     }
 
-    // The popup's view arrives with the delegate PopupDelegate chose, which identifies the waiting window.
-    private bool OnPopupViewCreated(nint popupView, nint popupDelegate)
+    // The delegate for a popup's view: the waiting window's, found by the client OpenPopup chose.
+    internal static nint PopupDelegateFor(nint client)
+        => s_pendingPopups.TryGetValue(client, out var pending) ? (nint)pending.Window._viewDelegate.Native : 0;
+
+    // The popup's view arrives with the delegate PopupDelegateFor chose, which identifies the waiting window.
+    internal static bool AdoptPopupView(WebContents opener, nint popupView, nint popupDelegate)
     {
         foreach (var (client, pending) in s_pendingPopups.ToArray())
         {
@@ -412,10 +437,11 @@ public sealed unsafe class BrowserWindow
             var popup = pending.Window;
             NativeObject.AddRef((void*)popupView);
             popup._browserView = (cef_browser_view_t*)popupView;
+            popup._pageView.SetNative(popup._browserView);
             popup.WebContents.MarkOpenedByPage();
-            if (!popup._outlivesOpener) _popups.Add(popup);
+            if (!popup._outlivesOpener) opener.Popups.Add(popup);
             popup.OpenWindow();
-            WebContents.RaiseDidCreateWindow(new DidCreateWindowEventArgs(popup, pending.Details));
+            opener.RaiseDidCreateWindow(new DidCreateWindowEventArgs(popup, pending.Details));
             return true;
         }
         return false;
@@ -453,7 +479,7 @@ public sealed unsafe class BrowserWindow
         _ => WindowOpenDisposition.Other,
     };
 
-    private static void ApplyWebPreferences(cef_browser_settings_t* settings, WebPreferences preferences)
+    internal static void ApplyWebPreferences(cef_browser_settings_t* settings, WebPreferences preferences)
     {
         static cef_state_t State(bool enabled) => enabled ? cef_state_t.STATE_DEFAULT : cef_state_t.STATE_DISABLED;
         settings->javascript = State(preferences.Javascript);
@@ -472,7 +498,7 @@ public sealed unsafe class BrowserWindow
     }
 
     // CEF copies the settings, so the strings are freed once the browser view exists.
-    private static void ClearWebPreferenceStrings(cef_browser_settings_t* settings)
+    internal static void ClearWebPreferenceStrings(cef_browser_settings_t* settings)
     {
         CefString.Clear(&settings->standard_font_family);
         CefString.Clear(&settings->serif_font_family);
@@ -484,6 +510,12 @@ public sealed unsafe class BrowserWindow
 
     /// <summary>The window's page. Electron's <c>win.webContents</c>.</summary>
     public WebContents WebContents { get; }
+
+    /// <summary>The view filling the window's content area. Its first child shows <see cref="WebContents"/> and fills
+    /// it; add <see cref="WebContentsView"/>s and other views over it. Electron's <c>win.contentView</c>.</summary>
+    public View ContentView { get; }
+
+    private readonly WebContentsView _pageView;
 
     /// <summary>A number unique among this process's windows. Electron's <c>win.id</c>.</summary>
     public int Id { get; }
@@ -1136,19 +1168,19 @@ public sealed unsafe class BrowserWindow
 
     private delegate T WindowQuery<out T>(cef_window_t* window);
 
-    private static Rectangle ToRectangle(cef_rect_t rect) => new(rect.x, rect.y, rect.width, rect.height);
+    internal static Rectangle ToRectangle(cef_rect_t rect) => new(rect.x, rect.y, rect.width, rect.height);
 
     private void OnWindowCreated(cef_window_t* window)
     {
         if (_menuBar is not null)
         {
-            _menuBar.Attach(window, _browserView);
+            _menuBar.Attach(window, ContentView.NativeView);
             _menuBar.SetMenu(_hasOwnMenu ? _ownMenu : Menu.GetApplicationMenu());
         }
         else
         {
-            NativeObject.AddRef(_browserView);
-            window->@base.add_child_view(&window->@base, (cef_view_t*)_browserView);
+            NativeObject.AddRef(ContentView.NativeView);
+            window->@base.add_child_view(&window->@base, ContentView.NativeView);
         }
 
         var size = new cef_size_t { width = _options.Width, height = _options.Height };
@@ -1243,6 +1275,14 @@ public sealed unsafe class BrowserWindow
         return canClose;
     }
 
+    // As Electron, views added to the window outlive it: tearing the window down would destroy their pages, and a page
+    // whose view has merely been removed lives on.
+    private void DetachViews()
+    {
+        foreach (var view in ContentView.Children)
+            if (view != _pageView) ContentView.RemoveChild(view);
+    }
+
     private void OnActivationChanged(bool active)
     {
         if (!active) _menuBar?.OnWindowBlurred();
@@ -1287,7 +1327,12 @@ public sealed unsafe class BrowserWindow
         (_window->is_fullscreen(_window) != 0 ? EnteredFullScreen : LeftFullScreen)?.Invoke(this, EventArgs.Empty);
     }
 
-    private void OnBrowserDestroyed(cef_browser_t* browser) => WebContents.OnBrowserDestroyed();
+    // The window's page goes first; the window's teardown follows at once, without asking can_close again.
+    private void OnBrowserDestroyed(cef_browser_t* browser)
+    {
+        DetachViews();
+        WebContents.OnBrowserDestroyed();
+    }
 
     private void OnWindowDestroyed(cef_window_t* window)
     {
@@ -1306,9 +1351,7 @@ public sealed unsafe class BrowserWindow
         // macOS closes child windows with their parent; Linux does not. Destroy, as Windows does with owned
         // windows: a child that vetoed would outlive its parent.
         foreach (var child in _children.ToArray()) child.Destroy();
-        // As Electron: windows the page opened close with it unless they asked to outlive it.
-        foreach (var popup in _popups.ToArray()) popup.Destroy();
-        _opener?._popups.Remove(this);
+        _opener?.Popups.Remove(this);
         Closed?.Invoke(this, EventArgs.Empty);
         if (s_open.Count == 0) OrielApp.Current.OnAllWindowsClosed();
     }

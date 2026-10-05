@@ -30,8 +30,11 @@ Cross-platform work. Platform-specific items: [linux-todo.md](linux-todo.md), [w
 - [x] `NavigationHistory` (`WebContents.NavigationHistory`)
 - [x] `WebFrameMain` (`WebContents.MainFrame`, IPC `SenderFrame`)
 - [x] Core `Session` (`Session`, `Cookies`, partitions; gaps DRIFT E1-E11) and `NativeImage` (gaps DRIFT B1-B5)
-- [ ] Remaining M2 modules: `BaseWindow`, `View`, `WebContentsView`,
-      `Debugger`, command line
+- [ ] `View` and `WebContentsView` ([design](design/web-contents-view.md)): phase 1 done (`ContentView`, child views,
+      bounds, visibility, `bounds-changed`, popups and `close()` from view pages); next `BaseWindow` (DRIFT V1, V2, V4, V7, V9, V12)
+- [ ] Windows: closing a view's page tears it down in a hidden, never-shown window; check it takes no focus there
+- [ ] macOS: check whether a hidden window or a `LoadUrl` takes focus (it did on Windows; fixed on branch `window-polish`)
+- [ ] Remaining M2 modules: `BaseWindow`, `Debugger`, command line
 - [x] `window.open` handling: `SetWindowOpenHandler`, `DidCreateWindow` (branch `window-open`)
 - [ ] Menus: Alt+letter mnemonics and the Alt toggle never fire (DRIFT W19): handle Alt in a `cef_keyboard_handler_t`
 - [x] macOS: `Width`/`Height` gave a window a title bar taller than asked (was DRIFT W18)

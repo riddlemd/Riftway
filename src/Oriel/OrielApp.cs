@@ -170,7 +170,9 @@ public sealed unsafe class OrielApp
         var will = new CancelEventArgs();
         WillQuit?.Invoke(this, will);
         _quitting = false;
-        if (!will.Cancel) CefNative.cef_quit_message_loop();
+        if (will.Cancel) return;
+        // CEF must not shut down with a page still open: views outside every window still have theirs.
+        WebContentsView.CloseAll(CefNative.cef_quit_message_loop);
     }
 
     /// <summary>A window refused to close; a quit in progress stops, as in Electron.</summary>

@@ -116,6 +116,17 @@ Entries marked _(branch `x`)_ are on that branch and not yet in `main`.
 | C8 | `context-menu` params `frame`, `linkText`, `altText`, `selectionRect`, `menuSourceType`, `formControlType`, `referrerPolicy`, `suggestedFilename`, `selectionStartOffset` | Missing | CEF: `cef_context_menu_params_t` lacks them; `frame`: CEF names the frame by its own identifier, which no DevTools frame id matches (WebFrameMain is built on DevTools) | Patch; or read the element under the point with JS for text/alt; Module for `frame` |
 | C10 | `loadFile(path, { query, search, hash })` | `LoadFile(path, query, hash)`; no `search` | Todo: not yet implemented | Append the raw string as the URL's query |
 
+## View / WebContentsView
+
+| ID | Electron | Oriel | Why | Possible resolution |
+|---|---|---|---|---|
+| V1 | `view.setBorderRadius()` | Missing | CEF: `cef_view_t` has no corner radius | Patch |
+| V2 | A `WebContentsView` page is like any other | Alloy style, unlike the window's own Chrome-style page: no Chrome command handling (so `DevTools = false` cannot block Chrome's shortcuts there, which Alloy lacks anyway), Alloy's context menu default | CEF: a Chrome-style window hosts at most one Chrome-style browser | None; revisit if CEF lifts the limit |
+| V4 | `new WebContentsView({ webContents })` adopts an existing page | Only `WebPreferences`; every view makes a new page | CEF: a browser cannot move to another browser view | None |
+| V7 | A `View` can draw over a `WebContentsView` | Hidden under the page on macOS; Windows and Linux not checked | CEF: a browser is a native view above what Views draws | None for plain views; a `WebContentsView` can overlap one |
+| V9 | `BaseWindow`, `win.setContentView()` | Missing; `BrowserWindow.ContentView` exists | Todo (phase 3) | Extract `BaseWindow` from `BrowserWindow` |
+| V12 | A view's page is its new size as soon as its bounds change | Linux applies the size asynchronously; a page whose view was empty since its browser started misses its first size, so Oriel sends it twice | CEF/X11: the page's child window is resized later | None needed |
+
 ## Menu / MenuItem
 
 | ID | Electron | Oriel | Why | Possible resolution |

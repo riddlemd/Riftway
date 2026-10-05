@@ -665,9 +665,30 @@ public sealed unsafe class WebContents
     /// <summary>Cancelled when the page's browser is destroyed.</summary>
     internal CancellationToken DestroyedToken => _destroyed.Token;
 
+    /// <summary>The page was closed and its browser is gone. Raised on the UI thread. Electron's <c>destroyed</c> event.</summary>
+    public event EventHandler? Destroyed;
+
+    /// <summary>Whether the page has been closed. Electron's <c>contents.isDestroyed()</c>.</summary>
+    public bool IsDestroyed() => _destroyed.IsCancellationRequested;
+
+    /// <summary>Closes the page: a window's page closes its window, a view's page leaves its view. Electron's
+    /// <c>contents.close()</c>.</summary>
+    /// <param name="waitForBeforeUnload">Run the page's <c>beforeunload</c> first, which may cancel the close.</param>
+    public void Close(bool waitForBeforeUnload = false) => CefThread.RunOnUi(() => CloseRequested?.Invoke(waitForBeforeUnload));
+
+    /// <summary>How the page's owner closes it; the argument is <c>waitForBeforeUnload</c>.</summary>
+    internal Action<bool>? CloseRequested { get; set; }
+
+    /// <summary>Windows this page opened that close with it.</summary>
+    internal List<BrowserWindow> Popups { get; } = [];
+
     internal void OnBrowserDestroyed()
     {
         _destroyed.Cancel();
+        // As Electron: windows the page opened close with it unless they asked to outlive it.
+        foreach (var popup in Popups.ToArray()) popup.Destroy();
+        Popups.Clear();
+        Destroyed?.Invoke(this, EventArgs.Empty);
         _devTools.Detach();
         NativeObject.Release(_browser);
         _browser = null;

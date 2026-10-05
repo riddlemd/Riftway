@@ -19,11 +19,11 @@ Counted from the Checklist at the end: `BaseWindow` and `BrowserWindow` are one 
 |---|---|---|---|---|---|---|---|
 | BaseWindow + BrowserWindow options | 54 | 26 | 2 | 26 | 0 | 48.1% | 50.0% |
 | webPreferences | 46 | 11 | 3 | 25 | 7 | 28.2% | 32.1% |
-| Instance methods | 143 | 60 | 11 | 66 | 6 | 43.8% | 47.8% |
-| Instance properties | 24 | 11 | 0 | 13 | 0 | 45.8% | 45.8% |
+| Instance methods | 143 | 61 | 11 | 65 | 6 | 44.5% | 48.5% |
+| Instance properties | 24 | 12 | 0 | 12 | 0 | 50.0% | 50.0% |
 | Events | 35 | 12 | 4 | 19 | 0 | 34.3% | 40.0% |
 | Static methods | 6 | 4 | 0 | 1 | 1 | 80.0% | 80.0% |
-| **Total** | 308 | 124 | 20 | 150 | 14 | 42.2% | 45.6% |
+| **Total** | 308 | 126 | 20 | 148 | 14 | 42.9% | 46.3% |
 
 ## Done since the audit
 
@@ -261,8 +261,8 @@ Parameters in brackets are optional in Electron. `webContents` members are in [w
 
 | Electron | Oriel | Status | Note |
 |---|---|---|---|
-| `setContentView(view)` | — | missing | No View module. |
-| `getContentView()` | — | missing | No View module. |
+| `setContentView(view)` | — | missing | DRIFT V9 (with `BaseWindow`) |
+| `getContentView()` | `ContentView` | done | A property, as Electron's `contentView` |
 | `destroy()` | `Destroy` | done |  |
 | `close()` | `Close` | done |  |
 | `focus()` | `Focus` | done |  |
@@ -411,7 +411,7 @@ Parameters in brackets are optional in Electron. `webContents` members are in [w
 |---|---|---|---|
 | `webContents` | `WebContents` | done |  |
 | `id` | `Id` | done |  |
-| `contentView` | — | missing | No View module. |
+| `contentView` | `ContentView` | done | First child is the window's page (Chrome style); views added over it are Alloy style (DRIFT V2) |
 | `tabbingIdentifier` | — | missing |  |
 | `autoHideMenuBar` | `AutoHideMenuBar` | done |  |
 | `simpleFullScreen` | `SetSimpleFullScreen / IsSimpleFullScreen` | done |  |
