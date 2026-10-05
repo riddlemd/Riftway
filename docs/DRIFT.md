@@ -53,7 +53,6 @@ Entries marked _(branch `x`)_ are on that branch and not yet in `main`.
 | W14 | `contextIsolation: false` | Always on | Design: the preload runs in an isolated world by construction | None planned |
 | W15 | `zoomFactor` | Re-applies to an origin whose zoom was reset to 0 | Todo | Track explicit resets |
 | W16 | `isMenuBarVisible()` etc. on Windows/Linux; the bar is a Views `MenuBar` (as Oriel's), with its own colours, padding, hover and mnemonic underlines; Linux can also export a DBus global menu | Same API and a Views bar, but plain: system-theme colours, no mnemonic underlines, different padding and hover; no global menu | CEF: label buttons cannot draw underlines; the rest is Todo | Match Electron's colours and padding; DBus menu on Linux |
-| W17 | Alt shows an auto-hidden bar until the user moves on | Hidden again on Alt, when its menu closes, when a key goes to the page, or on focus loss; a mouse click into the page does not hide it | Todo: the window sees no page mouse events | Hide on the page's mousedown, through the preload |
 | W20 | `setProgressBar` on Linux (Unity launcher progress); error and paused colours on macOS | Linux shows no progress; macOS shows error and paused as the plain Dock bar | OS: Linux progress is desktop-specific (D-Bus `com.canonical.Unity.LauncherEntry`); `NSProgressIndicator` has no colours | D-Bus launcher entry on Linux; a drawn bar on macOS |
 | W24 | `backgroundMaterial` / `setBackgroundMaterial` show Mica, Acrylic or Mica Alt behind a transparent window | DWM takes and reports the backdrop (`DWMWA_SYSTEMBACKDROP_TYPE`), but nothing shows: CEF paints the client area and its own title bar opaque, even with a transparent page and `BackgroundColor = "#00000000"`. Without the option DWM already reports Mica (`DWMSBT_MAINWINDOW`), set by Chromium or CEF, not Oriel | CEF: Views windows on Windows draw their own frame and an opaque background | `DwmExtendFrameIntoClientArea` and a transparent Views window; check whether CEF's frameless mode composites alpha |
 | W25 | `titleBarStyle: 'hidden'` with `titleBarOverlay` (Windows caption buttons over the page, `getTitleBarOverlay` geometry) | Missing | OS: needs a frameless window, caption buttons drawn over the page and `WM_NCHITTEST` for the drag area | Frameless window plus an overlay view (`W.add_overlay_view`) with min/max/close buttons, after `titleBarStyle` |
@@ -103,17 +102,14 @@ Entries marked _(branch `x`)_ are on that branch and not yet in `main`.
 | C1 | `loadURL(url, { baseURLForDataURL })` | Throws `NotSupportedException` | CEF cannot commit a `data:` URL under another base | Patch |
 | C2 | `UploadFile` `offset`/`length` | Throw; `modificationTime` ignored | CEF uploads whole files and does not check the time | Copy the slice to a temp file |
 | C3 | User agent override sets client hints | No `Sec-CH-UA*` or `navigator.userAgentData` change | CEF/DevTools: `Emulation.setUserAgentOverride` without metadata | Pass `userAgentMetadata` through DevTools |
-| C4 | `getUserAgent()` always answers | Empty until DevTools answers, just after the window is created | Todo | Read the default UA from CEF settings |
 | C5 | A reload repeats the `loadURL` options | Likely a plain request (untested) | Todo | Keep the options with the navigation entry |
 | C6 | `executeJavaScript` resolves a structured clone | JSON only (`JsonNode?`); undefined is null | Design: DevTools `Runtime.evaluate` returns JSON | Typed overloads |
-| C7 | `sendInputEvent` wheel, `mouseEnter`/`mouseLeave`/`contextMenu` types | Keyboard and mouse down/up/move only | Todo | DevTools `Input.dispatchMouseEvent` `mouseWheel` |
 | C8 | `context-menu` params `frame`, `linkText`, `altText`, `selectionRect`, `menuSourceType`, `formControlType`, `referrerPolicy`, `suggestedFilename`, `selectionStartOffset` | Missing | CEF: `cef_context_menu_params_t` lacks them; `frame`: CEF names the frame by its own identifier, which no DevTools frame id matches (WebFrameMain is built on DevTools) | Patch; or read the element under the point with JS for text/alt; Module for `frame` |
 
 ## Menu / MenuItem
 
 | ID | Electron | Oriel | Why | Possible resolution |
 |---|---|---|---|---|
-| M2 | `click(menuItem, window, event)` | No `KeyboardEvent` argument | Todo | Pass whether an accelerator triggered it, and modifiers |
 | M3 | Item `icon`, `sublabel`, `toolTip`, `registerAccelerator` | Missing | Todo (`icon` is Module: `NativeImage`) | `cef_menu_model` has no icon API either: Patch for Views menus |
 | M4 | macOS roles for tabs, speech, recent documents, `shareMenu`, `showSubstitutions`... | Missing | Todo | AppKit selectors for each |
 | M5 | `Command`/`Super` accelerators on Windows and Linux | Ignored | CEF: Views accelerators have no such modifier | OS key hook, or Patch |

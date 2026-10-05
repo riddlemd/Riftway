@@ -23,6 +23,42 @@ public sealed unsafe class OrielApp
     /// <summary>CEF's root cache path: the default session's data, and the parent of every persistent session's.</summary>
     internal static string? DataDirectory { get; private set; }
 
+    /// <summary>The user agent of pages that set none, as Electron's: Chromium's, with <c>Name/version</c> before the Chrome
+    /// token and <c>Oriel/version</c> after it. Set before <see cref="Run"/> for every page, or later for pages created
+    /// after. Electron's <c>app.userAgentFallback</c>.</summary>
+    public string UserAgentFallback
+    {
+        get => _userAgentFallback ??= BuildUserAgent(Name, AppVersion(), ChromeVersion(), OrielVersion());
+        set => _userAgentFallback = value ?? throw new ArgumentNullException(nameof(value));
+    }
+
+    private string? _userAgentFallback;
+
+    /// <summary>The user agent CEF was started with: every page's unless overridden.</summary>
+    internal static string? ProcessUserAgent { get; private set; }
+
+    /// <summary>Electron's format (GetApplicationUserAgent), on Chromium's reduced, per-OS platform string.</summary>
+    internal static string BuildUserAgent(string name, string version, string chromeVersion, string orielVersion)
+    {
+        var platform = OperatingSystem.IsMacOS() ? "Macintosh; Intel Mac OS X 10_15_7"
+            : OperatingSystem.IsWindows() ? "Windows NT 10.0; Win64; x64"
+            : "X11; Linux x86_64";
+        return $"Mozilla/5.0 ({platform}) AppleWebKit/537.36 (KHTML, like Gecko) {name.Replace(" ", "")}/{version} " +
+            $"Chrome/{chromeVersion} Oriel/{orielVersion} Safari/537.36";
+    }
+
+    private static string AppVersion() => ThreePart(Assembly.GetEntryAssembly()?.GetName().Version);
+
+    private static string OrielVersion() => ThreePart(typeof(OrielApp).Assembly.GetName().Version);
+
+    private static string ThreePart(Version? version) => version is null ? "0.0.0" : $"{version.Major}.{version.Minor}.{Math.Max(version.Build, 0)}";
+
+    private static string ChromeVersion()
+    {
+        CefRuntime.Load(CefLayout.MainProcessLibrary());
+        return string.Join('.', Enumerable.Range(4, 4).Select(CefNative.cef_version_info));
+    }
+
     /// <summary>The application's name; also names its data directory.</summary>
     public string Name { get; }
 
@@ -113,12 +149,15 @@ public sealed unsafe class OrielApp
             no_sandbox = IsSandboxed ? 0 : 1,
             log_severity = cef_log_severity_t.LOGSEVERITY_WARNING,
         };
+        ProcessUserAgent = UserAgentFallback;
+        CefString.Set(&settings.user_agent, ProcessUserAgent);
         CefString.Set(&settings.root_cache_path, dataDirectory);
         CefString.Set(&settings.cache_path, dataDirectory);
         CefString.Set(&settings.browser_subprocess_path, CefLayout.SubprocessPath());
 
         NativeObject.AddRef(app.Native);
         var initialized = CefNative.cef_initialize((cef_main_args_t*)&args, &settings, app.Native, null) != 0;
+        CefString.Clear(&settings.user_agent);
         CefString.Clear(&settings.root_cache_path);
         CefString.Clear(&settings.cache_path);
         CefString.Clear(&settings.browser_subprocess_path);

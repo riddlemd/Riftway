@@ -1,3 +1,5 @@
+using Oriel.Cef.Interop;
+
 namespace Oriel;
 
 /// <summary>The kind of a <see cref="KeyboardInputEvent"/>; Electron's <c>type</c> values for keyboard input.</summary>
@@ -63,6 +65,19 @@ public enum MouseInputEventType
 
     /// <summary>The pointer moved; Electron's <c>mouseMove</c>.</summary>
     MouseMove,
+
+    /// <summary>The pointer entered the page; Electron's <c>mouseEnter</c>.</summary>
+    MouseEnter,
+
+    /// <summary>The pointer left the page; Electron's <c>mouseLeave</c>.</summary>
+    MouseLeave,
+
+    /// <summary>A context-menu request (a right click); Electron's <c>contextMenu</c>.</summary>
+    ContextMenu,
+
+    /// <summary>The wheel turned, by <see cref="MouseInputEvent.DeltaX"/> and <see cref="MouseInputEvent.DeltaY"/>;
+    /// Electron's <c>mouseWheel</c>.</summary>
+    MouseWheel,
 }
 
 /// <summary>A mouse button; Electron's <c>button</c> values.</summary>
@@ -92,6 +107,14 @@ public sealed record MouseInputEvent(MouseInputEventType Type, int X, int Y)
 
     /// <summary>Modifier keys held during the event.</summary>
     public InputModifiers Modifiers { get; init; }
+
+    /// <summary>For <see cref="MouseInputEventType.MouseWheel"/>: pixels to scroll sideways; positive scrolls left, as
+    /// Electron's (Chromium's) <c>deltaX</c>.</summary>
+    public int DeltaX { get; init; }
+
+    /// <summary>For <see cref="MouseInputEventType.MouseWheel"/>: pixels to scroll; positive scrolls up, as Electron's
+    /// (Chromium's) <c>deltaY</c>.</summary>
+    public int DeltaY { get; init; }
 }
 
 /// <summary>Maps Electron key names to the DevTools <c>Input.dispatchKeyEvent</c> fields.</summary>
@@ -141,6 +164,12 @@ internal static class KeyMap
     }
 
     /// <summary>DevTools' modifier bits: Alt 1, Ctrl 2, Meta 4, Shift 8.</summary>
+    internal static uint CefModifiers(InputModifiers modifiers)
+        => (modifiers.HasFlag(InputModifiers.Shift) ? (uint)cef_event_flags_t.EVENTFLAG_SHIFT_DOWN : 0)
+            | (modifiers.HasFlag(InputModifiers.Control) ? (uint)cef_event_flags_t.EVENTFLAG_CONTROL_DOWN : 0)
+            | (modifiers.HasFlag(InputModifiers.Alt) ? (uint)cef_event_flags_t.EVENTFLAG_ALT_DOWN : 0)
+            | (modifiers.HasFlag(InputModifiers.Meta) ? (uint)cef_event_flags_t.EVENTFLAG_COMMAND_DOWN : 0);
+
     internal static int DevToolsModifiers(InputModifiers modifiers)
         => (modifiers.HasFlag(InputModifiers.Alt) ? 1 : 0) | (modifiers.HasFlag(InputModifiers.Control) ? 2 : 0)
             | (modifiers.HasFlag(InputModifiers.Meta) ? 4 : 0) | (modifiers.HasFlag(InputModifiers.Shift) ? 8 : 0);

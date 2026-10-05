@@ -101,7 +101,7 @@ internal sealed unsafe class WindowMenuBar
     {
         // A disabled item leaves the key to whatever else wants it.
         if (_menu?.FindByCommandId(commandId) is not { Enabled: true } item) return false;
-        item.Activate(_owner);
+        item.ActivateByAccelerator(_owner);
         return true;
     }
 
@@ -243,6 +243,9 @@ internal sealed unsafe class WindowMenuBar
         if (AutoHide && _shownByAlt && !IsMenuOpen) SetShown(false);
     }
 
+    /// <summary>A click into the page: an Alt-shown bar goes away, as Electron's.</summary>
+    internal void OnPageMouseDown() => OnWindowBlurred();
+
     private void OnMenuClosed()
     {
         ReleasePressedLock();
@@ -269,7 +272,7 @@ internal sealed unsafe class WindowMenuBar
     }
 
 
-    private void Execute(int commandId) => _menu?.FindByCommandId(commandId)?.Activate(_owner);
+    private void Execute(int commandId, cef_event_flags_t flags) => _menu?.FindByCommandId(commandId)?.Activate(_owner, KeyboardEvent.FromCefFlags(flags));
 
     private void UpdateVisibility()
     {

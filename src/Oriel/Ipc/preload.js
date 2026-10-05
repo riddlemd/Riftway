@@ -5,6 +5,9 @@
   const post = globalThis.__orielIpc;
   delete globalThis.__orielIpc;
 
+  // A click into the page puts an Alt-shown menu bar away (Electron's). Captured, so the page cannot stop it.
+  globalThis.addEventListener('mousedown', () => post(JSON.stringify({ t: 'mousedown', ch: '', args: [] })), true);
+
   let nextInvokeId = 1;
   const pendingInvokes = new Map();
   const channelListeners = new Map();

@@ -95,6 +95,8 @@ internal static class MacApplicationMenu
 
     private static void OnChosen(nint tag)
     {
-        if (s_shown?.FindByCommandId((int)tag) is { } item) item.Activate(BrowserWindow.GetFocusedWindow());
+        if (s_shown?.FindByCommandId((int)tag) is not { } item) return;
+        var (flags, keyDown) = MacMenu.CurrentEvent();
+        item.Activate(BrowserWindow.GetFocusedWindow(), KeyboardEvent.FromMacModifiers(flags, keyDown));
     }
 }

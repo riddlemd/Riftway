@@ -282,6 +282,7 @@ public sealed unsafe class BrowserWindow
         WebContents = new WebContents(_options.WebPreferences.Preload is { } preload ? File.ReadAllText(preload) : null, _options.WebPreferences, session);
         WebContents.PageTitleUpdated += (_, e) => PageTitleUpdated?.Invoke(this, e);
         WebContents.TitleApplied = SetTitle;
+        WebContents.PageMouseDown = () => _menuBar?.OnPageMouseDown();
         WebContents.DidFinishLoad += (_, _) =>
         {
             if (_readyToShowRaised) return;
@@ -554,7 +555,7 @@ public sealed unsafe class BrowserWindow
         var content = ContentBoundsOn(w);
         var at = x is { } ax && y is { } ay ? new Point(content.X + ax, content.Y + ay) : Screen.GetCursorScreenPoint();
         var screen = new cef_point_t { x = at.X, y = at.Y };
-        var popupDelegate = new MenuModelDelegate { CommandExecuted = id => menu.FindByCommandId(id)?.Activate(this), Closed = closed };
+        var popupDelegate = new MenuModelDelegate { CommandExecuted = (id, flags) => menu.FindByCommandId(id)?.Activate(this, KeyboardEvent.FromCefFlags(flags)), Closed = closed };
         NativeObject.AddRef(popupDelegate.Native);
         var model = CefNative.cef_menu_model_create(popupDelegate.Native);
         MenuModels.Fill(model, menu);

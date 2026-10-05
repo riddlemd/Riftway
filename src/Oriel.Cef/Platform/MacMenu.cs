@@ -70,6 +70,15 @@ public static unsafe class MacMenu
     public static void SetHidden(nint item, bool hidden) => SendBool(item, Sel("setHidden:"u8), hidden);
 
     /// <summary>Replaces the menu bar; NSApp retains <paramref name="menu"/>, and 0 clears it.</summary>
+    /// <summary>The modifier flags of the event AppKit is handling, and whether it is a key press.</summary>
+    public static (ulong ModifierFlags, bool IsKeyDown) CurrentEvent()
+    {
+        var e = Send(App(), Sel("currentEvent"u8));
+        if (e == 0) return (0, false);
+        // NSEventTypeKeyDown
+        return ((ulong)Send(e, Sel("modifierFlags"u8)), Send(e, Sel("type"u8)) == 10);
+    }
+
     public static void SetMainMenu(nint menu) => Send(App(), Sel("setMainMenu:"u8), menu);
 
     public static void SetServicesMenu(nint menu) => Send(App(), Sel("setServicesMenu:"u8), menu);

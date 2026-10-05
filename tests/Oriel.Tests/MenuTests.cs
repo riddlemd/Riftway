@@ -42,7 +42,7 @@ public sealed class MenuTests
     public void Activate_RunsClickWithTheItemAndWindow()
     {
         MenuItem? clicked = null;
-        var item = new MenuItem { Click = (i, _) => clicked = i };
+        var item = new MenuItem { Click = (i, _, _) => clicked = i };
         item.Activate(null);
         Assert.Same(item, clicked);
     }
@@ -51,7 +51,7 @@ public sealed class MenuTests
     public void Activate_RunsTheRoleInsteadOfClick()
     {
         var clicked = false;
-        new MenuItem { Role = MenuItemRole.Copy, Click = (_, _) => clicked = true }.Activate(null);
+        new MenuItem { Role = MenuItemRole.Copy, Click = (_, _, _) => clicked = true }.Activate(null);
         Assert.False(clicked);
     }
 
@@ -59,7 +59,7 @@ public sealed class MenuTests
     public void Activate_RunsClickForARoleWithNoActionHere()
     {
         var clicked = false;
-        new MenuItem { Role = MenuItemRole.About, Click = (_, _) => clicked = true }.Activate(null);
+        new MenuItem { Role = MenuItemRole.About, Click = (_, _, _) => clicked = true }.Activate(null);
         Assert.True(clicked);
     }
 
@@ -67,7 +67,7 @@ public sealed class MenuTests
     public void Activate_DoesNothingWhenDisabled()
     {
         var clicked = false;
-        var item = new MenuItem { Type = MenuItemType.Checkbox, Enabled = false, Click = (_, _) => clicked = true };
+        var item = new MenuItem { Type = MenuItemType.Checkbox, Enabled = false, Click = (_, _, _) => clicked = true };
         item.Activate(null);
         Assert.False(clicked);
         Assert.False(item.Checked);
@@ -167,4 +167,38 @@ public sealed class MenuTests
     [InlineData("&1st", null)]
     [InlineData("None", null)]
     public void MnemonicOf_FindsTheMarkedLetter(string label, char? letter) => Assert.Equal(letter, WindowMenuBar.MnemonicOf(label));
+}
+
+public sealed class KeyboardEventTests
+{
+    [Fact]
+    public void FromCefFlags_ReadsEachModifier()
+    {
+        Assert.Equal(new KeyboardEvent { ShiftKey = true, CtrlKey = true, AltKey = true, MetaKey = true },
+            KeyboardEvent.FromCefFlags(Oriel.Cef.Interop.cef_event_flags_t.EVENTFLAG_SHIFT_DOWN | Oriel.Cef.Interop.cef_event_flags_t.EVENTFLAG_CONTROL_DOWN
+                | Oriel.Cef.Interop.cef_event_flags_t.EVENTFLAG_ALT_DOWN | Oriel.Cef.Interop.cef_event_flags_t.EVENTFLAG_COMMAND_DOWN));
+        Assert.Equal(new KeyboardEvent { AltKey = true }, KeyboardEvent.FromCefFlags(Oriel.Cef.Interop.cef_event_flags_t.EVENTFLAG_ALT_DOWN));
+        Assert.Equal(new KeyboardEvent(), KeyboardEvent.FromCefFlags(Oriel.Cef.Interop.cef_event_flags_t.EVENTFLAG_LEFT_MOUSE_BUTTON));
+    }
+
+    [Theory]
+    [InlineData(1UL << 17, true, false, false, false)]
+    [InlineData(1UL << 18, false, true, false, false)]
+    [InlineData(1UL << 19, false, false, true, false)]
+    [InlineData(1UL << 20, false, false, false, true)]
+    public void FromMacModifiers_ReadsEachModifier(ulong flags, bool shift, bool ctrl, bool alt, bool meta)
+        => Assert.Equal(new KeyboardEvent { ShiftKey = shift, CtrlKey = ctrl, AltKey = alt, MetaKey = meta, TriggeredByAccelerator = true },
+            KeyboardEvent.FromMacModifiers(flags, keyDown: true));
+
+    [Fact]
+    public void FromMacModifiers_AClickIsNotAnAccelerator() => Assert.False(KeyboardEvent.FromMacModifiers(0, keyDown: false).TriggeredByAccelerator);
+
+    [Fact]
+    public void ForAccelerator_HoldsItsModifiers()
+    {
+        var keys = KeyboardEvent.ForAccelerator("CmdOrCtrl+Alt+K");
+        Assert.True(keys.TriggeredByAccelerator && keys.AltKey && !keys.ShiftKey);
+        Assert.Equal(OperatingSystem.IsMacOS(), keys.MetaKey);
+        Assert.Equal(!OperatingSystem.IsMacOS(), keys.CtrlKey);
+    }
 }

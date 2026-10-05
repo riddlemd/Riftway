@@ -11,6 +11,7 @@ var step = TimeSpan.FromSeconds(5);
 var simpleReady = false;
 BrowserWindow? childAlive = null;
 var willQuit = 0;
+KeyboardEvent? saveKeys = null;
 ExitedEventArgs? exited = null;
 app.Exited += (_, e) => exited = e;
 void countWillQuit(object? _, CancelEventArgs e) => willQuit++;
@@ -67,6 +68,22 @@ async Task RunAsync(BrowserWindow win, BrowserWindow simple)
     var loaded = Fires(h => win.WebContents.DidFinishLoad += h, h => win.WebContents.DidFinishLoad -= h,
         () => win.WebContents.LoadFile(page, new Dictionary<string, string> { ["q"] = "1 2" }, "top"), step);
     Check("LoadFile raises DidFinishLoad", loaded);
+    var navigatorAgent = (await win.WebContents.ExecuteJavaScriptAsync("navigator.userAgent"))?.ToString();
+    Check("the default user agent is Electron's format, with the app's and Oriel's tokens",
+        navigatorAgent == app.UserAgentFallback && navigatorAgent.Contains(" Oriel.WindowTest/") && navigatorAgent.Contains(" Oriel/")
+        && win.WebContents.GetUserAgent() == navigatorAgent, navigatorAgent);
+    var fresh = new BrowserWindow(new BrowserWindowOptions { Show = false });
+    Check("GetUserAgent answers before the page has loaded", fresh.WebContents.GetUserAgent() == app.UserAgentFallback, fresh.WebContents.GetUserAgent());
+    fresh.Destroy();
+    var original = app.UserAgentFallback;
+    app.UserAgentFallback = "OrielFallbackTest/1.0";
+    var later = new BrowserWindow(new BrowserWindowOptions { Show = false });
+    await later.WebContents.LoadFile(page);
+    var laterAgent = (await later.WebContents.ExecuteJavaScriptAsync("navigator.userAgent"))?.ToString();
+    Check("a fallback changed after start-up applies to new pages, as Electron", laterAgent == "OrielFallbackTest/1.0"
+        && later.WebContents.GetUserAgent() == "OrielFallbackTest/1.0", laterAgent);
+    later.Destroy();
+    app.UserAgentFallback = original;
     Check("GetUrl reflects LoadFile (query, hash)", win.WebContents.GetUrl().EndsWith("oriel-window-test.html?q=1%202#top", StringComparison.Ordinal), win.WebContents.GetUrl());
     // BrowserWindow's own LoadFile, with Electron's raw search, which replaces the query.
     await win.LoadFile(page, new Dictionary<string, string> { ["ignored"] = "1" }, search: "?raw=a%20b&x");
@@ -202,6 +219,7 @@ async Task RunAsync(BrowserWindow win, BrowserWindow simple)
     await DialogsAsync(win);
     await MenusAsync(win);
     await ContextMenusAsync(win);
+    await MouseEventsAsync();
     await WindowOpenAsync(win);
     await LoadAndSizeAsync(win);
     await NavigationAsync();
@@ -578,6 +596,48 @@ async Task DialogsAsync(BrowserWindow win)
     Directory.Delete(dir, recursive: true);
 }
 
+async Task MouseEventsAsync()
+{
+    var page = Path.Combine(Path.GetTempPath(), "oriel-mouse-events.html");
+    File.WriteAllText(page, "<!doctype html><body style='height:4000px;margin:0'><script>window.log=[];" +
+        "document.addEventListener('mouseover',()=>log.push('over'));" +
+        "document.addEventListener('mouseout',e=>{if(!e.relatedTarget)log.push('out')});" +
+        "document.addEventListener('contextmenu',e=>{log.push('ctx');e.preventDefault()});</script>");
+    var w = new BrowserWindow(new BrowserWindowOptions { Width = 400, Height = 300 });
+    await w.WebContents.LoadFile(page);
+    async Task<string> Log() => (await w.WebContents.ExecuteJavaScriptAsync("log.join(',')"))?.ToString() ?? "";
+
+    // Chromium's convention: a negative deltaY scrolls the page down.
+    w.WebContents.SendInputEvent(new MouseInputEvent(MouseInputEventType.MouseWheel, 50, 50) { DeltaY = -300 });
+    var scrolled = 0;
+    for (var i = 0; i < 30 && scrolled == 0; i++)
+    {
+        await Task.Delay(100);
+        scrolled = (await w.WebContents.ExecuteJavaScriptAsync("scrollY"))?.GetValue<int>() ?? 0;
+    }
+    Check("SendInputEvent MouseWheel scrolls the page, deltaY negative downwards as Electron", scrolled > 0, scrolled);
+
+    w.WebContents.SendInputEvent(new MouseInputEvent(MouseInputEventType.MouseEnter, 20, 20));
+    w.WebContents.SendInputEvent(new MouseInputEvent(MouseInputEventType.MouseLeave, 20, 20));
+    string log = "";
+    for (var i = 0; i < 30 && !log.Contains("out"); i++)
+    {
+        await Task.Delay(100);
+        log = await Log();
+    }
+    Check("SendInputEvent MouseEnter and MouseLeave reach the page", log.Contains("over") && log.Contains("out"), log);
+
+    w.WebContents.SendInputEvent(new MouseInputEvent(MouseInputEventType.ContextMenu, 30, 30));
+    for (var i = 0; i < 30 && !log.Contains("ctx"); i++)
+    {
+        await Task.Delay(100);
+        log = await Log();
+    }
+    Check("SendInputEvent ContextMenu raises the page's contextmenu", log.Contains("ctx"), log);
+    w.Destroy();
+    File.Delete(page);
+}
+
 async Task ContextMenusAsync(BrowserWindow win)
 {
     win.Focus();
@@ -670,11 +730,11 @@ async Task MenusAsync(BrowserWindow win)
         && (OperatingSystem.IsMacOS() || win.IsMenuBarVisible), $"bar={win.IsMenuBarVisible}");
 
     var clicks = new List<string>();
-    var save = new MenuItem { Id = "save", Label = "&Save", Accelerator = "CmdOrCtrl+Shift+K", Click = (_, w) => clicks.Add($"save:{w == win}") };
+    var save = new MenuItem { Id = "save", Label = "&Save", Accelerator = "CmdOrCtrl+Shift+K", Click = (_, w, keys) => { saveKeys = keys; clicks.Add($"save:{w == win}"); } };
     var check = new MenuItem { Type = MenuItemType.Checkbox, Label = "Check" };
     var radioA = new MenuItem { Type = MenuItemType.Radio, Label = "A", Checked = true };
     var radioB = new MenuItem { Type = MenuItemType.Radio, Label = "B" };
-    var go = new MenuItem { Label = "&Go", Click = (_, w) => clicks.Add($"go:{w == win}") };
+    var go = new MenuItem { Label = "&Go", Click = (_, w, _) => clicks.Add($"go:{w == win}") };
     var file = new MenuItem { Label = "&File", Submenu = [save, new MenuItem { Type = MenuItemType.Separator }, check, radioA, radioB] };
     var menu = OperatingSystem.IsMacOS()
         ? new Menu { new MenuItem { Role = MenuItemRole.AppMenu }, file, new MenuItem { Role = MenuItemRole.EditMenu } }
@@ -773,6 +833,8 @@ async Task BarMenusAsync(BrowserWindow win, Menu menu, MenuItem save, MenuItem g
     win.WebContents.SendInputEvent(new KeyboardInputEvent(KeyboardInputEventType.KeyDown, "K") { Modifiers = InputModifiers.Control | InputModifiers.Shift });
     win.WebContents.SendInputEvent(new KeyboardInputEvent(KeyboardInputEventType.KeyUp, "K") { Modifiers = InputModifiers.Control | InputModifiers.Shift });
     Check("an accelerator the page ignores runs the item", Eventually(() => clicks.Contains("save:True"), step), string.Join(",", clicks));
+    Check("Click's event says the accelerator chose it, with its keys, as Electron's KeyboardEvent",
+        saveKeys is { TriggeredByAccelerator: true, ShiftKey: true, CtrlKey: true, AltKey: false }, saveKeys);
 
     save.Enabled = false;
     clicks.Clear();
@@ -810,6 +872,11 @@ async Task BarMenusAsync(BrowserWindow win, Menu menu, MenuItem save, MenuItem g
     Key("A", KeyboardInputEventType.KeyDown);
     Key("A", KeyboardInputEventType.KeyUp);
     Check("typing into the page hides an Alt-shown bar", Eventually(() => !win.IsMenuBarVisible, step));
+    PressAlt();
+    Eventually(() => win.IsMenuBarVisible, step);
+    win.WebContents.SendInputEvent(new MouseInputEvent(MouseInputEventType.MouseDown, 40, 40));
+    win.WebContents.SendInputEvent(new MouseInputEvent(MouseInputEventType.MouseUp, 40, 40));
+    Check("a click into the page hides an Alt-shown bar, as Electron", Eventually(() => !win.IsMenuBarVisible, step));
     PressAlt();
     Eventually(() => win.IsMenuBarVisible, step);
     var thief = new BrowserWindow(new BrowserWindowOptions { Title = "Oriel window test: focus thief", Width = 200, Height = 150 });

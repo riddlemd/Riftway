@@ -39,6 +39,7 @@ public sealed unsafe class WebContents
 
     internal WebContents(string? appPreload, WebPreferences preferences, Session session)
     {
+        _defaultUserAgent = OrielApp.CurrentOrNull?.UserAgentFallback;
         _preferences = preferences;
         Session = session;
         JsDialog = new JsDialogHandler { SuppressAll = preferences.DisableDialogs };
@@ -159,6 +160,9 @@ public sealed unsafe class WebContents
     /// <summary>The session the page's cookies, cache and storage belong to. Electron's <c>webContents.session</c>.</summary>
     public Session Session { get; }
 
+    /// <summary>A mouse button went down in the page; UI thread.</summary>
+    internal Action? PageMouseDown { get; set; }
+
     /// <summary>The settings this page was created with; a page it opens inherits them.</summary>
     internal WebPreferences Preferences => _preferences;
 
@@ -230,12 +234,41 @@ public sealed unsafe class WebContents
     {
         ArgumentNullException.ThrowIfNull(inputEvent);
         var modifiers = KeyMap.DevToolsModifiers(inputEvent.Modifiers);
+        switch (inputEvent.Type)
+        {
+            // DevTools has no enter or leave; CEF's own mouse move carries the leave flag.
+            case MouseInputEventType.MouseEnter or MouseInputEventType.MouseLeave:
+                WithHost(host =>
+                {
+                    var mouse = new cef_mouse_event_t { x = inputEvent.X, y = inputEvent.Y, modifiers = KeyMap.CefModifiers(inputEvent.Modifiers) };
+                    host->send_mouse_move_event(host, &mouse, inputEvent.Type == MouseInputEventType.MouseLeave ? 1 : 0);
+                });
+                return;
+            // A right click is what raises the page's contextmenu, as Electron's contextMenu event does.
+            case MouseInputEventType.ContextMenu:
+                SendInputEvent(inputEvent with { Type = MouseInputEventType.MouseDown, Button = MouseButton.Right });
+                SendInputEvent(inputEvent with { Type = MouseInputEventType.MouseUp, Button = MouseButton.Right });
+                return;
+        }
         CefThread.RunOnUi(() => _devTools.Send("Input.dispatchMouseEvent", w =>
         {
-            w.WriteString("type", inputEvent.Type switch { MouseInputEventType.MouseDown => "mousePressed", MouseInputEventType.MouseUp => "mouseReleased", _ => "mouseMoved" });
+            w.WriteString("type", inputEvent.Type switch
+            {
+                MouseInputEventType.MouseDown => "mousePressed",
+                MouseInputEventType.MouseUp => "mouseReleased",
+                MouseInputEventType.MouseWheel => "mouseWheel",
+                _ => "mouseMoved",
+            });
             w.WriteNumber("x", inputEvent.X);
             w.WriteNumber("y", inputEvent.Y);
             w.WriteNumber("modifiers", modifiers);
+            if (inputEvent.Type == MouseInputEventType.MouseWheel)
+            {
+                // Chromium's wheel deltas are positive upwards and leftwards; DevTools', like the DOM's, downwards.
+                w.WriteNumber("deltaX", -inputEvent.DeltaX);
+                w.WriteNumber("deltaY", -inputEvent.DeltaY);
+                return;
+            }
             if (inputEvent.Type == MouseInputEventType.MouseMove) return;
             w.WriteString("button", inputEvent.Button switch { MouseButton.Middle => "middle", MouseButton.Right => "right", _ => "left" });
             w.WriteNumber("clickCount", inputEvent.ClickCount);
@@ -544,8 +577,8 @@ public sealed unsafe class WebContents
         CefThread.RunOnUi(() => ApplyUserAgent(userAgent));
     }
 
-    /// <summary>The page's user agent: the override, else Chromium's default (empty until DevTools reports it,
-    /// just after the window is created). Electron's <c>webContents.getUserAgent()</c>.</summary>
+    /// <summary>The page's user agent: the override, else the app's fallback when the page was created.
+    /// Electron's <c>webContents.getUserAgent()</c>.</summary>
     public string GetUserAgent() => CefThread.InvokeOnUi(() => _userAgent is { Length: > 0 } ua ? ua : _defaultUserAgent ?? string.Empty);
 
     private void ApplyUserAgent(string userAgent)
@@ -622,11 +655,10 @@ public sealed unsafe class WebContents
         _devTools.Send("Page.enable");
         // Per-frame DOMContentLoaded for dom-ready.
         _devTools.Send("Page.setLifecycleEventsEnabled", w => w.WriteBoolean("enabled", true));
-        _devTools.Send("Browser.getVersion", onResult: (result, error) =>
-        {
-            if (error is null) _defaultUserAgent = result.GetProperty("userAgent").GetString();
-        });
         if (_userAgent is { } userAgent) ApplyUserAgent(userAgent);
+        // A fallback changed after start-up applies to pages created since, as Electron's.
+        else if (_defaultUserAgent is { } fallback && fallback != OrielApp.ProcessUserAgent)
+            _devTools.Send("Emulation.setUserAgentOverride", w => w.WriteString("userAgent", fallback));
         _devTools.Send("Runtime.enable");
         // Chrome-style browsers ignore the font sizes in the browser settings; this sets them for this page only.
         if (_preferences.DefaultFontSize is not null || _preferences.DefaultMonospaceFontSize is not null)
@@ -761,6 +793,10 @@ public sealed unsafe class WebContents
             case "invoke":
                 var id = root.GetProperty("id").GetInt32();
                 _ = ReplyAsync(context, id, channel, args);
+                break;
+
+            case "mousedown":
+                PageMouseDown?.Invoke();
                 break;
         }
     }

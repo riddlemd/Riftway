@@ -21,7 +21,7 @@ public sealed unsafe class MenuModelDelegate
     public cef_menu_model_delegate_t* Native { get; }
 
     /// <summary>An item was chosen: its command id.</summary>
-    public Action<int>? CommandExecuted { get; init; }
+    public Action<int, cef_event_flags_t>? CommandExecuted { get; init; }
 
     /// <summary>The menu closed, whether or not an item was chosen.</summary>
     public Action? Closed { get; init; }
@@ -30,7 +30,7 @@ public sealed unsafe class MenuModelDelegate
     private static void ExecuteCommand(cef_menu_model_delegate_t* self, cef_menu_model_t* menuModel, int commandId, cef_event_flags_t eventFlags)
     {
         var owner = NativeObject.Owner<MenuModelDelegate>(self);
-        if (owner.CommandExecuted is { } callback) Guard.Run(() => callback(commandId));
+        if (owner.CommandExecuted is { } callback) Guard.Run(() => callback(commandId, eventFlags));
         NativeObject.Release(menuModel);
     }
 

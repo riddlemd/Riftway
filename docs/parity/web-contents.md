@@ -12,13 +12,13 @@ Percentages are over the non-n/a items; the second counts a partial item as half
 |---|---|---|---|---|---|---|---|
 | Static methods | 5 | 0 | 0 | 5 | 0 | 0.0% | 0.0% |
 | Instance events | 59 | 7 | 1 | 49 | 2 | 12.3% | 13.2% |
-| Instance methods | 118 | 22 | 6 | 82 | 8 | 20.0% | 22.7% |
-| Instance properties | 18 | 4 | 2 | 11 | 1 | 23.5% | 29.4% |
+| Instance methods | 118 | 24 | 4 | 82 | 8 | 21.8% | 23.6% |
+| Instance properties | 18 | 5 | 1 | 11 | 1 | 29.4% | 32.4% |
 | navigationHistory | 14 | 12 | 0 | 2 | 0 | 85.7% | 85.7% |
 | WebFrameMain events and statics | 3 | 1 | 0 | 2 | 0 | 33.3% | 33.3% |
 | WebFrameMain methods | 9 | 1 | 3 | 5 | 0 | 11.1% | 27.8% |
 | WebFrameMain properties | 15 | 9 | 0 | 6 | 0 | 60.0% | 60.0% |
-| **Total** | 241 | 56 | 12 | 162 | 11 | 24.3% | 27.0% |
+| **Total** | 241 | 59 | 9 | 162 | 11 | 25.7% | 27.6% |
 
 ## Checklist
 
@@ -107,7 +107,7 @@ Percentages are over the non-n/a items; the second counts a partial item as half
 | `reload()` | `Reload` | done |  |
 | `reloadIgnoringCache()` | `ReloadIgnoringCache` | done |  |
 | `setUserAgent(userAgent)` | `SetUserAgent` | done |  |
-| `getUserAgent()` | `GetUserAgent` | partial | Empty until DevTools answers, just after window creation (C4). |
+| `getUserAgent()` | `GetUserAgent` | done | The app's fallback until overridden |
 | `executeJavaScript(code, userGesture)` | `ExecuteJavaScriptAsync` | partial | JSON result only, `JsonNode?` (C6, S3). |
 | `setWindowOpenHandler(handler)` | `SetWindowOpenHandler` | partial | `features` rebuilt, no `referrer`/`postBody`, no `createWindow` (O1, O2, O3). |
 | `setZoomFactor(factor)` | `SetZoomFactor` | done |  |
@@ -127,7 +127,7 @@ Percentages are over the non-n/a items; the second counts a partial item as half
 | `isDevToolsOpened()` | `IsDevToolsOpened` | done |  |
 | `toggleDevTools()` | `ToggleDevTools` | done |  |
 | `send(channel, ...args)` | `Send` | done | Args are JSON (I1). |
-| `sendInputEvent(inputEvent)` | `SendInputEvent` | partial | Keyboard and mouse down/up/move only; no wheel, mouseEnter/Leave, contextMenu (C7). |
+| `sendInputEvent(inputEvent)` | `SendInputEvent` | done | Keyboard; mouse down/up/move/enter/leave, contextMenu and wheel |
 | `downloadURL()` | — | missing |  |
 | `isDestroyed()` | — | missing |  |
 | `close()` | — | missing |  |
@@ -224,7 +224,7 @@ Percentages are over the non-n/a items; the second counts a partial item as half
 | Electron | Oriel | Status | Note |
 |---|---|---|---|
 | `audioMuted` | — | missing |  |
-| `userAgent` | `SetUserAgent / GetUserAgent` | partial | Getter empty until DevTools answers (C4). |
+| `userAgent` | `SetUserAgent / GetUserAgent` | done |  |
 | `zoomLevel` | `SetZoomLevel / GetZoomLevel` | done |  |
 | `zoomFactor` | `SetZoomFactor / GetZoomFactor` | done |  |
 | `navigationHistory` | `NavigationHistory` | done | Members in their own table below. |
