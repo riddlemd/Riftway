@@ -58,9 +58,14 @@ public sealed unsafe partial class BrowserWindow
         => OperatingSystem.IsMacOS() && Query(w => MacWindow.HasCollectionBehavior((nint)w->get_window_handle(w), MacWindow.Transient), false);
 
     /// <summary>Shows the window on every workspace (macOS Spaces). Electron's <c>win.setVisibleOnAllWorkspaces()</c>.</summary>
-    /// <remarks>Linux has workspaces too, but Oriel does not set them yet (drift W43); Windows has none, as in Electron.</remarks>
+    /// <remarks>On Linux the window manager's workspaces; Windows has none, as in Electron.</remarks>
     public void SetVisibleOnAllWorkspaces(bool visible, VisibleOnAllWorkspacesOptions? options = null)
     {
+        if (OperatingSystem.IsLinux())
+        {
+            Command(w => X11Window.SetVisibleOnAllWorkspaces((nint)w->get_window_handle(w), visible));
+            return;
+        }
         if (!OperatingSystem.IsMacOS()) return;
         options ??= new VisibleOnAllWorkspacesOptions();
         Command(w =>
@@ -73,7 +78,8 @@ public sealed unsafe partial class BrowserWindow
         });
     }
 
-    /// <summary>Electron's <c>win.isVisibleOnAllWorkspaces()</c>; false off macOS.</summary>
+    /// <summary>Electron's <c>win.isVisibleOnAllWorkspaces()</c>; false on Windows.</summary>
     public bool IsVisibleOnAllWorkspaces()
-        => OperatingSystem.IsMacOS() && Query(w => MacWindow.HasCollectionBehavior((nint)w->get_window_handle(w), MacWindow.CanJoinAllSpaces), false);
+        => OperatingSystem.IsLinux() ? Query(w => X11Window.IsVisibleOnAllWorkspaces((nint)w->get_window_handle(w)), false)
+            : OperatingSystem.IsMacOS() && Query(w => MacWindow.HasCollectionBehavior((nint)w->get_window_handle(w), MacWindow.CanJoinAllSpaces), false);
 }

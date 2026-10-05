@@ -56,7 +56,6 @@ Entries marked _(branch `x`)_ are on that branch and not yet in `main`.
 | W25 | `titleBarStyle: 'hidden'` with `titleBarOverlay` (Windows caption buttons over the page, `getTitleBarOverlay` geometry) | Missing | OS: needs a frameless window, caption buttons drawn over the page and `WM_NCHITTEST` for the drag area | Frameless window plus an overlay view (`W.add_overlay_view`) with min/max/close buttons, after `titleBarStyle` |
 | W26 | `icon` option takes a `NativeImage` or a path | Two options: `Icon` (path) and `IconImage` (`NativeImage`, wins over `Icon`) | Design: a C# property has one type | None |
 | W29 | Windows: `setAlwaysOnTop` levels from `pop-up-menu` up put the window above the taskbar, the lower ones behind it | Always on top at one level; `level` and `relativeLevel` work on macOS only | CEF: `set_always_on_top` has no level; Todo: the taskbar ordering on Windows | Win32 z-order against the taskbar |
-| W43 | `setVisibleOnAllWorkspaces` on Linux puts the window on every workspace | Does nothing on Linux; macOS matches Electron, and Windows has no workspaces, as in Electron | Todo: `_NET_WM_DESKTOP` 0xFFFFFFFF through X11 | Todo |
 
 ## nativeImage
 

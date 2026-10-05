@@ -970,6 +970,24 @@ async Task MacWindowApisAsync()
         w.SetRepresentedFilename("/tmp/x");
         w.SetDocumentEdited(true);
         Check("represented filename and document edited are macOS only", w.GetRepresentedFilename() == "" && !w.IsDocumentEdited());
+        if (OperatingSystem.IsLinux() && File.Exists("/usr/bin/xdotool"))
+        {
+            // The window manager's own view of the window's desktop, read with xdotool.
+            string Desktop()
+            {
+                var xdotool = System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo("/usr/bin/xdotool", $"get_desktop_for_window {w.GetNativeWindowHandle()}") { RedirectStandardOutput = true })!;
+                var output = xdotool.StandardOutput.ReadToEnd().Trim();
+                xdotool.WaitForExit();
+                return output;
+            }
+            var before = Desktop();
+            w.SetVisibleOnAllWorkspaces(true);
+            var all = Eventually(() => Desktop() is "-1" or "4294967295", step) && w.IsVisibleOnAllWorkspaces();
+            var allDesktop = Desktop();
+            w.SetVisibleOnAllWorkspaces(false);
+            Check("SetVisibleOnAllWorkspaces puts the window on every desktop and back on the current one (Linux)",
+                all && Eventually(() => Desktop() == before, step) && !w.IsVisibleOnAllWorkspaces(), $"{before} -> {allDesktop} -> {Desktop()}");
+        }
         w.Destroy();
         return;
     }

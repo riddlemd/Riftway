@@ -19,11 +19,11 @@ Counted from the Checklist at the end: `BaseWindow` and `BrowserWindow` are one 
 |---|---|---|---|---|---|---|---|
 | BaseWindow + BrowserWindow options | 54 | 27 | 2 | 25 | 0 | 50.0% | 51.9% |
 | webPreferences | 46 | 11 | 3 | 25 | 7 | 28.2% | 32.1% |
-| Instance methods | 143 | 69 | 11 | 57 | 6 | 50.4% | 54.4% |
+| Instance methods | 143 | 71 | 9 | 57 | 6 | 51.8% | 55.1% |
 | Instance properties | 24 | 11 | 0 | 13 | 0 | 45.8% | 45.8% |
 | Events | 35 | 14 | 4 | 17 | 0 | 40.0% | 45.7% |
 | Static methods | 6 | 4 | 0 | 1 | 1 | 80.0% | 80.0% |
-| **Total** | 308 | 136 | 20 | 138 | 14 | 46.3% | 49.7% |
+| **Total** | 308 | 138 | 18 | 138 | 14 | 46.9% | 50.0% |
 
 ## Done since the audit
 
@@ -374,8 +374,8 @@ Parameters in brackets are optional in Electron. `webContents` members are in [w
 | `setMenuBarVisibility(visible)` | `SetMenuBarVisibility` | done |  |
 | `isMenuBarVisible()` | `IsMenuBarVisible` | done |  |
 | `isSnapped()` | — | missing |  |
-| `setVisibleOnAllWorkspaces(visible, options)` | `SetVisibleOnAllWorkspaces` | partial | macOS; not Linux yet (W43). |
-| `isVisibleOnAllWorkspaces()` | `IsVisibleOnAllWorkspaces` | partial | macOS (W43). |
+| `setVisibleOnAllWorkspaces(visible, options)` | `SetVisibleOnAllWorkspaces` | done | macOS and Linux; Windows has no workspaces, as in Electron. |
+| `isVisibleOnAllWorkspaces()` | `IsVisibleOnAllWorkspaces` | done |  |
 | `setIgnoreMouseEvents(ignore, options)` | — | missing |  |
 | `setContentProtection(enable)` | — | missing |  |
 | `isContentProtected()` | — | missing |  |
