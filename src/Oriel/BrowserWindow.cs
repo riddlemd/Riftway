@@ -874,6 +874,8 @@ public sealed unsafe partial class BrowserWindow
     public void Close() => Command(w =>
     {
         _closeFromCode = true;
+        // A window with a sheet attached does not close, even once the sheet ends; Electron ends them first.
+        if (OperatingSystem.IsMacOS()) MacWindow.EndAttachedSheets((nint)w->get_window_handle(w));
         w->close(w);
     });
 

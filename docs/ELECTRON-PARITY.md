@@ -109,7 +109,7 @@ Detailed item-by-item status, including `navigationHistory` and `WebFrameMain`: 
 
 | Electron | Oriel | Source | Wave | Status |
 |---|---|---|---|---|
-| `dialog` (file dialogs) | `Dialog` | CEF | M2 | partial: open (files, several files, a directory) and save dialogs, async and sync (see DRIFT.md) |
+| `dialog` (file dialogs) | `Dialog` | OS (macOS) + CEF | M2 | partial: macOS matches (NSOpenPanel/NSSavePanel as Electron: every option, sheets, window-less and Sync; bookmarks on any build, G9); Linux and Windows run CEF's dialog with a window, fewer options and async-only on the UI thread (see DRIFT.md G1–G8) |
 | `dialog` (message boxes, error box, certificate trust) | `Dialog` | OS | M5 | — |
 | `Menu` / `MenuItem` (app menu, context menus) | `Menu` / `MenuItem` | OS + CEF | M5 | partial: application and window menus, popups and context menus, roles, accelerators, `click`'s `KeyboardEvent`; no icons, sublabels or tooltips |
 | `Tray` | `Tray` | OS | M5 | — |
