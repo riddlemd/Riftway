@@ -58,6 +58,24 @@ public sealed unsafe class OrielApp
         return s_current = new OrielApp(name ?? Assembly.GetEntryAssembly()?.GetName().Name ?? "Oriel");
     }
 
+    private string? _appUserModelId;
+
+    /// <summary>Windows: the AppUserModelID that groups the app's taskbar buttons and sends its notifications. Set with
+    /// <see cref="SetAppUserModelId"/>; else the process's explicit id, else Electron's default form
+    /// <c>electron.app.{Name}</c> with "oriel".</summary>
+    public string AppUserModelId => _appUserModelId
+        ?? (OperatingSystem.IsWindows() ? WindowsToast.GetProcessAppUserModelId() : null)
+        ?? DefaultAppUserModelId(Name);
+
+    internal static string DefaultAppUserModelId(string? name) => "oriel.app." + (name ?? Assembly.GetEntryAssembly()?.GetName().Name ?? "Oriel");
+
+    /// <summary>Sets the process's AppUserModelID; Electron's <c>app.setAppUserModelId()</c>. No-op off Windows.</summary>
+    public void SetAppUserModelId(string id)
+    {
+        ArgumentException.ThrowIfNullOrEmpty(id);
+        _appUserModelId = id;
+        if (OperatingSystem.IsWindows()) WindowsToast.SetProcessAppUserModelId(id);
+    }
     /// <summary>Turns on Chromium's sandbox for every child process. Electron's <c>app.enableSandbox()</c>.</summary>
     /// <remarks>Call before <see cref="Run"/>. Linux only so far: macOS and Windows link CEF's sandbox library into
     /// the subprocess exe, which their packaging does not do yet.</remarks>

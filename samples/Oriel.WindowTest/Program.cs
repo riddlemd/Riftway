@@ -200,6 +200,8 @@ async Task RunAsync(BrowserWindow win, BrowserWindow simple)
     await TaskbarAsync(win);
     await WindowsApisAsync();
     await NativeImageAsync();
+    if (OperatingSystem.IsWindows()) await SafeStorageAsync();
+    if (OperatingSystem.IsWindows()) await NotificationAsync();
 
     // Closing cancelled once: the window must survive the first close.
     var closingCount = 0;
@@ -1256,6 +1258,94 @@ async Task NativeImageAsync()
     }
     Directory.Delete(dir, recursive: true);
 }
+// Windows PowerShell 5.1 reads Oriel's work back through .NET Framework and WinRT; stdout is base64 UTF-8.
+static string PowerShell(string script)
+{
+    var psi = new System.Diagnostics.ProcessStartInfo("powershell.exe", "-NoProfile -NonInteractive -EncodedCommand "
+        + Convert.ToBase64String(System.Text.Encoding.Unicode.GetBytes("$ErrorActionPreference='Stop'; $r = & { " + script + " }; [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes([string]$r))")))
+    { RedirectStandardOutput = true, RedirectStandardError = true, UseShellExecute = false, CreateNoWindow = true };
+    using var p = System.Diagnostics.Process.Start(psi)!;
+    var output = p.StandardOutput.ReadToEndAsync();
+    var error = p.StandardError.ReadToEndAsync();
+    if (!p.WaitForExit(30000)) { p.Kill(); return "timeout"; }
+    try { return System.Text.Encoding.UTF8.GetString(Convert.FromBase64String(output.Result.Trim())); }
+    catch (FormatException) { return "error: " + error.Result.Trim(); }
+}
+
+// Read back with .NET Framework's ProtectedData under the same entropy: real DPAPI, both directions.
+async Task SafeStorageAsync()
+{
+    const string secret = "Oriel secret ✓ 日本";
+    const string unprotect = "Add-Type -AssemblyName System.Security; [Text.Encoding]::UTF8.GetString([Security.Cryptography.ProtectedData]::Unprotect([Convert]::FromBase64String('{0}'), [Text.Encoding]::UTF8.GetBytes('Oriel.SafeStorage'), 'CurrentUser'))";
+    Check("SafeStorage.IsEncryptionAvailable", SafeStorage.IsEncryptionAvailable());
+    var encrypted = SafeStorage.EncryptString(secret);
+    var read = PowerShell(string.Format(unprotect, Convert.ToBase64String(encrypted)));
+    Check("EncryptString is DPAPI for this user with Oriel's entropy (ProtectedData.Unprotect)", read == secret, read);
+    var foreign = PowerShell("Add-Type -AssemblyName System.Security; [Convert]::ToBase64String([Security.Cryptography.ProtectedData]::Protect([Text.Encoding]::UTF8.GetBytes('from powershell ✓'), [Text.Encoding]::UTF8.GetBytes('Oriel.SafeStorage'), 'CurrentUser'))");
+    string decrypted;
+    try { decrypted = SafeStorage.DecryptString(Convert.FromBase64String(foreign)); }
+    catch (Exception e) { decrypted = e.GetType().Name + " " + foreign; }
+    Check("DecryptString opens ProtectedData.Protect's output", decrypted == "from powershell ✓", decrypted);
+    var unentropied = PowerShell("Add-Type -AssemblyName System.Security; [Convert]::ToBase64String([Security.Cryptography.ProtectedData]::Protect([Text.Encoding]::UTF8.GetBytes('x'), $null, 'CurrentUser'))");
+    var refused = false;
+    try { SafeStorage.DecryptString(Convert.FromBase64String(unentropied)); }
+    catch (InvalidOperationException) { refused = true; }
+    catch (FormatException) { }
+    Check("DecryptString refuses DPAPI data without Oriel's entropy", refused, unentropied);
+    await Task.CompletedTask;
+}
+
+#pragma warning disable CA1416 // Called only on Windows.
+// Toasts need the AppUserModelID registered; an AppUserModelId key with a DisplayName does what a Start-menu shortcut
+// does. Shown toasts are read back from the Action Center history through Windows PowerShell's WinRT projection.
+async Task NotificationAsync()
+{
+    var id = "Oriel.WindowTest.Toast." + Environment.ProcessId;
+    var key = @"Software\Classes\AppUserModelId\" + id;
+    using (var k = Microsoft.Win32.Registry.CurrentUser.CreateSubKey(key)) k.SetValue("DisplayName", "Oriel WindowTest");
+    const string history = "$null = [Windows.UI.Notifications.ToastNotificationManager,Windows.UI.Notifications,ContentType=WindowsRuntime]; ([Windows.UI.Notifications.ToastNotificationManager]::History.GetHistory('{0}') | ForEach-Object {{ $_.Content.GetXml() }}) -join '|'";
+    try
+    {
+        app.SetAppUserModelId(id);
+        Check("SetAppUserModelId sets the process's explicit AppUserModelID", WindowsToast.GetProcessAppUserModelId() == id && app.AppUserModelId == id, WindowsToast.GetProcessAppUserModelId());
+        Check("Notification.IsSupported", Notification.IsSupported());
+
+        var tag = "Oriel toast " + Guid.NewGuid().ToString("N")[..8];
+        var events = new System.Collections.Concurrent.ConcurrentQueue<string>();
+        var n = new Notification { Title = tag, Body = "Body text", Silent = true, Actions = [new("Open")] };
+        n.Shown += (_, _) => events.Enqueue("shown");
+        n.Closed += (_, r) => events.Enqueue("closed " + r);
+        n.Failed += (_, e) => events.Enqueue("failed " + e);
+        Oriel.Cef.CefThread.InvokeOnUi(() => { n.Show(); return 0; });
+        Check("Show raises Shown", events.Contains("shown"), string.Join(",", events));
+        var shown = "";
+        Check("the toast reaches the Action Center under the app's id, with its title, body and button",
+            Eventually(() => (shown = PowerShell(string.Format(history, id))).Contains(tag) && shown.Contains("Body text") && shown.Contains("content=\"Open\""), step), shown);
+        Oriel.Cef.CefThread.InvokeOnUi(() => { n.Close(); return 0; });
+        Check("Close raises Closed (ApplicationHidden)", Eventually(() => events.Contains("closed ApplicationHidden"), step), string.Join(",", events));
+        Check("Close removes it from the Action Center", Eventually(() => !(shown = PowerShell(string.Format(history, id))).Contains(tag), step), shown);
+        Check("a closed notification is no longer shown", !n.IsShown);
+
+        var bad = new Notification { ToastXml = "<toast><visual>" };
+        var failed = "";
+        bad.Failed += (_, e) => failed = e;
+        Oriel.Cef.CefThread.InvokeOnUi(() => { bad.Show(); return 0; });
+        Check("malformed ToastXml raises Failed and is not shown", failed.Length > 0 && !bad.IsShown, failed);
+
+        var custom = new Notification { ToastXml = $"<toast><visual><binding template=\"ToastGeneric\"><text>{tag} custom</text></binding></visual><audio silent=\"true\"/></toast>" };
+        Oriel.Cef.CefThread.InvokeOnUi(() => { custom.Show(); return 0; });
+        Check("ToastXml is shown as given", Eventually(() => (shown = PowerShell(string.Format(history, id))).Contains(tag + " custom"), step), shown);
+        Oriel.Cef.CefThread.InvokeOnUi(() => { custom.Close(); return 0; });
+        await Task.Delay(500);
+    }
+    finally
+    {
+        PowerShell($"$null = [Windows.UI.Notifications.ToastNotificationManager,Windows.UI.Notifications,ContentType=WindowsRuntime]; [Windows.UI.Notifications.ToastNotificationManager]::History.Clear('{id}')");
+        Microsoft.Win32.Registry.CurrentUser.DeleteSubKeyTree(key, throwOnMissingSubKey: false);
+    }
+}
+#pragma warning restore CA1416
+
 // A 16x16 red PNG, written once to a temp file.
 static string OverlayPng()
 {
