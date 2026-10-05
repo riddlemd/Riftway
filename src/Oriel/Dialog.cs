@@ -161,7 +161,7 @@ public sealed record SaveDialogReturnValue(bool Canceled, string FilePath)
 /// <remarks>On macOS these are AppKit's NSOpenPanel and NSSavePanel, set up as Electron's: a sheet on the window
 /// given, else a free-standing panel. Elsewhere CEF shows its dialogs through a window's browser, so a dialog needs an
 /// open window: the one given, else the focused window, else any. Use after <see cref="OrielApp.Ready"/>, from any thread.</remarks>
-public static unsafe class Dialog
+public static unsafe partial class Dialog
 {
     /// <summary>Asks the user for files or a directory. Electron's <c>dialog.showOpenDialog()</c>.</summary>
     /// <exception cref="InvalidOperationException">Before <see cref="OrielApp.Ready"/>; or, off macOS, no window is open.</exception>

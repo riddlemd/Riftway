@@ -262,6 +262,7 @@ async Task RunAsync(BrowserWindow win, BrowserWindow simple)
     await WebFrameAsync();
     await MenuRolesAsync(win);
     await WebContentsMethodsAsync();
+    await MessageBoxTest.RunAsync(win, Check, step);
 
     // Closing cancelled once: the window must survive the first close.
     var closingCount = 0;
