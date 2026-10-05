@@ -169,6 +169,33 @@ async Task RunAsync()
     diskPopup?.Close();
     diskWin.Close();
 
+    // A session's user agent and languages reach its pages, open ones too; a page's own override wins.
+    var agents = Session.FromPartition("agents");
+    agents.Protocol.Handle("https", _ => ProtocolResponse.Text(Page, "text/html"));
+    var agentWin = new BrowserWindow(new BrowserWindowOptions { Show = false, WebPreferences = new WebPreferences { Session = agents } });
+    await agentWin.LoadUrl(Site);
+    agents.SetUserAgent("SessionAgent/1.0", "fr-FR");
+    await agentWin.LoadUrl(Site + "again");
+    async Task<string?> Nav(BrowserWindow w) => (await w.WebContents.ExecuteJavaScriptAsync("navigator.userAgent + '|' + navigator.language"))?.ToString();
+    var open = await Nav(agentWin);
+    Check("Session.SetUserAgent reaches an open page, with its languages", open == "SessionAgent/1.0|fr-FR", open);
+    Check("Session.GetUserAgent and WebContents.GetUserAgent", agents.GetUserAgent() == "SessionAgent/1.0" && agentWin.WebContents.GetUserAgent() == "SessionAgent/1.0");
+    agentWin.WebContents.SetUserAgent("PageAgent/1.0");
+    await agentWin.LoadUrl(Site + "page");
+    var pageOwn = await Nav(agentWin);
+    agentWin.WebContents.SetUserAgent("");
+    await agentWin.LoadUrl(Site + "cleared");
+    var cleared = await Nav(agentWin);
+    Check("a page's own user agent wins, and clearing it returns to the session's", pageOwn?.StartsWith("PageAgent/1.0|") == true && cleared == "SessionAgent/1.0|fr-FR",
+        $"{pageOwn} / {cleared}");
+    var later = new BrowserWindow(new BrowserWindowOptions { Show = false, WebPreferences = new WebPreferences { Session = agents } });
+    await later.LoadUrl(Site);
+    var laterAgent = await Nav(later);
+    Check("a page opened later in the session starts with its user agent", laterAgent == "SessionAgent/1.0|fr-FR", laterAgent);
+    Check("other sessions keep the app's", defaultSession.GetUserAgent() == app.UserAgentFallback && memory.GetUserAgent() == app.UserAgentFallback);
+    later.Destroy();
+    agentWin.Destroy();
+
     // Proxy: requests go to a local listener posing as the proxy.
     var proxied = Session.FromPartition("proxied");
     using var listener = new TcpListener(IPAddress.Loopback, 0);

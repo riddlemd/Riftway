@@ -39,7 +39,9 @@ public sealed unsafe class WebContents
 
     internal WebContents(string? appPreload, WebPreferences preferences, Session session)
     {
-        _defaultUserAgent = OrielApp.CurrentOrNull?.UserAgentFallback;
+        _defaultUserAgent = session.UserAgentOrNull ?? OrielApp.CurrentOrNull?.UserAgentFallback;
+        _acceptLanguages = session.AcceptLanguages;
+        session.Track(this);
         _preferences = preferences;
         Session = session;
         JsDialog = new JsDialogHandler { SuppressAll = preferences.DisableDialogs };
@@ -602,8 +604,30 @@ public sealed unsafe class WebContents
     private void ApplyUserAgent(string userAgent)
     {
         _userAgent = userAgent;
-        // Emulation's override stays for the DevTools session, across navigations and renderer swaps.
-        _devTools.Send("Emulation.setUserAgentOverride", w => w.WriteString("userAgent", userAgent));
+        SendUserAgent();
+    }
+
+    private string? _acceptLanguages;
+
+    /// <summary>UI thread: the page's session changed its user agent; the page's own override still wins.</summary>
+    internal void OnSessionUserAgent(string userAgent, string? acceptLanguages)
+    {
+        _defaultUserAgent = userAgent;
+        _acceptLanguages = acceptLanguages;
+        SendUserAgent();
+    }
+
+    // The page's override, else its session's, else the app's fallback; CEF started with the fallback.
+    private void SendUserAgent()
+    {
+        var userAgent = _userAgent is { Length: > 0 } own ? own : _defaultUserAgent ?? "";
+        var differs = userAgent != OrielApp.ProcessUserAgent || _acceptLanguages is not null;
+        // Emulation's override stays for the DevTools session, across navigations and renderer swaps; an empty one clears it.
+        _devTools.Send("Emulation.setUserAgentOverride", w =>
+        {
+            w.WriteString("userAgent", differs ? userAgent : "");
+            if (_acceptLanguages is { } languages) w.WriteString("acceptLanguage", languages);
+        });
     }
 
     private void Navigate(string url, PendingLoad? load)
@@ -673,10 +697,8 @@ public sealed unsafe class WebContents
         _devTools.Send("Page.enable");
         // Per-frame DOMContentLoaded for dom-ready.
         _devTools.Send("Page.setLifecycleEventsEnabled", w => w.WriteBoolean("enabled", true));
-        if (_userAgent is { } userAgent) ApplyUserAgent(userAgent);
-        // A fallback changed after start-up applies to pages created since, as Electron's.
-        else if (_defaultUserAgent is { } fallback && fallback != OrielApp.ProcessUserAgent)
-            _devTools.Send("Emulation.setUserAgentOverride", w => w.WriteString("userAgent", fallback));
+        // A session's user agent, or a fallback changed after start-up, applies from the first page, as Electron's.
+        if (_userAgent is not null || _defaultUserAgent != OrielApp.ProcessUserAgent || _acceptLanguages is not null) SendUserAgent();
         _devTools.Send("Runtime.enable");
         // Chrome-style browsers ignore the font sizes in the browser settings; this sets them for this page only.
         if (_preferences.DefaultFontSize is not null || _preferences.DefaultMonospaceFontSize is not null)

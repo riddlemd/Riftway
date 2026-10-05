@@ -156,6 +156,44 @@ public sealed unsafe partial class Session
         return Task.CompletedTask;
     }
 
+    /// <summary>Sets the user agent, and optionally the accepted languages (e.g. <c>en-US,fr</c>), of the session's
+    /// pages, open ones included; a page's own <see cref="WebContents.SetUserAgent"/> still wins. Electron's
+    /// <c>ses.setUserAgent()</c>.</summary>
+    public void SetUserAgent(string userAgent, string? acceptLanguages = null)
+    {
+        ArgumentNullException.ThrowIfNull(userAgent);
+        WebContents[] pages;
+        lock (_pages)
+        {
+            UserAgentOrNull = userAgent;
+            AcceptLanguages = acceptLanguages;
+            pages = [.. _pages.Select(p => p.TryGetTarget(out var page) ? page : null).OfType<WebContents>()];
+        }
+        CefThread.RunOnUi(() =>
+        {
+            foreach (var page in pages) page.OnSessionUserAgent(userAgent, acceptLanguages);
+        });
+    }
+
+    /// <summary>The session's user agent: its own, else the app's fallback. Electron's <c>ses.getUserAgent()</c>.</summary>
+    public string GetUserAgent() => UserAgentOrNull ?? OrielApp.Current.UserAgentFallback;
+
+    internal string? UserAgentOrNull { get; private set; }
+
+    internal string? AcceptLanguages { get; private set; }
+
+    private readonly List<WeakReference<WebContents>> _pages = [];
+
+    /// <summary>A page of this session, for <see cref="SetUserAgent"/>.</summary>
+    internal void Track(WebContents page)
+    {
+        lock (_pages)
+        {
+            _pages.RemoveAll(p => !p.TryGetTarget(out _));
+            _pages.Add(new WeakReference<WebContents>(page));
+        }
+    }
+
     /// <summary>The native context with a reference for the caller.</summary>
     internal cef_request_context_t* AddRefNative()
     {
