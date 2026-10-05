@@ -51,6 +51,7 @@ public sealed unsafe class WebContents
             ? s_preloadRuntime
             : $"{s_preloadRuntime}\n;(() => {{\n{appPreload}\n}})();\n";
         _devTools.EventReceived += OnDevToolsEvent;
+        Debugger = new Debugger(_devTools, () => _ready);
 
         Display = new DisplayHandler { TitleChanged = OnTitleChanged };
         ContextMenuRequests = new ContextMenuHandler(OnContextMenu);
@@ -158,6 +159,9 @@ public sealed unsafe class WebContents
 
     /// <summary>The session the page's cookies, cache and storage belong to. Electron's <c>webContents.session</c>.</summary>
     public Session Session { get; }
+
+    /// <summary>The page's Chrome DevTools Protocol session. Electron's <c>webContents.debugger</c>.</summary>
+    public Debugger Debugger { get; }
 
     /// <summary>The settings this page was created with; a page it opens inherits them.</summary>
     internal WebPreferences Preferences => _preferences;
@@ -650,6 +654,7 @@ public sealed unsafe class WebContents
             _mainFrameId = frame.GetProperty("id").GetString();
             AddFrameTree(result.GetProperty("frameTree"));
             _ready = true;
+            Debugger.OnTargetCreated();
             // A page-opened window starts on its real page, which can commit before the scripts above are registered
             // and would then run without Oriel's runtime or the preload. Reloading keeps window.opener.
             if (_openedByPage && frame.GetProperty("url").GetString() is { Length: > 0 } url && url != "about:blank")
@@ -669,6 +674,7 @@ public sealed unsafe class WebContents
     {
         _destroyed.Cancel();
         _devTools.Detach();
+        Debugger.OnTargetDestroyed();
         NativeObject.Release(_browser);
         _browser = null;
         _ready = false;

@@ -115,6 +115,7 @@ Entries marked _(branch `x`)_ are on that branch and not yet in `main`.
 | C7 | `sendInputEvent` wheel, `mouseEnter`/`mouseLeave`/`contextMenu` types | Keyboard and mouse down/up/move only | Todo | DevTools `Input.dispatchMouseEvent` `mouseWheel` |
 | C8 | `context-menu` params `frame`, `linkText`, `altText`, `selectionRect`, `menuSourceType`, `formControlType`, `referrerPolicy`, `suggestedFilename`, `selectionStartOffset` | Missing | CEF: `cef_context_menu_params_t` lacks them; `frame`: CEF names the frame by its own identifier, which no DevTools frame id matches (WebFrameMain is built on DevTools) | Patch; or read the element under the point with JS for text/alt; Module for `frame` |
 | C10 | `loadFile(path, { query, search, hash })` | `LoadFile(path, query, hash)`; no `search` | Todo: not yet implemented | Append the raw string as the URL's query |
+| C11 | `webContents.debugger` is its own protocol client: it sees only the domains it enables, and cannot break other clients | Shares the protocol session Oriel drives the page with: `Message` also carries `Page` and `Runtime` events Oriel enabled, and disabling those domains breaks Oriel's IPC, frames and `ExecuteJavaScriptAsync` | CEF: one DevTools session per browser, with message ids shared by every sender | A child session through `Target.attachToTarget`, if Chromium allows a page session to attach to itself; else Patch |
 
 ## Menu / MenuItem
 

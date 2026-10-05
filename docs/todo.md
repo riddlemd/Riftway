@@ -30,10 +30,10 @@ Cross-platform work. Platform-specific items: [linux-todo.md](linux-todo.md), [w
 - [x] `NavigationHistory` (`WebContents.NavigationHistory`)
 - [x] `WebFrameMain` (`WebContents.MainFrame`, IPC `SenderFrame`)
 - [x] Core `Session` (`Session`, `Cookies`, partitions; gaps DRIFT E1-E11) and `NativeImage` (gaps DRIFT B1-B5)
-- [ ] Remaining M2 modules: `BaseWindow`, `View`, `WebContentsView`,
-      `Debugger`, command line
+- [x] `Debugger` (`WebContents.Debugger`; shares Oriel's protocol session, DRIFT C11)
+- [ ] Remaining M2 modules: `BaseWindow`, `View`, `WebContentsView`, command line
 - [x] `window.open` handling: `SetWindowOpenHandler`, `DidCreateWindow` (branch `window-open`)
-- [ ] Menus: Alt+letter mnemonics and the Alt toggle never fire (DRIFT W19): handle Alt in a `cef_keyboard_handler_t`
+- [x] Menus: Alt+letter mnemonics and the Alt toggle (was DRIFT W19)
 - [x] macOS: `Width`/`Height` gave a window a title bar taller than asked (was DRIFT W18)
 - [x] `OrielApp.Quit()` from any thread (was DRIFT A4)
 - [ ] `Protocol`: `AllowServiceWorkers` and `CodeCache` privileges throw `NotSupportedException`

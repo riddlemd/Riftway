@@ -200,6 +200,7 @@ async Task RunAsync(BrowserWindow win, BrowserWindow simple)
     await TaskbarAsync(win);
     await WindowsApisAsync();
     await NativeImageAsync();
+    await DebuggerAsync();
 
     // Closing cancelled once: the window must survive the first close.
     var closingCount = 0;
@@ -1311,6 +1312,113 @@ async Task LinuxTaskbarAsync()
     await Task.Delay(300);
 }
 
+async Task DebuggerAsync()
+{
+    var page = Path.Combine(Path.GetTempPath(), "oriel-debugger-test.html");
+    File.WriteAllText(page, "<!doctype html><title>debugger</title><p>debugger</p>");
+
+    var w = new BrowserWindow(new BrowserWindowOptions { Show = false });
+    var debug = w.WebContents.Debugger;
+    var unattached = debug.SendCommandAsync("Runtime.evaluate");
+    Check("Debugger: SendCommand needs Attach; the task fails, as Electron's promise rejects",
+        unattached.Exception?.InnerException is InvalidOperationException && !debug.IsAttached(), unattached.Status);
+    Check("Debugger: an unknown protocol version is refused",
+        Record.Exception(() => debug.Attach("9.9")) is ArgumentException && !debug.IsAttached());
+    debug.Attach("1.3");
+    var early = debug.SendCommandAsync("Runtime.evaluate", new System.Text.Json.Nodes.JsonObject { ["expression"] = "6 * 7", ["returnByValue"] = true });
+    Check("Debugger: Attach; a second Attach is refused",
+        debug.IsAttached() && Record.Exception(() => debug.Attach()) is InvalidOperationException);
+    var earlyDone = await Task.WhenAny(early, Task.Delay(step)) == early && early.IsCompletedSuccessfully;
+    Check("Debugger: a command sent right after the window is created returns its result",
+        earlyDone && early.Result?["result"]?["value"]?.GetValue<int>() == 42, earlyDone ? early.Result?.ToJsonString() : early.Status);
+    await w.WebContents.LoadFile(page);
+
+    // Errors and events.
+    var failed = await Record.ExceptionAsync(() => debug.SendCommandAsync("Nope.nothing"));
+    Check("Debugger: a protocol error fails the command", failed is DebuggerCommandException { Method: "Nope.nothing" }, failed?.Message);
+    var requests = new System.Collections.Concurrent.ConcurrentQueue<string>();
+    debug.Message += (_, e) => { if (e.Method == "Network.requestWillBeSent") requests.Enqueue(e.Params?["request"]?["url"]?.ToString() ?? ""); };
+    await debug.SendCommandAsync("Network.enable");
+    await w.WebContents.ExecuteJavaScriptAsync("location.reload(); 1");
+    Check("Debugger: Message carries the events of a domain it enabled",
+        Eventually(() => requests.Any(u => u.EndsWith("oriel-debugger-test.html")), step), string.Join(",", requests));
+
+    // A popup's page has no browser yet when DidCreateWindow is raised: the command waits for it.
+    Task<System.Text.Json.Nodes.JsonNode?>? popupCommand = null;
+    BrowserWindow? popup = null;
+    void onPopup(object? _, DidCreateWindowEventArgs e)
+    {
+        popup = e.Window;
+        e.Window.WebContents.Debugger.Attach();
+        popupCommand = e.Window.WebContents.Debugger.SendCommandAsync("Runtime.evaluate",
+            new System.Text.Json.Nodes.JsonObject { ["expression"] = "'popup:' + (1 + 1)", ["returnByValue"] = true });
+    }
+    w.WebContents.DidCreateWindow += onPopup;
+    await w.WebContents.ExecuteJavaScriptAsync("window.open('about:blank'); 1", userGesture: true);
+    var popupDone = Eventually(() => popupCommand is { IsCompleted: true }, step);
+    Check("Debugger: a command sent before a popup's page exists returns its result",
+        popupDone && popupCommand!.IsCompletedSuccessfully && popupCommand.Result?["result"]?["value"]?.ToString() == "popup:2",
+        popupCommand?.Status);
+    w.WebContents.DidCreateWindow -= onPopup;
+    popup?.Destroy();
+
+    // A child session (a cross-site iframe in its own process): its events reach Message with their session.
+    var sites = Session.FromPartition("debugger-sites");
+    sites.Protocol.Handle("https", request => ProtocolResponse.Text(new Uri(request.Url).Host == "a.test"
+        ? "<!doctype html><title>a</title><iframe src='https://b.test/frame'></iframe>"
+        : "<!doctype html><title>b</title><p>b", "text/html"));
+    var host = new BrowserWindow(new BrowserWindowOptions { Show = false, WebPreferences = new WebPreferences { Partition = "debugger-sites" } });
+    await host.WebContents.LoadUrl("https://a.test/");
+    var hostDebug = host.WebContents.Debugger;
+    hostDebug.Attach();
+    var childSessions = new System.Collections.Concurrent.ConcurrentQueue<string>();
+    var childEvents = new System.Collections.Concurrent.ConcurrentQueue<string>();
+    hostDebug.Message += (_, e) =>
+    {
+        if (e.Method == "Target.attachedToTarget" && e.Params?["sessionId"]?.ToString() is { } sid) childSessions.Enqueue(sid);
+        if (e.SessionId is not null) childEvents.Enqueue(e.Method);
+    };
+    await hostDebug.SendCommandAsync("Target.setAutoAttach", new System.Text.Json.Nodes.JsonObject
+    {
+        ["autoAttach"] = true, ["waitForDebuggerOnStart"] = false, ["flatten"] = true,
+    });
+    var attached = Eventually(() => !childSessions.IsEmpty, step);
+    if (attached && childSessions.TryPeek(out var child))
+    {
+        await hostDebug.SendCommandAsync("Runtime.enable", null, child);
+        await hostDebug.SendCommandAsync("Page.enable", null, child);
+    }
+    Check("Debugger: a child session's events reach Message with their session id",
+        attached && Eventually(() => childEvents.Contains("Runtime.executionContextCreated"), step), string.Join(",", childEvents.Distinct()));
+    hostDebug.Detach();
+    host.Destroy();
+
+    // Detach: no more events, and Detach again is harmless.
+    debug.Detach();
+    debug.Detach();
+    var before = requests.Count;
+    await w.WebContents.ExecuteJavaScriptAsync("location.reload(); 1");
+    await Task.Delay(1500);
+    Check("Debugger: Detach stops Message", !debug.IsAttached() && requests.Count == before, $"{before} -> {requests.Count}");
+
+    // Closing the page detaches with a reason and fails what is still waiting.
+    string? reason = null;
+    debug.Detached += (_, e) => reason = e.Reason;
+    debug.Attach();
+    var hanging = debug.SendCommandAsync("Runtime.evaluate", new System.Text.Json.Nodes.JsonObject
+    {
+        ["expression"] = "new Promise(() => {})", ["awaitPromise"] = true,
+    });
+    await Task.Delay(300);
+    w.Destroy();
+    var hangingDone = await Task.WhenAny(hanging, Task.Delay(step)) == hanging;
+    Check("Debugger: closing the page raises Detached and fails pending commands",
+        Eventually(() => reason == "target closed", step) && !debug.IsAttached() && hangingDone && hanging.IsFaulted,
+        $"{reason} {hanging.Status}");
+    File.Delete(page);
+    await Task.Delay(300);
+}
+
 async Task FramesAsync()
 {
     var dir = Directory.CreateTempSubdirectory("oriel-frames-").FullName;
@@ -1551,4 +1659,19 @@ static unsafe class LinuxX11
     [System.Runtime.InteropServices.DllImport(Lib)]
     private static extern int XGetWindowProperty(nint display, nint window, nint property, nint offset, nint length, int delete, nint type,
         out nint actualType, out int actualFormat, out nuint count, out nuint bytesAfter, out nint* data);
+}
+
+static class Record
+{
+    internal static Exception? Exception(Action act)
+    {
+        try { act(); return null; }
+        catch (Exception e) { return e; }
+    }
+
+    internal static async Task<Exception?> ExceptionAsync(Func<Task> act)
+    {
+        try { await act(); return null; }
+        catch (Exception e) { return e; }
+    }
 }
