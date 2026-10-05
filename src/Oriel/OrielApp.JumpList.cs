@@ -63,7 +63,7 @@ public sealed record JumpListCategory
     /// <summary>What the category holds.</summary>
     public JumpListCategoryType Type { get; init; }
 
-    /// <summary>The heading of a <see cref="JumpListCategoryType.Custom"/> category; required there.</summary>
+    /// <summary>The heading of a <see cref="JumpListCategoryType.Custom"/> category; must not be empty when set.</summary>
     public string? Name { get; init; }
 
     /// <summary>The items of a Tasks or Custom category; required for those, ignored for the others.</summary>
@@ -107,7 +107,7 @@ public sealed record JumpListSettings
     /// <summary>How many items the jump list shows at least; Windows' default is 10.</summary>
     public int MinItems { get; init; }
 
-    /// <summary>Items the user removed from custom categories; adding them again fails, so they are skipped.</summary>
+    /// <summary>Items the user removed from the jump list; the shell drops a custom category that adds one again.</summary>
     public IReadOnlyList<JumpListItem> RemovedItems { get; init; } = [];
 }
 
@@ -159,11 +159,11 @@ public sealed partial class OrielApp
         return ApplyUserTasks(backend, tasks);
     }
 
-    /// <summary>Replaces the whole jump list; null or empty restores the shell's default. Electron's
+    /// <summary>Replaces the whole jump list; null deletes it, restoring the shell's default. Electron's
     /// <c>app.setJumpList()</c>: returns <c>ok</c>, <c>error</c>, <c>invalidSeparatorError</c>,
     /// <c>fileTypeRegistrationError</c> or <c>customCategoryAccessDeniedError</c>; always <c>error</c> on other OSes.</summary>
-    /// <remarks>Commits what it can even when a category fails; the result names the first non-generic failure.
-    /// Items in <see cref="JumpListSettings.RemovedItems"/> are skipped.</remarks>
+    /// <remarks>Commits what it can even when a category fails; the result names the first non-generic failure. An
+    /// empty list commits an empty transaction.</remarks>
     /// <exception cref="ArgumentException">A category or item lacks a required field: Electron's <c>argumentError</c>.</exception>
     public string SetJumpList(IReadOnlyList<JumpListCategory>? categories)
     {
@@ -177,7 +177,8 @@ public sealed partial class OrielApp
     public JumpListSettings GetJumpListSettings()
     {
         using var backend = CreateJumpListBackend();
-        return backend is null ? throw new PlatformNotSupportedException("Jump lists exist only on Windows.") : ReadJumpListSettings(backend);
+        if (backend is not null) return ReadJumpListSettings(backend);
+        return OperatingSystem.IsWindows() ? new JumpListSettings { MinItems = 10 } : throw new PlatformNotSupportedException("Jump lists exist only on Windows.");
     }
 
     internal static IJumpListBackend? CreateJumpListBackend() => OperatingSystem.IsWindows() ? WindowsJumpListBackend.Create() : null;
@@ -214,11 +215,10 @@ public sealed partial class OrielApp
     {
         if (categories is not null) ValidateJumpList(categories);
         if (backend is null) return JumpListResultText(JumpListResult.Error);
-        if (categories is null || categories.Count == 0)
+        if (categories is null)
             return JumpListResultText(backend.Delete() ? JumpListResult.Ok : JumpListResult.Error);
 
-        var removed = new List<JumpListItem>();
-        if (!backend.Begin(out _, removed)) return JumpListResultText(JumpListResult.Error);
+        if (!backend.Begin(out _, [])) return JumpListResultText(JumpListResult.Error);
         var result = JumpListResult.Ok;
         foreach (var category in categories)
         {
@@ -226,7 +226,7 @@ public sealed partial class OrielApp
             {
                 JumpListCategoryType.Frequent or JumpListCategoryType.Recent =>
                     backend.AppendKnownCategory(category.Type) < 0 ? JumpListResult.Error : JumpListResult.Ok,
-                _ => AppendCategory(backend, category, [.. category.Items!.Where(i => !IsRemoved(i, removed))]),
+                _ => AppendCategory(backend, category, category.Items!),
             };
             // Only one code can be returned, so the first specific one wins over a generic error.
             if (result is JumpListResult.Ok or JumpListResult.Error && latest != JumpListResult.Ok) result = latest;
@@ -245,21 +245,20 @@ public sealed partial class OrielApp
     }
 
     /// <summary>The fields Electron's converters require; a missing one throws as Electron's <c>argumentError</c> does.</summary>
-    /// <remarks>A Custom category with no name is rejected too, where Electron would hand the shell an empty name.</remarks>
     internal static void ValidateJumpList(IReadOnlyList<JumpListCategory> categories)
     {
         foreach (var category in categories)
         {
-            if (category.Name is "" || category.Type == JumpListCategoryType.Custom && category.Name is null)
-                throw new ArgumentException("A custom category needs a non-empty name.", nameof(categories));
+            if (category.Name is "")
+                throw new ArgumentException("A category name must not be empty.", nameof(categories));
             if (category.Type is not (JumpListCategoryType.Tasks or JumpListCategoryType.Custom)) continue;
             if (category.Items is null)
                 throw new ArgumentException($"A {category.Type} category needs items.", nameof(categories));
             foreach (var item in category.Items)
             {
-                if (item.Type == JumpListItemType.Task && (string.IsNullOrEmpty(item.Program) || item.Title is null))
+                if (item.Type == JumpListItemType.Task && (item.Program is null || item.Title is null))
                     throw new ArgumentException("A task needs a program and a title.", nameof(categories));
-                if (item.Type == JumpListItemType.File && string.IsNullOrEmpty(item.Path))
+                if (item.Type == JumpListItemType.File && item.Path is null)
                     throw new ArgumentException("A file item needs a path.", nameof(categories));
             }
         }
@@ -298,7 +297,7 @@ public sealed partial class OrielApp
             if (backend.AddUserTasks(collection) < 0 && result == JumpListResult.Ok) result = JumpListResult.Error;
             return result;
         }
-        var hr = backend.AppendCategory(category.Name!, collection);
+        var hr = backend.AppendCategory(category.Name ?? "", collection);
         if (hr >= 0) return result;
         return hr switch
         {
@@ -307,15 +306,6 @@ public sealed partial class OrielApp
             _ => result == JumpListResult.Ok ? JumpListResult.Error : result,
         };
     }
-
-    /// <summary>Whether the user removed <paramref name="item"/>: a file by path, a task by program and arguments.</summary>
-    internal static bool IsRemoved(JumpListItem item, IReadOnlyList<JumpListItem> removed) => item.Type switch
-    {
-        JumpListItemType.File => removed.Any(r => r.Type == JumpListItemType.File && string.Equals(r.Path, item.Path, StringComparison.OrdinalIgnoreCase)),
-        JumpListItemType.Task => removed.Any(r => r.Type == JumpListItemType.Task
-            && string.Equals(r.Program, item.Program, StringComparison.OrdinalIgnoreCase) && r.Args == item.Args),
-        _ => false,
-    };
 
     /// <summary>Electron's string for <paramref name="result"/>.</summary>
     internal static string JumpListResultText(JumpListResult result) => result switch
@@ -343,7 +333,7 @@ public sealed partial class OrielApp
         };
 }
 
-/// <summary>The jump list of the process's explicit AppUserModelID, or of the shell's default id for it.</summary>
+/// <summary>The jump list of the AppUserModelID Electron's <c>GetAppUserModelID</c> gives.</summary>
 [SupportedOSPlatform("windows")]
 internal sealed class WindowsJumpListBackend : IJumpListBackend
 {
@@ -357,7 +347,7 @@ internal sealed class WindowsJumpListBackend : IJumpListBackend
     public static WindowsJumpListBackend? Create()
     {
         var uninitialize = WindowsJumpList.InitializeCom();
-        var appId = WindowsJumpList.ExplicitAppUserModelId();
+        var appId = WindowsAppRegistry.AppUserModelId();
         var list = WindowsJumpList.CreateDestinationList(appId);
         if (list != 0) return new WindowsJumpListBackend(list, appId, uninitialize);
         if (uninitialize) WindowsJumpList.UninitializeCom();

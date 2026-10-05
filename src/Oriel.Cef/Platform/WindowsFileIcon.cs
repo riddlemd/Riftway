@@ -3,26 +3,90 @@ using System.Runtime.Versioning;
 
 namespace Oriel.Cef.Platform;
 
-/// <summary>The shell's icon for a file, as Chromium's <c>IconLoader</c> asks for it.</summary>
+/// <summary>File icons as Chromium's <c>IconLoader</c> (<c>icon_loader_win.cc</c>) and <c>UtilReadIcon</c> read them.</summary>
 [SupportedOSPlatform("windows")]
 public static unsafe class WindowsFileIcon
 {
     private const uint ShgfiIcon = 0x100, ShgfiSmallIcon = 0x1, ShgfiUseFileAttributes = 0x10;
     private const uint FileAttributeNormal = 0x80;
+    private const uint GenericRead = 0x80000000;
+    private const uint FileShareAll = 0x7;
+    private const uint OpenExisting = 3;
+    private const uint PageReadonly = 0x02, SecImageNoExecute = 0x11000000;
+    private const uint FileMapRead = 0x4;
+    private const int RtGroupIcon = 14, ImageIcon = 1, LogPixelsX = 88;
 
-    /// <summary>The icon for <paramref name="query"/>, 16 px when <paramref name="small"/> else 32 px, as premultiplied
-    /// BGRA top row first; null if the shell has none. With <paramref name="byType"/> the query is an extension and the
-    /// file is not read.</summary>
-    public static (byte[] Bgra, int Width, int Height)? Load(string query, bool small, bool byType)
+    /// <summary>Chromium's <c>GetIconForFileExtension</c>: the shell's icon for the type <paramref name="extension"/>
+    /// (which may be empty) without reading any file, the system small icon when <paramref name="small"/> else the large
+    /// one, as premultiplied BGRA top row first; null if the shell has none.</summary>
+    public static (byte[] Bgra, int Width, int Height)? LoadForExtension(string extension, bool small)
     {
         CoInitializeEx(null, 0 /* COINIT_MULTITHREADED */);
         FileInfo info;
-        var flags = ShgfiIcon | (small ? ShgfiSmallIcon : 0) | (byType ? ShgfiUseFileAttributes : 0);
         nint ok;
-        fixed (char* q = query) ok = SHGetFileInfoW(q, byType ? FileAttributeNormal : 0, &info, (uint)sizeof(FileInfo), flags);
+        fixed (char* q = extension)
+            ok = SHGetFileInfoW(q, FileAttributeNormal, &info, (uint)sizeof(FileInfo), ShgfiIcon | (small ? ShgfiSmallIcon : 0) | ShgfiUseFileAttributes);
         if (ok == 0 || info.Icon == 0) return null;
         try { return Pixels(info.Icon); }
         finally { DestroyIcon(info.Icon); }
+    }
+
+    /// <summary>Chromium's <c>UtilReadIcon</c>: maps <paramref name="path"/> as an executable image and loads its first
+    /// <c>RT_GROUP_ICON</c> at <paramref name="size"/> pixels square. Null when the file cannot be opened, is not a PE image
+    /// (an .ico file is not) or has no icon.</summary>
+    public static (byte[] Bgra, int Width, int Height)? LoadFromFile(string path, int size)
+    {
+        nint file;
+        fixed (char* p = path) file = CreateFileW(p, GenericRead, FileShareAll, null, OpenExisting, 0, 0);
+        if (file == -1) return null;
+        try
+        {
+            var mapping = CreateFileMappingW(file, null, PageReadonly | SecImageNoExecute, 0, 0, null);
+            if (mapping == 0) return null;
+            try
+            {
+                var view = MapViewOfFile(mapping, FileMapRead, 0, 0, 0);
+                if (view is null) return null;
+                try { return FirstIcon((nint)view, size); }
+                finally { UnmapViewOfFile(view); }
+            }
+            finally { CloseHandle(mapping); }
+        }
+        finally { CloseHandle(file); }
+    }
+
+    /// <summary><c>display::win::GetDPIScale()</c> without a forced scale: the system DPI over 96.</summary>
+    public static float SystemDpiScale()
+    {
+        var dc = GetDC(0);
+        try { return GetDeviceCaps(dc, LogPixelsX) / 96f; }
+        finally { ReleaseDC(0, dc); }
+    }
+
+    private static (byte[] Bgra, int Width, int Height)? FirstIcon(nint module, int size)
+    {
+        nint id = 0;
+        // The callback stops at the first name, so EnumResourceNamesW reports failure even when it found one.
+        EnumResourceNamesW(module, (char*)RtGroupIcon, &TakeFirstName, (nint)(&id));
+        try
+        {
+            var icon = LoadImageW(module, (char*)id, ImageIcon, size, size, 0 /* LR_DEFAULTCOLOR */);
+            if (icon == 0) return null;
+            try { return Pixels(icon); }
+            finally { DestroyIcon(icon); }
+        }
+        finally
+        {
+            if ((nuint)id >> 16 != 0) Marshal.FreeHGlobal(id);
+        }
+    }
+
+    [UnmanagedCallersOnly]
+    private static int TakeFirstName(nint module, char* type, char* name, nint param)
+    {
+        // A name is either an integer id (IS_INTRESOURCE) or a string that only lives during the callback.
+        *(nint*)param = (nuint)name >> 16 == 0 ? (nint)name : Marshal.StringToHGlobalUni(new string(name));
+        return 0;
     }
 
     private static (byte[] Bgra, int Width, int Height)? Pixels(nint icon)
@@ -126,6 +190,14 @@ public static unsafe class WindowsFileIcon
     [DllImport("gdi32.dll")] private static extern int DeleteObject(nint obj);
     [DllImport("user32.dll")] private static extern nint GetDC(nint hwnd);
     [DllImport("user32.dll")] private static extern int ReleaseDC(nint hwnd, nint dc);
+    [DllImport("gdi32.dll")] private static extern int GetDeviceCaps(nint dc, int index);
+    [DllImport("kernel32.dll")] private static extern nint CreateFileW(char* name, uint access, uint share, void* security, uint disposition, uint flags, nint template);
+    [DllImport("kernel32.dll")] private static extern nint CreateFileMappingW(nint file, void* security, uint protect, uint sizeHigh, uint sizeLow, char* name);
+    [DllImport("kernel32.dll")] private static extern void* MapViewOfFile(nint mapping, uint access, uint offsetHigh, uint offsetLow, nuint bytes);
+    [DllImport("kernel32.dll")] private static extern int UnmapViewOfFile(void* view);
+    [DllImport("kernel32.dll")] private static extern int CloseHandle(nint handle);
+    [DllImport("kernel32.dll")] private static extern int EnumResourceNamesW(nint module, char* type, delegate* unmanaged<nint, char*, char*, nint, int> callback, nint param);
+    [DllImport("user32.dll")] private static extern nint LoadImageW(nint instance, char* name, uint type, int width, int height, uint flags);
 }
 
 /// <summary>Pixel arithmetic for icons, kept apart so it is testable on every OS.</summary>

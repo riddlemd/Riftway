@@ -108,7 +108,9 @@ public sealed class JumpListTests
     {
         public List<string> Added { get; } = [];
         public void Add(string path) => Added.Add(path);
-        public void Clear() { }
+        public int Cleared { get; private set; }
+        public void Clear() => Cleared++;
+        public IReadOnlyList<string> List() => Added;
     }
 
     private static JumpListItem Task(string title, string description = "") =>
@@ -141,11 +143,11 @@ public sealed class JumpListTests
     }
 
     [Fact]
-    public void EmptyCategoriesDeleteTheList()
+    public void EmptyCategoriesCommitAnEmptyTransaction()
     {
         var backend = new FakeBackend();
         Assert.Equal("ok", OrielApp.ApplyJumpList(backend, []));
-        Assert.Equal(["delete"], backend.Calls);
+        Assert.Equal(["begin", "commit"], backend.Calls);
     }
 
     [Fact]
@@ -255,15 +257,31 @@ public sealed class JumpListTests
     }
 
     [Fact]
-    public void RemovedItemsAreSkipped()
+    public void RemovedItemsAreAddedAgain()
     {
         var backend = new FakeBackend();
         backend.Removed.Add(File(@"C:\GONE.txt"));
         backend.Removed.Add(Task("removed") with { Args = "--x" });
         var result = OrielApp.ApplyJumpList(backend,
-            [Custom("C", File(@"c:\gone.txt"), File(@"C:\kept.txt"), Task("removed") with { Args = "--x" }, Task("other args") with { Args = "--y" })]);
+            [Custom("C", File(@"c:\gone.txt"), File(@"C:\kept.txt"), Task("removed") with { Args = "--x" })]);
         Assert.Equal("ok", result);
-        Assert.Contains(@"C[file:C:\kept.txt,task:other args]", backend.Calls);
+        Assert.Contains(@"C[file:c:\gone.txt,file:C:\kept.txt,task:removed]", backend.Calls);
+    }
+
+    [Fact]
+    public void ACustomCategoryWithoutANameReachesTheShellWithAnEmptyName()
+    {
+        var backend = new FakeBackend();
+        Assert.Equal("ok", OrielApp.ApplyJumpList(backend, [new JumpListCategory { Type = JumpListCategoryType.Custom, Items = [File(@"C:\a.txt")] }]));
+        Assert.Contains(@"[file:C:\a.txt]", backend.Calls);
+    }
+
+    [Fact]
+    public void EmptyProgramAndPathAreAcceptedAsInElectron()
+    {
+        var backend = new FakeBackend();
+        Assert.Equal("ok", OrielApp.ApplyJumpList(backend, [Custom("C", Task("t") with { Program = "" }, File(""))]));
+        Assert.Contains("C[task:t,file:]", backend.Calls);
     }
 
     [Fact]
@@ -278,7 +296,7 @@ public sealed class JumpListTests
     public static TheoryData<JumpListCategory> InvalidCategories => new()
     {
         Custom("", Task("a")),
-        new JumpListCategory { Type = JumpListCategoryType.Custom, Items = [Task("a")] },
+        new JumpListCategory { Type = JumpListCategoryType.Tasks, Name = "", Items = [Task("a")] },
         new JumpListCategory { Type = JumpListCategoryType.Tasks },
         new JumpListCategory { Type = JumpListCategoryType.Custom, Name = "C" },
         Tasks(Task("a") with { Title = null }),
@@ -381,12 +399,13 @@ public sealed class JumpListTests
     }
 
     [Fact]
-    public void RecentDocumentNeedsAPath()
+    public void RecentDocumentPassesAnyPathThroughAndOnlyRejectsNull()
     {
         var recent = new FakeRecent();
-        Assert.Throws<ArgumentException>(() => OrielApp.AddRecentDocument(recent, ""));
+        Assert.Throws<ArgumentNullException>(() => OrielApp.AddRecentDocument(recent, null!));
+        OrielApp.AddRecentDocument(recent, "");
         OrielApp.AddRecentDocument(recent, @"C:\doc.txt");
-        Assert.Equal([@"C:\doc.txt"], recent.Added);
+        Assert.Equal(["", @"C:\doc.txt"], recent.Added);
         OrielApp.AddRecentDocument(null, @"C:\doc.txt");
     }
 
@@ -496,5 +515,31 @@ public sealed class JumpListTests
         using var backend = OrielApp.CreateJumpListBackend();
         Assert.NotNull(backend);
         Assert.True(OrielApp.ReadJumpListSettings(backend).MinItems > 0);
+    }
+
+    // Written with WScript.Shell, so the read-back does not share Oriel's IShellLink code.
+    [WindowsOnlyFact]
+    public void RealRecentDocumentsListTheTargetsOfTheRecentFoldersShortcuts()
+    {
+        if (!OperatingSystem.IsWindows()) return;
+        var target = Path.Combine(Path.GetTempPath(), "oriel-recent-" + Guid.NewGuid().ToString("N") + ".txt");
+        var link = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.Recent), Path.GetFileName(target) + ".lnk");
+        System.IO.File.WriteAllText(target, "x");
+        try
+        {
+            dynamic shell = Activator.CreateInstance(Type.GetTypeFromProgID("WScript.Shell")!)!;
+            dynamic shortcut = shell.CreateShortcut(link);
+            shortcut.TargetPath = target;
+            shortcut.Save();
+
+            var documents = OrielApp.CreateRecentDocumentsBackend()!.List();
+
+            Assert.Single(documents, d => string.Equals(d, target, StringComparison.OrdinalIgnoreCase));
+        }
+        finally
+        {
+            System.IO.File.Delete(link);
+            System.IO.File.Delete(target);
+        }
     }
 }

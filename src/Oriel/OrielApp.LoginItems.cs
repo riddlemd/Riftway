@@ -8,7 +8,7 @@ public sealed record LoginItemSettings
     /// <summary>Launch the app when the user logs in.</summary>
     public bool OpenAtLogin { get; init; }
 
-    /// <summary>The executable to launch; defaults to the running process.</summary>
+    /// <summary>The executable to launch; null or empty is the running process.</summary>
     public string? Path { get; init; }
 
     /// <summary>Arguments for the launch.</summary>
@@ -17,7 +17,7 @@ public sealed record LoginItemSettings
     /// <summary>Whether the entry is switched on in Task Manager's Startup tab.</summary>
     public bool Enabled { get; init; } = true;
 
-    /// <summary>The registry value's name; defaults to the app's name.</summary>
+    /// <summary>The registry value's name; null or empty is the AppUserModelID.</summary>
     public string? Name { get; init; }
 
     /// <summary>Launch hidden. macOS only; ignored on Windows.</summary>
@@ -27,39 +27,43 @@ public sealed record LoginItemSettings
 /// <summary>Which executable <see cref="OrielApp.GetLoginItemSettings"/> asks about.</summary>
 public sealed record LoginItemQuery
 {
-    /// <summary>The executable; defaults to the running process.</summary>
+    /// <summary>The executable; null or empty is the running process.</summary>
     public string? Path { get; init; }
 
-    /// <summary>The arguments the entry must carry.</summary>
+    /// <summary>The arguments the entry must carry for <see cref="LoginItemStatus.OpenAtLogin"/>.</summary>
     public IReadOnlyList<string>? Args { get; init; }
 }
 
 /// <summary>One login entry for the queried executable.</summary>
 /// <param name="Name">The registry value's name.</param>
 /// <param name="Path">The executable.</param>
-/// <param name="Args">Its arguments.</param>
-/// <param name="Scope">Always <c>user</c> on Windows.</param>
+/// <param name="Args">Its arguments, without switches (<c>--x</c>, <c>-x</c>, <c>/x</c>), as Chromium's
+/// <c>CommandLine::GetArgs</c> reports them.</param>
+/// <param name="Scope"><c>user</c> (<c>HKCU</c>) or <c>machine</c> (<c>HKLM</c>).</param>
 /// <param name="Enabled">Whether Task Manager has it switched on.</param>
 public sealed record LoginItemLaunchItem(string Name, string Path, IReadOnlyList<string> Args, string Scope, bool Enabled);
 
 /// <summary>The login-item state <see cref="OrielApp.GetLoginItemSettings"/> reads.</summary>
 public sealed record LoginItemStatus
 {
-    /// <summary>An entry for the queried path and args exists.</summary>
+    /// <summary>The <c>Run</c> value named by the AppUserModelID is the command for the queried path and args.</summary>
     public bool OpenAtLogin { get; init; }
 
-    /// <summary>That entry exists and is enabled, so the executable runs at login.</summary>
+    /// <summary>Whether the app was launched at login; always false on Windows, as in Electron.</summary>
+    public bool WasOpenedAtLogin { get; init; }
+
+    /// <summary>Some entry in <see cref="LaunchItems"/> is enabled, whatever its arguments.</summary>
     public bool ExecutableWillLaunchAtLogin { get; init; }
 
-    /// <summary>Every entry whose executable is the queried path.</summary>
+    /// <summary>Every <c>HKCU</c> then <c>HKLM</c> <c>Run</c> entry whose program is the queried path, ignoring case.</summary>
     public IReadOnlyList<LoginItemLaunchItem> LaunchItems { get; init; } = [];
 }
 
 public sealed unsafe partial class OrielApp
 {
-    /// <summary>Adds or removes the app's login item. Electron's <c>app.setLoginItemSettings</c>.</summary>
+    /// <summary>Adds or removes the app's login item. Electron's <c>app.setLoginItemSettings</c>; registry failures are
+    /// silent, as in Electron.</summary>
     /// <exception cref="PlatformNotSupportedException">Not on Windows.</exception>
-    /// <exception cref="InvalidOperationException">The registry write failed.</exception>
     public void SetLoginItemSettings(LoginItemSettings settings) => ApplyLoginItem(settings);
 
     internal static void ApplyLoginItem(LoginItemSettings settings)
@@ -70,14 +74,11 @@ public sealed unsafe partial class OrielApp
             throw LoginItemsUnsupported();
         }
 
-        string name = settings.Name ?? DefaultLoginItemName();
-        if (!WindowsAppRegistry.SetLoginItem(name, settings.OpenAtLogin, settings.Enabled, settings.Path, settings.Args))
-        {
-            throw new InvalidOperationException($"Could not update the login item '{name}'.");
-        }
+        string name = string.IsNullOrEmpty(settings.Name) ? WindowsAppRegistry.AppUserModelId() : settings.Name;
+        WindowsAppRegistry.SetLoginItem(name, settings.OpenAtLogin, settings.Enabled, settings.Path, settings.Args);
     }
 
-    /// <summary>Reads the login item for an executable. Electron's <c>app.getLoginItemSettings</c>.</summary>
+    /// <summary>Reads the login items for an executable. Electron's <c>app.getLoginItemSettings</c>.</summary>
     /// <exception cref="PlatformNotSupportedException">Not on Windows.</exception>
     public LoginItemStatus GetLoginItemSettings(LoginItemQuery? query = null) => ReadLoginItem(query);
 
@@ -93,11 +94,9 @@ public sealed unsafe partial class OrielApp
         {
             OpenAtLogin = open,
             ExecutableWillLaunchAtLogin = will,
-            LaunchItems = items.Select(i => new LoginItemLaunchItem(i.Name, i.Path, i.Args, "user", i.Enabled)).ToList(),
+            LaunchItems = items.Select(i => new LoginItemLaunchItem(i.Name, i.Path, i.Args, i.Scope, i.Enabled)).ToList(),
         };
     }
-
-    internal static string DefaultLoginItemName() => CurrentOrNull?.Name ?? "Oriel";
 
     private static PlatformNotSupportedException LoginItemsUnsupported()
         => new("Login items are implemented on Windows only.");

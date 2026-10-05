@@ -39,8 +39,8 @@ public static unsafe class WindowsJumpList
 {
     private static readonly Guid s_clsidDestinationList = new("77F10CF0-3DB5-4966-B520-B7C54FD35ED6");
     private static readonly Guid s_iidCustomDestinationList = new("6332DEBF-87B5-4670-90C0-5E57B408A49E");
-    private static readonly Guid s_clsidApplicationDestinations = new("86C14003-4D6B-4EF3-A7B4-0506663B2E68");
-    private static readonly Guid s_iidApplicationDestinations = new("12337D35-94C6-48A0-BCE7-6A9C69D4D600");
+    private static readonly Guid s_iidPersistFile = new("0000010B-0000-0000-C000-000000000046");
+    private static readonly Guid s_folderIdRecent = new("AE50C081-EBD2-438A-8655-8A092E34987A");
     private static readonly Guid s_clsidEnumerableObjectCollection = new("2D3468C1-36A7-43B6-AC24-D3F02FD9607A");
     private static readonly Guid s_iidObjectCollection = new("5632B1A4-E38A-400A-928A-D4CD63230295");
     private static readonly Guid s_iidObjectArray = new("92CA9DCD-5622-4BBA-A805-5E9F541BD8C9");
@@ -61,9 +61,8 @@ public static unsafe class WindowsJumpList
     private const int ListDelete = 10;
     private const int ListAbort = 11;
 
-    // IApplicationDestinations.
-    private const int DestinationsSetAppId = 3;
-    private const int DestinationsRemoveAll = 5;
+    // IPersistFile.
+    private const int PersistFileLoad = 5;
 
     // IObjectArray, then IObjectCollection.
     private const int ArrayGetCount = 3;
@@ -94,8 +93,8 @@ public static unsafe class WindowsJumpList
     private const uint CoinitMultithreaded = 0;
     private const int RpcEChangedMode = unchecked((int)0x80010106);
     private const uint SigdnFileSysPath = 0x80058000;
-    private const uint ShardPathW = 3;
     private const uint ShardAppIdInfo = 4;
+    private const uint SlgpUncPriority = 2;
     private const ushort VtBool = 11;
     private const ushort VtLpwstr = 31;
     private const int MaxPath = 260;
@@ -231,33 +230,13 @@ public static unsafe class WindowsJumpList
         finally { Release((nint)item); }
     }
 
-    /// <summary>Removes every recent and frequent destination: <c>IApplicationDestinations::RemoveAllDestinations</c>
-    /// for <paramref name="appId"/>, or the process's default id when null. False if refused.</summary>
-    public static bool RemoveAllDestinations(string? appId)
-    {
-        var destinations = Create(s_clsidApplicationDestinations, s_iidApplicationDestinations);
-        if (destinations is null) return false;
-        try
-        {
-            if (appId is not null)
-            {
-                fixed (char* id = appId)
-                    if (((delegate* unmanaged<void*, char*, int>)Slot(destinations, DestinationsSetAppId))(destinations, id) < 0) return false;
-            }
-            return ((delegate* unmanaged<void*, int>)Slot(destinations, DestinationsRemoveAll))(destinations) >= 0;
-        }
-        finally { Release((nint)destinations); }
-    }
+    /// <summary>Electron's <c>ClearRecentDocuments</c>: <c>SHAddToRecentDocs(SHARD_APPIDINFO, NULL)</c>.</summary>
+    public static void ClearRecentDocuments() => SHAddToRecentDocs(ShardAppIdInfo, null);
 
-    /// <summary>Adds <paramref name="path"/> to the recent documents, under <paramref name="appId"/> when given.
-    /// Silently ignores paths the shell cannot parse.</summary>
-    public static void AddRecentDocument(string path, string? appId)
+    /// <summary>Electron's <c>AddRecentDocument</c>: <paramref name="path"/> as a shell item under <paramref name="appId"/>
+    /// (<c>SHARD_APPIDINFO</c>). Silently ignores paths the shell cannot parse.</summary>
+    public static void AddRecentDocument(string path, string appId)
     {
-        if (appId is null)
-        {
-            fixed (char* p = path) SHAddToRecentDocs(ShardPathW, p);
-            return;
-        }
         var item = CreateItem(path);
         if (item is null) return;
         try
@@ -269,6 +248,57 @@ public static unsafe class WindowsJumpList
             }
         }
         finally { Release((nint)item); }
+    }
+
+    /// <summary>Electron's <c>GetRecentDocuments</c>: the non-empty targets of the <c>*.lnk</c> files directly in the
+    /// user's Recent folder (<c>FOLDERID_Recent</c>), in directory order. Needs COM on the calling thread.</summary>
+    public static IReadOnlyList<string> RecentDocuments()
+    {
+        char* folder;
+        var known = s_folderIdRecent;
+        if (SHGetKnownFolderPath(&known, 0, 0, &folder) < 0 || folder is null) return [];
+        string recent;
+        try { recent = new string(folder); }
+        finally { CoTaskMemFree(folder); }
+
+        List<string> documents = [];
+        try
+        {
+            // base::FileEnumerator lists hidden and system files too.
+            foreach (var link in Directory.EnumerateFiles(recent, "*.lnk", new EnumerationOptions { AttributesToSkip = 0, MatchType = MatchType.Win32 }))
+            {
+                if (ShortcutTarget(link) is { Length: > 0 } target) documents.Add(target);
+            }
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { }
+        return documents;
+    }
+
+    // base::win::ResolveShortcut: load the link read-only and read its path, without resolving it.
+    private static string? ShortcutTarget(string link)
+    {
+        var shellLink = Create(s_clsidShellLink, s_iidShellLinkW);
+        if (shellLink is null) return null;
+        try
+        {
+            void* persist;
+            var iid = s_iidPersistFile;
+            if (((delegate* unmanaged<void*, Guid*, void**, int>)Slot(shellLink, 0))(shellLink, &iid, &persist) < 0) return null;
+            try
+            {
+                int hr;
+                fixed (char* path = link)
+                    hr = ((delegate* unmanaged<void*, char*, uint, int>)Slot(persist, PersistFileLoad))(persist, path, 0 /* STGM_READ */);
+                if (hr < 0) return null;
+            }
+            finally { Release((nint)persist); }
+            var buffer = stackalloc char[MaxPath];
+            buffer[0] = '\0';
+            return ((delegate* unmanaged<void*, char*, int, void*, uint, int>)Slot(shellLink, LinkGetPath))(shellLink, buffer, MaxPath, null, SlgpUncPriority) < 0
+                ? null
+                : new string(buffer);
+        }
+        finally { Release((nint)shellLink); }
     }
 
     /// <summary>Releases a COM handle from this class; 0 is ignored.</summary>
@@ -434,4 +464,5 @@ public static unsafe class WindowsJumpList
     [DllImport("shell32.dll")] private static extern int GetCurrentProcessExplicitAppUserModelID(char** appId);
     [DllImport("shell32.dll")] private static extern int SHCreateItemFromParsingName(char* path, void* bindContext, Guid* iid, void** item);
     [DllImport("shell32.dll")] private static extern void SHAddToRecentDocs(uint flags, void* data);
+    [DllImport("shell32.dll")] private static extern int SHGetKnownFolderPath(Guid* id, uint flags, nint token, char** path);
 }

@@ -8,3 +8,12 @@ public sealed class WindowsOnlyFactAttribute : FactAttribute
         if (!OperatingSystem.IsWindows()) Skip = "Windows only";
     }
 }
+
+/// <summary>A theory that only runs on Windows and shows as skipped elsewhere.</summary>
+public sealed class WindowsOnlyTheoryAttribute : TheoryAttribute
+{
+    public WindowsOnlyTheoryAttribute()
+    {
+        if (!OperatingSystem.IsWindows()) Skip = "Windows only";
+    }
+}

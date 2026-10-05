@@ -35,7 +35,7 @@ Where an implemented module differs from Electron, the difference and its reason
 
 | Electron | Oriel | Source | Wave | Status |
 |---|---|---|---|---|
-| `app` | `OrielApp` | CEF + OS | M2 | partial: `ready`, `window-all-closed`, `second-instance`, `before-quit`, `will-quit`, `quit()`, `exit()`, `enableSandbox`, `isReady`, `name`; Windows: protocol client, login items, `setUserTasks`/`setJumpList`/`getJumpListSettings`, recent documents, `getFileIcon`; no `quit` event (see DRIFT.md A7-A13) |
+| `app` | `OrielApp` | CEF + OS | M2 | partial: `ready`, `window-all-closed`, `second-instance`, `before-quit`, `will-quit`, `quit()`, `exit()`, `enableSandbox`, `isReady`, `name`; Windows: protocol client (`setAsDefaultProtocolClient`, `removeAsDefaultProtocolClient`, `isDefaultProtocolClient`, `getApplicationNameForProtocol`, `getApplicationInfoForProtocol`), login items, `setUserTasks`/`setJumpList`/`getJumpListSettings`, recent documents (`addRecentDocument`, `clearRecentDocuments`, `getRecentDocuments`), `getFileIcon`; no `quit` event (see DRIFT.md A12-A13) |
 | `process` | `OrielProcess` | .NET + CEF | M2 | — |
 | `CommandLine` (`app.commandLine`) | `OrielApp.CommandLine` | CEF | M2 | — |
 | Command-line switches | same switches | CEF | M2 | — |
