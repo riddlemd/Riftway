@@ -99,6 +99,12 @@ public sealed unsafe class OrielApp
 
     internal void RaiseCertificateError(object? sender, CertificateErrorEventArgs args) => CertificateError?.Invoke(this, args);
 
+    /// <summary>A server asks a page for a client certificate, after the page's own
+    /// <see cref="WebContents.SelectClientCertificate"/>. Electron's <c>app</c> <c>select-client-certificate</c>.</summary>
+    public event EventHandler<SelectClientCertificateEventArgs>? SelectClientCertificate;
+
+    internal void RaiseSelectClientCertificate(object? sender, SelectClientCertificateEventArgs args) => SelectClientCertificate?.Invoke(this, args);
+
     internal void RaiseLogin(object? sender, LoginEventArgs args) => Login?.Invoke(this, args);
 
     /// <summary>Creates the process's application.</summary>

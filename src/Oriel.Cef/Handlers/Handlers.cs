@@ -331,6 +331,7 @@ public sealed unsafe class RequestHandler
         Native = NativeObject.Create<cef_request_handler_t>(this);
         Native->get_resource_request_handler = &GetResourceRequestHandler;
         Native->on_certificate_error = &OnCertificateError;
+        Native->on_select_client_certificate = &OnSelectClientCertificate;
         Native->on_before_browse = &OnBeforeBrowse;
         Native->get_auth_credentials = &GetAuthCredentials;
         Native->on_render_process_terminated = &OnRenderProcessTerminated;
@@ -408,6 +409,16 @@ public sealed unsafe class RequestHandler
         }
         return path;
     }
+
+    /// <summary>A server asks for a client certificate; the task's result is the index of the one to use, or null for
+    /// none. Null picks the first. UI thread.</summary>
+    public Func<ClientCertificateRequest, Task<int?>>? SelectClientCertificate { get; init; }
+
+    [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])]
+    private static int OnSelectClientCertificate(cef_request_handler_t* self, cef_browser_t* browser, int isProxy, cef_string_utf16_t* host,
+        int port, nuint count, cef_x509_certificate_t** certificates, cef_select_client_certificate_callback_t* callback)
+        => SecurityHandlers.OnSelectClientCertificate(NativeObject.Owner<RequestHandler>(self).SelectClientCertificate, browser, isProxy, host,
+            port, count, certificates, callback);
 
     /// <summary>A navigation hit an invalid certificate; the task's result trusts it. Null cancels. UI thread.</summary>
     public Func<CertificateErrorInfo, Task<bool>>? CertificateError { get; init; }

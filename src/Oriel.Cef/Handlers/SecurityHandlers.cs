@@ -9,6 +9,9 @@ public sealed record CertificateErrorInfo(cef_errorcode_t Error, string Url, IRe
 /// name and current URL then its ancestors', the main frame last.</summary>
 public sealed record BrowseRequest(string Url, bool IsRedirect, bool UserGesture, uint Transition, IReadOnlyList<(string Name, string Url)> FramePath);
 
+/// <summary>A server asking for a client certificate: the server, and each candidate's DER bytes then its issuers'.</summary>
+public sealed record ClientCertificateRequest(bool IsProxy, string Host, int Port, IReadOnlyList<IReadOnlyList<byte[]>> Certificates);
+
 /// <summary>A server or proxy asking for credentials.</summary>
 public sealed record AuthChallenge(string OriginUrl, bool IsProxy, string Host, int Port, string Realm, string Scheme);
 
@@ -69,10 +72,45 @@ public static unsafe class SecurityHandlers
         return 1;
     }
 
+    /// <summary>UI thread: CEF's <c>on_select_client_certificate</c>. The task's result is the index of the certificate
+    /// to use, or null for none.</summary>
+    public static int OnSelectClientCertificate(Func<ClientCertificateRequest, Task<int?>>? decide, cef_browser_t* browser, int isProxy,
+        cef_string_utf16_t* host, int port, nuint count, cef_x509_certificate_t** certificates, cef_select_client_certificate_callback_t* callback)
+    {
+        NativeObject.Release(browser);
+        // Each certificate arrives with a reference, kept until the answer; the chosen one gets another for CEF.
+        var natives = new nint[(int)count];
+        var chains = new List<IReadOnlyList<byte[]>>((int)count);
+        for (var i = 0; i < (int)count; i++)
+        {
+            natives[i] = (nint)certificates[i];
+            chains.Add(ChainOfCertificate(certificates[i]));
+        }
+        var request = new ClientCertificateRequest(isProxy != 0, CefString.Read(host), port, chains);
+        var answer = decide is null ? Task.FromResult<int?>(count > 0 ? 0 : null) : Guard.Run(() => decide(request), Task.FromResult<int?>(null));
+        answer.ContinueWith(t => CefThread.RunOnUi(() =>
+        {
+            var chosen = t.IsCompletedSuccessfully && t.Result is { } index && index >= 0 && index < natives.Length ? (cef_x509_certificate_t*)natives[index] : null;
+            if (chosen is not null) NativeObject.AddRef(chosen);
+            callback->select(callback, chosen);
+            NativeObject.Release(callback);
+            foreach (var native in natives) NativeObject.Release((cef_x509_certificate_t*)native);
+        }), TaskScheduler.Default);
+        return 1;
+    }
+
     private static IReadOnlyList<byte[]> ChainOf(cef_sslinfo_t* ssl)
     {
         var certificate = ssl->get_x509_certificate(ssl);
         if (certificate is null) return [];
+        var chain = ChainOfCertificate(certificate);
+        NativeObject.Release(certificate);
+        return chain;
+    }
+
+    // The certificate's DER bytes then its issuers'; the caller keeps its reference.
+    private static IReadOnlyList<byte[]> ChainOfCertificate(cef_x509_certificate_t* certificate)
+    {
         var chain = new List<byte[]> { Bytes(certificate->get_derencoded(certificate)) };
         var count = certificate->get_issuer_chain_size(certificate);
         if (count > 0)
@@ -85,7 +123,6 @@ public static unsafe class SecurityHandlers
                 for (nuint i = 0; i < size; i++) chain.Add(Bytes(list[i]));
             }
         }
-        NativeObject.Release(certificate);
         return chain;
     }
 

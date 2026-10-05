@@ -164,7 +164,7 @@ Entries marked _(branch `x`)_ are on that branch and not yet in `main`.
 | E22 | Spell checker: `removeWordFromSpellCheckerDictionary`, `setSpellCheckerDictionaryDownloadURL`, the `spellcheck-dictionary-*` events, `webPreferences.spellcheck` | The two methods throw `NotSupportedException`; no events; no per-page switch | CEF: no way to remove a custom word, choose the download server, hear about dictionary downloads, or turn checking off for one page | Patch |
 | E23 | `addWordToSpellCheckerDictionary` works with no page open | Needs an open page in the session; false without one | CEF: adding a word goes through a browser | — |
 | E24 | `ses.setCertificateVerifyProc` decides every certificate | Missing | CEF: it reports only certificates Chromium rejected, through `certificate-error`; nothing sees each verification | Patch |
-| E25 | `select-client-certificate` | Missing | Todo: CEF has `on_select_client_certificate`; testing it needs a client certificate in the platform store | Todo |
+| E25 | `select-client-certificate` works with each OS's certificate store | Checked on Linux with NSS only; macOS (Keychain) and Windows (certificate store) are untested | Todo: a test needs a client certificate in the user's store, which the macOS run should not touch | Check on Windows |
 | E26 | `certificate-error` also fires for a subframe, with `isMainFrame` false | Only a main-frame navigation raises it; a subframe's invalid certificate is refused without asking (checked) | CEF: `on_certificate_error` is not called for subframes | Patch |
 | E11 | Session events (`select-*-device`, ...) | None | Todo: with E10 | With E10 |
 

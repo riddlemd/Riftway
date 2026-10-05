@@ -73,8 +73,58 @@ public sealed class LoginEventArgs : CancelEventArgs
     internal Task<(string User, string Password)?> Answer => Cancel ? _answer.Task : Task.FromResult<(string User, string Password)?>(null);
 }
 
+/// <summary>Arguments for <see cref="WebContents.SelectClientCertificate"/> and <see cref="OrielApp.SelectClientCertificate"/>.
+/// Set <see cref="CancelEventArgs.Cancel"/> (Electron's <c>event.preventDefault()</c>) and call <see cref="Callback"/> to
+/// choose; otherwise the first certificate is used, as Electron's default.</summary>
+public sealed class SelectClientCertificateEventArgs : CancelEventArgs
+{
+    private readonly TaskCompletionSource<Certificate?> _answer = new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+    internal SelectClientCertificateEventArgs(WebContents webContents, string url, IReadOnlyList<Certificate> certificateList)
+    {
+        WebContents = webContents;
+        Url = url;
+        CertificateList = certificateList;
+    }
+
+    /// <summary>The page whose request asked.</summary>
+    public WebContents WebContents { get; }
+
+    /// <summary>The server, as <c>host:port</c>, as Electron gives it.</summary>
+    public string Url { get; }
+
+    /// <summary>The certificates the server accepts.</summary>
+    public IReadOnlyList<Certificate> CertificateList { get; }
+
+    /// <summary>Uses <paramref name="certificate"/> (one of <see cref="CertificateList"/>), or none when null; may be
+    /// called later. Electron's <c>callback(certificate)</c>.</summary>
+    public void Callback(Certificate? certificate = null) => _answer.TrySetResult(certificate);
+
+    internal Task<int?> Answer => (Cancel ? _answer.Task : Task.FromResult(CertificateList.FirstOrDefault())).ContinueWith(t =>
+    {
+        var chosen = t.Result;
+        for (var i = 0; i < CertificateList.Count; i++)
+            if (chosen is not null && (ReferenceEquals(CertificateList[i], chosen) || CertificateList[i].Fingerprint == chosen.Fingerprint)) return (int?)i;
+        return null;
+    }, TaskScheduler.Default);
+}
+
 public sealed partial class WebContents
 {
+    /// <summary>A server asks the page for a client certificate. Electron's <c>select-client-certificate</c>; the app's
+    /// <see cref="OrielApp.SelectClientCertificate"/> is raised after it, with the same arguments.</summary>
+    public event EventHandler<SelectClientCertificateEventArgs>? SelectClientCertificate;
+
+    // UI thread.
+    private Task<int?> OnSelectClientCertificate(ClientCertificateRequest request)
+    {
+        var certificates = request.Certificates.Select(chain => Certificate.FromChain(chain)).OfType<Certificate>().ToList();
+        var args = new SelectClientCertificateEventArgs(this, $"{request.Host}:{request.Port}", certificates);
+        Raise(SelectClientCertificate, args, "select-client-certificate");
+        Raise(OrielApp.CurrentOrNull is { } app ? app.RaiseSelectClientCertificate : null, args, "select-client-certificate");
+        return args.Answer;
+    }
+
     /// <summary>The page's navigation hit an invalid certificate. Electron's <c>certificate-error</c>; the app's
     /// <see cref="OrielApp.CertificateError"/> is raised after it, with the same arguments.</summary>
     public event EventHandler<CertificateErrorEventArgs>? CertificateError;

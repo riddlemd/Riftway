@@ -115,6 +115,7 @@ public sealed unsafe partial class WebContents
         {
             Wants = WantsRequest,
             CertificateError = OnCertificateError,
+            SelectClientCertificate = OnSelectClientCertificate,
             BeforeBrowse = OnBeforeBrowse,
             Login = OnLogin,
             RenderProcessTerminated = OnRenderProcessTerminated,

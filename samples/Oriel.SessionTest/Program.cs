@@ -7,6 +7,8 @@ using Cookie = Oriel.Cookie;
 
 // End-to-end Session check: partitions, cookies, per-session protocol and proxy, driven from a worker thread.
 // The exit code is the number of failures (-1 when the run never finishes).
+// Linux: two client certificates in the user's NSS store, which Chromium opens at start-up.
+var clientCertificates = OperatingSystem.IsLinux() && File.Exists("/usr/bin/certutil") && File.Exists("/usr/bin/pk12util") ? InstallClientCertificates() : false;
 var app = OrielApp.Create("Oriel.SessionTest");
 var failures = -1;
 var results = new List<string>();
@@ -772,6 +774,43 @@ async Task RunAsync()
         && await Throws(() => ContentTracing.GetCategoriesAsync()) is NotSupportedException);
     traced.Destroy();
 
+    // select-client-certificate: a TLS server that asks for one; the first is used unless a handler chooses.
+    if (clientCertificates)
+    {
+        using var mutualListener = new TcpListener(IPAddress.Loopback, 0);
+        mutualListener.Start();
+        var mutualUrl = $"https://127.0.0.1:{((IPEndPoint)mutualListener.LocalEndpoint).Port}/";
+        _ = ServeTls(mutualListener, tlsCert, requireClient: true);
+        async Task<(string? Body, List<string> Order, SelectClientCertificateEventArgs? Args)> VisitMutual(Action<SelectClientCertificateEventArgs>? decide)
+        {
+            var order = new List<string>();
+            SelectClientCertificateEventArgs? seenArgs = null;
+            var w = new BrowserWindow(new BrowserWindowOptions { Show = false, WebPreferences = new WebPreferences { Partition = "mutual-" + Guid.NewGuid() } });
+            w.WebContents.CertificateError += (_, e) => { e.Cancel = true; e.Callback(true); };
+            w.WebContents.SelectClientCertificate += (_, e) => { order.Add("page"); seenArgs = e; decide?.Invoke(e); };
+            EventHandler<SelectClientCertificateEventArgs> onApp = (sender, e) => order.Add(ReferenceEquals(sender, app) && ReferenceEquals(e, seenArgs) ? "app" : "app?");
+            app.SelectClientCertificate += onApp;
+            var failed = await Throws(() => w.LoadUrl(mutualUrl).WaitAsync(TimeSpan.FromSeconds(15)));
+            var body = failed is null ? (await w.WebContents.ExecuteJavaScriptAsync("document.body.innerText"))?.ToString() : failed.Message;
+            app.SelectClientCertificate -= onApp;
+            w.Destroy();
+            return (body, order, seenArgs);
+        }
+        var firstPick = await VisitMutual(null);
+        Check("with no choice, the first client certificate is used, as Electron's", firstPick.Body is "tls ok client=oriel-client-1" or "tls ok client=oriel-client-2"
+            && firstPick.Order.SequenceEqual(["page", "app"]), $"{firstPick.Body} [{string.Join(",", firstPick.Order)}]");
+        var list = firstPick.Args?.CertificateList.Select(c => c.SubjectName).ToList() ?? [];
+        Check("select-client-certificate carries host:port and the candidates", firstPick.Args?.Url == mutualUrl[8..^1]
+            && list.Order().SequenceEqual(["oriel-client-1", "oriel-client-2"]) && firstPick.Body == "tls ok client=" + list[0], $"{firstPick.Args?.Url} {string.Join(",", list)}");
+        string? picked = null;
+        var chosen = await VisitMutual(e => { e.Cancel = true; picked = e.CertificateList[^1].SubjectName; e.Callback(e.CertificateList[^1]); });
+        Check("preventDefault and callback(certificate) use that certificate, not the first", picked is not null && picked != list.FirstOrDefault()
+            && chosen.Body == "tls ok client=" + picked, $"{picked}: {chosen.Body}");
+        var none = await VisitMutual(e => { e.Cancel = true; _ = Task.Delay(200).ContinueWith(_ => e.Callback()); });
+        Check("callback() with none continues without a certificate", none.Body == "tls ok client=none", none.Body);
+        mutualListener.Stop();
+    }
+
     // Proxy: requests go to a local listener posing as the proxy.
     var proxied = Session.FromPartition("proxied");
     using var listener = new TcpListener(IPAddress.Loopback, 0);
@@ -802,8 +841,9 @@ static async Task<T?> WaitFor<T>(Func<T?> probe) where T : class
     return null;
 }
 
-// Serves "tls ok" over TLS with the given certificate, to every connection.
-static async Task ServeTls(TcpListener listener, System.Security.Cryptography.X509Certificates.X509Certificate2 certificate)
+// Serves "tls ok" over TLS with the given certificate, to every connection; with requireClient, says which client
+// certificate came.
+static async Task ServeTls(TcpListener listener, System.Security.Cryptography.X509Certificates.X509Certificate2 certificate, bool requireClient = false)
 {
     while (true)
     {
@@ -816,9 +856,12 @@ static async Task ServeTls(TcpListener listener, System.Security.Cryptography.X5
             {
                 try
                 {
-                    using var tls = new System.Net.Security.SslStream(client.GetStream());
-                    await tls.AuthenticateAsServerAsync(certificate);
-                    await Respond(tls, 200, "OK", "", "tls ok");
+                    using var tls = new System.Net.Security.SslStream(client.GetStream(), false,
+                        // Self-signed client certificates, or none, are what the test sends.
+                        (_, _, _, errors) => (errors & ~(System.Net.Security.SslPolicyErrors.RemoteCertificateChainErrors | System.Net.Security.SslPolicyErrors.RemoteCertificateNotAvailable)) == 0);
+                    await tls.AuthenticateAsServerAsync(certificate, requireClient, false);
+                    var who = tls.RemoteCertificate is { } remote ? new System.Security.Cryptography.X509Certificates.X509Certificate2(remote).GetNameInfo(System.Security.Cryptography.X509Certificates.X509NameType.SimpleName, false) : "none";
+                    await Respond(tls, 200, "OK", "", requireClient ? $"tls ok client={who}" : "tls ok");
                 }
                 catch (Exception) { }
             }
@@ -868,6 +911,33 @@ static async Task Respond(Stream stream, int status, string reason, string heade
     await stream.WriteAsync(head);
     await stream.WriteAsync(bytes);
     await stream.FlushAsync();
+}
+
+// Two self-signed client certificates, imported into a fresh NSS store in the home directory.
+static bool InstallClientCertificates()
+{
+    var db = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".pki", "nssdb");
+    if (Directory.Exists(db)) Directory.Delete(db, recursive: true);
+    Directory.CreateDirectory(db);
+    bool Run(string tool, string arguments)
+    {
+        using var process = System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo(tool, arguments) { RedirectStandardOutput = true, RedirectStandardError = true })!;
+        process.WaitForExit();
+        return process.ExitCode == 0;
+    }
+    if (!Run("/usr/bin/certutil", $"-N -d sql:{db} --empty-password")) return false;
+    foreach (var name in new[] { "oriel-client-1", "oriel-client-2" })
+    {
+        using var key = System.Security.Cryptography.RSA.Create(2048);
+        var request = new System.Security.Cryptography.X509Certificates.CertificateRequest($"CN={name}", key,
+            System.Security.Cryptography.HashAlgorithmName.SHA256, System.Security.Cryptography.RSASignaturePadding.Pkcs1);
+        request.CertificateExtensions.Add(new System.Security.Cryptography.X509Certificates.X509EnhancedKeyUsageExtension([new("1.3.6.1.5.5.7.3.2")], false));
+        using var certificate = request.CreateSelfSigned(DateTimeOffset.UtcNow.AddDays(-1), DateTimeOffset.UtcNow.AddDays(30));
+        var pfx = Path.Combine(db, name + ".p12");
+        File.WriteAllBytes(pfx, certificate.Export(System.Security.Cryptography.X509Certificates.X509ContentType.Pkcs12, "pw"));
+        if (!Run("/usr/bin/pk12util", $"-i {pfx} -d sql:{db} -W pw")) return false;
+    }
+    return true;
 }
 
 // Answers one proxied request and reports its request line.
