@@ -281,7 +281,7 @@ public sealed unsafe partial class BrowserWindow
         // CEF gives a popup its opener's request context, whatever the options say.
         if (opener is not null && session != opener.WebContents.Session)
             throw new InvalidOperationException("A window a page opens must use its opener's session.");
-        WebContents = new WebContents(_options.WebPreferences.Preload is { } preload ? File.ReadAllText(preload) : null, _options.WebPreferences, session);
+        WebContents = new WebContents(_options.WebPreferences.Preload, _options.WebPreferences, session);
         WebContents.PageTitleUpdated += (_, e) => PageTitleUpdated?.Invoke(this, e);
         WebContents.EnterHtmlFullScreen += (_, _) => EnterHtmlFullScreen?.Invoke(this, EventArgs.Empty);
         WebContents.LeaveHtmlFullScreen += (_, _) => LeaveHtmlFullScreen?.Invoke(this, EventArgs.Empty);

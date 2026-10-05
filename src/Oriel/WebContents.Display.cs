@@ -38,6 +38,13 @@ public sealed record ConsoleMessageEventArgs(string Message, ConsoleMessageLevel
 /// <param name="Hotspot">A custom cursor's hotspot, else (0, 0).</param>
 public sealed record CursorChangedEventArgs(string Type, NativeImage? Image, double Scale, Size Size, Point Hotspot);
 
+/// <summary>A preload that failed to load or threw; Electron's <c>preload-error</c> arguments.</summary>
+/// <param name="PreloadPath">The preload's path.</param>
+/// <param name="ErrorName">The error's name, e.g. <c>SyntaxError</c>.</param>
+/// <param name="Message">The error's message.</param>
+/// <param name="Stack">The error's stack.</param>
+public sealed record PreloadErrorEventArgs(string PreloadPath, string ErrorName, string Message, string Stack);
+
 /// <summary>Options for <see cref="WebContents.Close"/>; Electron's <c>close()</c> options.</summary>
 public sealed record WebContentsCloseOptions
 {
@@ -60,6 +67,11 @@ public sealed unsafe partial class WebContents
     public event EventHandler<IpcMessageEventArgs>? IpcMessage;
 
     internal void RaiseIpcMessage(string channel, IpcMainEvent e) => Raise(IpcMessage, new IpcMessageEventArgs(channel, e), "ipc-message");
+
+    /// <summary>A preload script failed to load or threw; the others still ran. Electron's <c>preload-error</c>.</summary>
+    public event EventHandler<PreloadErrorEventArgs>? PreloadError;
+
+    private void RaisePreloadError(PreloadErrorEventArgs args) => Raise(PreloadError, args, "preload-error");
 
     /// <summary>The page logged a message. Electron's <c>console-message</c>.</summary>
     public event EventHandler<ConsoleMessageEventArgs>? ConsoleMessage;

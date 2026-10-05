@@ -495,6 +495,25 @@ async Task RunAsync()
     preloaded.RegisterPreloadScript(new PreloadScriptRegistration("frame", Path.Combine(preloadDir, "missing.js")));
     var missing = await Order("four");
     Check("a missing preload file leaves the others running", missing == "s2,s3,app", missing);
+    var throwing = Path.Combine(preloadDir, "throws.js");
+    File.WriteAllText(throwing, "(globalThis.order ??= []).push('throws'); throw new TypeError('boom');");
+    var unparsable = Path.Combine(preloadDir, "unparsable.js");
+    File.WriteAllText(unparsable, "(globalThis.order ??= []).push('unparsable'); this is not javascript(");
+    preloaded.RegisterPreloadScript(new PreloadScriptRegistration("frame", throwing));
+    preloaded.RegisterPreloadScript(new PreloadScriptRegistration("frame", unparsable));
+    var preloadErrors = new List<string>();
+    var unableLogs = new List<string>();
+    preloadWin.WebContents.PreloadError += (_, e) => { lock (preloadErrors) preloadErrors.Add($"{Path.GetFileName(e.PreloadPath)}:{e.ErrorName}:{e.Message.Replace(preloadDir, "~")}"); };
+    preloadWin.WebContents.ConsoleMessage += (_, e) => { if (e.Message.StartsWith("Unable to load preload script: ", StringComparison.Ordinal)) lock (unableLogs) unableLogs.Add($"{e.Level}:{Path.GetFileName(e.Message)}"); };
+    var failing = await Order("five");
+    var reported = Until(() => { lock (preloadErrors) return preloadErrors.Count >= 3; }, TimeSpan.FromSeconds(5));
+    string Errors() { lock (preloadErrors) return string.Join(" | ", preloadErrors); }
+    Check("preload-error reports a missing, a throwing and an unparsable preload, and the rest still run, as Electron's",
+        reported && failing == "s2,s3,throws,app" && Errors() == $"missing.js:Error:Cannot find module '~{Path.DirectorySeparatorChar}missing.js' | throws.js:TypeError:boom | unparsable.js:SyntaxError:Unexpected identifier 'is'",
+        $"{failing} :: {Errors()}");
+    string Unable() { lock (unableLogs) return string.Join(",", unableLogs); }
+    Check("each failing preload logs Electron's 'Unable to load preload script' as an error",
+        Until(() => Unable() == "Error:missing.js,Error:throws.js,Error:unparsable.js", TimeSpan.FromSeconds(5)), Unable());
     preloadWin.Destroy();
     var elsewhere = new BrowserWindow(new BrowserWindowOptions { Show = false, WebPreferences = new WebPreferences { Session = Session.FromPartition("preloads-otherOrder") } });
     Session.FromPartition("preloads-otherOrder").Protocol.Handle("https", _ => ProtocolResponse.Text(Page, "text/html"));

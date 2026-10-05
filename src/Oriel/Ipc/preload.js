@@ -5,6 +5,12 @@
   const post = globalThis.__orielIpc;
   delete globalThis.__orielIpc;
 
+  // Declared by the script around this runtime, so its preload wrappers can report failures as Electron's init does.
+  reportPreloadError = (path, error) => post(JSON.stringify({
+    t: 'preload-error', ch: '',
+    args: [path, { name: String(error?.name ?? 'Error'), message: String(error?.message ?? error), stack: String(error?.stack ?? '') }],
+  }));
+
   // A click into the page puts an Alt-shown menu bar away (Electron's). Captured, so the page cannot stop it.
   globalThis.addEventListener('mousedown', () => post(JSON.stringify({ t: 'mousedown', ch: '', args: [] })), true);
 

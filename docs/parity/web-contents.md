@@ -11,14 +11,14 @@ Percentages are over the non-n/a items; the second counts a partial item as half
 | Area | Items | Done | Partial | Missing | n/a | % done | % done + partial/2 |
 |---|---|---|---|---|---|---|---|
 | Static methods | 5 | 1 | 2 | 2 | 0 | 20.0% | 40.0% |
-| Instance events | 59 | 27 | 11 | 19 | 2 | 47.4% | 57.0% |
+| Instance events | 59 | 28 | 11 | 18 | 2 | 49.1% | 58.8% |
 | Instance methods | 118 | 37 | 21 | 52 | 8 | 33.6% | 43.2% |
 | Instance properties | 18 | 9 | 1 | 7 | 1 | 52.9% | 55.9% |
 | navigationHistory | 14 | 12 | 0 | 2 | 0 | 85.7% | 85.7% |
 | WebFrameMain events and statics | 3 | 1 | 0 | 2 | 0 | 33.3% | 33.3% |
 | WebFrameMain methods | 9 | 1 | 4 | 4 | 0 | 11.1% | 33.3% |
 | WebFrameMain properties | 15 | 10 | 0 | 5 | 0 | 66.7% | 66.7% |
-| **Total** | 241 | 98 | 39 | 93 | 11 | 42.6% | 51.1% |
+| **Total** | 241 | 99 | 39 | 92 | 11 | 43.0% | 51.5% |
 
 ## Checklist
 
@@ -90,7 +90,7 @@ Percentages are over the non-n/a items; the second counts a partial item as half
 | `paint` | — | missing |  |
 | `devtools-reload-page` | — | missing |  |
 | `console-message` | `ConsoleMessage` | partial | No `frame` (C28). |
-| `preload-error` | — | missing |  |
+| `preload-error` | `PreloadError` | done | The error arrives as its name, message and stack. |
 | `ipc-message` | `IpcMessage` | done |  |
 | `ipc-message-sync` | — | missing | Sync IPC (I2). |
 | `preferred-size-changed` | — | missing |  |
