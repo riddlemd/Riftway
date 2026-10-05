@@ -19,7 +19,7 @@ public static class PowerSaveBlocker
     private static readonly IPowerSaveBlockerBackend s_backend = OperatingSystem.IsWindows() ? new WindowsPowerSaveBlockerBackend() : new UnsupportedPowerSaveBlockerBackend();
 
     /// <summary>Starts blocking and returns the blocker's id. Electron's <c>powerSaveBlocker.start()</c>.</summary>
-    /// <exception cref="InvalidOperationException">The system refused the request.</exception>
+    /// <remarks>Like Electron it returns an id even if the system refuses the request.</remarks>
     public static int Start(PowerSaveBlockerType type) => s_backend.Start(type);
 
     /// <summary>Stops the blocker; false if there was none. Electron's <c>powerSaveBlocker.stop()</c>.</summary>
@@ -31,13 +31,29 @@ public static class PowerSaveBlocker
 
 internal static class PowerSaveBlockers
 {
-    /// <summary>Win32's <c>POWER_REQUEST_TYPE</c> for a blocker: <c>PowerRequestDisplayRequired</c> for the screen,
-    /// <c>PowerRequestSystemRequired</c> for the app.</summary>
-    internal static int RequestType(PowerSaveBlockerType type) => type == PowerSaveBlockerType.PreventDisplaySleep ? 0 : 1;
+    /// <summary>The one type that takes effect for the active blockers: display beats app suspension, as in Electron's
+    /// <c>UpdatePowerSaveBlocker</c>; null when none is active.</summary>
+    internal static PowerSaveBlockerType? Effective(IEnumerable<PowerSaveBlockerType> active)
+    {
+        PowerSaveBlockerType? result = null;
+        foreach (var type in active)
+        {
+            if (type == PowerSaveBlockerType.PreventDisplaySleep) return type;
+            result = type;
+        }
+        return result;
+    }
 
-    /// <summary>The reason Windows shows for the request in <c>powercfg /requests</c>.</summary>
-    internal static string Reason(PowerSaveBlockerType type)
-        => type == PowerSaveBlockerType.PreventDisplaySleep ? "Oriel: prevent-display-sleep" : "Oriel: prevent-app-suspension";
+    /// <summary>The <c>POWER_REQUEST_TYPE</c>s Chromium's <c>power_save_blocker_win.cc</c> sets: <c>PowerRequestDisplayRequired</c>
+    /// (0) for the screen, plus <c>PowerRequestSystemRequired</c> (1) below Windows 11, which sleeps the system only after the
+    /// display; <c>PowerRequestExecutionRequired</c> (3) for app suspension.</summary>
+    internal static int[] RequestTypes(PowerSaveBlockerType type, bool windows11OrLater)
+        => type == PowerSaveBlockerType.PreventDisplaySleep ? (windows11OrLater ? [0] : [0, 1]) : [3];
+
+    /// <summary>The reason Windows shows in <c>powercfg /requests</c>: Electron's <c>ELECTRON_PRODUCT_NAME</c>, here the
+    /// executable's product name, else the app's name.</summary>
+    internal static string Reason(string? fileProductName, string? appName)
+        => !string.IsNullOrWhiteSpace(fileProductName) ? fileProductName : !string.IsNullOrWhiteSpace(appName) ? appName : "Oriel";
 }
 
 /// <summary>One OS's power save blockers.</summary>
@@ -48,38 +64,61 @@ internal interface IPowerSaveBlockerBackend
     bool IsStarted(int id);
 }
 
+/// <summary>One wake lock for the whole process at the highest active type, re-evaluated whenever a blocker starts or stops,
+/// as Electron does.</summary>
 [System.Runtime.Versioning.SupportedOSPlatform("windows")]
 internal sealed class WindowsPowerSaveBlockerBackend : IPowerSaveBlockerBackend
 {
     private readonly Lock _gate = new();
-    private readonly Dictionary<int, (nint Request, int Type)> _requests = [];
+    private readonly Dictionary<int, PowerSaveBlockerType> _blockers = [];
+    private readonly List<(nint Request, int Type)> _held = [];
+    private PowerSaveBlockerType? _heldType;
     private int _nextId;
 
     public int Start(PowerSaveBlockerType type)
     {
-        var requestType = PowerSaveBlockers.RequestType(type);
-        var request = WindowsSystem.StartPowerRequest(requestType, PowerSaveBlockers.Reason(type));
-        if (request == 0) throw new InvalidOperationException("Windows refused the power request.");
         lock (_gate)
         {
+            // Electron hands out the id whether or not the OS grants the request.
             var id = _nextId++;
-            _requests[id] = (request, requestType);
+            _blockers[id] = type;
+            Update();
             return id;
         }
     }
 
     public bool Stop(int id)
     {
-        (nint Request, int Type) entry;
         lock (_gate)
-            if (!_requests.Remove(id, out entry)) return false;
-        WindowsSystem.StopPowerRequest(entry.Request, entry.Type);
-        return true;
+        {
+            var removed = _blockers.Remove(id);
+            Update();
+            return removed;
+        }
     }
 
     public bool IsStarted(int id)
     {
-        lock (_gate) return _requests.ContainsKey(id);
+        lock (_gate) return _blockers.ContainsKey(id);
+    }
+
+    private void Update()
+    {
+        var effective = PowerSaveBlockers.Effective(_blockers.Values);
+        if (effective == _heldType) return;
+        foreach (var (request, type) in _held) WindowsSystem.StopPowerRequest(request, type);
+        _held.Clear();
+        _heldType = effective;
+        if (effective is not { } now) return;
+        var reason = PowerSaveBlockers.Reason(ProductName(), OrielApp.CurrentOrNull?.Name);
+        foreach (var type in PowerSaveBlockers.RequestTypes(now, Environment.OSVersion.Version.Build >= 22000))
+            if (WindowsSystem.StartPowerRequest(type, reason) is var request and not 0) _held.Add((request, type));
+    }
+
+    private static string? ProductName()
+    {
+        try { return Environment.ProcessPath is { } path ? System.Diagnostics.FileVersionInfo.GetVersionInfo(path).ProductName : null; }
+        catch (IOException) { return null; }
     }
 }
 

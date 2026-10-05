@@ -43,15 +43,16 @@ internal readonly record struct HotKey(uint Modifiers, uint VirtualKey);
 internal static class GlobalShortcuts
 {
     /// <summary>The hotkey for an accelerator; equal combinations written differently give the same key, as Electron
-    /// compares parsed accelerators. <c>MOD_NOREPEAT</c> makes a held key fire once.</summary>
+    /// compares parsed accelerators. No <c>MOD_NOREPEAT</c>: like Chromium, a held key repeats.</summary>
     internal static HotKey Key(string accelerator)
     {
         ArgumentNullException.ThrowIfNull(accelerator);
         var parsed = Accelerator.Parse(accelerator, OperatingSystem.IsMacOS());
-        return new HotKey(Modifiers(parsed.Modifiers) | 0x4000 /* MOD_NOREPEAT */, (uint)parsed.KeyCode);
+        return new HotKey(Modifiers(parsed.Modifiers), (uint)parsed.KeyCode);
     }
 
-    /// <summary>Win32's <c>MOD_ALT</c>, <c>MOD_CONTROL</c>, <c>MOD_SHIFT</c>, <c>MOD_WIN</c>; Command is the Windows key.</summary>
+    /// <summary>Win32's <c>MOD_ALT</c>, <c>MOD_CONTROL</c>, <c>MOD_SHIFT</c>, <c>MOD_WIN</c>; Command is the Windows key (Chromium drops it
+    /// and registers the bare key; see DRIFT J2).</summary>
     internal static uint Modifiers(AcceleratorModifiers m)
         => (m.HasFlag(AcceleratorModifiers.Alt) ? 0x1u : 0) | (m.HasFlag(AcceleratorModifiers.Control) ? 0x2u : 0)
             | (m.HasFlag(AcceleratorModifiers.Shift) ? 0x4u : 0) | (m.HasFlag(AcceleratorModifiers.Command) ? 0x8u : 0);

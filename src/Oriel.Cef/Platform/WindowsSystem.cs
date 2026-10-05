@@ -5,7 +5,8 @@ namespace Oriel.Cef.Platform;
 
 /// <summary>System-wide hooks on Windows: global hotkeys, power and session notifications, idle time, power status and
 /// power requests. UI thread only for the window-bound calls; the host window belongs to that thread.</summary>
-/// <remarks>The host is a hidden top-level window: <c>WM_POWERBROADCAST</c> does not reach message-only windows.</remarks>
+/// <remarks>The host is a hidden top-level window: <c>WM_POWERBROADCAST</c> does not reach message-only windows. Like
+/// Chromium's power window it is <c>WS_POPUP</c> and <c>WS_EX_NOACTIVATE</c>, registered for suspend and resume.</remarks>
 [SupportedOSPlatform("windows")]
 public static unsafe class WindowsSystem
 {
@@ -26,8 +27,10 @@ public static unsafe class WindowsSystem
         {
             var cls = new WndClass { WndProc = &WndProc, Instance = GetModuleHandleW(null), ClassName = name };
             RegisterClassW(&cls);
-            s_host = CreateWindowExW(0, name, name, 0x80000000 /* WS_POPUP */, 0, 0, 0, 0, 0, 0, cls.Instance, 0);
+            s_host = CreateWindowExW(0x08000000 /* WS_EX_NOACTIVATE */, name, name, 0x80000000 /* WS_POPUP */, 0, 0, 0, 0, 0, 0, cls.Instance, 0);
         }
+        // Modern Standby machines send PBT_APMSUSPEND only to windows registered for it.
+        RegisterSuspendResumeNotification(s_host, 0 /* DEVICE_NOTIFY_WINDOW_HANDLE */);
         // Lock and unlock of this session only.
         WTSRegisterSessionNotification(s_host, 0 /* NOTIFY_FOR_THIS_SESSION */);
         return s_host;
@@ -62,21 +65,42 @@ public static unsafe class WindowsSystem
         finally { CloseDesktop(desktop); }
     }
 
-    /// <summary>Whether the machine runs on battery: <c>ACLineStatus</c> 0; null when Windows cannot tell.</summary>
+    /// <summary>Whether the machine runs on battery: <c>ACLineStatus</c> 0, as Chromium's <c>GetBatteryPowerStatus</c> reads it
+    /// (an unknown line status, 255, counts as external power); null when the call fails.</summary>
     public static bool? OnBattery()
     {
         PowerStatus status;
         if (GetSystemPowerStatus(&status) == 0) return null;
-        return status.AcLineStatus switch { 0 => true, 1 => false, _ => null };
+        return status.AcLineStatus == 0;
     }
 
-    /// <summary>Starts a power request: <paramref name="type"/> is a <c>POWER_REQUEST_TYPE</c> (0 display, 1 system);
-    /// returns its handle, or 0 if Windows refused.</summary>
+    /// <summary>The CPU idleness percentage from <c>SystemPowerInformation</c>; null if the call fails.</summary>
+    public static int? CpuIdleness()
+    {
+        SystemPowerInformation info;
+        return CallNtPowerInformation(12 /* SystemPowerInformation */, null, 0, &info, (uint)sizeof(SystemPowerInformation)) >= 0 ? (int)info.Idleness : null;
+    }
+
+    /// <summary>Each logical CPU's <c>MaxIdleState</c> and <c>CurrentIdleState</c> from <c>ProcessorInformation</c>; null if the
+    /// call fails.</summary>
+    public static (uint Max, uint Current)[]? ProcessorIdleStates()
+    {
+        var count = (int)GetActiveProcessorCount(0xFFFF /* ALL_PROCESSOR_GROUPS */);
+        var info = new ProcessorPowerInformation[count];
+        fixed (ProcessorPowerInformation* p = info)
+            if (CallNtPowerInformation(11 /* ProcessorInformation */, null, 0, p, (uint)(sizeof(ProcessorPowerInformation) * count)) < 0) return null;
+        var states = new (uint, uint)[count];
+        for (var i = 0; i < count; i++) states[i] = (info[i].MaxIdleState, info[i].CurrentIdleState);
+        return states;
+    }
+
+    /// <summary>Starts a power request: <paramref name="type"/> is a <c>POWER_REQUEST_TYPE</c> (0 display, 1 system, 3
+    /// execution); returns its handle, or 0 if Windows refused.</summary>
     public static nint StartPowerRequest(int type, string reason)
     {
         fixed (char* r = reason)
         {
-            var context = new ReasonContext { Version = 0, Flags = 0x1 /* POWER_REQUEST_CONTEXT_SIMPLE_STRING */, Reason = r };
+            var context = new ReasonContext { Version = 0 /* POWER_REQUEST_CONTEXT_VERSION */, Flags = 0x1 /* POWER_REQUEST_CONTEXT_SIMPLE_STRING */, Reason = r };
             var request = PowerCreateRequest(&context);
             if (request == -1) return 0;
             if (PowerSetRequest(request, type) != 0) return request;
@@ -134,6 +158,26 @@ public static unsafe class WindowsSystem
     }
 
     [StructLayout(LayoutKind.Sequential)]
+    private struct SystemPowerInformation
+    {
+        public uint MaxIdlenessAllowed;
+        public uint Idleness;
+        public uint TimeRemaining;
+        public byte CoolingMode;
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct ProcessorPowerInformation
+    {
+        public uint Number;
+        public uint MaxMhz;
+        public uint CurrentMhz;
+        public uint MhzLimit;
+        public uint MaxIdleState;
+        public uint CurrentIdleState;
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
     private struct ReasonContext
     {
         public uint Version;
@@ -169,6 +213,9 @@ public static unsafe class WindowsSystem
     [DllImport("kernel32.dll")] private static extern nint PowerCreateRequest(ReasonContext* context);
     [DllImport("kernel32.dll")] private static extern int PowerSetRequest(nint request, int type);
     [DllImport("kernel32.dll")] private static extern int PowerClearRequest(nint request, int type);
+    [DllImport("powrprof.dll")] private static extern int CallNtPowerInformation(int level, void* input, uint inputLength, void* output, uint outputLength);
+    [DllImport("kernel32.dll")] private static extern uint GetActiveProcessorCount(ushort group);
+    [DllImport("user32.dll")] private static extern nint RegisterSuspendResumeNotification(nint recipient, uint flags);
     [DllImport("kernel32.dll")] private static extern int CloseHandle(nint handle);
     [DllImport("wtsapi32.dll")] private static extern int WTSRegisterSessionNotification(nint hwnd, uint flags);
     [DllImport("user32.dll")] private static extern ushort RegisterClassW(WndClass* cls);

@@ -218,6 +218,38 @@ static unsafe class WindowsShell
         Thread.Sleep(100);
     }
 
+    /// <summary>Presses the keys, then sends the last key's key-down <paramref name="repeats"/> more times as a held key
+    /// does, then releases them in reverse.</summary>
+    internal static void Hold(int repeats, params byte[] keys)
+    {
+        foreach (var key in keys) keybd_event(key, 0, 0, 0);
+        for (var i = 0; i < repeats; i++) { Thread.Sleep(30); keybd_event(keys[^1], 0, 0, 0); }
+        Thread.Sleep(50);
+        foreach (var key in keys.Reverse()) keybd_event(key, 0, 0x2 /* KEYEVENTF_KEYUP */, 0);
+        Thread.Sleep(100);
+    }
+
+    /// <summary>The entries of <c>powercfg /requests</c> by section (<c>DISPLAY</c>, <c>SYSTEM</c>, <c>EXECUTION</c>, ...);
+    /// null when powercfg refuses, which it does without elevation.</summary>
+    internal static Dictionary<string, List<string>>? PowerRequests()
+    {
+        var psi = new System.Diagnostics.ProcessStartInfo("powercfg.exe") { UseShellExecute = false, CreateNoWindow = true, RedirectStandardOutput = true };
+        psi.ArgumentList.Add("/requests");
+        using var process = System.Diagnostics.Process.Start(psi)!;
+        var text = process.StandardOutput.ReadToEnd();
+        process.WaitForExit();
+        if (process.ExitCode != 0) return null;
+        var sections = new Dictionary<string, List<string>>();
+        List<string>? current = null;
+        foreach (var raw in text.Split('\n'))
+        {
+            var line = raw.TrimEnd('\r');
+            if (line.Length > 1 && line.EndsWith(':') && !line.Any(char.IsLower)) sections[line[..^1]] = current = [];
+            else if (current is not null && line.Length > 0 && line != "None.") current.Add(line);
+        }
+        return sections;
+    }
+
     /// <summary>A real mouse move, which counts as user input.</summary>
     internal static void Nudge()
     {

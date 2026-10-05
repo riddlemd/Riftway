@@ -171,15 +171,14 @@ Entries marked _(branch `x`)_ are on that branch and not yet in `main`.
 | ID | Electron | Oriel | Why | Possible resolution |
 |---|---|---|---|---|
 | J1 | `globalShortcut` on macOS and Linux | Windows only: macOS and Linux throw `PlatformNotSupportedException` behind `IGlobalShortcutBackend` _(branch `power-shortcuts`)_ | OS | macOS Carbon `RegisterEventHotKey`; Linux X11 `XGrabKey` or the GlobalShortcuts portal |
-| J2 | What a held shortcut does on Windows (repeats or not) | Fires once per press (`MOD_NOREPEAT`) _(branch `power-shortcuts`)_ | Unknown: Electron's Windows behaviour unchecked | Compare with Electron |
+| J2 | A `Super`/`Command` global shortcut on Windows | Registers with `MOD_WIN`, so it fires on Windows key plus the key _(branch `power-shortcuts`)_ | Design: Chromium registers the bare key for Super shortcuts (`global_accelerator_listener_win.cc` drops `MOD_WIN`), which grabs it system-wide and never fires | Copy Chromium if bug-for-bug parity is wanted |
 
 ## powerMonitor, powerSaveBlocker
 
 | ID | Electron | Oriel | Why | Possible resolution |
 |---|---|---|---|---|
 | U1 | `powerMonitor` and `powerSaveBlocker` on macOS and Linux | Windows only: macOS and Linux throw `PlatformNotSupportedException` _(branch `power-shortcuts`)_ | OS | macOS IOKit power notifications and assertions; Linux logind over D-Bus and the Inhibit portal |
-| U2 | `speed-limit-change` (Windows), `thermal-state-change`, `getCurrentThermalState` (macOS), `shutdown` (Linux, macOS), `user-did-become-active`/`user-did-resign-active` (macOS) | Missing _(branch `power-shortcuts`)_ | OS; Todo | Windows: `PowerRegisterSuspendResumeNotification` and processor power information for the speed limit |
-| U3 | `prevent-app-suspension` keeps the system awake | `PowerRequestSystemRequired`; Chromium's exact request type on Windows is unchecked _(branch `power-shortcuts`)_ | Unknown | Compare with Chromium's `power_save_blocker_win` |
+| U2 | `thermal-state-change`, `getCurrentThermalState` (macOS), `shutdown` (Linux, macOS), `user-did-become-active`/`user-did-resign-active` (macOS) | Missing _(branch `power-shortcuts`)_ | OS: not emitted on Windows either (Chromium has no Windows thermal or shutdown source) | macOS IOKit and `NSProcessInfo` thermal state; Linux logind `PrepareForShutdown` |
 
 ## IPC, contextBridge, protocol
 

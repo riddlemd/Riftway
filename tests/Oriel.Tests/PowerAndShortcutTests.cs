@@ -46,23 +46,104 @@ public sealed class PowerAndShortcutTests
     }
 
     [Fact]
-    public void Key_IsTheParsedCombination_WithNoRepeat()
+    public void Key_IsTheParsedCombination_WithNoRepeatFlag()
     {
         var key = GlobalShortcuts.Key("Ctrl+Alt+Shift+F9");
-        Assert.Equal(0x4007u, key.Modifiers);
+        Assert.Equal(0x7u, key.Modifiers);
         Assert.Equal(0x78u, key.VirtualKey);
         Assert.Equal(key, GlobalShortcuts.Key("Shift+Control+Alt+F9"));
         Assert.NotEqual(key, GlobalShortcuts.Key("Ctrl+Alt+F9"));
-        Assert.Equal(new HotKey(0x4002, 0x41), GlobalShortcuts.Key("CmdOrCtrl+A"));
+        Assert.Equal(new HotKey(0x2, 0x41), GlobalShortcuts.Key("CmdOrCtrl+A"));
         Assert.Throws<ArgumentException>(() => GlobalShortcuts.Key("Ctrl+Nope"));
     }
 
     [Fact]
-    public void Blockers_MapToPowerRequestTypes()
+    public void Blockers_MapToChromiumsPowerRequests()
     {
-        Assert.Equal(0, PowerSaveBlockers.RequestType(PowerSaveBlockerType.PreventDisplaySleep));
-        Assert.Equal(1, PowerSaveBlockers.RequestType(PowerSaveBlockerType.PreventAppSuspension));
-        Assert.Equal("Oriel: prevent-display-sleep", PowerSaveBlockers.Reason(PowerSaveBlockerType.PreventDisplaySleep));
-        Assert.Equal("Oriel: prevent-app-suspension", PowerSaveBlockers.Reason(PowerSaveBlockerType.PreventAppSuspension));
+        Assert.Equal([0], PowerSaveBlockers.RequestTypes(PowerSaveBlockerType.PreventDisplaySleep, true));
+        Assert.Equal([0, 1], PowerSaveBlockers.RequestTypes(PowerSaveBlockerType.PreventDisplaySleep, false));
+        Assert.Equal([3], PowerSaveBlockers.RequestTypes(PowerSaveBlockerType.PreventAppSuspension, true));
+        Assert.Equal([3], PowerSaveBlockers.RequestTypes(PowerSaveBlockerType.PreventAppSuspension, false));
+    }
+
+    [Fact]
+    public void Reason_IsTheProductNameThenTheAppName()
+    {
+        Assert.Equal("Product", PowerSaveBlockers.Reason("Product", "app"));
+        Assert.Equal("app", PowerSaveBlockers.Reason("", "app"));
+        Assert.Equal("app", PowerSaveBlockers.Reason(null, "app"));
+        Assert.Equal("Oriel", PowerSaveBlockers.Reason(null, null));
+    }
+
+    [Fact]
+    public void Effective_DisplayBeatsAppAndNoneIsNull()
+    {
+        const PowerSaveBlockerType app = PowerSaveBlockerType.PreventAppSuspension, display = PowerSaveBlockerType.PreventDisplaySleep;
+        Assert.Null(PowerSaveBlockers.Effective([]));
+        Assert.Equal(app, PowerSaveBlockers.Effective([app, app]));
+        Assert.Equal(display, PowerSaveBlockers.Effective([display]));
+        Assert.Equal(display, PowerSaveBlockers.Effective([app, display, app]));
+    }
+
+    [Fact]
+    public void Throttling_IsTheMeanDistanceFromTheDeepestIdleState()
+    {
+        Assert.Equal(0f, PowerRules.Throttling([]));
+        Assert.Equal(0f, PowerRules.Throttling([(2u, 2u), (3u, 3u)]));
+        Assert.Equal(0.5f, PowerRules.Throttling([(2u, 1u)]));
+        Assert.Equal(0.5f, PowerRules.Throttling([(2u, 0u), (2u, 2u)]));
+        Assert.Equal(1f / 9, PowerRules.Throttling([(3u, 2u), (3u, 3u), (3u, 3u)]), 5);
+        Assert.Equal(0f, PowerRules.Throttling([(0u, 0u)]));
+    }
+
+    private static int[] Run(SpeedLimitFilter filter, int count, int idleness, float throttling)
+        => [.. Enumerable.Range(0, count).Select(_ => filter.Next(idleness, throttling))];
+
+    [Fact]
+    public void SpeedLimit_StaysAtMaxUntilTheWindowIsFull_ThenIsTheMean()
+    {
+        var filter = new SpeedLimitFilter();
+        Assert.Equal([100, 100, 100, 100, 100, 100, 100, 100, 100, 50], Run(filter, 10, 10, 0.5f));
+        // The window slides: nine 50s and a 70 average 52.
+        Assert.Equal(52, filter.Next(10, 0.3f));
+    }
+
+    [Fact]
+    public void SpeedLimit_RoundsUpAndTruncatesTheMean()
+    {
+        // ceil(100 * (1 - 0.333)) = 67; nine 67s and a 74 (throttling 0.265) sum to 677, which truncates to 67, not 68.
+        var filter = new SpeedLimitFilter();
+        Run(filter, 9, 10, 0.333f);
+        Assert.Equal(67, filter.Next(10, 0.265f));
+    }
+
+    [Theory]
+    [InlineData(91, 0.5f)]
+    [InlineData(10, 0.09f)]
+    public void SpeedLimit_IdleOrBarelyThrottledResetsTheWindow(int idleness, float throttling)
+    {
+        var filter = new SpeedLimitFilter();
+        Run(filter, 10, 10, 0.5f);
+        Assert.Equal(100, filter.Next(idleness, throttling));
+        // The window was emptied, so ten samples are needed again.
+        Assert.Equal([100, 100, 100, 100, 100, 100, 100, 100, 100, 50], Run(filter, 10, 10, 0.5f));
+    }
+
+    [Theory]
+    [InlineData(90, 0.5f, 50)]
+    [InlineData(10, 0.1f, 90)]
+    public void SpeedLimit_ThresholdsAreInclusive(int idleness, float throttling, int expected)
+    {
+        var filter = new SpeedLimitFilter();
+        Assert.Equal(expected, Run(filter, 10, idleness, throttling)[^1]);
+    }
+
+    [Fact]
+    public void SpeedLimit_AnUnreadableIdlenessGivesMaxAndKeepsTheWindow()
+    {
+        var filter = new SpeedLimitFilter();
+        Run(filter, 9, 10, 0.5f);
+        Assert.Equal(100, filter.Next(null, 0.5f));
+        Assert.Equal(50, filter.Next(10, 0.5f));
     }
 }
