@@ -754,7 +754,33 @@ public sealed unsafe class BrowserWindow
     public nint GetNativeWindowHandle() => Query(w => (nint)w->get_window_handle(w), 0);
 
     /// <summary>Keeps the window above others, or stops. Electron's <c>win.setAlwaysOnTop()</c>.</summary>
-    public void SetAlwaysOnTop(bool flag) => Command(w => w->set_always_on_top(w, flag ? 1 : 0));
+    /// <remarks>On macOS, <paramref name="level"/> (<c>normal</c>, <c>floating</c>, <c>torn-off-menu</c>, <c>modal-panel</c>,
+    /// <c>main-menu</c>, <c>status</c>, <c>pop-up-menu</c>, <c>screen-saver</c>) plus <paramref name="relativeLevel"/> sets the
+    /// window's level, as Electron; elsewhere they are ignored (DRIFT W29).</remarks>
+    /// <exception cref="ArgumentException">An unknown level.</exception>
+    public void SetAlwaysOnTop(bool flag, string level = "floating", int relativeLevel = 0)
+    {
+        var macLevel = MacWindowLevel(level) ?? throw new ArgumentException($"Unknown level '{level}'.", nameof(level));
+        Command(w =>
+        {
+            var onTop = flag && level != "normal";
+            w->set_always_on_top(w, onTop ? 1 : 0);
+            if (OperatingSystem.IsMacOS()) MacWindow.SetLevel((nint)w->get_window_handle(w), onTop ? macLevel + relativeLevel : 0);
+        });
+    }
+
+    /// <summary>Electron's level names as AppKit window levels (NSWindowLevel).</summary>
+    internal static long? MacWindowLevel(string level) => level switch
+    {
+        "normal" => 0,
+        "floating" or "torn-off-menu" => 3,
+        "modal-panel" => 8,
+        "main-menu" => 24,
+        "status" => 25,
+        "pop-up-menu" => 101,
+        "screen-saver" => 1000,
+        _ => null,
+    };
 
     /// <summary>Whether the window stays above others. Electron's <c>win.isAlwaysOnTop()</c>.</summary>
     public bool IsAlwaysOnTop => Query(w => w->is_always_on_top(w) != 0, false);
@@ -776,27 +802,47 @@ public sealed unsafe class BrowserWindow
     public string GetTitle() => Query(w => CefString.ReadUserFree(w->get_title(w)), string.Empty);
 
     /// <summary>Moves and resizes the window, in screen DIPs. Electron's <c>win.setBounds()</c>.</summary>
-    public void SetBounds(Rectangle bounds) => Command(w =>
+    /// <remarks>On macOS, <paramref name="animate"/> uses AppKit's animation; elsewhere it is ignored, as in Electron.</remarks>
+    public void SetBounds(Rectangle bounds, bool animate = false) => Command(w => ApplyOuterBounds(w, bounds, animate));
+
+    private static void ApplyOuterBounds(cef_window_t* w, Rectangle bounds, bool animate)
     {
+        if (animate && OperatingSystem.IsMacOS())
+        {
+            MacWindow.AnimateFrame((nint)w->get_window_handle(w), bounds.X, bounds.Y, bounds.Width, bounds.Height);
+            return;
+        }
         var rect = new cef_rect_t { x = bounds.X, y = bounds.Y, width = bounds.Width, height = bounds.Height };
         w->@base.@base.set_bounds(&w->@base.@base, &rect);
-    });
+    }
+
+    private static Rectangle OuterBoundsOn(cef_window_t* w) => ToRectangle(w->@base.@base.get_bounds_in_screen(&w->@base.@base));
 
     /// <summary>The window's bounds in screen DIPs. Electron's <c>win.getBounds()</c>.</summary>
     public Rectangle GetBounds() => Query(w => ToRectangle(w->@base.@base.get_bounds_in_screen(&w->@base.@base)), default);
 
     /// <summary>Resizes the window, keeping its position. Electron's <c>win.setSize()</c>.</summary>
-    public void SetSize(int width, int height) => Command(w =>
+    /// <remarks>On macOS, <paramref name="animate"/> uses AppKit's animation; elsewhere it is ignored, as in Electron.</remarks>
+    public void SetSize(int width, int height, bool animate = false) => Command(w =>
     {
-        var size = new cef_size_t { width = width, height = height };
-        w->@base.@base.set_size(&w->@base.@base, &size);
+        if (animate) ApplyOuterBounds(w, OuterBoundsOn(w) with { Width = width, Height = height }, animate);
+        else
+        {
+            var size = new cef_size_t { width = width, height = height };
+            w->@base.@base.set_size(&w->@base.@base, &size);
+        }
     });
 
     /// <summary>Moves the window, keeping its size. Electron's <c>win.setPosition()</c>.</summary>
-    public void SetPosition(int x, int y) => Command(w =>
+    /// <remarks>On macOS, <paramref name="animate"/> uses AppKit's animation; elsewhere it is ignored, as in Electron.</remarks>
+    public void SetPosition(int x, int y, bool animate = false) => Command(w =>
     {
-        var point = new cef_point_t { x = x, y = y };
-        w->@base.@base.set_position(&w->@base.@base, &point);
+        if (animate) ApplyOuterBounds(w, OuterBoundsOn(w) with { X = x, Y = y }, animate);
+        else
+        {
+            var point = new cef_point_t { x = x, y = y };
+            w->@base.@base.set_position(&w->@base.@base, &point);
+        }
     });
 
     /// <summary>Centres the window on its display. Electron's <c>win.center()</c>.</summary>
@@ -876,17 +922,19 @@ public sealed unsafe class BrowserWindow
     public Rectangle GetContentBounds() => Query(ContentBoundsOn, default);
 
     /// <summary>Places the window so its page area has <paramref name="bounds"/>. Electron's <c>win.setContentBounds()</c>.</summary>
-    public void SetContentBounds(Rectangle bounds) => Command(w => SetContentBoundsOn(w, bounds));
+    /// <remarks>On macOS, <paramref name="animate"/> uses AppKit's animation; elsewhere it is ignored, as in Electron.</remarks>
+    public void SetContentBounds(Rectangle bounds, bool animate = false) => Command(w => SetContentBoundsOn(w, bounds, animate));
 
     /// <summary>The page area's size. Electron's <c>win.getContentSize()</c>.</summary>
     public (int Width, int Height) GetContentSize() => GetContentBounds() is var b ? (b.Width, b.Height) : default;
 
     /// <summary>Resizes the window so its page area is <paramref name="width"/>×<paramref name="height"/>.
     /// Electron's <c>win.setContentSize()</c>.</summary>
-    public void SetContentSize(int width, int height) => Command(w =>
+    /// <remarks>On macOS, <paramref name="animate"/> uses AppKit's animation; elsewhere it is ignored, as in Electron.</remarks>
+    public void SetContentSize(int width, int height, bool animate = false) => Command(w =>
     {
         var content = ContentBoundsOn(w);
-        SetContentBoundsOn(w, content with { Width = width, Height = height });
+        SetContentBoundsOn(w, content with { Width = width, Height = height }, animate);
     });
 
     /// <summary>Sets the colour behind the page. Electron's <c>win.setBackgroundColor()</c>.</summary>
@@ -1102,7 +1150,7 @@ public sealed unsafe class BrowserWindow
         return client with { Y = client.Y + bar, Height = client.Height - bar };
     }
 
-    private void SetContentBoundsOn(cef_window_t* w, Rectangle content)
+    private void SetContentBoundsOn(cef_window_t* w, Rectangle content, bool animate = false)
     {
         // The frame is whatever the window has beyond its page area; keep it the same around the new content.
         var outer = ToRectangle(w->@base.@base.get_bounds_in_screen(&w->@base.@base));
@@ -1114,7 +1162,7 @@ public sealed unsafe class BrowserWindow
             width = content.Width + (outer.Width - inner.Width),
             height = content.Height + (outer.Height - inner.Height),
         };
-        w->@base.@base.set_bounds(&w->@base.@base, &rect);
+        ApplyOuterBounds(w, ToRectangle(rect), animate);
     }
 
     /// <summary>Parses <c>#RRGGBB</c> or <c>#AARRGGBB</c> into CEF's ARGB.</summary>

@@ -135,6 +135,34 @@ async Task RunAsync(BrowserWindow win, BrowserWindow simple)
     Check("always on top", Eventually(() => win.IsAlwaysOnTop, step), win.IsAlwaysOnTop);
     win.SetAlwaysOnTop(false);
     Check("always on top cleared", Eventually(() => !win.IsAlwaysOnTop, step), win.IsAlwaysOnTop);
+#pragma warning disable CA1416 // macOS only, inside the IsMacOS check
+    if (OperatingSystem.IsMacOS())
+    {
+        win.SetAlwaysOnTop(true, "status", 1);
+        Check("SetAlwaysOnTop level and relativeLevel set the window level, as Electron",
+            Eventually(() => Oriel.Cef.CefThread.InvokeOnUi(() => Oriel.Cef.Platform.MacWindow.GetLevel(win.GetNativeWindowHandle())) == 26, step) && win.IsAlwaysOnTop,
+            Oriel.Cef.CefThread.InvokeOnUi(() => Oriel.Cef.Platform.MacWindow.GetLevel(win.GetNativeWindowHandle())));
+        win.SetAlwaysOnTop(false);
+        Check("SetAlwaysOnTop(false) returns to the normal level",
+            Eventually(() => Oriel.Cef.CefThread.InvokeOnUi(() => Oriel.Cef.Platform.MacWindow.GetLevel(win.GetNativeWindowHandle())) == 0, step) && !win.IsAlwaysOnTop);
+
+        // AppKit animates the frame on the main thread, so a query right after waits for the animation to end.
+        var start = win.GetBounds();
+        var target = start with { X = start.X + 120, Width = start.Width + 80 };
+        var timer = System.Diagnostics.Stopwatch.StartNew();
+        win.SetBounds(target, animate: true);
+        var landed = win.GetBounds();
+        var animated = timer.ElapsedMilliseconds;
+        win.SetBounds(start);
+        timer.Restart();
+        win.GetBounds();
+        var instant = timer.ElapsedMilliseconds;
+        Check("SetBounds with animate animates the move on macOS, as Electron", landed == target && animated >= 100 && instant < 100,
+            $"{landed} animated={animated}ms instant={instant}ms");
+        win.SetBounds(start);
+        Eventually(() => win.GetBounds() == start, step);
+    }
+#pragma warning restore CA1416
 
     Check("Maximize raises Maximized", Fires(h => win.Maximized += h, h => win.Maximized -= h, win.Maximize, step));
     Check("IsMaximized", Eventually(() => win.IsMaximized, step), win.IsMaximized);

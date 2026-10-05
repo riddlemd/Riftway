@@ -135,6 +135,29 @@ public static unsafe class MacWindow
 
     private static void SetFrame(nint window, NSRect frame) => SendSetFrame(window, Sel("setFrame:display:"u8), frame, 1);
 
+    /// <summary>The window's level (NSWindowLevel).</summary>
+    public static long GetLevel(nint contentView) => NSWindowOf(contentView) is var window && window != 0 ? (long)Send(window, Sel("level"u8)) : 0;
+
+    /// <summary>Sets the window's level (NSWindowLevel).</summary>
+    public static void SetLevel(nint contentView, long level)
+    {
+        var window = NSWindowOf(contentView);
+        if (window != 0) SendObject(window, Sel("setLevel:"u8), (nint)level);
+    }
+
+    /// <summary>Moves and resizes the window with AppKit's animation; the rectangle is in screen points with the origin at
+    /// the top left of the main display, as Views uses.</summary>
+    public static void AnimateFrame(nint contentView, int x, int y, int width, int height)
+    {
+        var window = NSWindowOf(contentView);
+        if (window == 0) return;
+        // AppKit's origin is the bottom left of the first screen.
+        var screens = Send(Class("NSScreen"u8), Sel("screens"u8));
+        var primary = Frame(Send(screens, Sel("firstObject"u8)));
+        var frame = new NSRect { X = x, Y = primary.Height - (y + height), Width = width, Height = height };
+        SendAnimateFrame(window, Sel("setFrame:display:animate:"u8), frame, 1, 1);
+    }
+
     // u8 literals are null-terminated in memory, as the runtime expects.
     private static nint Class(ReadOnlySpan<byte> name)
     {
@@ -162,4 +185,5 @@ public static unsafe class MacWindow
     [DllImport(ObjC, EntryPoint = "objc_msgSend")] private static extern void SendObject(nint receiver, nint selector, nint arg);
     [DllImport(ObjC, EntryPoint = "objc_msgSendSuper")] private static extern void SendSuperObject(ObjcSuper* super, nint selector, nint arg);
     [DllImport(ObjC, EntryPoint = "objc_msgSend")] private static extern void SendSetFrame(nint receiver, nint selector, NSRect frame, byte display);
+    [DllImport(ObjC, EntryPoint = "objc_msgSend")] private static extern void SendAnimateFrame(nint receiver, nint selector, NSRect frame, byte display, byte animate);
 }
