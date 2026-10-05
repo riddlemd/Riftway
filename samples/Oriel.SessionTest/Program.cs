@@ -522,7 +522,8 @@ async Task RunAsync()
     }
     var badLanguage = await Throws(() => { spelling.SetSpellCheckerLanguages(["en-US", "xx"]); return Task.CompletedTask; });
     Check("an unknown language throws Electron's error", badLanguage is ArgumentException && badLanguage.Message.StartsWith("Invalid language code provided: \"xx\" is not a valid language code"), badLanguage?.Message);
-    var spellWin = new BrowserWindow(new BrowserWindowOptions { Width = 500, Height = 200, WebPreferences = new WebPreferences { Session = spelling } });
+    // On top: Chromium hides a page whose window other windows cover (Windows occlusion), and a hidden page drops mouse input.
+    var spellWin = new BrowserWindow(new BrowserWindowOptions { Width = 500, Height = 200, AlwaysOnTop = true, WebPreferences = new WebPreferences { Session = spelling } });
     await spellWin.LoadUrl(SpellPage);
     // Chromium checks what is typed, once a word ends.
     async Task TypeMisspelling()

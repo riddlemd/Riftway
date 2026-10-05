@@ -174,6 +174,9 @@ public sealed unsafe partial class WebContents
         var misspelled = CefString.ReadUserFree(p->get_misspelled_word(p));
         // macOS checks with the system spell checker, whose guesses Chromium fetches only when it builds its own menu.
         if (OperatingSystem.IsMacOS() && words.Count == 0 && misspelled.Length > 0) words = [.. Oriel.Cef.Platform.MacSpelling.Guesses(misspelled)];
+        // Windows likewise leaves the Windows spell checker's out; Electron patches Chromium to fetch them with the check.
+        if (OperatingSystem.IsWindows() && words.Count == 0 && misspelled.Length > 0)
+            words = [.. Oriel.Cef.Platform.WindowsSpelling.Suggestions(misspelled, Session.GetSpellCheckerLanguages())];
 
         var args = new ContextMenuParams
         {
