@@ -21,9 +21,9 @@ Counted from the Checklist at the end: `BaseWindow` and `BrowserWindow` are one 
 | webPreferences | 46 | 11 | 3 | 25 | 7 | 28.2% | 32.1% |
 | Instance methods | 143 | 62 | 9 | 66 | 6 | 45.3% | 48.5% |
 | Instance properties | 24 | 11 | 0 | 13 | 0 | 45.8% | 45.8% |
-| Events | 35 | 12 | 4 | 19 | 0 | 34.3% | 40.0% |
+| Events | 35 | 14 | 4 | 17 | 0 | 40.0% | 45.7% |
 | Static methods | 6 | 4 | 0 | 1 | 1 | 80.0% | 80.0% |
-| **Total** | 308 | 126 | 18 | 150 | 14 | 42.9% | 45.9% |
+| **Total** | 308 | 128 | 18 | 148 | 14 | 43.5% | 46.6% |
 
 ## Done since the audit
 
@@ -462,8 +462,8 @@ Parameters in brackets are optional in Electron. `webContents` members are in [w
 | `moved` | — | missing |  |
 | `enter-full-screen` | `EnteredFullScreen` | done |  |
 | `leave-full-screen` | `LeftFullScreen` | done |  |
-| `enter-html-full-screen` | — | missing |  |
-| `leave-html-full-screen` | — | missing |  |
+| `enter-html-full-screen` | `EnterHtmlFullScreen` | done |  |
+| `leave-html-full-screen` | `LeaveHtmlFullScreen` | done |  |
 | `always-on-top-changed` | — | missing |  |
 | `app-command` | — | missing |  |
 | `swipe` | — | missing |  |

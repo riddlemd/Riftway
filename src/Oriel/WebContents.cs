@@ -61,7 +61,12 @@ public sealed unsafe partial class WebContents
         _appPreload = appPreload;
         _devTools.EventReceived += OnDevToolsEvent;
 
-        Display = new DisplayHandler { TitleChanged = OnTitleChanged, FaviconUrlsChanged = OnFaviconUrlsChanged };
+        Display = new DisplayHandler
+        {
+            TitleChanged = OnTitleChanged,
+            FaviconUrlsChanged = OnFaviconUrlsChanged,
+            FullscreenModeChanged = OnFullscreenModeChanged,
+        };
         ContextMenuRequests = new ContextMenuHandler(OnContextMenu);
         Load = new LoadHandler
         {
@@ -69,6 +74,7 @@ public sealed unsafe partial class WebContents
             LoadingStateChanged = loading => Raise(loading ? DidStartLoading : DidStopLoading),
             LoadEnded = (isMain, _) =>
             {
+                if (_navigated) DidFrameFinishLoad?.Invoke(this, isMain);
                 if (!isMain) return;
                 if (_navigated && !_bootstrapForgotten)
                 {
@@ -85,7 +91,11 @@ public sealed unsafe partial class WebContents
                     (code, text) = (BlockedByClientError, "ERR_BLOCKED_BY_CLIENT");
                 // An aborted load was superseded by a newer one, whose task stays pending; LoadUrl already failed the old one.
                 if (isMain && _navigated && code != AbortedError) CompleteLoad(new LoadFailedException(code, text, url));
-                if (_navigated) DidFailLoad?.Invoke(this, new LoadFailedEventArgs(code, text, url, isMain));
+                if (!_navigated) return;
+                var failure = new LoadFailedEventArgs(code, text, url, isMain);
+                DidFailProvisionalLoad?.Invoke(this, failure);
+                // Electron's did-fail-load leaves out cancelled loads.
+                if (code != AbortedError) DidFailLoad?.Invoke(this, failure);
             },
         };
         var webRequest = session.WebRequest;

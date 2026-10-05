@@ -11,14 +11,14 @@ Percentages are over the non-n/a items; the second counts a partial item as half
 | Area | Items | Done | Partial | Missing | n/a | % done | % done + partial/2 |
 |---|---|---|---|---|---|---|---|
 | Static methods | 5 | 1 | 2 | 2 | 0 | 20.0% | 40.0% |
-| Instance events | 59 | 16 | 7 | 34 | 2 | 28.1% | 34.2% |
-| Instance methods | 118 | 25 | 5 | 80 | 8 | 22.7% | 25.0% |
+| Instance events | 59 | 20 | 8 | 29 | 2 | 35.1% | 42.1% |
+| Instance methods | 118 | 25 | 7 | 78 | 8 | 22.7% | 25.9% |
 | Instance properties | 18 | 7 | 1 | 9 | 1 | 41.2% | 44.1% |
 | navigationHistory | 14 | 12 | 0 | 2 | 0 | 85.7% | 85.7% |
 | WebFrameMain events and statics | 3 | 1 | 0 | 2 | 0 | 33.3% | 33.3% |
 | WebFrameMain methods | 9 | 1 | 3 | 5 | 0 | 11.1% | 27.8% |
 | WebFrameMain properties | 15 | 9 | 0 | 6 | 0 | 60.0% | 60.0% |
-| **Total** | 241 | 72 | 18 | 140 | 11 | 31.3% | 35.2% |
+| **Total** | 241 | 76 | 21 | 133 | 11 | 33.0% | 37.6% |
 
 ## Checklist
 
@@ -46,8 +46,8 @@ Percentages are over the non-n/a items; the second counts a partial item as half
 | `context-menu` | `ContextMenu` | partial | Params `frame`, `linkText`, `altText`, `selectionRect`, `menuSourceType`, `formControlType`, `referrerPolicy`, `suggestedFilename`, `selectionStartOffset` missing (C8). |
 | `will-attach-webview` | — | n/a | <webview> |
 | `did-attach-webview` | — | n/a | <webview> |
-| `did-fail-provisional-load` | — | missing |  |
-| `did-frame-finish-load` | — | missing |  |
+| `did-fail-provisional-load` | `DidFailProvisionalLoad` | done | `DidFailLoad` now leaves out cancelled loads, as Electron's. |
+| `did-frame-finish-load` | `DidFrameFinishLoad` | partial | No process or routing ids (F2). |
 | `page-favicon-updated` | `PageFaviconUpdated` | done |  |
 | `content-bounds-updated` | — | missing |  |
 | `will-navigate` | `WillNavigate` | done | `Initiator` is null (C12). |
@@ -66,8 +66,8 @@ Percentages are over the non-n/a items; the second counts a partial item as half
 | `input-event` | — | missing |  |
 | `before-input-event` | `BeforeInputEvent` | partial | `modifiers` shape (C15); `code`, `isComposing`, `location` derived (C16). |
 | `before-mouse-event` | — | missing |  |
-| `enter-html-full-screen` | — | missing |  |
-| `leave-html-full-screen` | — | missing |  |
+| `enter-html-full-screen` | `EnterHtmlFullScreen` | done |  |
+| `leave-html-full-screen` | `LeaveHtmlFullScreen` | done |  |
 | `zoom-changed` | — | missing |  |
 | `blur` | — | missing |  |
 | `focus` | — | missing |  |
@@ -79,7 +79,7 @@ Percentages are over the non-n/a items; the second counts a partial item as half
 | `certificate-error` | `CertificateError` | done | The app's `CertificateError` follows, with the same arguments. |
 | `select-client-certificate` | — | missing |  |
 | `login` | `Login` | done | The app's `Login` follows, with the same arguments. |
-| `found-in-page` | — | missing |  |
+| `found-in-page` | `FoundInPage` | done |  |
 | `media-started-playing` | — | missing |  |
 | `media-paused` | — | missing |  |
 | `audio-state-changed` | — | missing |  |
@@ -162,8 +162,8 @@ Percentages are over the non-n/a items; the second counts a partial item as half
 | `replace()` | — | missing |  |
 | `replaceMisspelling(text)` | `ReplaceMisspelling` | done |  |
 | `insertText()` | — | missing |  |
-| `findInPage()` | — | missing |  |
-| `stopFindInPage()` | — | missing |  |
+| `findInPage(text, options)` | `FindInPage` | partial | A new session only when the text or case changes (C18). |
+| `stopFindInPage(action)` | `StopFindInPage` | partial | `activateSelection` keeps the selection (C18). |
 | `capturePage()` | — | missing |  |
 | `isBeingCaptured()` | — | missing |  |
 | `getPrintersAsync()` | — | missing |  |

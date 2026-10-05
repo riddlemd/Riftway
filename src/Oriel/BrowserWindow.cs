@@ -280,6 +280,8 @@ public sealed unsafe class BrowserWindow
             throw new InvalidOperationException("A window a page opens must use its opener's session.");
         WebContents = new WebContents(_options.WebPreferences.Preload is { } preload ? File.ReadAllText(preload) : null, _options.WebPreferences, session);
         WebContents.PageTitleUpdated += (_, e) => PageTitleUpdated?.Invoke(this, e);
+        WebContents.EnterHtmlFullScreen += (_, _) => EnterHtmlFullScreen?.Invoke(this, EventArgs.Empty);
+        WebContents.LeaveHtmlFullScreen += (_, _) => LeaveHtmlFullScreen?.Invoke(this, EventArgs.Empty);
         WebContents.TitleApplied = SetTitle;
         WebContents.PageMouseDown = () => _menuBar?.OnPageMouseDown();
         WebContents.DidFinishLoad += (_, _) =>
@@ -294,6 +296,7 @@ public sealed unsafe class BrowserWindow
         {
             Permission = WebContents.Permissions,
             Download = WebContents.Downloads,
+            Find = WebContents.Finds,
         };
         if (!OperatingSystem.IsMacOS())
         {
@@ -585,6 +588,12 @@ public sealed unsafe class BrowserWindow
 
     /// <summary>The page set its title; cancel to keep the window's title. Electron's <c>page-title-updated</c>.</summary>
     public event EventHandler<PageTitleUpdatedEventArgs>? PageTitleUpdated;
+
+    /// <summary>The page entered HTML full screen. Electron's <c>enter-html-full-screen</c>.</summary>
+    public event EventHandler? EnterHtmlFullScreen;
+
+    /// <summary>The page left HTML full screen. Electron's <c>leave-html-full-screen</c>.</summary>
+    public event EventHandler? LeaveHtmlFullScreen;
 
     /// <summary>The page finished its first load, so the window can be shown without a blank flash.
     /// Electron's <c>ready-to-show</c>.</summary>

@@ -256,6 +256,7 @@ async Task RunAsync(BrowserWindow win, BrowserWindow simple)
     await WindowsApisAsync();
     await NativeImageAsync();
     await WebContentsLifecycleAsync(win);
+    await PageEventsAsync();
 
     // Closing cancelled once: the window must survive the first close.
     var closingCount = 0;
@@ -761,6 +762,86 @@ async Task DialogsAsync(BrowserWindow win)
 
     Check("Sync dialogs refuse the UI thread",
         Oriel.Cef.CefThread.InvokeOnUi(() => Throws<InvalidOperationException>(() => Dialog.ShowSaveDialogSync(win, new SaveDialogOptions()))));
+    Directory.Delete(dir, recursive: true);
+}
+
+async Task PageEventsAsync()
+{
+    var dir = Directory.CreateTempSubdirectory("oriel-page-").FullName;
+    var page = Path.Combine(dir, "find.html");
+    File.WriteAllText(page, "<!doctype html><p id=p>apple banana apple Apple</p><iframe srcdoc='<p>inner</p>'></iframe><div id=full style='background:#0a0'>full</div>");
+    var w = new BrowserWindow(new BrowserWindowOptions { Title = "Oriel window test: page events", Width = 500, Height = 300 });
+    var frameLoads = new System.Collections.Concurrent.ConcurrentQueue<bool>();
+    w.WebContents.DidFrameFinishLoad += (_, isMain) => frameLoads.Enqueue(isMain);
+    Fires(h => w.WebContents.DidFinishLoad += h, h => w.WebContents.DidFinishLoad -= h, () => w.WebContents.LoadFile(page), step);
+    Check("DidFrameFinishLoad is raised for the iframe and for the main frame, the main frame last",
+        Eventually(() => frameLoads.Count >= 2, step) && frameLoads.Contains(false) && frameLoads.Last(), string.Join(",", frameLoads));
+
+    // findInPage: a new search, follow-ups both ways, case, and stopping.
+    FoundInPageEventArgs? found = null;
+    w.WebContents.FoundInPage += (_, e) => { if (e.FinalUpdate) found = e; };
+    var lastId = 0;
+    async Task<FoundInPageEventArgs?> Find(string text, FindInPageOptions options)
+    {
+        found = null;
+        lastId = w.WebContents.FindInPage(text, options);
+        await Task.Yield();
+        return Eventually(() => found is not null, step) ? found : null;
+    }
+    w.Focus();
+    var first = await Find("apple", new FindInPageOptions { FindNext = true });
+    Check("FindInPage starts a search: FoundInPage has its request id, the matches and the first match", first is { Matches: 3, ActiveMatchOrdinal: 1 } && first.RequestId == lastId
+        && first.SelectionArea.Width > 0, first);
+    var next = await Find("apple", new FindInPageOptions());
+    Check("FindInPage with findNext false moves to the next match", next is { Matches: 3, ActiveMatchOrdinal: 2 }, next);
+    var back = await Find("apple", new FindInPageOptions { Forward = false });
+    Check("Forward false moves back", back is { ActiveMatchOrdinal: 1 }, back);
+    var cased = await Find("Apple", new FindInPageOptions { FindNext = true, MatchCase = true });
+    Check("MatchCase finds only the matching case", cased is { Matches: 1 }, cased);
+    // Stop with the case-sensitive search's match active: clear, then a fresh search kept. The DOM selection only
+    // changes when the find stops, so each is read after a pause.
+    string Selection() => (string?)Js(w, "getSelection().toString()").Result ?? "";
+    w.WebContents.StopFindInPage(StopFindAction.ClearSelection);
+    await Task.Delay(500);
+    var cleared = Selection();
+    await w.WebContents.ExecuteJavaScriptAsync("getSelection().removeAllRanges(); 1");
+    await Find("banana", new FindInPageOptions { FindNext = true });
+    w.WebContents.StopFindInPage(StopFindAction.KeepSelection);
+    await Task.Delay(500);
+    var kept = Selection();
+    Check("StopFindInPage clears the active match's selection, or keeps it", cleared == "\"\"" && kept == "\"banana\"", $"{cleared} / {kept}");
+    Check("FindInPage refuses empty text, as Electron's", Throws<ArgumentException>(() => w.WebContents.FindInPage("")));
+
+    // HTML full screen: the page asks; both the page and the window hear it.
+    var fullEvents = new System.Collections.Concurrent.ConcurrentQueue<string>();
+    w.WebContents.EnterHtmlFullScreen += (_, _) => fullEvents.Enqueue("page-enter");
+    w.WebContents.LeaveHtmlFullScreen += (_, _) => fullEvents.Enqueue("page-leave");
+    w.EnterHtmlFullScreen += (_, _) => fullEvents.Enqueue("window-enter");
+    w.LeaveHtmlFullScreen += (_, _) => fullEvents.Enqueue("window-leave");
+    await w.WebContents.ExecuteJavaScriptAsync("full.requestFullscreen().then(() => 1, () => 0)", userGesture: true);
+    var entered = Eventually(() => fullEvents.Contains("page-enter") && fullEvents.Contains("window-enter"), step);
+    await w.WebContents.ExecuteJavaScriptAsync("document.exitFullscreen().then(() => 1, () => 0)", userGesture: true);
+    var left = Eventually(() => fullEvents.Contains("page-leave") && fullEvents.Contains("window-leave"), step);
+    Check("requestFullscreen raises EnterHtmlFullScreen and exitFullscreen LeaveHtmlFullScreen, on the page and the window", entered && left, string.Join(",", fullEvents));
+
+    // did-fail-provisional-load for every failure; did-fail-load leaves out a cancelled one.
+    var provisional = new System.Collections.Concurrent.ConcurrentQueue<int>();
+    var failed = new System.Collections.Concurrent.ConcurrentQueue<int>();
+    w.WebContents.DidFailProvisionalLoad += (_, e) => provisional.Enqueue(e.ErrorCode);
+    w.WebContents.DidFailLoad += (_, e) => failed.Enqueue(e.ErrorCode);
+    _ = w.LoadUrl("http://oriel-nowhere.invalid/").ContinueWith(_ => { });
+    var unreachable = Eventually(() => !failed.IsEmpty, step);
+    Check("a failed load raises DidFailProvisionalLoad and DidFailLoad", unreachable && provisional.SequenceEqual(failed) && failed.All(c => c < 0),
+        $"{string.Join(",", provisional)} / {string.Join(",", failed)}");
+    provisional.Clear();
+    failed.Clear();
+    _ = w.LoadUrl("http://10.255.255.1/").ContinueWith(_ => { });
+    await Task.Delay(300);
+    Fires(h => w.WebContents.DidFinishLoad += h, h => w.WebContents.DidFinishLoad -= h, () => w.WebContents.LoadFile(page), step);
+    var aborted = Eventually(() => provisional.Contains(-3), step);
+    Check("a cancelled load raises DidFailProvisionalLoad (ERR_ABORTED) but not DidFailLoad, as Electron's", aborted && !failed.Contains(-3),
+        $"{string.Join(",", provisional)} / {string.Join(",", failed)}");
+    w.Destroy();
     Directory.Delete(dir, recursive: true);
 }
 

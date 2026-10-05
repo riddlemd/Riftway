@@ -205,6 +205,27 @@ public sealed unsafe class ClientHandler
 
     private readonly PermissionHandler? _permission;
 
+    /// <summary>Reports find results; null leaves them to CEF.</summary>
+    public FindHandler? Find
+    {
+        get => _find;
+        init
+        {
+            _find = value;
+            if (value is not null) Native->get_find_handler = &GetFindHandler;
+        }
+    }
+
+    private readonly FindHandler? _find;
+
+    [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])]
+    private static cef_find_handler_t* GetFindHandler(cef_client_t* self)
+    {
+        var handler = NativeObject.Owner<ClientHandler>(self)._find!.Native;
+        NativeObject.AddRef(handler);
+        return handler;
+    }
+
     /// <summary>Reports downloads; null leaves them to CEF.</summary>
     public DownloadHandler? Download
     {
@@ -642,6 +663,17 @@ public sealed unsafe class DisplayHandler
         Native = NativeObject.Create<cef_display_handler_t>(this);
         Native->on_title_change = &OnTitleChange;
         Native->on_favicon_urlchange = &OnFaviconUrlChange;
+        Native->on_fullscreen_mode_change = &OnFullscreenModeChange;
+    }
+
+    /// <summary>The page entered (true) or left HTML full screen; Chrome style resizes the window itself.</summary>
+    public Action<bool>? FullscreenModeChanged { get; init; }
+
+    [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])]
+    private static void OnFullscreenModeChange(cef_display_handler_t* self, cef_browser_t* browser, int fullscreen)
+    {
+        if (NativeObject.Owner<DisplayHandler>(self).FullscreenModeChanged is { } callback) Guard.Run(() => callback(fullscreen != 0));
+        NativeObject.Release(browser);
     }
 
     /// <summary>The page's favicon URLs changed (all of them, in the page's order).</summary>
