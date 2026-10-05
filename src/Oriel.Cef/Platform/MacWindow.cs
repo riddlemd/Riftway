@@ -158,6 +158,76 @@ public static unsafe class MacWindow
         SendAnimateFrame(window, Sel("setFrame:display:animate:"u8), frame, 1, 1);
     }
 
+    /// <summary>The file the title bar's proxy icon stands for. Electron's <c>setRepresentedFilename</c>.</summary>
+    public static void SetRepresentedFilename(nint contentView, string filename)
+    {
+        var window = NSWindowOf(contentView);
+        if (window != 0) SendObject(window, Sel("setRepresentedFilename:"u8), NSString(filename));
+    }
+
+    /// <summary>Electron's <c>getRepresentedFilename</c>.</summary>
+    public static string GetRepresentedFilename(nint contentView)
+        => NSWindowOf(contentView) is var window && window != 0 ? ReadNSString(Send(window, Sel("representedFilename"u8))) : "";
+
+    /// <summary>The close button's unsaved-changes dot. Electron's <c>setDocumentEdited</c>.</summary>
+    public static void SetDocumentEdited(nint contentView, bool edited)
+    {
+        var window = NSWindowOf(contentView);
+        if (window != 0) SendBool(window, Sel("setDocumentEdited:"u8), edited ? (byte)1 : (byte)0);
+    }
+
+    /// <summary>Electron's <c>isDocumentEdited</c>.</summary>
+    public static bool IsDocumentEdited(nint contentView)
+        => NSWindowOf(contentView) is var window && window != 0 && SendGetBool(window, Sel("isDocumentEdited"u8)) != 0;
+
+    /// <summary>Shows or hides the close, minimise and zoom buttons. Electron's <c>setWindowButtonVisibility</c>.</summary>
+    public static void SetWindowButtonsHidden(nint contentView, bool hidden)
+    {
+        var window = NSWindowOf(contentView);
+        if (window == 0) return;
+        // NSWindowCloseButton, NSWindowMiniaturizeButton, NSWindowZoomButton.
+        for (nuint kind = 0; kind <= 2; kind++)
+        {
+            var button = SendNUIntObject(window, Sel("standardWindowButton:"u8), kind);
+            if (button != 0) SendBool(button, Sel("setHidden:"u8), hidden ? (byte)1 : (byte)0);
+        }
+    }
+
+    /// <summary>Whether a collection behaviour flag (NSWindowCollectionBehavior) is set.</summary>
+    public static bool HasCollectionBehavior(nint contentView, nuint flag)
+        => NSWindowOf(contentView) is var window && window != 0 && ((nuint)Send(window, Sel("collectionBehavior"u8)) & flag) != 0;
+
+    /// <summary>Sets or clears a collection behaviour flag, as Electron's <c>SetCollectionBehavior</c>.</summary>
+    public static void SetCollectionBehavior(nint contentView, nuint flag, bool on)
+    {
+        var window = NSWindowOf(contentView);
+        if (window == 0) return;
+        var behavior = (nuint)Send(window, Sel("collectionBehavior"u8));
+        SendNUInt(window, Sel("setCollectionBehavior:"u8), on ? behavior | flag : behavior & ~flag);
+    }
+
+    /// <summary>NSWindowCollectionBehaviorCanJoinAllSpaces.</summary>
+    public const nuint CanJoinAllSpaces = 1 << 0;
+
+    /// <summary>NSWindowCollectionBehaviorTransient: left out of Mission Control.</summary>
+    public const nuint Transient = 1 << 3;
+
+    /// <summary>NSWindowCollectionBehaviorFullScreenAuxiliary.</summary>
+    public const nuint FullScreenAuxiliary = 1 << 8;
+
+    /// <summary>Hides (accessory) or shows (regular) the app's Dock icon, as Electron's <c>app.dock.hide/show</c>.</summary>
+    public static void SetDockIconHidden(bool hidden)
+        => SendNUInt(Send(Class("NSApplication"u8), Sel("sharedApplication"u8)), Sel("setActivationPolicy:"u8), hidden ? 1u : 0u);
+
+    private static nint NSString(string value)
+    {
+        var bytes = System.Text.Encoding.UTF8.GetBytes(value + " ");
+        fixed (byte* p = bytes) return SendBytesObject(Class("NSString"u8), Sel("stringWithUTF8String:"u8), p);
+    }
+
+    private static string ReadNSString(nint value)
+        => value == 0 ? "" : Marshal.PtrToStringUTF8(Send(value, Sel("UTF8String"u8))) ?? "";
+
     // u8 literals are null-terminated in memory, as the runtime expects.
     private static nint Class(ReadOnlySpan<byte> name)
     {
@@ -183,6 +253,10 @@ public static unsafe class MacWindow
     [DllImport(ObjC)] private static extern void objc_registerClassPair(nint cls);
     [DllImport(ObjC)] private static extern byte class_addMethod(nint cls, nint name, void* imp, byte* types);
     [DllImport(ObjC, EntryPoint = "objc_msgSend")] private static extern void SendObject(nint receiver, nint selector, nint arg);
+    [DllImport(ObjC, EntryPoint = "objc_msgSend")] private static extern void SendBool(nint receiver, nint selector, byte value);
+    [DllImport(ObjC, EntryPoint = "objc_msgSend")] private static extern byte SendGetBool(nint receiver, nint selector);
+    [DllImport(ObjC, EntryPoint = "objc_msgSend")] private static extern nint SendNUIntObject(nint receiver, nint selector, nuint value);
+    [DllImport(ObjC, EntryPoint = "objc_msgSend")] private static extern nint SendBytesObject(nint receiver, nint selector, byte* value);
     [DllImport(ObjC, EntryPoint = "objc_msgSendSuper")] private static extern void SendSuperObject(ObjcSuper* super, nint selector, nint arg);
     [DllImport(ObjC, EntryPoint = "objc_msgSend")] private static extern void SendSetFrame(nint receiver, nint selector, NSRect frame, byte display);
     [DllImport(ObjC, EntryPoint = "objc_msgSend")] private static extern void SendAnimateFrame(nint receiver, nint selector, NSRect frame, byte display, byte animate);

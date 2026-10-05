@@ -95,6 +95,9 @@ public sealed record BrowserWindowOptions
     /// Ignored elsewhere. Electron's <c>simpleFullscreen</c>.</summary>
     public bool SimpleFullScreen { get; init; }
 
+    /// <summary>Leaves the window out of Mission Control (macOS). Electron's <c>hiddenInMissionControl</c>.</summary>
+    public bool HiddenInMissionControl { get; init; }
+
     /// <summary>The window this one belongs to: it stays above its parent, has no taskbar button of its own,
     /// and closes with it. Electron's <c>parent</c>.</summary>
     public BrowserWindow? Parent { get; init; }
@@ -201,7 +204,7 @@ public sealed record DefaultFontFamily
 /// Electron's event names collide with its method names in C# (<c>focus()</c> / <c>'focus'</c>), so
 /// events use .NET's past tense: <see cref="Focused"/>, <see cref="Moved"/>, <see cref="Maximized"/>, ...
 /// </remarks>
-public sealed unsafe class BrowserWindow
+public sealed unsafe partial class BrowserWindow
 {
     // Native delegates call back into these objects, so open windows must stay reachable.
     private static readonly List<BrowserWindow> s_open = [];
@@ -1273,6 +1276,8 @@ public sealed unsafe class BrowserWindow
             window->show(window);
             ApplySkipTaskbar(window);
         }
+        if (_options.HiddenInMissionControl && OperatingSystem.IsMacOS())
+            MacWindow.SetCollectionBehavior((nint)window->get_window_handle(window), MacWindow.Transient, true);
         if (_options.FullScreen)
         {
             if (UsesSimpleFullScreen && OperatingSystem.IsMacOS()) MacWindow.SetSimpleFullScreen((nint)window->get_window_handle(window), true);

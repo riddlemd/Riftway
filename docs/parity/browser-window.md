@@ -17,13 +17,13 @@ Counted from the Checklist at the end: `BaseWindow` and `BrowserWindow` are one 
 
 | Area | Items | Done | Partial | Missing | n/a | % done | % done + partial/2 |
 |---|---|---|---|---|---|---|---|
-| BaseWindow + BrowserWindow options | 54 | 26 | 2 | 26 | 0 | 48.1% | 50.0% |
+| BaseWindow + BrowserWindow options | 54 | 27 | 2 | 25 | 0 | 50.0% | 51.9% |
 | webPreferences | 46 | 11 | 3 | 25 | 7 | 28.2% | 32.1% |
-| Instance methods | 143 | 62 | 9 | 66 | 6 | 45.3% | 48.5% |
+| Instance methods | 143 | 69 | 11 | 57 | 6 | 50.4% | 54.4% |
 | Instance properties | 24 | 11 | 0 | 13 | 0 | 45.8% | 45.8% |
 | Events | 35 | 14 | 4 | 17 | 0 | 40.0% | 45.7% |
 | Static methods | 6 | 4 | 0 | 1 | 1 | 80.0% | 80.0% |
-| **Total** | 308 | 128 | 18 | 148 | 14 | 43.5% | 46.6% |
+| **Total** | 308 | 136 | 20 | 138 | 14 | 46.3% | 49.7% |
 
 ## Done since the audit
 
@@ -172,7 +172,7 @@ Parameters in brackets are optional in Electron. `webContents` members are in [w
 | `fullscreenable` | — | missing |  |
 | `simpleFullscreen` | `SimpleFullScreen` | done | macOS only, as in Electron. |
 | `skipTaskbar` | `SkipTaskbar` | done |  |
-| `hiddenInMissionControl` | — | missing |  |
+| `hiddenInMissionControl` | `HiddenInMissionControl` | done | macOS. |
 | `kiosk` | — | missing |  |
 | `name` | — | missing |  |
 | `windowStatePersistence` | — | missing |  |
@@ -317,8 +317,8 @@ Parameters in brackets are optional in Electron. `webContents` members are in [w
 | `isFullScreenable()` | — | missing |  |
 | `setClosable(closable)` | `SetClosable` | done |  |
 | `isClosable()` | `IsClosable` | done |  |
-| `setHiddenInMissionControl(hidden)` | — | missing |  |
-| `isHiddenInMissionControl()` | — | missing |  |
+| `setHiddenInMissionControl(hidden)` | `SetHiddenInMissionControl` | done |  |
+| `isHiddenInMissionControl()` | `IsHiddenInMissionControl` | done |  |
 | `setAlwaysOnTop(flag, level, relativeLevel)` | `SetAlwaysOnTop` | partial | No `level` or `relativeLevel`. |
 | `isAlwaysOnTop()` | `IsAlwaysOnTop` | done |  |
 | `moveAbove(mediaSourceId)` | — | missing |  |
@@ -340,10 +340,10 @@ Parameters in brackets are optional in Electron. `webContents` members are in [w
 | `isWindowMessageHooked(message)` | — | missing |  |
 | `unhookWindowMessage(message)` | — | missing |  |
 | `unhookAllWindowMessages()` | — | missing |  |
-| `setRepresentedFilename(filename)` | — | missing |  |
-| `getRepresentedFilename()` | — | missing |  |
-| `setDocumentEdited(edited)` | — | missing |  |
-| `isDocumentEdited()` | — | missing |  |
+| `setRepresentedFilename(filename)` | `SetRepresentedFilename` | done | macOS; nothing elsewhere, as in Electron. |
+| `getRepresentedFilename()` | `GetRepresentedFilename` | done |  |
+| `setDocumentEdited(edited)` | `SetDocumentEdited` | done | macOS. |
+| `isDocumentEdited()` | `IsDocumentEdited` | done |  |
 | `focusOnWebView()` | — | missing |  |
 | `blurWebView()` | — | missing |  |
 | `capturePage(rect, opts)` | — | missing | `NativeImage` exists; the capture is missing. |
@@ -368,14 +368,14 @@ Parameters in brackets are optional in Electron. `webContents` members are in [w
 | `getAccentColor()` | — | missing |  |
 | `showDefinitionForSelection()` | — | missing |  |
 | `setIcon(icon)` | `SetIcon` | done | Path or `NativeImage`; Windows and Linux only, as in Electron. |
-| `setWindowButtonVisibility(visible)` | — | missing |  |
+| `setWindowButtonVisibility(visible)` | `SetWindowButtonVisibility` | done | macOS. |
 | `setAutoHideMenuBar(hide)` | `AutoHideMenuBar (set)` | done |  |
 | `isMenuBarAutoHide()` | `AutoHideMenuBar (get)` | done |  |
 | `setMenuBarVisibility(visible)` | `SetMenuBarVisibility` | done |  |
 | `isMenuBarVisible()` | `IsMenuBarVisible` | done |  |
 | `isSnapped()` | — | missing |  |
-| `setVisibleOnAllWorkspaces(visible, options)` | — | missing |  |
-| `isVisibleOnAllWorkspaces()` | — | missing |  |
+| `setVisibleOnAllWorkspaces(visible, options)` | `SetVisibleOnAllWorkspaces` | partial | macOS; not Linux yet (W43). |
+| `isVisibleOnAllWorkspaces()` | `IsVisibleOnAllWorkspaces` | partial | macOS (W43). |
 | `setIgnoreMouseEvents(ignore, options)` | — | missing |  |
 | `setContentProtection(enable)` | — | missing |  |
 | `isContentProtected()` | — | missing |  |

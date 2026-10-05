@@ -258,6 +258,7 @@ async Task RunAsync(BrowserWindow win, BrowserWindow simple)
     await WebContentsLifecycleAsync(win);
     await PageEventsAsync();
     await MessagePortsAsync();
+    await MacWindowApisAsync();
 
     // Closing cancelled once: the window must survive the first close.
     var closingCount = 0;
@@ -958,6 +959,59 @@ async Task MessagePortsAsync()
     Check("a page that navigates away closes the ports it held", Eventually(() => navigated, step));
     w.Destroy();
     Directory.Delete(dir, recursive: true);
+}
+
+async Task MacWindowApisAsync()
+{
+    var w = new BrowserWindow(new BrowserWindowOptions { Title = "Oriel window test: mac apis", Width = 300, Height = 200, HiddenInMissionControl = true });
+    if (!OperatingSystem.IsMacOS())
+    {
+        // Elsewhere these do nothing, as in Electron, and report the defaults.
+        w.SetRepresentedFilename("/tmp/x");
+        w.SetDocumentEdited(true);
+        Check("represented filename and document edited are macOS only", w.GetRepresentedFilename() == "" && !w.IsDocumentEdited());
+        w.Destroy();
+        return;
+    }
+    // Read back from AppKit directly, not through Oriel's helpers.
+    nint NSWindow() => MacInterop.Send(w.GetNativeWindowHandle(), MacInterop.sel_registerName("window"));
+    string Represented() => System.Runtime.InteropServices.Marshal.PtrToStringUTF8(MacInterop.Send(MacInterop.Send(NSWindow(), MacInterop.sel_registerName("representedFilename")), MacInterop.sel_registerName("UTF8String"))) ?? "";
+    bool Edited() => MacInterop.SendBool(NSWindow(), MacInterop.sel_registerName("isDocumentEdited")) != 0;
+    nuint Behavior() => (nuint)MacInterop.Send(NSWindow(), MacInterop.sel_registerName("collectionBehavior"));
+    bool ButtonHidden(nuint kind) => MacInterop.SendBool(MacInterop.SendNUInt(NSWindow(), MacInterop.sel_registerName("standardWindowButton:"), kind), MacInterop.sel_registerName("isHidden")) != 0;
+
+    var file = Path.Combine(Path.GetTempPath(), "oriel-represented.txt");
+    File.WriteAllText(file, "x");
+    w.SetRepresentedFilename(file);
+    Check("SetRepresentedFilename sets the NSWindow's, and GetRepresentedFilename reads it", Eventually(() => Represented() == file, step) && w.GetRepresentedFilename() == file, Represented());
+    w.SetDocumentEdited(true);
+    var edited = Eventually(() => Edited(), step) && w.IsDocumentEdited();
+    w.SetDocumentEdited(false);
+    Check("SetDocumentEdited sets the NSWindow's edited state, both ways", edited && Eventually(() => !Edited(), step) && !w.IsDocumentEdited());
+    w.SetWindowButtonVisibility(false);
+    var hidden = Eventually(() => ButtonHidden(0) && ButtonHidden(1) && ButtonHidden(2), step);
+    w.SetWindowButtonVisibility(true);
+    Check("SetWindowButtonVisibility hides and shows the close, minimise and zoom buttons", hidden && Eventually(() => !ButtonHidden(0) && !ButtonHidden(1) && !ButtonHidden(2), step));
+    var transientAtStart = (Behavior() & 8) != 0 && w.IsHiddenInMissionControl();
+    w.SetHiddenInMissionControl(false);
+    Check("HiddenInMissionControl sets the Transient behaviour; SetHiddenInMissionControl(false) clears it",
+        transientAtStart && Eventually(() => (Behavior() & 8) == 0, step) && !w.IsHiddenInMissionControl(), Behavior());
+    w.SetVisibleOnAllWorkspaces(true, new VisibleOnAllWorkspacesOptions { SkipTransformProcessType = true });
+    var allSpaces = Eventually(() => (Behavior() & 1) != 0 && (Behavior() & 256) == 0, step) && w.IsVisibleOnAllWorkspaces();
+    w.SetVisibleOnAllWorkspaces(true, new VisibleOnAllWorkspacesOptions { VisibleOnFullScreen = true, SkipTransformProcessType = true });
+    var overFullScreen = Eventually(() => (Behavior() & 257) == 257, step);
+    w.SetVisibleOnAllWorkspaces(false, new VisibleOnAllWorkspacesOptions { SkipTransformProcessType = true });
+    Check("SetVisibleOnAllWorkspaces joins all Spaces, over full screen apps when asked, and leaves them",
+        allSpaces && overFullScreen && Eventually(() => (Behavior() & 257) == 0, step) && !w.IsVisibleOnAllWorkspaces(), Behavior());
+    // Without SkipTransformProcessType the Dock icon goes for full-screen visibility and comes back otherwise.
+    nint Policy() => MacInterop.Send(MacInterop.Send(MacInterop.objc_getClass("NSApplication"), MacInterop.sel_registerName("sharedApplication")), MacInterop.sel_registerName("activationPolicy"));
+    w.SetVisibleOnAllWorkspaces(true, new VisibleOnAllWorkspacesOptions { VisibleOnFullScreen = true });
+    var accessory = Eventually(() => Policy() == 1, step);
+    w.SetVisibleOnAllWorkspaces(false);
+    Check("SetVisibleOnAllWorkspaces hides the Dock icon for full-screen visibility and shows it again, as Electron", accessory && Eventually(() => Policy() == 0, step), Policy());
+    w.Destroy();
+    File.Delete(file);
+    await Task.CompletedTask;
 }
 
 async Task MouseEventsAsync()
@@ -2086,10 +2140,12 @@ static class MacInterop
     [System.Runtime.InteropServices.DllImport("/usr/lib/libobjc.A.dylib")] internal static extern nint objc_getClass(string name);
     [System.Runtime.InteropServices.DllImport("/usr/lib/libobjc.A.dylib")] internal static extern nint sel_registerName(string name);
     [System.Runtime.InteropServices.DllImport("/usr/lib/libobjc.A.dylib", EntryPoint = "objc_msgSend")] internal static extern NSPoint MouseLocation(nint cls, nint selector);
+    [System.Runtime.InteropServices.DllImport("/usr/lib/libobjc.A.dylib", EntryPoint = "objc_msgSend")] internal static extern byte SendBool(nint receiver, nint selector);
+    [System.Runtime.InteropServices.DllImport("/usr/lib/libobjc.A.dylib", EntryPoint = "objc_msgSend")] internal static extern nint SendNUInt(nint receiver, nint selector, nuint value);
     [System.Runtime.InteropServices.DllImport("/System/Library/Frameworks/CoreGraphics.framework/CoreGraphics")] internal static extern uint CGMainDisplayID();
     [System.Runtime.InteropServices.DllImport("/System/Library/Frameworks/CoreGraphics.framework/CoreGraphics")] internal static extern CGRect CGDisplayBounds(uint display);
     [System.Runtime.InteropServices.DllImport("/System/Library/Frameworks/CoreGraphics.framework/CoreGraphics")] internal static extern byte CGDisplayUsesForceToGray();
-    [System.Runtime.InteropServices.DllImport("/usr/lib/libobjc.A.dylib", EntryPoint = "objc_msgSend")] private static extern nint Send(nint receiver, nint selector);
+    [System.Runtime.InteropServices.DllImport("/usr/lib/libobjc.A.dylib", EntryPoint = "objc_msgSend")] internal static extern nint Send(nint receiver, nint selector);
     [System.Runtime.InteropServices.DllImport("/usr/lib/libobjc.A.dylib", EntryPoint = "objc_msgSend")] private static extern nint Send(nint receiver, nint selector, nint arg);
     [System.Runtime.InteropServices.DllImport("/usr/lib/libobjc.A.dylib", EntryPoint = "objc_msgSend")] private static extern nint SendString(nint receiver, nint selector, string utf8);
 
