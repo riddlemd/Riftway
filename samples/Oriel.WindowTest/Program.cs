@@ -200,6 +200,7 @@ async Task RunAsync(BrowserWindow win, BrowserWindow simple)
     await TaskbarAsync(win);
     await WindowsApisAsync();
     await NativeImageAsync();
+    if (OperatingSystem.IsWindows()) await AppWindowsAsync();
 
     // Closing cancelled once: the window must survive the first close.
     var closingCount = 0;
@@ -1256,6 +1257,132 @@ async Task NativeImageAsync()
     }
     Directory.Delete(dir, recursive: true);
 }
+// Windows PowerShell 5.1 reads Oriel's work back through .NET Framework and WinRT; stdout is base64 UTF-8.
+static string PowerShell(string script)
+{
+    var psi = new System.Diagnostics.ProcessStartInfo("powershell.exe", "-NoProfile -NonInteractive -EncodedCommand "
+        + Convert.ToBase64String(System.Text.Encoding.Unicode.GetBytes("$ErrorActionPreference='Stop'; $r = & { " + script + " }; [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes([string]$r))")))
+    { RedirectStandardOutput = true, RedirectStandardError = true, UseShellExecute = false, CreateNoWindow = true };
+    using var p = System.Diagnostics.Process.Start(psi)!;
+    var output = p.StandardOutput.ReadToEndAsync();
+    var error = p.StandardError.ReadToEndAsync();
+    if (!p.WaitForExit(30000)) { p.Kill(); return "timeout"; }
+    try { return System.Text.Encoding.UTF8.GetString(Convert.FromBase64String(output.Result.Trim())); }
+    catch (FormatException) { return "error: " + error.Result.Trim(); }
+}
+
+#pragma warning disable CA1416 // Called only on Windows.
+// app's Windows integration: the file icon is compared with System.Drawing's ExtractAssociatedIcon.
+async Task AppWindowsAsync()
+{
+    static int Opaque(byte[] bgra) { var n = 0; for (var i = 3; i < bgra.Length; i += 4) if (bgra[i] > 128) n++; return n; }
+    var notepad = Path.Combine(Environment.SystemDirectory, "notepad.exe");
+    var text = await app.GetFileIcon(Path.Combine(Path.GetTempPath(), Guid.NewGuid() + ".txt"));
+    var small = await app.GetFileIcon("x.txt", new FileIconOptions { Size = FileIconSize.Small });
+    var large = await app.GetFileIcon("x.txt", new FileIconOptions { Size = FileIconSize.Large });
+    Check("GetFileIcon sizes: normal and large 32, small 16 (a missing .txt still has its type's icon)",
+        text.GetSize() == (32, 32) && large.GetSize() == (32, 32) && small.GetSize() == (16, 16), $"{text.GetSize()} {large.GetSize()} {small.GetSize()}");
+    var exe = await app.GetFileIcon(notepad);
+    var reference = PowerShell($"Add-Type -AssemblyName System.Drawing; $b = [System.Drawing.Icon]::ExtractAssociatedIcon('{notepad}').ToBitmap(); $n = 0; for ($y = 0; $y -lt $b.Height; $y++) {{ for ($x = 0; $x -lt $b.Width; $x++) {{ if ($b.GetPixel($x, $y).A -gt 128) {{ $n++ }} }} }}; \"$($b.Width) $n\"");
+    var mine = $"{exe.GetSize().Width} {Opaque(exe.ToBitmap())}";
+    Check("GetFileIcon of an .exe is its own icon (System.Drawing's ExtractAssociatedIcon agrees), not the text icon",
+        reference.Split(' ') is [var rw, var rn] && rw == "32" && int.TryParse(rn, out var refOpaque) && Math.Abs(refOpaque - Opaque(exe.ToBitmap())) <= refOpaque / 10
+        && !exe.ToBitmap().SequenceEqual(text.ToBitmap()), $"{mine} vs {reference}");
+    var missing = "";
+    try { await app.GetFileIcon(Path.Combine(Path.GetTempPath(), Guid.NewGuid() + ".exe")); missing = "no fault"; }
+    catch (InvalidOperationException e) { missing = e.Message; }
+    Check("GetFileIcon of a missing .exe faults", missing == "Failed to get file icon.", missing);
+
+    // The shell persists jump lists as CustomDestinations\*.customDestinations-ms, titles in UTF-16.
+    var destinations = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), @"Microsoft\Windows\Recent\CustomDestinations");
+    bool Listed(string title) => Directory.Exists(destinations) && Directory.GetFiles(destinations, "*.customDestinations-ms")
+        .Any(f => { try { return System.Text.Encoding.Unicode.GetString(File.ReadAllBytes(f)).Contains(title) || System.Text.Encoding.Unicode.GetString(File.ReadAllBytes(f)[1..]).Contains(title); } catch (IOException) { return false; } });
+    bool trackDocs;
+    using (var adv = Microsoft.Win32.Registry.CurrentUser.OpenSubKey(@"Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced"))
+        trackDocs = adv?.GetValue("Start_TrackDocs") is not 0;
+    var tag = "OrielWT" + Guid.NewGuid().ToString("N")[..8];
+    try
+    {
+        var tasksSet = app.SetUserTasks([
+            new UserTask { Program = notepad, Title = tag + " one", Description = "first" },
+            new UserTask { Program = notepad, Arguments = "x.txt", Title = tag + " two" }]);
+        Check("SetUserTasks puts both tasks in the shell's jump list file", tasksSet && Listed(tag + " one") && Listed(tag + " two"), tasksSet);
+        var result = app.SetJumpList([
+            new JumpListCategory { Type = JumpListCategoryType.Tasks, Items = [new JumpListItem { Type = JumpListItemType.Task, Program = notepad, Title = tag + " task" }, new JumpListItem { Type = JumpListItemType.Separator }] },
+            new JumpListCategory { Type = JumpListCategoryType.Recent },
+            new JumpListCategory { Type = JumpListCategoryType.Custom, Name = tag + " custom", Items = [new JumpListItem { Type = JumpListItemType.Task, Program = notepad, Title = tag + " in custom" }] }]);
+        // With "Show recently opened items" off, the shell refuses every custom category.
+        var expected = trackDocs ? "ok" : "customCategoryAccessDeniedError";
+        Check($"SetJumpList commits the tasks and reports the custom category as Windows decides ({expected})",
+            result == expected && Listed(tag + " task") && !Listed(tag + " one"), result);
+        Check("SetJumpList rejects a separator in a custom category", app.SetJumpList([new JumpListCategory { Type = JumpListCategoryType.Custom, Name = tag, Items = [new JumpListItem { Type = JumpListItemType.Separator }] }]) == "invalidSeparatorError");
+        var settings = app.GetJumpListSettings();
+        Check("GetJumpListSettings reports the shell's minimum slot count", settings.MinItems > 0, settings.MinItems);
+        Check("SetJumpList(null) clears the list", app.SetJumpList(null) == "ok" && !Listed(tag + " task"));
+    }
+    finally { app.SetJumpList(null); }
+
+    // The shell only records recent documents when the user allows it.
+    var recentFile = Path.Combine(Path.GetTempPath(), tag + ".txt");
+    File.WriteAllText(recentFile, "recent");
+    var recentLink = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.Recent), tag + ".txt.lnk");
+    try
+    {
+        app.AddRecentDocument(recentFile);
+        if (trackDocs) Check("AddRecentDocument adds a Recent shortcut", Eventually(() => File.Exists(recentLink), step), recentLink);
+        else Console.WriteLine($"SKIP  AddRecentDocument read-back: Start_TrackDocs is off, so the shell records nothing  [{File.Exists(recentLink)}]");
+        app.ClearRecentDocuments();
+    }
+    finally
+    {
+        File.Delete(recentFile);
+        if (File.Exists(recentLink)) File.Delete(recentLink);
+    }
+    // The protocol and login-item keys are read back through the registry directly and Windows' merged HKCR view.
+    var exePath = Environment.ProcessPath!;
+    var scheme = "oriel-wt-" + Environment.ProcessId;
+    var classKey = @"Software\Classes\" + scheme;
+    var runName = "OrielWindowTest" + Environment.ProcessId;
+    const string runKey = @"Software\Microsoft\Windows\CurrentVersion\Run";
+    const string approvedKey = @"Software\Microsoft\Windows\CurrentVersion\Explorer\StartupApproved\Run";
+    try
+    {
+        var set = app.SetAsDefaultProtocolClient(scheme);
+        using (var k = Microsoft.Win32.Registry.CurrentUser.OpenSubKey(classKey + @"\shell\open\command"))
+            Check("SetAsDefaultProtocolClient writes the class's open command", set && k?.GetValue(null) as string == $"\"{exePath}\" \"%1\"", k?.GetValue(null));
+        var merged = PowerShell($"if ((Get-ItemProperty 'Registry::HKEY_CLASSES_ROOT\\{scheme}').'URL Protocol' -eq '') {{ (Get-ItemProperty 'Registry::HKEY_CLASSES_ROOT\\{scheme}\\shell\\open\\command').'(default)' }} else {{ 'not a URL protocol' }}");
+        Check("Windows sees it as a URL protocol (HKCR)", merged == $"\"{exePath}\" \"%1\"", merged);
+        Check("IsDefaultProtocolClient: true for this exe, false with other arguments",
+            app.IsDefaultProtocolClient(scheme) && !app.IsDefaultProtocolClient(scheme, args: ["--other"]));
+        var friendly = app.GetApplicationNameForProtocol(scheme + "://x");
+        Check("GetApplicationNameForProtocol names the handler", friendly.Length > 0 && friendly == (System.Diagnostics.FileVersionInfo.GetVersionInfo(exePath).FileDescription ?? Path.GetFileNameWithoutExtension(exePath)), friendly);
+        var removed = app.RemoveAsDefaultProtocolClient(scheme);
+        using (var k = Microsoft.Win32.Registry.CurrentUser.OpenSubKey(classKey))
+            Check("RemoveAsDefaultProtocolClient deletes the class", removed && k is null && !app.IsDefaultProtocolClient(scheme), removed);
+
+        app.SetLoginItemSettings(new LoginItemSettings { OpenAtLogin = true, Name = runName, Args = ["--hidden"] });
+        using (var k = Microsoft.Win32.Registry.CurrentUser.OpenSubKey(runKey))
+            Check("SetLoginItemSettings writes the Run value", k?.GetValue(runName) as string == $"\"{exePath}\" --hidden", k?.GetValue(runName));
+        var status = app.GetLoginItemSettings(new LoginItemQuery { Args = ["--hidden"] });
+        Check("GetLoginItemSettings reports it open at login, enabled, among the launch items",
+            status.OpenAtLogin && status.ExecutableWillLaunchAtLogin && status.LaunchItems.Any(i => i.Name == runName && i.Enabled && i.Args.SequenceEqual(["--hidden"])),
+            $"{status.OpenAtLogin} {status.ExecutableWillLaunchAtLogin} {string.Join(",", status.LaunchItems.Select(i => i.Name))}");
+        app.SetLoginItemSettings(new LoginItemSettings { OpenAtLogin = true, Name = runName, Args = ["--hidden"], Enabled = false });
+        using (var k = Microsoft.Win32.Registry.CurrentUser.OpenSubKey(approvedKey))
+            Check("Enabled = false marks it disabled in StartupApproved, and it will not launch",
+                k?.GetValue(runName) is byte[] { Length: > 0 } marker && marker[0] == 0x03 && !app.GetLoginItemSettings(new LoginItemQuery { Args = ["--hidden"] }).ExecutableWillLaunchAtLogin,
+                k?.GetValue(runName) is byte[] b ? Convert.ToHexString(b) : "none");
+        app.SetLoginItemSettings(new LoginItemSettings { OpenAtLogin = false, Name = runName });
+        using (var run = Microsoft.Win32.Registry.CurrentUser.OpenSubKey(runKey))
+        using (var approved = Microsoft.Win32.Registry.CurrentUser.OpenSubKey(approvedKey))
+            Check("OpenAtLogin = false removes both values", run?.GetValue(runName) is null && approved?.GetValue(runName) is null && !app.GetLoginItemSettings(new LoginItemQuery { Args = ["--hidden"] }).OpenAtLogin);
+    }
+    finally
+    {
+        Microsoft.Win32.Registry.CurrentUser.DeleteSubKeyTree(classKey, throwOnMissingSubKey: false);
+        using (var run = Microsoft.Win32.Registry.CurrentUser.OpenSubKey(runKey, writable: true)) run?.DeleteValue(runName, throwOnMissingValue: false);
+        using (var approved = Microsoft.Win32.Registry.CurrentUser.OpenSubKey(approvedKey, writable: true)) approved?.DeleteValue(runName, throwOnMissingValue: false);
+    }}
 // A 16x16 red PNG, written once to a temp file.
 static string OverlayPng()
 {
