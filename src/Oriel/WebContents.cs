@@ -9,7 +9,7 @@ using Oriel.Cef.Interop;
 namespace Oriel;
 
 /// <summary>The page inside a window: Electron's <c>webContents</c>.</summary>
-public sealed unsafe class WebContents
+public sealed unsafe partial class WebContents
 {
     private const string IsolatedWorld = "oriel";
     private const string Binding = "__orielIpc";
@@ -39,6 +39,7 @@ public sealed unsafe class WebContents
 
     internal WebContents(string? appPreload, WebPreferences preferences, Session session)
     {
+        Permissions = new PermissionHandler { Prompt = DecidePromptAsync, MediaAccess = DecideMediaAsync };
         _defaultUserAgent = session.UserAgentOrNull ?? OrielApp.CurrentOrNull?.UserAgentFallback;
         _acceptLanguages = session.AcceptLanguages;
         session.Track(this);
@@ -164,6 +165,9 @@ public sealed unsafe class WebContents
 
     /// <summary>A mouse button went down in the page; UI thread.</summary>
     internal Action? PageMouseDown { get; set; }
+
+    /// <summary>The page's permission prompts and media requests, decided by its session.</summary>
+    internal PermissionHandler Permissions { get; }
 
     /// <summary>The settings this page was created with; a page it opens inherits them.</summary>
     internal WebPreferences Preferences => _preferences;

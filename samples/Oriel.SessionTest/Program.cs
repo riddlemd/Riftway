@@ -196,6 +196,34 @@ async Task RunAsync()
     later.Destroy();
     agentWin.Destroy();
 
+    // Permissions: granted unless the session's handler says otherwise, as Electron.
+    // Geolocation: a refusal is error 1; a grant goes on to the (absent) location source, so any other outcome.
+    async Task<string?> AskLocation(string partition, Func<WebContents, string, PermissionRequestDetails, Task<bool>>? handler)
+    {
+        var session = Session.FromPartition(partition);
+        session.Protocol.Handle("https", _ => ProtocolResponse.Text(Page, "text/html"));
+        session.SetPermissionRequestHandler(handler);
+        var w = new BrowserWindow(new BrowserWindowOptions { Show = false, WebPreferences = new WebPreferences { Session = session } });
+        await w.LoadUrl(Site);
+        var answer = (await w.WebContents.ExecuteJavaScriptAsync(
+            "new Promise(r => navigator.geolocation.getCurrentPosition(() => r('ok'), e => r(e.code === 1 ? 'denied' : 'granted'), { timeout: 2000 }))")
+            .WaitAsync(TimeSpan.FromSeconds(10)))?.ToString();
+        w.Destroy();
+        return answer;
+    }
+    var byDefault = await AskLocation("perm-default", null);
+    Check("with no permission handler, a permission is granted, as Electron", byDefault is "granted" or "ok", byDefault);
+    var asked = new List<string>();
+    var denied = await AskLocation("perm-deny", (page, permission, details) =>
+    {
+        asked.Add($"{permission}|{details.RequestingUrl}|{page is not null}");
+        return Task.FromResult(false);
+    });
+    Check("a permission handler that refuses denies it, and is told what was asked", denied == "denied"
+        && asked.Count == 1 && asked[0].StartsWith("geolocation|https://oriel.test", StringComparison.Ordinal) && asked[0].EndsWith("|True"), $"{denied} {string.Join(";", asked)}");
+    var granted = await AskLocation("perm-grant", (_, _, _) => Task.FromResult(true));
+    Check("a permission handler that grants allows it", granted is "granted" or "ok", granted);
+
     // Proxy: requests go to a local listener posing as the proxy.
     var proxied = Session.FromPartition("proxied");
     using var listener = new TcpListener(IPAddress.Loopback, 0);

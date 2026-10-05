@@ -194,6 +194,14 @@ public sealed unsafe partial class Session
         }
     }
 
+    /// <summary>Decides the permissions the session's pages ask for: the handler gets the page, Electron's permission name
+    /// (<c>notifications</c>, <c>geolocation</c>, <c>media</c>, <c>clipboard-read</c>, ...) and details, and grants with
+    /// true. With none, every permission is granted, as Electron. Electron's <c>ses.setPermissionRequestHandler()</c>.</summary>
+    public void SetPermissionRequestHandler(Func<WebContents, string, PermissionRequestDetails, Task<bool>>? handler)
+        => _permissionRequestHandler = handler;
+
+    private volatile Func<WebContents, string, PermissionRequestDetails, Task<bool>>? _permissionRequestHandler;
+
     /// <summary>The native context with a reference for the caller.</summary>
     internal cef_request_context_t* AddRefNative()
     {
@@ -304,6 +312,17 @@ public sealed unsafe partial class Session
 // Outside the unsafe part: C# does not allow await in an unsafe context.
 public sealed partial class Session
 {
+    internal async Task<bool> DecidePermissionAsync(WebContents page, string permission, PermissionRequestDetails details)
+    {
+        if (_permissionRequestHandler is not { } handler) return true;
+        try { return await handler(page, permission, details).ConfigureAwait(false); }
+        catch (Exception e)
+        {
+            Console.Error.WriteLine($"[Oriel] The permission request handler failed; denying {permission}: {e}");
+            return false;
+        }
+    }
+
     /// <summary>Resolves <paramref name="host"/> with the session's network settings. Electron's <c>ses.resolveHost()</c>.</summary>
     /// <exception cref="HostResolutionException">The host could not be resolved.</exception>
     public async Task<ResolvedHost> ResolveHostAsync(string host)

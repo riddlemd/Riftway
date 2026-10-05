@@ -290,7 +290,10 @@ public sealed unsafe class BrowserWindow
         };
         _client = new ClientHandler(WebContents.Display, WebContents.Load, WebContents.JsDialog, WebContents.Request, WebContents.Command,
             WebContents.ContextMenuRequests, new KeyboardHandler(keyEvent => _menuBar?.OnKeyEvent(keyEvent) ?? false),
-            new LifeSpanHandler { BeforePopup = OnBeforePopup, PopupAborted = OnPopupAborted });
+            new LifeSpanHandler { BeforePopup = OnBeforePopup, PopupAborted = OnPopupAborted })
+        {
+            Permission = WebContents.Permissions,
+        };
         if (!OperatingSystem.IsMacOS())
         {
             _menuBar = new WindowMenuBar(this) { AutoHide = _options.AutoHideMenuBar };

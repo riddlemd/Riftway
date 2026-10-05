@@ -192,6 +192,27 @@ public sealed unsafe class ClientHandler
 
     public cef_client_t* Native { get; }
 
+    /// <summary>Answers permission prompts and media access; null leaves them to CEF.</summary>
+    public PermissionHandler? Permission
+    {
+        get => _permission;
+        init
+        {
+            _permission = value;
+            if (value is not null) Native->get_permission_handler = &GetPermissionHandler;
+        }
+    }
+
+    private readonly PermissionHandler? _permission;
+
+    [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])]
+    private static cef_permission_handler_t* GetPermissionHandler(cef_client_t* self)
+    {
+        var handler = NativeObject.Owner<ClientHandler>(self)._permission!.Native;
+        NativeObject.AddRef(handler);
+        return handler;
+    }
+
     [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])]
     private static cef_keyboard_handler_t* GetKeyboardHandler(cef_client_t* self)
     {
