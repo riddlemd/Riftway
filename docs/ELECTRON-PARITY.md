@@ -9,7 +9,7 @@ Recounted 2026-10-04 against `src/Oriel`. Update these figures when a row or che
 
 | Measure | Done | Partial | Not started | Total |
 |---|---|---|---|---|
-| Module rows below | 1 | 16 | 50 | 67 |
+| Module rows below | 1 | 17 | 49 | 67 |
 | M2 rows | 1 | 13 | 8 | 22 |
 
 The 67 rows include `BrowserView` (deprecated, never implemented; counted as not started).
@@ -119,7 +119,7 @@ Detailed item-by-item status, including `navigationHistory` and `WebFrameMain`: 
 | `clipboard` / `ClipboardItem` | `Clipboard` / `ClipboardItem` | OS | M5 | — |
 | `shell` | `Shell` | OS | M5 | — |
 | `nativeImage` | `NativeImage` | CEF + .NET | M5 | partial: PNG/JPEG through CEF, raw bitmaps, data URLs, `@Nx` files, crop, resize, representations; window icon, overlay and thumbar buttons take it; gaps in DRIFT B1-B5 (no `createThumbnailFromPath`, one resize filter, template images unused, no ICO) |
-| `nativeTheme` | `NativeTheme` | OS + CEF | M5 | — |
+| `nativeTheme` | `NativeTheme` | OS + CEF | M5 | partial: `themeSource` (pages, Chromium's UI, macOS appearance), `shouldUseDarkColors`, `shouldUseHighContrastColors`, `shouldUseInvertedColorScheme`, `inForcedColorsMode`, `prefersReducedTransparency`, `updated` (polled; DRIFT Y1-Y3) |
 | `powerMonitor` | `PowerMonitor` | OS | M5 | — |
 | `powerSaveBlocker` | `PowerSaveBlocker` | OS | M5 | — |
 | `safeStorage` | `SafeStorage` | OS | M5 | — |

@@ -92,6 +92,25 @@ public sealed unsafe partial class Session
 
     internal bool IsDefault => _handler is null;
 
+    private readonly List<Action> _whenInitialized = [];
+    private bool _initialized;
+
+    /// <summary>UI thread: runs <paramref name="action"/> once CEF has initialised the session's profile; at once for the
+    /// default session.</summary>
+    /// <remarks>A browser created on a persistent profile before then can crash Chromium on Linux.</remarks>
+    internal void WhenInitialized(Action action)
+    {
+        if (IsDefault || _initialized) action();
+        else _whenInitialized.Add(action);
+    }
+
+    private void OnInitialized()
+    {
+        _initialized = true;
+        foreach (var action in _whenInitialized) action();
+        _whenInitialized.Clear();
+    }
+
     /// <summary>Where the session keeps its data on disk; null for an in-memory session. Electron's <c>ses.getStoragePath()</c>.</summary>
     public string? GetStoragePath() => _storagePath;
 
@@ -156,6 +175,12 @@ public sealed unsafe partial class Session
         return Task.CompletedTask;
     }
 
+    /// <summary>Every session made from a partition or path; the default session is CEF's global context.</summary>
+    internal static IReadOnlyList<Session> Created()
+    {
+        lock (s_gate) return [.. s_byPath.Values.Concat(s_byPartition.Values).Distinct()];
+    }
+
     /// <summary>The native context with a reference for the caller.</summary>
     internal cef_request_context_t* AddRefNative()
     {
@@ -175,6 +200,8 @@ public sealed unsafe partial class Session
         // Chrome-style profiles save each origin's zoom across launches; Electron keeps zoom for the session only.
         var value = CefNative.cef_value_create();
         value->set_dictionary(value, CefNative.cef_dictionary_value_create());
+        NativeTheme.ApplyTo(context);
+
         try { SetPreference(context, "partition.per_host_zoom_levels", value); }
         catch (ArgumentException e) { Console.Error.WriteLine($"[Oriel] Could not reset saved zoom levels: {e.Message}"); }
     }
@@ -216,7 +243,17 @@ public sealed unsafe partial class Session
     // An empty cache path gives an in-memory profile; a path inside the root cache path gives a profile on disk.
     private static Session Create(string? path)
     {
-        var handler = new RequestContextHandler { Initialized = context => ApplyElectronDefaults((cef_request_context_t*)context) };
+        Session? created = null;
+        var initialized = false;
+        var handler = new RequestContextHandler
+        {
+            Initialized = context =>
+            {
+                ApplyElectronDefaults((cef_request_context_t*)context);
+                if (created is not null) created.OnInitialized();
+                else initialized = true;
+            },
+        };
         var context = CefThread.InvokeOnUi(() =>
         {
             var settings = new cef_request_context_settings_t { size = (nuint)sizeof(cef_request_context_settings_t) };
@@ -227,7 +264,10 @@ public sealed unsafe partial class Session
             return (nint)created;
         });
         if (context == 0) throw new InvalidOperationException($"CEF could not create a session{(path is null ? "" : $" at {path}")}.");
-        return new Session((cef_request_context_t*)context, path, handler);
+        created = new Session((cef_request_context_t*)context, path, handler);
+        // CEF may finish before create_context returns.
+        if (initialized) created.OnInitialized();
+        return created;
     }
 
     private Task Complete(CompletionStart start)

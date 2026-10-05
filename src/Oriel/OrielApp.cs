@@ -221,6 +221,7 @@ public sealed unsafe class OrielApp
         var global = CefNative.cef_request_context_get_global_context();
         Session.ApplyElectronDefaults(global);
         NativeObject.Release(global);
+        NativeTheme.OnReady();
         // Before Ready, so the first window's page can already load from a custom scheme.
         Protocol.OnContextInitialized();
         IsReady = true;

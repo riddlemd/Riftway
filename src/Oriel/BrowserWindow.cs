@@ -335,7 +335,14 @@ public sealed unsafe class BrowserWindow
         CefThread.InvokeOnUi(() =>
         {
             if (_options.Parent is { _window: null }) throw new InvalidOperationException("The parent window is closed.");
-            CreateNative();
+            OpenWindow();
+            // The page waits for its session's profile; the window, and commands to it, do not.
+            WebContents.Session.WhenInitialized(() =>
+            {
+                if (_window is null) return;
+                CreateNative();
+                AttachPage(_window);
+            });
             return true;
         });
     }
@@ -360,7 +367,6 @@ public sealed unsafe class BrowserWindow
         _browserView = CefNative.cef_browser_view_create(_client.Native, &url, &settings, null, context, _viewDelegate.Native);
         CefString.Clear(&url);
         ClearWebPreferenceStrings(&settings);
-        OpenWindow();
     }
 
     private void OpenWindow()
@@ -1138,7 +1144,8 @@ public sealed unsafe class BrowserWindow
 
     private static Rectangle ToRectangle(cef_rect_t rect) => new(rect.x, rect.y, rect.width, rect.height);
 
-    private void OnWindowCreated(cef_window_t* window)
+    // The page view, with the menu bar above it on Windows and Linux.
+    private void AttachPage(cef_window_t* window)
     {
         if (_menuBar is not null)
         {
@@ -1150,6 +1157,13 @@ public sealed unsafe class BrowserWindow
             NativeObject.AddRef(_browserView);
             window->@base.add_child_view(&window->@base, (cef_view_t*)_browserView);
         }
+        if (_backgroundColor is not null) _browserView->@base.set_background_color(&_browserView->@base, ParseColor(_backgroundColor));
+    }
+
+    private void OnWindowCreated(cef_window_t* window)
+    {
+        // A popup's view is adopted before its window opens; a window's own page may still wait for its session.
+        if (_browserView is not null) AttachPage(window);
 
         var size = new cef_size_t { width = _options.Width, height = _options.Height };
         if (_options is { X: { } x, Y: { } y, Center: false })
@@ -1189,7 +1203,6 @@ public sealed unsafe class BrowserWindow
         {
             var argb = ParseColor(_backgroundColor);
             window->@base.@base.set_background_color(&window->@base.@base, argb);
-            _browserView->@base.set_background_color(&_browserView->@base, argb);
         }
         if (_options.BackgroundMaterial is { } material) ApplyBackgroundMaterial(window, material);
         if (_icon is not null) SetIconOn(window, _icon);

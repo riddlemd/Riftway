@@ -177,6 +177,14 @@ Entries marked _(branch `x`)_ are on that branch and not yet in `main`.
 | I5 | `protocol.handle` takes and returns Fetch `Request`/`Response` | `ProtocolRequest` → `Task<ProtocolResponse>`; Oriel answers `Range` itself | Design | None |
 | I6 | Privileges `allowServiceWorkers`, `codeCache` | Throw `NotSupportedException` | CEF: no service workers or V8 code cache for custom schemes | Patch |
 
+## nativeTheme
+
+| ID | Electron | Oriel | Why | Possible resolution |
+|---|---|---|---|---|
+| Y1 | `updated` fires as soon as the system's theme or contrast changes | Checked once a second while there are handlers | Todo: no OS notification wired | `AppleInterfaceThemeChangedNotification`, `WM_SETTINGCHANGE`, the XDG portal's `SettingChanged` |
+| Y2 | Linux: Chromium's reading of the desktop's dark preference | `org.gnome.desktop.interface color-scheme` through `gsettings`, or a `GTK_THEME` ending in `:dark`; no high contrast on Linux | Todo: Chromium reads the XDG desktop portal | Read the portal over D-Bus |
+| Y3 | Native window frames and menus follow `themeSource` on every OS | macOS: yes (the app's appearance); Windows and Linux: not checked | Unknown | Check on Windows (DWM's immersive dark mode) and Linux |
+
 ## Platform and runtime
 
 | ID | Electron | Oriel | Why | Possible resolution |

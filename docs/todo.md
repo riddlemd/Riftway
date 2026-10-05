@@ -38,6 +38,8 @@ Cross-platform work. Platform-specific items: [linux-todo.md](linux-todo.md), [w
 - [x] `OrielApp.Quit()` from any thread (was DRIFT A4)
 - [ ] `Protocol`: `AllowServiceWorkers` and `CodeCache` privileges throw `NotSupportedException`
 
+- [ ] When merging `web-contents-view`: a `WebContentsView` in a persistent partition must create its browser after `Session.WhenInitialized`, as `BrowserWindow` now does (Linux crashed creating a browser on a profile CEF had not finished loading)
+
 ## Tests
 
 - [x] Screen checks at 125% scaling (Windows): Chromium floors when converting, so the checks tolerate one pixel
