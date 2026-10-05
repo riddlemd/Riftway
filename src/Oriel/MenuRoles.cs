@@ -111,10 +111,10 @@ internal static class MenuRoles
         _ => null,
     };
 
-    /// <summary>macOS's default application menu; Electron's, without its Help links.</summary>
+    /// <summary>The default application menu on every OS; Electron's (lib/browser/default-menu.ts).</summary>
     internal static Menu DefaultApplicationMenu() =>
     [
-        Item(MenuItemRole.AppMenu),
+        .. OperatingSystem.IsMacOS() ? [Item(MenuItemRole.AppMenu)] : Array.Empty<MenuItem>(),
         Item(MenuItemRole.FileMenu),
         Item(MenuItemRole.EditMenu),
         Item(MenuItemRole.ViewMenu),

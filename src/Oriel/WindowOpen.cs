@@ -42,12 +42,23 @@ public sealed record WindowOpenHandlerResponse
     /// replace the opener's. Electron's <c>overrideBrowserWindowOptions</c>.</summary>
     public BrowserWindowOptions? OverrideBrowserWindowOptions { get; init; }
 
+    /// <summary>Changes the options parsed from the page's features (size, position, the opener's web preferences);
+    /// Electron's <c>overrideBrowserWindowOptions</c>, which Electron spreads over those options.</summary>
+    /// <remarks>A record cannot tell a property left at its default from one set to it, so this receives the parsed
+    /// options to change with <c>with</c>; <see cref="OverrideBrowserWindowOptions"/> replaces them whole.</remarks>
+    public Func<BrowserWindowOptions, BrowserWindowOptions>? ConfigureBrowserWindowOptions { get; init; }
+
     /// <summary>Whether the new window stays open when its opener closes. Electron's <c>outlivesOpener</c>.</summary>
     public bool OutlivesOpener { get; init; }
 
     /// <summary>Opens the window. Electron's <c>{ action: 'allow' }</c>.</summary>
     public static WindowOpenHandlerResponse Allow(BrowserWindowOptions? overrideBrowserWindowOptions = null, bool outlivesOpener = false)
         => new(true) { OverrideBrowserWindowOptions = overrideBrowserWindowOptions, OutlivesOpener = outlivesOpener };
+
+    /// <summary>Opens the window with the page's features' options changed by <paramref name="configure"/>, as Electron
+    /// spreads <c>overrideBrowserWindowOptions</c> over them.</summary>
+    public static WindowOpenHandlerResponse Allow(Func<BrowserWindowOptions, BrowserWindowOptions> configure, bool outlivesOpener = false)
+        => new(true) { ConfigureBrowserWindowOptions = configure, OutlivesOpener = outlivesOpener };
 
     /// <summary>Blocks the window: <c>window.open</c> returns null in the page. Electron's <c>{ action: 'deny' }</c>.</summary>
     public static WindowOpenHandlerResponse Deny { get; } = new(false);

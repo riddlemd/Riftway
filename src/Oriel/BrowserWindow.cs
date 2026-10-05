@@ -382,7 +382,8 @@ public sealed unsafe class BrowserWindow
         var response = WebContents.DecideWindowOpen(details);
         if (!response.IsAllowed) return null;
 
-        var options = response.OverrideBrowserWindowOptions ?? PopupOptionsFrom(features, WebContents.Preferences);
+        var parsed = PopupOptionsFrom(features, WebContents.Preferences);
+        var options = response.OverrideBrowserWindowOptions ?? response.ConfigureBrowserWindowOptions?.Invoke(parsed) ?? parsed;
         BrowserWindow popup;
         try { popup = new BrowserWindow(options, opener: this) { _outlivesOpener = response.OutlivesOpener }; }
         catch (Exception e) when (e is ArgumentException or NotSupportedException or InvalidOperationException)
@@ -421,13 +422,14 @@ public sealed unsafe class BrowserWindow
         return false;
     }
 
-    /// <summary>The options of a window a page opens with no override: the opener's web preferences, and the size
-    /// and position the page asked for, which like a browser's are the page area's.</summary>
+    /// <summary>The options of a window a page opens with no override: the opener's web preferences, and the size and
+    /// position the page asked for (the outer size, as Electron).</summary>
     internal static BrowserWindowOptions PopupOptionsFrom(cef_popup_features_t* features, WebPreferences openerPreferences)
     {
         var options = new BrowserWindowOptions { WebPreferences = openerPreferences };
-        if (features->widthSet != 0) options = options with { Width = features->width, UseContentSize = true };
-        if (features->heightSet != 0) options = options with { Height = features->height, UseContentSize = true };
+        // As Electron (parse-features-string.ts): width and height are the window's outer size, not the page's.
+        if (features->widthSet != 0) options = options with { Width = features->width };
+        if (features->heightSet != 0) options = options with { Height = features->height };
         if (features->xSet != 0 && features->ySet != 0) options = options with { X = features->x, Y = features->y };
         return options;
     }
@@ -634,6 +636,13 @@ public sealed unsafe class BrowserWindow
     /// <inheritdoc cref="Oriel.WebContents.LoadUrl" path="/param|/exception"/>
     public Task LoadUrl(string url, LoadUrlOptions? options = null) => WebContents.LoadUrl(url, options);
 
+    /// <summary>Loads a local file in the window's page. Electron's <c>win.loadFile()</c>.</summary>
+    public Task LoadFile(string path, IReadOnlyDictionary<string, string>? query = null, string? hash = null, string? search = null)
+        => WebContents.LoadFile(path, query, hash, search);
+
+    /// <summary>Reloads the window's page. Electron's <c>win.reload()</c>.</summary>
+    public void Reload() => WebContents.Reload();
+
     /// <summary>Shows and focuses the window. Electron's <c>win.show()</c>.</summary>
     public void Show() => Command(w =>
     {
@@ -702,8 +711,9 @@ public sealed unsafe class BrowserWindow
         else Command(w => w->set_fullscreen(w, flag ? 1 : 0));
     }
 
-    /// <summary>Whether the window is full screen. Electron's <c>win.isFullScreen()</c>.</summary>
-    public bool IsFullScreen => UsesSimpleFullScreen ? IsSimpleFullScreen : IsNativeFullScreen;
+    /// <summary>Whether the window is in native full screen; false in simple full screen, as Electron (which reads the
+    /// window's full-screen style). Electron's <c>win.isFullScreen()</c>.</summary>
+    public bool IsFullScreen => IsNativeFullScreen;
 
     private bool IsNativeFullScreen => Query(w => w->is_fullscreen(w) != 0, false);
 

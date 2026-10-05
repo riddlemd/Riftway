@@ -36,34 +36,30 @@ Entries marked _(branch `x`)_ are on that branch and not yet in `main`.
 |---|---|---|---|---|
 | A1 | `app.enableSandbox()` on every OS | Linux only; `Run()` throws `PlatformNotSupportedException` on macOS and Windows | OS/packaging: CEF forces `--no-sandbox` whenever `browser_subprocess_path` is set (Windows), and the macOS helper does not link the sandbox library | Windows: the `bootstrap.exe` layout (probe passed, see windows-todo.md). macOS: native helper + `cef_sandbox` |
 | A2 | Several instances may run; `requestSingleInstanceLock()` opts in to one | Always single instance per data directory: a second launch exits and the first gets `SecondInstance` | CEF: Chrome-style profiles lock their data directory | Per-instance cache paths when the lock is not requested; `RequestSingleInstanceLock` |
-| A3 | `quit` event with the exit code | Missing; `BeforeQuit`, `WillQuit` and the window-closing quit flow are done | Todo | Raise it after the message loop ends |
 
 ## BrowserWindow
 
 | ID | Electron | Oriel | Why | Possible resolution |
 |---|---|---|---|---|
-| W1 | `show`/`hide` fire whenever the window is shown or hidden | Fire only from `Show()`/`Hide()` | Unknown (CEF reports no visibility change) | OS notifications, or poll like minimize |
+| W1 | macOS: `show`/`hide` also fire when the window is occluded or revealed (`windowDidChangeOcclusionState`); Windows and Linux fire them only from Oriel's own calls, as Oriel does everywhere | Fire only from `Show()`/`Hide()` | Todo: no occlusion observer on macOS | `NSWindowDidChangeOcclusionStateNotification` |
 | W2 | `minimize`/`restore` events from the OS | Polled every 250 ms | CEF: reports neither; on macOS minimizing changes no bounds | OS notifications |
 | W5 | Modal windows disable their parent's input on Linux | The parent still takes focus under window managers that ignore the modal hint (openbox) | CEF: no input filter to block the parent | OS: X11 input shape or grab; check GNOME/KDE |
 | W7 | `openDevTools({ mode })` with docked modes | Separate window only | Unknown | CEF `show_dev_tools` with an inspector view, or `BrowserView` docking |
 | W8 | `setParentWindow` | Missing | CEF: Views sets the parent only at creation | OS: `addChildWindow:`, owner `HWND`, `XSetTransientForHint` |
-| W9 | Native full screen on macOS | Same, but it blacks out other displays; `SimpleFullScreen` is the alternative. With the option set, the green button and the page's Fullscreen API also use simple full screen _(page path untested)_ | Design: KHost-style audience screens need the other displays | None needed; document |
-| W10 | `closable` not implemented on Linux | Honoured on every OS | Design (superset) | None |
+| W9 | `setFullScreen(false)` does nothing in simple full screen (its guard reads the full-screen style, which simple full screen does not set) | Leaves simple full screen | Design: Electron's guard looks like a bug; matching it would strand the window | None |
 | W11 | `webPreferences.defaultFontFamily.math` | Throws `NotSupportedException` | CEF: no setting for it | Patch |
 | W12 | `minimumFontSize`, `defaultEncoding` per window | Throw `NotSupportedException` | CEF: Chrome-style browsers take them from the profile, for every window | Set them per `Session` (profile preferences), for every window in it |
 | W13 | `webSecurity`, `allowRunningInsecureContent`, `experimentalFeatures`, `enable/disableBlinkFeatures`, `autoplayPolicy`, `sandbox` per window | Missing | CEF: Chromium switches, process-wide | App-level options; per-window is a Patch |
 | W14 | `contextIsolation: false` | Always on | Design: the preload runs in an isolated world by construction | None planned |
 | W15 | `zoomFactor` | Re-applies to an origin whose zoom was reset to 0 | Todo | Track explicit resets |
-| W16 | `isMenuBarVisible()` etc. on Windows/Linux; `setMenu` on macOS sets nothing; Windows uses a native Win32 menu bar | Same API; the bar is drawn by CEF Views: on Windows a plain strip following the system theme, without mnemonic underlines and with different padding and hover | CEF: Views windows have no native menu bar | Style the bar (colours, font, underlines) to match the OS |
+| W16 | `isMenuBarVisible()` etc. on Windows/Linux; the bar is a Views `MenuBar` (as Oriel's), with its own colours, padding, hover and mnemonic underlines; Linux can also export a DBus global menu | Same API and a Views bar, but plain: system-theme colours, no mnemonic underlines, different padding and hover; no global menu | CEF: label buttons cannot draw underlines; the rest is Todo | Match Electron's colours and padding; DBus menu on Linux |
 | W17 | Alt shows an auto-hidden bar until the user moves on | Hidden again on Alt, when its menu closes, when a key goes to the page, or on focus loss; a mouse click into the page does not hide it | Todo: the window sees no page mouse events | Hide on the page's mousedown, through the preload |
 | W20 | `setProgressBar` on Linux (Unity launcher progress); error and paused colours on macOS | Linux shows no progress; macOS shows error and paused as the plain Dock bar | OS: Linux progress is desktop-specific (D-Bus `com.canonical.Unity.LauncherEntry`); `NSProgressIndicator` has no colours | D-Bus launcher entry on Linux; a drawn bar on macOS |
-| W23 | `setProgressBar(NaN)` is unspecified (Electron casts it to an arbitrary value) | Removes the bar | Design | None |
 | W24 | `backgroundMaterial` / `setBackgroundMaterial` show Mica, Acrylic or Mica Alt behind a transparent window | DWM takes and reports the backdrop (`DWMWA_SYSTEMBACKDROP_TYPE`), but nothing shows: CEF paints the client area and its own title bar opaque, even with a transparent page and `BackgroundColor = "#00000000"`. Without the option DWM already reports Mica (`DWMSBT_MAINWINDOW`), set by Chromium or CEF, not Oriel | CEF: Views windows on Windows draw their own frame and an opaque background | `DwmExtendFrameIntoClientArea` and a transparent Views window; check whether CEF's frameless mode composites alpha |
 | W25 | `titleBarStyle: 'hidden'` with `titleBarOverlay` (Windows caption buttons over the page, `getTitleBarOverlay` geometry) | Missing | OS: needs a frameless window, caption buttons drawn over the page and `WM_NCHITTEST` for the drag area | Frameless window plus an overlay view (`W.add_overlay_view`) with min/max/close buttons, after `titleBarStyle` |
 | W26 | `icon` option takes a `NativeImage` or a path | Two options: `Icon` (path) and `IconImage` (`NativeImage`, wins over `Icon`) | Design: a C# property has one type | None |
 | W27 | `setBounds`, `setContentBounds`, `setSize`, `setContentSize`, `setPosition` take `animate` (macOS only) | No `animate` argument; changes are immediate | Todo: not yet implemented | `NSWindow setFrame:display:animate:` through the Objective-C runtime |
-| W28 | `win.loadFile()` and `win.reload()` | Missing on `BrowserWindow`; `WebContents.LoadFile` and `WebContents.Reload` exist (`BrowserWindow.LoadUrl` exists) | Todo: not yet implemented | Forward to `WebContents` |
-| W29 | `setAlwaysOnTop(flag, level, relativeLevel)` | Takes `flag` only | Todo: not yet implemented | macOS: `NSWindow.level`; Windows and Linux ignore `level` in Electron |
+| W29 | `setAlwaysOnTop(flag, level, relativeLevel)`: macOS window levels, and on Windows the floating to status levels put the window behind the taskbar | Takes `flag` only | Todo | `NSWindow.level` plus relativeLevel; on Windows the taskbar ordering |
 
 ## nativeImage
 
@@ -83,7 +79,6 @@ Entries marked _(branch `x`)_ are on that branch and not yet in `main`.
 | O2 | `details.referrer`, `details.postBody` | Missing | CEF: `on_before_popup` has neither | Patch |
 | O3 | Handler can `createWindow` with its own `webContents` | Not offered | Todo | Adopt a given window's view |
 | O4 | A popup's first page loads once, with the preload | When it commits before Oriel's runtime and preload are registered over DevTools, it is reloaded once so they run: the page loads twice, and a POST target is untested | CEF: the popup's browser exists only as it starts loading; there is no about:blank start as for other windows | Patch, or register before the first commit (DevTools auto-attach) |
-| O5 | `width`/`height` from features | Size the page area (`UseContentSize`), as browsers treat them; not compared with Electron | Unknown | Check Electron |
 
 ## webFrameMain
 
@@ -99,7 +94,6 @@ Entries marked _(branch `x`)_ are on that branch and not yet in `main`.
 | ID | Electron | Oriel | Why | Possible resolution |
 |---|---|---|---|---|
 | N1 | `removeEntryAtIndex`, `restore` (entries with `pageState`) | Missing; entries have only `url` and `title` | CEF: no way to remove or restore entries, and no page state | Patch |
-| N2 | `goToIndex`, `goToOffset` move the history directly | Through the page's own `history.go(n)`, so they do nothing in a page with `Javascript = false` | CEF: only one-step `go_back` / `go_forward` | Patch, or step repeatedly |
 | N3 | A window's history starts with its first page | Same, by resetting the history after the first page loads, which drops the about:blank Oriel starts on; until a first page loads successfully, that entry is there | Design: the preload is registered over DevTools on about:blank before the real page | Register before the first navigation without a document |
 
 ## webContents
@@ -114,19 +108,16 @@ Entries marked _(branch `x`)_ are on that branch and not yet in `main`.
 | C6 | `executeJavaScript` resolves a structured clone | JSON only (`JsonNode?`); undefined is null | Design: DevTools `Runtime.evaluate` returns JSON | Typed overloads |
 | C7 | `sendInputEvent` wheel, `mouseEnter`/`mouseLeave`/`contextMenu` types | Keyboard and mouse down/up/move only | Todo | DevTools `Input.dispatchMouseEvent` `mouseWheel` |
 | C8 | `context-menu` params `frame`, `linkText`, `altText`, `selectionRect`, `menuSourceType`, `formControlType`, `referrerPolicy`, `suggestedFilename`, `selectionStartOffset` | Missing | CEF: `cef_context_menu_params_t` lacks them; `frame`: CEF names the frame by its own identifier, which no DevTools frame id matches (WebFrameMain is built on DevTools) | Patch; or read the element under the point with JS for text/alt; Module for `frame` |
-| C10 | `loadFile(path, { query, search, hash })` | `LoadFile(path, query, hash)`; no `search` | Todo: not yet implemented | Append the raw string as the URL's query |
 
 ## Menu / MenuItem
 
 | ID | Electron | Oriel | Why | Possible resolution |
 |---|---|---|---|---|
-| M1 | Default application menu on every OS | macOS only; Windows and Linux get no bar unless the app sets one | Design: keeps existing Oriel windows unchanged; macOS needs a menu for Cmd+C/V/Q | Decide; Electron's default is mostly reload/DevTools items |
 | M2 | `click(menuItem, window, event)` | No `KeyboardEvent` argument | Todo | Pass whether an accelerator triggered it, and modifiers |
 | M3 | Item `icon`, `sublabel`, `toolTip`, `registerAccelerator` | Missing | Todo (`icon` is Module: `NativeImage`) | `cef_menu_model` has no icon API either: Patch for Views menus |
 | M4 | macOS roles for tabs, speech, recent documents, `shareMenu`, `showSubstitutions`... | Missing | Todo | AppKit selectors for each |
 | M5 | `Command`/`Super` accelerators on Windows and Linux | Ignored | CEF: Views accelerators have no such modifier | OS key hook, or Patch |
 | M7 | `popup({ positioningItem })` (macOS) | Missing | CEF: `show_menu` takes a point only | Patch |
-| M8 | Role items' `click` runs if the role has no action | Same; but on macOS the editing, About and Hide roles are AppKit actions and never run `click` | Design: they then also work in DevTools and native text fields | None |
 
 ## screen
 
@@ -134,7 +125,6 @@ Entries marked _(branch `x`)_ are on that branch and not yet in `main`.
 |---|---|---|---|---|
 | R1 | `display-added`, `display-removed`, `display-metrics-changed` from the OS | Displays compared once a second while a handler is attached, so events come up to a second late | CEF: reports no display changes | OS notifications (`NSApplicationDidChangeScreenParametersNotification`, `WM_DISPLAYCHANGE`, XRandR events) |
 | R2 | `Display` has `label`, `internal`, `monochrome`, `colorSpace`, `colorDepth`, `depthPerComponent`, `displayFrequency`, `touchSupport`, `accelerometerSupport`, `detected`, `nativeOrigin`, `maximumCursorSize` | Only `id`, `bounds`, `workArea`, `size`, `workAreaSize`, `scaleFactor`, `rotation` | CEF: `cef_display_t` has no more | OS per field |
-| R4 | `screenToDipPoint` / `dipToScreenPoint` on Windows and Linux only | Also on macOS | Design (superset) | None |
 | R5 | `getCursorScreenPoint` under Wayland | X11 only (`XQueryPointer` on Oriel's own X connection) | OS; see P2 | Follow P2 |
 
 ## dialog

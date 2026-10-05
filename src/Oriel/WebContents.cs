@@ -369,16 +369,22 @@ public sealed unsafe class WebContents
         if (_browser is not null) action(_browser);
     });
 
-    /// <summary>Runs script in the main frame's own world; UI thread, browser present.</summary>
-    internal void RunInMainFrame(string code)
+    /// <summary>Moves the history to the entry <paramref name="target"/> picks from the current index and the entry count;
+    /// directly, through DevTools, as Electron's controller does, so it needs none of the page's script.</summary>
+    internal void GoToHistoryEntry(Func<int, int, int> target) => CefThread.RunOnUi(() =>
     {
-        var frame = _browser->get_main_frame(_browser);
-        cef_string_utf16_t script = default, url = default;
-        CefString.Set(&script, code);
-        frame->execute_java_script(frame, &script, &url, 0);
-        CefString.Clear(&script);
-        NativeObject.Release(frame);
-    }
+        if (_browser is null) return;
+        _devTools.Send("Page.getNavigationHistory", onResult: (result, error) =>
+        {
+            if (error is not null) return;
+            var current = result.GetProperty("currentIndex").GetInt32();
+            var entries = result.GetProperty("entries");
+            var index = target(current, entries.GetArrayLength());
+            if (index < 0 || index >= entries.GetArrayLength() || index == current) return;
+            var id = entries[index].GetProperty("id").GetInt32();
+            _devTools.Send("Page.navigateToHistoryEntry", w => w.WriteNumber("entryId", id));
+        });
+    });
 
     /// <summary>Keeps only the page showing in the back/forward list.</summary>
     internal void ResetHistory() => CefThread.RunOnUi(() =>
@@ -458,11 +464,13 @@ public sealed unsafe class WebContents
     /// <param name="path">Absolute, or relative to the current directory.</param>
     /// <param name="query">Query parameters, encoded into the URL.</param>
     /// <param name="hash">Fragment, without the leading <c>#</c>.</param>
-    public Task LoadFile(string path, IReadOnlyDictionary<string, string>? query = null, string? hash = null)
+    /// <param name="search">A raw query string, used as is; it replaces <paramref name="query"/>, as in Electron.</param>
+    public Task LoadFile(string path, IReadOnlyDictionary<string, string>? query = null, string? hash = null, string? search = null)
     {
         ArgumentNullException.ThrowIfNull(path);
         var builder = new UriBuilder(new Uri(Path.GetFullPath(path)));
-        if (query is { Count: > 0 })
+        if (search is not null) builder.Query = search.TrimStart('?');
+        else if (query is { Count: > 0 })
             builder.Query = string.Join('&', query.Select(kv => $"{Uri.EscapeDataString(kv.Key)}={Uri.EscapeDataString(kv.Value)}"));
         if (!string.IsNullOrEmpty(hash)) builder.Fragment = hash;
         return LoadUrl(builder.Uri.AbsoluteUri);

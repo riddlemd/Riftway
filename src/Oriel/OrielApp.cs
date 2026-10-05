@@ -45,6 +45,10 @@ public sealed unsafe class OrielApp
     /// <summary>Every window has closed for a quit; cancel to keep running. Electron's <c>will-quit</c>.</summary>
     public event EventHandler<CancelEventArgs>? WillQuit;
 
+    /// <summary>The application is quitting, by <see cref="Quit"/> or <see cref="Exit"/>; raised on the main thread once the
+    /// message loop has ended. Electron's <c>quit</c> event (named for the method it would collide with).</summary>
+    public event EventHandler<ExitedEventArgs>? Exited;
+
     /// <summary>The last window closed. With no handler the application quits. Not raised while quitting.
     /// Electron's <c>window-all-closed</c>.</summary>
     public event EventHandler? WindowAllClosed;
@@ -127,6 +131,7 @@ public sealed unsafe class OrielApp
         }
 
         CefNative.cef_run_message_loop();
+        Exited?.Invoke(this, new ExitedEventArgs(_exitCode));
         CefNative.cef_shutdown();
         return _exitCode;
     }
@@ -225,14 +230,16 @@ public sealed unsafe class OrielApp
         Protocol.OnContextInitialized();
         IsReady = true;
         Ready?.Invoke(this, EventArgs.Empty);
-        // After Ready, so an app that sets its own menu there never shows the default.
-        if (OperatingSystem.IsMacOS())
-        {
-            Menu.SetDefaultApplicationMenuIfUnset();
-            MacApplicationMenu.Install();
-        }
+        // After Ready, so an app that sets its own menu there never shows the default (Electron sets it just before
+        // ready and lets the app replace it, which ends the same way).
+        Menu.SetDefaultApplicationMenuIfUnset();
+        if (OperatingSystem.IsMacOS()) MacApplicationMenu.Install();
     }
 }
+
+/// <summary>How the application is quitting; Electron's <c>quit</c> event arguments.</summary>
+/// <param name="ExitCode">What <see cref="OrielApp.Run"/> returns.</param>
+public sealed record ExitedEventArgs(int ExitCode);
 
 /// <summary>A relaunch handed to the running instance; Electron's <c>second-instance</c> arguments.</summary>
 /// <param name="CommandLine">The new launch's full command line.</param>

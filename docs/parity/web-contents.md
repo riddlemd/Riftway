@@ -12,13 +12,13 @@ Percentages are over the non-n/a items; the second counts a partial item as half
 |---|---|---|---|---|---|---|---|
 | Static methods | 5 | 0 | 0 | 5 | 0 | 0.0% | 0.0% |
 | Instance events | 59 | 7 | 1 | 49 | 2 | 12.3% | 13.2% |
-| Instance methods | 118 | 21 | 7 | 82 | 8 | 19.1% | 22.3% |
+| Instance methods | 118 | 22 | 6 | 82 | 8 | 20.0% | 22.7% |
 | Instance properties | 18 | 4 | 2 | 11 | 1 | 23.5% | 29.4% |
-| navigationHistory | 14 | 10 | 2 | 2 | 0 | 71.4% | 78.6% |
+| navigationHistory | 14 | 12 | 0 | 2 | 0 | 85.7% | 85.7% |
 | WebFrameMain events and statics | 3 | 1 | 0 | 2 | 0 | 33.3% | 33.3% |
 | WebFrameMain methods | 9 | 1 | 3 | 5 | 0 | 11.1% | 27.8% |
 | WebFrameMain properties | 15 | 9 | 0 | 6 | 0 | 60.0% | 60.0% |
-| **Total** | 241 | 53 | 15 | 162 | 11 | 23.0% | 26.3% |
+| **Total** | 241 | 56 | 12 | 162 | 11 | 24.3% | 27.0% |
 
 ## Checklist
 
@@ -101,7 +101,7 @@ Percentages are over the non-n/a items; the second counts a partial item as half
 | Electron | Oriel | Status | Note |
 |---|---|---|---|
 | `loadURL(url, options)` | `LoadUrl` | partial | Returns Task; `baseURLForDataURL` throws, `UploadFile` offset/length throw, no client hints, reload drops options (C1, C2, C3, C5). |
-| `loadFile(filePath, options)` | `LoadFile` | partial | `query` and `hash`, no `search`. |
+| `loadFile(filePath, options)` | `LoadFile` | done | `query`, `search`, `hash` |
 | `getURL()` | `GetUrl` | done |  |
 | `getTitle()` | `GetTitle` | done |  |
 | `reload()` | `Reload` | done |  |
@@ -254,8 +254,8 @@ Percentages are over the non-n/a items; the second counts a partial item as half
 | `getEntryAtIndex(index)` | `GetEntryAtIndex` | done | Entry has `url` and `title` (no `pageState`, N1). |
 | `goBack()` | `GoBack` | done |  |
 | `goForward()` | `GoForward` | done |  |
-| `goToIndex(index)` | `GoToIndex` | partial | Via the page's `history.go`; does nothing with `Javascript = false` (N2). |
-| `goToOffset(offset)` | `GoToOffset` | partial | Via the page's `history.go`; does nothing with `Javascript = false` (N2). |
+| `goToIndex(index)` | `GoToIndex` | done | Directly, through DevTools |
+| `goToOffset(offset)` | `GoToOffset` | done | Directly, through DevTools |
 | `length()` | `Length` | done |  |
 | `removeEntryAtIndex(index)` | — | missing | N1. |
 | `getAllEntries()` | `GetAllEntries` | done |  |

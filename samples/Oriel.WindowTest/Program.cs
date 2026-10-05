@@ -11,6 +11,8 @@ var step = TimeSpan.FromSeconds(5);
 var simpleReady = false;
 BrowserWindow? childAlive = null;
 var willQuit = 0;
+ExitedEventArgs? exited = null;
+app.Exited += (_, e) => exited = e;
 void countWillQuit(object? _, CancelEventArgs e) => willQuit++;
 
 void Check(string name, bool pass, object? detail = null)
@@ -66,6 +68,10 @@ async Task RunAsync(BrowserWindow win, BrowserWindow simple)
         () => win.WebContents.LoadFile(page, new Dictionary<string, string> { ["q"] = "1 2" }, "top"), step);
     Check("LoadFile raises DidFinishLoad", loaded);
     Check("GetUrl reflects LoadFile (query, hash)", win.WebContents.GetUrl().EndsWith("oriel-window-test.html?q=1%202#top", StringComparison.Ordinal), win.WebContents.GetUrl());
+    // BrowserWindow's own LoadFile, with Electron's raw search, which replaces the query.
+    await win.LoadFile(page, new Dictionary<string, string> { ["ignored"] = "1" }, search: "?raw=a%20b&x");
+    Check("BrowserWindow.LoadFile with search uses it as is", win.WebContents.GetUrl().EndsWith("oriel-window-test.html?raw=a%20b&x", StringComparison.Ordinal), win.WebContents.GetUrl());
+    Check("BrowserWindow.Reload reloads", Fires(h => win.WebContents.DidFinishLoad += h, h => win.WebContents.DidFinishLoad -= h, win.Reload, step));
     Check("PageTitleUpdated raised", Eventually(() => seenTitle == "Page title", step), seenTitle);
     Check("window title follows the page", Eventually(() => win.GetTitle() == "Page title", step), win.GetTitle());
     win.PageTitleUpdated -= onTitle;
@@ -152,11 +158,14 @@ async Task RunAsync(BrowserWindow win, BrowserWindow simple)
     // A window created with SimpleFullScreen routes SetFullScreen to simple full screen on macOS.
     simple.Show();
     simple.SetFullScreen(true);
-    Check("SimpleFullScreen option: SetFullScreen reports full screen", Eventually(() => simple.IsFullScreen, step), simple.IsFullScreen);
     if (OperatingSystem.IsMacOS())
-        Check("SimpleFullScreen option: uses simple full screen on macOS", simple.IsSimpleFullScreen, simple.IsSimpleFullScreen);
+        Check("SimpleFullScreen option: SetFullScreen goes simple; IsFullScreen is false there, as Electron",
+            Eventually(() => simple.IsSimpleFullScreen, step) && !simple.IsFullScreen, $"{simple.IsSimpleFullScreen} {simple.IsFullScreen}");
+    else
+        Check("SimpleFullScreen option: SetFullScreen is native full screen elsewhere", Eventually(() => simple.IsFullScreen, step), simple.IsFullScreen);
     simple.SetFullScreen(false);
-    Check("SimpleFullScreen option: SetFullScreen(false) leaves it", Eventually(() => !simple.IsFullScreen, step), simple.IsFullScreen);
+    Check("SimpleFullScreen option: SetFullScreen(false) leaves it", Eventually(() => !simple.IsFullScreen && !simple.IsSimpleFullScreen, step),
+        $"{simple.IsSimpleFullScreen} {simple.IsFullScreen}");
     Check("GetNativeWindowHandle", simple.GetNativeWindowHandle() != 0);
     if (OperatingSystem.IsMacOS())
     {
@@ -654,11 +663,11 @@ static bool Throws<T>(Action act) where T : Exception
 async Task MenusAsync(BrowserWindow win)
 {
     var defaultMenu = Menu.GetApplicationMenu();
-    if (OperatingSystem.IsMacOS())
-        Check("macOS gets a default application menu", defaultMenu?.Items.Select(i => i.Role).SequenceEqual(
-            [MenuItemRole.AppMenu, MenuItemRole.FileMenu, MenuItemRole.EditMenu, MenuItemRole.ViewMenu, MenuItemRole.WindowMenu]) == true);
-    else
-        Check("no default application menu on Windows/Linux", defaultMenu is null && !win.IsMenuBarVisible, $"menu={defaultMenu is not null} bar={win.IsMenuBarVisible}");
+    MenuItemRole[] expected = OperatingSystem.IsMacOS()
+        ? [MenuItemRole.AppMenu, MenuItemRole.FileMenu, MenuItemRole.EditMenu, MenuItemRole.ViewMenu, MenuItemRole.WindowMenu]
+        : [MenuItemRole.FileMenu, MenuItemRole.EditMenu, MenuItemRole.ViewMenu, MenuItemRole.WindowMenu];
+    Check("the default application menu is Electron's on every OS", defaultMenu?.Items.Select(i => i.Role).SequenceEqual(expected) == true
+        && (OperatingSystem.IsMacOS() || win.IsMenuBarVisible), $"bar={win.IsMenuBarVisible}");
 
     var clicks = new List<string>();
     var save = new MenuItem { Id = "save", Label = "&Save", Accelerator = "CmdOrCtrl+Shift+K", Click = (_, w) => clicks.Add($"save:{w == win}") };
@@ -742,6 +751,9 @@ async Task MacMenusAsync(BrowserWindow win, Menu menu, MenuItem save, MenuItem c
 
 async Task BarMenusAsync(BrowserWindow win, Menu menu, MenuItem save, MenuItem go, List<string> clicks)
 {
+    // Measured from no bar at all: the default application menu gives every window one.
+    win.RemoveMenu();
+    Eventually(() => !win.IsMenuBarVisible, step);
     var bounds = win.GetBounds();
     var content = win.GetContentBounds();
     // The page's own height shows whether CEF really laid the bar out, not just Oriel's bookkeeping.
@@ -882,7 +894,7 @@ async Task WindowOpenAsync(BrowserWindow win)
     if (popup is not null)
     {
         Check("the popup loads its page", Eventually(() => popup.WebContents.GetTitle() == "popup page", step), popup.WebContents.GetTitle());
-        Check("the features size the popup's page area", Eventually(() => popup.GetContentSize() == (320, 240), step), popup.GetContentSize());
+        Check("the features size the popup's window, as Electron", Eventually(() => popup.GetSize() == (320, 240), step), popup.GetSize());
         Check("the popup sees its opener", await Run(popup, "window.opener !== null") == "true");
         // file: pages are opaque origins, so the opener may only use cross-origin members such as closed.
         Check("the opener holds a live handle to the popup", await Run(win, "window.__popup.closed") == "false", await Run(win, "window.__popup.closed"));
@@ -922,6 +934,18 @@ async Task WindowOpenAsync(BrowserWindow win)
         Check("a popup inherits the opener's preload", Eventually(() => Run(inheriting, "typeof probe").Result == "\"object\"", step), Run(inheriting, "typeof probe").Result);
         inheriting.Destroy();
         lock (popups) popups.Clear();
+    }
+
+    // Electron spreads the handler's options over the features': the page's width stays, the handler's height wins.
+    second.WebContents.SetWindowOpenHandler(_ => WindowOpenHandlerResponse.Allow(options => options with { Height = 250 }));
+    await Run(second, "window.open('popup.html', '', 'width=320'); 1");
+    Check("a configured popup keeps the features and takes the handler's changes, as Electron merges them",
+        Eventually(() => { lock (popups) return popups.Count == 1 && popups[0].GetSize() == (320, 250); }, step),
+        popups.Count == 1 ? popups[0].GetSize() : popups.Count);
+    lock (popups)
+    {
+        foreach (var p in popups) p.Destroy();
+        popups.Clear();
     }
 
     var outlive = false;
@@ -1017,6 +1041,22 @@ async Task NavigationAsync()
     Check("GoToIndex", At(0, "one"), $"{history.GetActiveIndex()} {nav.WebContents.GetTitle()}");
     history.GoToOffset(2);
     Check("GoToOffset", At(2, "three"), $"{history.GetActiveIndex()} {nav.WebContents.GetTitle()}");
+    history.GoToOffset(-1);
+    Check("GoToOffset moves relative to the page showing", At(1, "two"), $"{history.GetActiveIndex()} {nav.WebContents.GetTitle()}");
+    history.GoToIndex(2);
+    At(2, "three");
+
+    // Directly, as Electron: a page whose scripts are off still moves.
+    var noScript = new BrowserWindow(new BrowserWindowOptions { Show = false, WebPreferences = new WebPreferences { Javascript = false } });
+    await noScript.WebContents.LoadFile(one);
+    await noScript.WebContents.LoadFile(two);
+    noScript.WebContents.NavigationHistory.GoToIndex(0);
+    Check("GoToIndex works without the page's scripts", Eventually(() => noScript.WebContents.NavigationHistory.GetActiveIndex() == 0, step),
+        noScript.WebContents.NavigationHistory.GetActiveIndex());
+    noScript.WebContents.NavigationHistory.GoToOffset(1);
+    Check("GoToOffset works without the page's scripts", Eventually(() => noScript.WebContents.NavigationHistory.GetActiveIndex() == 1, step),
+        noScript.WebContents.NavigationHistory.GetActiveIndex());
+    noScript.Destroy();
 
     history.Clear();
     Check("Clear keeps only the page showing", Eventually(() => history.Length() == 1 && history.GetActiveIndex() == 0 && !history.CanGoBack(), step), Titles());
@@ -1445,6 +1485,7 @@ if (failures >= 0)
 {
     // Checked once Run has returned: the final Quit must have raised WillQuit on its way out.
     Check("WillQuit is raised when the app quits", willQuit == 1, willQuit);
+    Check("Exited is raised with the exit code, as Electron's quit event", exited is { ExitCode: 0 }, exited);
     failures = results.Count(r => r.StartsWith("FAIL", StringComparison.Ordinal));
 }
 Console.WriteLine(failures < 0 ? "RESULT: did not finish" : $"RESULT: {failures} failure(s)");
