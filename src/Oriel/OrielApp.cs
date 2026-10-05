@@ -159,6 +159,7 @@ public sealed unsafe partial class OrielApp
                 BeforeChildProcessLaunch = commandLine =>
                 {
                     if (schemeSwitch is not null) AppendSwitch(commandLine, SchemeSwitch.Name, schemeSwitch);
+                    CrashReporterNative.OnChildProcessLaunch(commandLine);
                 },
             },
             OnBeforeCommandLineProcessing,
@@ -168,6 +169,7 @@ public sealed unsafe partial class OrielApp
         NativeObject.AddRef(app.Native);
         var exitCode = CefNative.cef_execute_process((cef_main_args_t*)&args, app.Native, null);
         if (exitCode >= 0) return exitCode;
+        CrashReporter.OnCrashpadStarted();
 
         // userData or sessionData set before Run moves the profile, as Electron's before ready.
         var dataDirectory = DataDirectory = GetPath("sessionData");

@@ -9,7 +9,7 @@ Recounted 2026-10-04 against `src/Oriel`. Update these figures when a row or che
 
 | Measure | Done | Partial | Not started | Total |
 |---|---|---|---|---|
-| Module rows below | 1 | 16 | 50 | 67 |
+| Module rows below | 1 | 17 | 49 | 67 |
 | M2 rows | 1 | 13 | 8 | 22 |
 
 The 67 rows include `BrowserView` (deprecated, never implemented; counted as not started).
@@ -43,7 +43,7 @@ Where an implemented module differs from Electron, the difference and its reason
 | `utilityProcess` | `UtilityProcess` (.NET child process) | .NET | M6 | — |
 | `parentPort` | `ParentPort` | .NET | M6 | — |
 | `MessageChannelMain` / `MessagePortMain` | `MessageChannelMain` / `MessagePortMain` | .NET + CEF | M6 | partial: channels in the main process, ports moved to and from pages (`webContents.postMessage`, `frame.postMessage`, `ipcRenderer.postMessage`, `event.ports`), ports through ports, `start`, `close`; JSON messages (I1); no `close` from a page's own `close()` (I7) |
-| `crashReporter` | `CrashReporter` (Crashpad) | CEF | M4 | — |
+| `crashReporter` | `CrashReporter` (Crashpad) | CEF | M4 | partial: every method; `Start` before `Run()` writes CEF's `crash_reporter.cfg`; Windows verified end to end (renderer and browser crashes, uploads, local-only, rate limit); see DRIFT.md CR1–CR14 |
 | `contentTracing` | `ContentTracing` | CEF | M6 | partial: `startRecording` (categories), `stopRecording`; no `getCategories`, `getTraceBufferUsage` or trace options (P6) |
 | `autoUpdater` | `AutoUpdater` (Velopack) | Pack | M4 | — |
 | Fuses, ASAR | Fuses, packed app archive with integrity check | Pack | M4 | — |
