@@ -148,11 +148,27 @@ static unsafe class WindowsShell
     /// <summary>Whether the window has <c>WS_EX_TRANSPARENT</c>.</summary>
     internal static bool ClickThrough(nint hwnd) => OperatingSystem.IsWindows() && Oriel.Cef.Platform.WindowsWindowStyle.IsClickThrough(hwnd);
 
+    /// <summary>Whether the window forwards mouse moves to its page, read back from Oriel's hook set.</summary>
+    internal static bool Forwarding(nint hwnd) => OperatingSystem.IsWindows() && Oriel.Cef.Platform.WindowsSubclass.IsForwardingMouseMoves(hwnd);
+
+    /// <summary>Puts the real cursor at a screen point and wiggles it a mickey, so low-level mouse hooks see moves.</summary>
+    internal static void MoveMouse(int x, int y)
+    {
+        _ = SetCursorPos(x, y);
+        mouse_event(0x0001 /* MOVE */, 1, 0, 0, 0);
+        Thread.Sleep(40);
+        mouse_event(0x0001 /* MOVE */, -1, 0, 0, 0);
+        Thread.Sleep(40);
+    }
+
     /// <summary>Whether DWM renders the window's frame.</summary>
     internal static bool NcRendering(nint hwnd) => OperatingSystem.IsWindows() && Oriel.Cef.Platform.WindowsWindowStyle.IsDwmNonClientRendering(hwnd);
 
     /// <summary>The foreground window.</summary>
     internal static nint Foreground() => GetForegroundWindow();
+
+    /// <summary>Whether Win32 has the window visible (<c>IsWindowVisible</c>).</summary>
+    internal static bool Visible(nint hwnd) => IsWindowVisible(hwnd) != 0;
 
     /// <summary>The top-level window that takes the mouse at (<paramref name="x"/>, <paramref name="y"/>).</summary>
     internal static nint RootAt(int x, int y) => GetAncestor(WindowFromPoint(new PointNative { X = x, Y = y }), 2 /* GA_ROOT */);
@@ -183,6 +199,9 @@ static unsafe class WindowsShell
         mouse_event(0x0004 /* LEFTUP */, 0, 0, 0, 0);
         Thread.Sleep(400);
     }
+
+    /// <summary>Moves the real mouse to a screen point without waiting.</summary>
+    internal static void MovePointer(int x, int y) => _ = SetCursorPos(x, y);
 
     /// <summary>Moves the real mouse to a screen point.</summary>
     internal static void Hover(int x, int y)
@@ -236,6 +255,7 @@ static unsafe class WindowsShell
 
     [DllImport("gdi32.dll")] private static extern uint GetPixel(nint dc, int x, int y);
     [DllImport("user32.dll")] private static extern nint GetForegroundWindow();
+    [DllImport("user32.dll")] private static extern int IsWindowVisible(nint hwnd);
     [DllImport("user32.dll")] private static extern nint WindowFromPoint(PointNative point);
     [DllImport("user32.dll")] private static extern nint GetAncestor(nint hwnd, uint flags);
     [DllImport("user32.dll")] private static extern int GetWindowRect(nint hwnd, RectNative* rect);

@@ -25,7 +25,8 @@ public enum MaximizeButtonEvent
 }
 
 /// <summary>Routes a window's messages that CEF does not surface to callbacks: thumbnail toolbar clicks
-/// (<c>WM_COMMAND</c> with <c>THBN_CLICKED</c>) and the user's move and resize drags (<c>WM_MOVING</c>, <c>WM_SIZING</c>).</summary>
+/// (<c>WM_COMMAND</c> with <c>THBN_CLICKED</c>) and the user's move and resize drags (<c>WM_MOVING</c>, <c>WM_SIZING</c>);
+/// and forwards mouse moves to a click-through window's page.</summary>
 /// <remarks>UI thread only: a subclass belongs to the thread that owns the window.</remarks>
 [SupportedOSPlatform("windows")]
 public static unsafe class WindowsSubclass
@@ -34,12 +35,19 @@ public static unsafe class WindowsSubclass
     private const uint WmSizing = 0x0214;
     private const uint WmMoving = 0x0216;
     private const uint WmNcDestroy = 0x0082;
+    private const uint WmMouseMove = 0x0200;
+    private const uint WmMouseLeave = 0x02A3;
+    private const int WhMouseLl = 14;
     private const int ThbnClicked = 0x1800;
     private static readonly ConcurrentDictionary<nint, Hooks> s_hooks = new();
+    // Top-level windows forwarding mouse moves, to their page window; Electron's forwarding_windows_.
+    private static readonly ConcurrentDictionary<nint, nint> s_forwarding = new();
+    private static nint s_mouseHook;
 
     private sealed class Hooks
     {
         public bool NoActivate;
+        public bool SwallowMouseLeave;
         public Func<bool>? MeantHidden;
         public Action<int>? ThumbClick;
         public Func<int, (int Left, int Top, int Right, int Bottom), bool>? Sizing;
@@ -64,6 +72,67 @@ public static unsafe class WindowsSubclass
     /// returning true keeps it where it is. False if the window could not be subclassed.</summary>
     public static bool RouteMoving(nint hwnd, Func<(int Left, int Top, int Right, int Bottom), bool> onMoving)
         => Hook(hwnd) is { } hooks && (hooks.Moving = onMoving) is not null;
+
+    /// <summary>Starts or stops posting the mouse moves over the top-level window <paramref name="hwnd"/> to its page
+    /// window (Chromium's <c>Chrome_RenderWidgetHostHWND</c>), as Electron's <c>SetForwardMouseMessages</c> does for a
+    /// window that ignores the mouse. False if the window has no page window or it could not be subclassed.</summary>
+    /// <remarks>A process-wide low-level mouse hook sees the moves, installed while any window forwards; the installing
+    /// thread must pump messages, as the UI thread does. The page window swallows <c>WM_MOUSELEAVE</c> meanwhile.</remarks>
+    public static bool ForwardMouseMoves(nint hwnd, bool forward)
+    {
+        if (!forward)
+        {
+            StopForwarding(hwnd);
+            return true;
+        }
+        if (s_forwarding.ContainsKey(hwnd)) return true;
+        // Chromium creates its legacy page window only while it needs one; without it the top-level window takes the mouse.
+        var page = PageWindow(hwnd) is var child and not 0 ? child : hwnd;
+        if (Hook(page) is not { } hooks) return false;
+        hooks.SwallowMouseLeave = true;
+        s_forwarding[hwnd] = page;
+        if (s_mouseHook == 0) s_mouseHook = SetWindowsHookExW(WhMouseLl, &MouseHookProc, 0, 0);
+        return s_mouseHook != 0;
+    }
+
+    /// <summary>Whether <paramref name="hwnd"/> forwards mouse moves to its page window.</summary>
+    public static bool IsForwardingMouseMoves(nint hwnd) => s_forwarding.ContainsKey(hwnd);
+
+    private static void StopForwarding(nint hwnd)
+    {
+        if (!s_forwarding.TryRemove(hwnd, out var page)) return;
+        if (s_hooks.TryGetValue(page, out var hooks)) hooks.SwallowMouseLeave = false;
+        if (s_forwarding.IsEmpty && s_mouseHook != 0)
+        {
+            UnhookWindowsHookEx(s_mouseHook);
+            s_mouseHook = 0;
+        }
+    }
+
+    private static nint PageWindow(nint hwnd)
+    {
+        fixed (char* name = "Chrome_RenderWidgetHostHWND") return FindWindowExW(hwnd, 0, name, null);
+    }
+
+    // Electron's MouseHookProc: the page window ignores the mouse while click-through, so moves inside it are posted.
+    [UnmanagedCallersOnly]
+    private static nint MouseHookProc(int code, nint wParam, nint lParam)
+    {
+        if (code >= 0 && wParam == WmMouseMove)
+        {
+            var point = ((MouseHookNative*)lParam)->Point;
+            foreach (var (_, page) in s_forwarding)
+            {
+                RectNative client;
+                var p = point;
+                GetClientRect(page, &client);
+                ScreenToClient(page, &p);
+                if (p.X >= client.Left && p.X < client.Right && p.Y >= client.Top && p.Y < client.Bottom)
+                    PostMessageW(page, WmMouseMove, 0, (nint)(uint)((p.X & 0xFFFF) | ((p.Y & 0xFFFF) << 16)));
+            }
+        }
+        return CallNextHookEx(0, code, wParam, lParam);
+    }
 
     /// <summary>Makes the top-level window <paramref name="hwnd"/> answer <c>HTMAXBUTTON</c> where
     /// <paramref name="overMaximize"/> (screen pixels) says a drawn maximize button is, so Windows 11 offers snap layouts
@@ -165,6 +234,8 @@ public static unsafe class WindowsSubclass
                             return 0;
                     }
                 }
+                // Electron's SubclassProc: Chromium would take the leave as the pointer leaving the page.
+                if (message == WmMouseLeave && hooks.SwallowMouseLeave) return 0;
                 if (message == WmWindowPosChanging && hooks.NoActivate)
                     ((WindowPosNative*)lParam)->Flags |= SwpNoActivate;
                 if (message == WmCommand && ((wParam >> 16) & 0xFFFF) == ThbnClicked && hooks.ThumbClick is { } onClick)
@@ -189,6 +260,8 @@ public static unsafe class WindowsSubclass
         if (message == WmNcDestroy)
         {
             s_hooks.TryRemove(hwnd, out _);
+            foreach (var (top, page) in s_forwarding)
+                if (top == hwnd || page == hwnd) StopForwarding(top);
             RemoveWindowSubclass(hwnd, &Proc, 1);
         }
         return DefSubclassProc(hwnd, message, wParam, lParam);
@@ -231,6 +304,23 @@ public static unsafe class WindowsSubclass
     }
 
     [StructLayout(LayoutKind.Sequential)]
+    private struct PointNative
+    {
+        public int X;
+        public int Y;
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct MouseHookNative
+    {
+        public PointNative Point;
+        public uint MouseData;
+        public uint Flags;
+        public uint Time;
+        public nuint ExtraInfo;
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
     private struct RectNative
     {
         public int Left;
@@ -241,6 +331,13 @@ public static unsafe class WindowsSubclass
 
     [DllImport("user32.dll")] private static extern int GetWindowRect(nint hwnd, RectNative* rect);
     [DllImport("user32.dll")] private static extern nint GetForegroundWindow();
+    [DllImport("user32.dll")] private static extern int GetClientRect(nint hwnd, RectNative* rect);
+    [DllImport("user32.dll")] private static extern int ScreenToClient(nint hwnd, PointNative* point);
+    [DllImport("user32.dll")] private static extern int PostMessageW(nint hwnd, uint message, nint wParam, nint lParam);
+    [DllImport("user32.dll")] private static extern nint FindWindowExW(nint parent, nint after, char* className, char* title);
+    [DllImport("user32.dll")] private static extern nint SetWindowsHookExW(int id, delegate* unmanaged<int, nint, nint, nint> proc, nint module, uint threadId);
+    [DllImport("user32.dll")] private static extern int UnhookWindowsHookEx(nint hook);
+    [DllImport("user32.dll")] private static extern nint CallNextHookEx(nint hook, int code, nint wParam, nint lParam);
     [DllImport("user32.dll")] private static extern int TrackMouseEvent(TrackMouseEventNative* track);
     [DllImport("user32.dll")] private static extern int SetForegroundWindow(nint hwnd);
     [DllImport("comctl32.dll")] private static extern int SetWindowSubclass(nint hwnd, delegate* unmanaged<nint, uint, nint, nint, nuint, nuint, nint> proc, nuint id, nuint data);

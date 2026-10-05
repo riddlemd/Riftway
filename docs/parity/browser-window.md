@@ -101,24 +101,26 @@ Counted from the Checklist at the end: `BaseWindow` and `BrowserWindow` are one 
   until the menu is used; the bar takes CEF Views' default look.
 
 - Window polish, Windows (branch `window-polish`): `ShowInactive` (shown through CEF with `SWP_NOACTIVATE` forced in
-  `WM_WINDOWPOSCHANGING`), `Opacity`/`SetOpacity`/`GetOpacity` (`WS_EX_LAYERED` alpha), `HasShadow`/`SetHasShadow` (frameless:
-  DWM margins and non-client rendering), `SetIgnoreMouseEvents` (`WS_EX_TRANSPARENT`), `SetContentProtection`/
-  `IsContentProtected` (`WDA_EXCLUDEFROMCAPTURE`), `Kiosk`/`SetKiosk`/`IsKiosk` (full screen), `GetNormalBounds`
-  (`GetWindowPlacement`), cancellable `WillResize`/`WillMove` (`WM_SIZING`/`WM_MOVING`). Gaps: DRIFT W30–W33.
+  `WM_WINDOWPOSCHANGING`), `Opacity`/`SetOpacity`/`GetOpacity` (`WS_EX_LAYERED` alpha), `HasShadow`/`SetHasShadow` (stored only,
+  as Electron on Windows), `SetIgnoreMouseEvents` (`WS_EX_TRANSPARENT`; `Forward` posts mouse moves to the page from a
+  low-level mouse hook, as Electron), `SetContentProtection`/`IsContentProtected` (`WDA_EXCLUDEFROMCAPTURE`),
+  `Kiosk`/`SetKiosk`/`IsKiosk` (full screen; `IsKiosk` is `IsFullScreen`), `GetNormalBounds` (`GetWindowPlacement`),
+  cancellable `WillResize`/`WillMove` (`WM_SIZING`/`WM_MOVING`). Gaps: DRIFT W30, W31, W33.
   Fixed on the way: CEF activated a window created hidden, and any window starting a load, taking the keyboard from
   the window in front; a window meant to be hidden now hands activation back, and loads restore the foreground.
 
 - Title bar (branch `title-bar`): `-webkit-app-region: drag`/`no-drag` in frameless windows (`cef_drag_handler_t` to
   `W.set_draggable_regions`, offset by the page's origin; the overlay is cut out as no-drag). `TitleBarStyle` (frameless on
   Windows and Linux), `TitleBarOverlay`/`SetTitleBarOverlay` (Windows: a CEF Views panel docked top right by
-  `W.add_overlay_view`, three 46-DIP buttons with drawn symbols, Windows 11 hover and close colours, hidden in full
-  screen; defaults from `COLOR_BTNFACE`/`COLOR_BTNTEXT` and the system caption height), `GetTitleBarOverlayBounds`.
-  Gaps: DRIFT W34–W37.
+  `W.add_overlay_view`, three buttons as Electron sizes them (45 DIPs, the later two with a 1-DIP spacing) with drawn symbols, Electron's hover tints fading over 150 ms and red close, hidden in full
+  screen; colours parsed as Chromium's `ParseCssColorString` does, alpha showing the page through; defaults from
+  `COLOR_BTNFACE`/`COLOR_BTNTEXT` and the system caption height). Gaps: DRIFT W34, W37.
 
 - Title bar follow-ups (branch `title-bar-2`): the overlay's buttons follow `Minimizable`/`Maximizable`/`Closable`
   (disabled, greyed symbol); Windows 11 snap layouts over the drawn maximize button: the window answers `HTMAXBUTTON`,
   Chromium's page window passes that hit test up (`HTTRANSPARENT`), and the non-client hover, press and click drive
-  the button. `SetParentWindow` on Windows (`GWLP_HWNDPARENT`), keeping `GetParentWindow`/`GetChildWindows` and
+  the button. `SetParentWindow` on Windows (`GWLP_HWNDPARENT`, then a visible window re-shown in its show state and
+  brought to the top, as Electron; no cycle check, modal throws), keeping `GetParentWindow`/`GetChildWindows` and
   closing with the new parent.
 
 ## Next, by importance
@@ -139,7 +141,7 @@ Counted from the Checklist at the end: `BaseWindow` and `BrowserWindow` are one 
 3. `titleBarStyle` on macOS, `trafficLightPosition`, the Window Controls Overlay page API (W34, W37) — OS, Patch.
 4. `showInactive`, `opacity`, `setIgnoreMouseEvents`, content protection, `will-resize`/`will-move` on macOS and Linux (W30) — OS.
 5. Window state persistence (`windowStatePersistence`, `getNormalBounds`, `persisted-state-restored`) — Oriel.
-6. `resized`/`moved` events, `hasShadow` on framed windows and macOS (W31), kiosk presentation options on macOS (W33) — OS.
+6. `resized`/`moved` events, `hasShadow` on macOS and Linux (W31), kiosk presentation options on macOS (W33) — OS.
 
 Accuracy gaps in done items: `Shown`/`Hidden` fire only from `Show()`/`Hide()`, not when the OS shows or hides the
 window; `devTools: false` blocks
@@ -208,14 +210,14 @@ Parameters in brackets are optional in Electron. `webContents` members are in [w
 | `autoHideMenuBar` | `AutoHideMenuBar` | done |  |
 | `enableLargerThanScreen` | — | missing |  |
 | `backgroundColor` | `BackgroundColor` | done |  |
-| `hasShadow` | `HasShadow` | partial | Windows frameless only; a framed window keeps DWM's shadow (W31). |
+| `hasShadow` | `HasShadow` | partial | Stored only, which is Electron's behaviour on Windows; macOS and Linux not yet (W31). |
 | `opacity` | `Opacity` | partial | Windows only for now (W30). |
 | `darkTheme` | — | missing |  |
 | `transparent` | — | missing |  |
 | `type` | — | missing |  |
 | `visualEffectState` | — | missing |  |
 | `titleBarStyle` | `TitleBarStyle` | partial | Windows (and Linux, unchecked): anything but `Default` is frameless; macOS keeps its title bar (W37). |
-| `titleBarOverlay` | `TitleBarOverlay` | partial | Windows: Views buttons docked top right; no page API (W34), opaque colours (W35); snap layouts through `HTMAXBUTTON`, buttons follow the window's flags. |
+| `titleBarOverlay` | `TitleBarOverlay` | partial | Windows: Views buttons docked top right, CSS colours as Chromium parses them; no page API (W34); snap layouts through `HTMAXBUTTON`, buttons follow the window's flags. |
 | `accentColor` | — | missing |  |
 | `trafficLightPosition` | — | missing |  |
 | `roundedCorners` | — | missing |  |
@@ -376,7 +378,7 @@ Parameters in brackets are optional in Electron. `webContents` members are in [w
 | `setProgressBar(progress, options)` | `SetProgressBar` | partial | No Linux progress; macOS error/paused show as plain bar (W20). |
 | `setOverlayIcon(overlay, description)` | `SetOverlayIcon` | done | Takes a `NativeImage`. |
 | `invalidateShadow()` | — | missing |  |
-| `setHasShadow(hasShadow)` | `SetHasShadow` | partial | Windows frameless only (W31). |
+| `setHasShadow(hasShadow)` | `SetHasShadow` | partial | Stored only, as Electron on Windows; macOS and Linux not yet (W31). |
 | `hasShadow()` | `GetHasShadow` | done | Returns the value set. |
 | `setOpacity(opacity)` | `SetOpacity` | partial | Windows only for now (W30). |
 | `getOpacity()` | `GetOpacity` | done |  |
@@ -397,12 +399,12 @@ Parameters in brackets are optional in Electron. `webContents` members are in [w
 | `isSnapped()` | — | missing |  |
 | `setVisibleOnAllWorkspaces(visible, options)` | — | missing |  |
 | `isVisibleOnAllWorkspaces()` | — | missing |  |
-| `setIgnoreMouseEvents(ignore, options)` | `SetIgnoreMouseEvents` | partial | Windows only; `forward` ignored (W30, W32). |
+| `setIgnoreMouseEvents(ignore, options)` | `SetIgnoreMouseEvents` | partial | Windows only, `forward` included (W30). |
 | `setContentProtection(enable)` | `SetContentProtection` | partial | Windows only for now (W30). |
 | `isContentProtected()` | `IsContentProtected` | partial | Windows only for now (W30). |
 | `setFocusable(focusable)` | — | missing |  |
 | `isFocusable()` | — | missing |  |
-| `setParentWindow(parent)` | `SetParentWindow` | partial | Windows: `GWLP_HWNDPARENT` with Oriel's parent/child bookkeeping; macOS and Linux throw (W8). |
+| `setParentWindow(parent)` | `SetParentWindow` | partial | Windows: as Electron (`GWLP_HWNDPARENT`, re-show, modal throws) with Oriel's parent/child bookkeeping; macOS and Linux throw (W8). |
 | `getParentWindow()` | `GetParentWindow` | done |  |
 | `getChildWindows()` | `GetChildWindows` | done |  |
 | `setAutoHideCursor(autoHide)` | — | missing |  |
@@ -424,7 +426,7 @@ Parameters in brackets are optional in Electron. `webContents` members are in [w
 | `removeBrowserView(browserView)` | — | n/a | Deprecated. |
 | `setTopBrowserView(browserView)` | — | n/a | Deprecated. |
 | `getBrowserViews()` | — | n/a | Deprecated. |
-| `setTitleBarOverlay(options)` | `SetTitleBarOverlay` | done | Throws `InvalidOperationException` without an overlay, as Electron throws. |
+| `setTitleBarOverlay(options)` | `SetTitleBarOverlay` | done | Throws `InvalidOperationException` without an overlay, as Electron throws; an unparsable colour throws `ArgumentException` with Electron's `TypeError` message. |
 
 ### Instance properties
 
@@ -439,7 +441,7 @@ Parameters in brackets are optional in Electron. `webContents` members are in [w
 | `fullScreen` | `SetFullScreen / IsFullScreen` | done |  |
 | `focusable` | — | missing |  |
 | `visibleOnAllWorkspaces` | — | missing |  |
-| `shadow` | `SetHasShadow / GetHasShadow` | partial | Windows frameless only (W31). |
+| `shadow` | `SetHasShadow / GetHasShadow` | partial | Stored only, as Electron on Windows (W31). |
 | `menuBarVisible` | `SetMenuBarVisibility / IsMenuBarVisible` | done |  |
 | `kiosk` | `SetKiosk / IsKiosk` | partial | Full screen; macOS presentation options not yet (W33). |
 | `documentEdited` | — | missing |  |

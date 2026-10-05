@@ -6,12 +6,17 @@ namespace Oriel;
 
 /// <summary>Minimize, maximize/restore and close drawn as CEF Views buttons in an overlay at the window's top right, over
 /// the page of a window whose title bar is hidden. UI thread only.</summary>
+/// <remarks>CEF hosts overlays in a translucent widget, so colours with alpha show the page through. Each button is one
+/// drawn image (background inset by the spacing, symbol centred), since a Views background fills the whole view.</remarks>
 internal sealed unsafe class TitleBarOverlayView
 {
     private readonly BrowserWindow _owner;
+    private readonly Func<uint> _foreground;
     private readonly cef_label_button_t*[] _buttons = new cef_label_button_t*[3];
     private readonly ButtonDelegate[] _delegates = new ButtonDelegate[3];
     private readonly cef_button_state_t[] _states = new cef_button_state_t[3];
+    private readonly HoverAnimation[] _hover = [new(), new(), new()];
+    private bool _ticking;
     private readonly bool[] _enabled = [true, true, true];
     private PanelDelegate? _panelDelegate;
     private cef_panel_t* _panel;
@@ -21,16 +26,19 @@ internal sealed unsafe class TitleBarOverlayView
     private int _height;
     private bool _maximized;
 
-    internal TitleBarOverlayView(BrowserWindow owner) => _owner = owner;
+    /// <summary>An overlay for <paramref name="owner"/>; <paramref name="foreground"/> gives the caption foreground the
+    /// hover and press tints use, read at each paint so a theme change is followed.</summary>
+    internal TitleBarOverlayView(BrowserWindow owner, Func<uint> foreground) => (_owner, _foreground) = (owner, foreground);
 
     /// <summary>The overlay's height in DIPs.</summary>
     internal int Height => _height;
 
     /// <summary>The overlay's width in DIPs.</summary>
-    internal int Width => TitleBar.ButtonWidth * _buttons.Length;
+    internal int Width => Enumerable.Range(0, _buttons.Length).Sum(TitleBar.ButtonWidthAt);
 
     internal void Attach(cef_window_t* window, uint color, uint symbol, int height)
     {
+        // Electron's container paints the colour too, under the buttons that paint it again.
         _panelDelegate = new PanelDelegate(() => { if (_panel is not null) _panel->@base.set_background_color(&_panel->@base, _color); });
         NativeObject.AddRef(_panelDelegate.Native);
         _panel = CefNative.cef_panel_create(_panelDelegate.Native);
@@ -39,7 +47,7 @@ internal sealed unsafe class TitleBarOverlayView
         for (var i = 0; i < _buttons.Length; i++)
         {
             var index = i;
-            _delegates[i] = new ButtonDelegate(() => Press(index), state => { _states[index] = state; Paint(index); }, () => Paint(index));
+            _delegates[i] = new ButtonDelegate(() => Press(index), state => OnState(index, state), () => Paint(index));
             cef_string_utf16_t empty = default;
             NativeObject.AddRef(_delegates[i].Native);
             var button = CefNative.cef_label_button_create(_delegates[i].Native, &empty);
@@ -47,6 +55,9 @@ internal sealed unsafe class TitleBarOverlayView
             button->@base.set_ink_drop_enabled(&button->@base, 0);
             var view = (cef_view_t*)button;
             view->set_focusable(view, 0);
+            // The image is the whole button, so nothing may pad it.
+            var none = new cef_insets_t();
+            view->set_insets(view, &none);
             // One reference for this class, one the panel takes.
             NativeObject.AddRef(button);
             _buttons[i] = button;
@@ -67,7 +78,7 @@ internal sealed unsafe class TitleBarOverlayView
         _panel->@base.set_background_color(&_panel->@base, color);
         for (var i = 0; i < _buttons.Length; i++)
         {
-            var size = new cef_size_t { width = TitleBar.ButtonWidth, height = height };
+            var size = new cef_size_t { width = TitleBar.ButtonWidthAt(i), height = height };
             _buttons[i]->set_minimum_size(_buttons[i], &size);
             _buttons[i]->set_maximum_size(_buttons[i], &size);
             Paint(i);
@@ -157,32 +168,58 @@ internal sealed unsafe class TitleBarOverlayView
         _ => CaptionGlyph.Close,
     };
 
+    private static double NowMs => System.Diagnostics.Stopwatch.GetElapsedTime(0).TotalMilliseconds;
+
+    private void OnState(int index, cef_button_state_t state)
+    {
+        _hover[index].OnStateChanged(_states[index], state, NowMs);
+        _states[index] = state;
+        Paint(index);
+        if (_hover[index].IsAnimating && !_ticking)
+        {
+            _ticking = true;
+            CefThread.PostUiDelayed(Tick, HoverAnimation.FrameInterval);
+        }
+    }
+
+    private void Tick()
+    {
+        _ticking = false;
+        if (_controller is null) return;
+        var now = NowMs;
+        for (var i = 0; i < _buttons.Length; i++)
+        {
+            if (!_hover[i].IsAnimating) continue;
+            _hover[i].Step(now);
+            Paint(i);
+            _ticking = true;
+        }
+        if (_ticking) CefThread.PostUiDelayed(Tick, HoverAnimation.FrameInterval);
+    }
+
     private void Paint(int index)
     {
         var button = _buttons[index];
         if (button is null) return;
         var close = index == 2;
-        var (normal, hover, pressed) = TitleBar.ButtonBackgrounds(_color, _symbol, close);
+        var state = _states[index];
+        var hover = _hover[index];
+        var fill = TitleBar.ButtonFill(_color, _foreground(), close, state == cef_button_state_t.CEF_BUTTON_STATE_PRESSED, hover.Value);
+        var symbol = !_enabled[index]
+            ? TitleBar.Blend(_color, _symbol, TitleBar.DisabledSymbol)
+            : TitleBar.SymbolColor(_symbol, close, state is cef_button_state_t.CEF_BUTTON_STATE_HOVERED or cef_button_state_t.CEF_BUTTON_STATE_PRESSED, hover.IsAnimating, hover.Value);
         var view = (cef_view_t*)button;
-        view->set_background_color(view, _states[index] switch
+        view->set_background_color(view, 0);
+        var (glyph, width, spacing) = (GlyphOf(index), TitleBar.ButtonWidthAt(index), TitleBar.SpacingAt(index));
+        var image = ImageCodec.ToCefImage(CaptionGlyphs.Scales.Select(scale => (scale, CaptionGlyphs.RenderButton(glyph, scale, width, _height, spacing, fill, symbol))));
+        // The button shows the image of its state; each paint is for the current one, so all take it. set_image takes a reference.
+        foreach (var s in (ReadOnlySpan<cef_button_state_t>)[cef_button_state_t.CEF_BUTTON_STATE_NORMAL, cef_button_state_t.CEF_BUTTON_STATE_HOVERED, cef_button_state_t.CEF_BUTTON_STATE_PRESSED, cef_button_state_t.CEF_BUTTON_STATE_DISABLED])
         {
-            _ when !_enabled[index] => normal,
-            cef_button_state_t.CEF_BUTTON_STATE_HOVERED => hover,
-            cef_button_state_t.CEF_BUTTON_STATE_PRESSED => pressed,
-            _ => normal,
-        });
-        // The close button's symbol turns white on red.
-        var glyph = GlyphOf(index);
-        var active = close ? 0xFFFFFFFF : _symbol;
-        SetImage(button, cef_button_state_t.CEF_BUTTON_STATE_NORMAL, glyph, _symbol);
-        SetImage(button, cef_button_state_t.CEF_BUTTON_STATE_HOVERED, glyph, active);
-        SetImage(button, cef_button_state_t.CEF_BUTTON_STATE_PRESSED, glyph, active);
-        SetImage(button, cef_button_state_t.CEF_BUTTON_STATE_DISABLED, glyph, TitleBar.Blend(_color, _symbol, TitleBar.DisabledSymbol));
+            NativeObject.AddRef(image);
+            button->set_image(button, s, image);
+        }
+        NativeObject.Release(image);
     }
-
-    // set_image takes the image's one reference.
-    private static void SetImage(cef_label_button_t* button, cef_button_state_t state, CaptionGlyph glyph, uint argb)
-        => button->set_image(button, state, ImageCodec.ToCefImage(CaptionGlyphs.Scales.Select(s => (s, CaptionGlyphs.Render(glyph, s, argb)))));
 
     private void Press(int index)
     {

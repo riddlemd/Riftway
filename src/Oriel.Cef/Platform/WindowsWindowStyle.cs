@@ -81,19 +81,6 @@ public static unsafe class WindowsWindowStyle
         return (r.Left, r.Top, r.Right - r.Left, r.Bottom - r.Top);
     }
 
-    /// <summary>Gives a frameless window DWM's shadow or takes it away. False if DWM refused.</summary>
-    /// <remarks>The shadow, and Windows 11's one-pixel border, need both DWM's non-client rendering and a frame margin
-    /// extended into the client area; any margin brings them back as they were, and Chromium does not restore its own.
-    /// A framed window's shadow cannot go without its frame going too.</remarks>
-    public static bool SetFramelessShadow(nint hwnd, bool shadow)
-    {
-        var policy = shadow ? 0 /* DWMNCRP_USEWINDOWSTYLE */ : 1 /* DWMNCRP_DISABLED */;
-        if (DwmSetWindowAttribute(hwnd, 2 /* DWMWA_NCRENDERING_POLICY */, &policy, sizeof(int)) < 0) return false;
-        // MARGINS is left, right, top, bottom.
-        var margins = new Rect { Bottom = shadow ? 1 : 0 };
-        return DwmExtendFrameIntoClientArea(hwnd, &margins) >= 0;
-    }
-
     /// <summary>Whether DWM renders the window's non-client area (<c>DWMWA_NCRENDERING_ENABLED</c>).</summary>
     public static bool IsDwmNonClientRendering(nint hwnd)
     {
@@ -115,6 +102,10 @@ public static unsafe class WindowsWindowStyle
         return (int)Math.Round(pixels * 96.0 / dpi);
     }
 
+    /// <summary>Whether apps use the dark theme (<c>AppsUseLightTheme</c> is 0), which Chromium's colours follow.</summary>
+    public static bool AppsUseDarkTheme()
+        => Microsoft.Win32.Registry.GetValue(@"HKEY_CURRENT_USER\Software\Microsoft\Windows\CurrentVersion\Themes\Personalize", "AppsUseLightTheme", 1) is 0;
+
     /// <summary>The system's button face and button text colours as ARGB, Electron's default overlay colours.</summary>
     public static (uint Face, uint Text) ButtonColors() => (Argb(GetSysColor(15 /* COLOR_BTNFACE */)), Argb(GetSysColor(18 /* COLOR_BTNTEXT */)));
 
@@ -122,8 +113,20 @@ public static unsafe class WindowsWindowStyle
     private static uint Argb(uint colorRef) => 0xFF000000 | ((colorRef & 0xFF) << 16) | (colorRef & 0xFF00) | ((colorRef >> 16) & 0xFF);
 
     /// <summary>Makes <paramref name="owner"/> the window's owner, or none: the window stays above it, minimizes with it
-    /// and is not in the taskbar on its own. The top-level form of a parent; <c>GWLP_HWNDPARENT</c>.</summary>
-    public static void SetOwner(nint hwnd, nint owner) => SetWindowLongPtrW(hwnd, -8 /* GWLP_HWNDPARENT */, owner);
+    /// and is not in the taskbar on its own. The top-level form of a parent; <c>GWLP_HWNDPARENT</c>, as Electron's
+    /// <c>SetParentWindow</c>: an unchanged owner does nothing, and a visible window is hidden and shown again in its
+    /// show state and brought to the top.</summary>
+    public static void SetOwner(nint hwnd, nint owner)
+    {
+        if (GetWindowLongPtrW(hwnd, -8 /* GWLP_HWNDPARENT */) == owner) return;
+        SetWindowLongPtrW(hwnd, -8 /* GWLP_HWNDPARENT */, owner);
+        if (IsWindowVisible(hwnd) == 0) return;
+        var placement = new WindowPlacement { Length = (uint)sizeof(WindowPlacement) };
+        GetWindowPlacement(hwnd, &placement);
+        ShowWindow(hwnd, 0 /* SW_HIDE */);
+        ShowWindow(hwnd, (int)placement.ShowCmd);
+        BringWindowToTop(hwnd);
+    }
 
     /// <summary>The window's owner, or 0.</summary>
     public static nint GetOwner(nint hwnd) => GetWindow(hwnd, 4 /* GW_OWNER */);
@@ -188,13 +191,14 @@ public static unsafe class WindowsWindowStyle
     [DllImport("user32.dll")] private static extern int GetWindowRect(nint hwnd, Rect* rect);
     [DllImport("user32.dll")] private static extern nint GetAncestor(nint hwnd, uint flags);
     [DllImport("user32.dll")] private static extern nint GetWindow(nint hwnd, uint command);
+    [DllImport("user32.dll")] private static extern int IsWindowVisible(nint hwnd);
+    [DllImport("user32.dll")] private static extern int ShowWindow(nint hwnd, int command);
+    [DllImport("user32.dll")] private static extern int BringWindowToTop(nint hwnd);
     [DllImport("user32.dll")] private static extern nint FindWindowExW(nint parent, nint after, char* className, char* title);
     [DllImport("user32.dll")] private static extern int GetClassNameW(nint hwnd, char* name, int max);
     [DllImport("user32.dll")] private static extern uint GetDpiForWindow(nint hwnd);
     [DllImport("user32.dll")] private static extern int GetSystemMetricsForDpi(int index, uint dpi);
     [DllImport("user32.dll")] private static extern uint GetSysColor(int index);
     [DllImport("user32.dll")] private static extern int SetWindowPos(nint hwnd, nint after, int x, int y, int cx, int cy, uint flags);
-    [DllImport("dwmapi.dll")] private static extern int DwmExtendFrameIntoClientArea(nint hwnd, Rect* margins);
-    [DllImport("dwmapi.dll")] private static extern int DwmSetWindowAttribute(nint hwnd, uint attribute, void* value, uint size);
     [DllImport("dwmapi.dll")] private static extern int DwmGetWindowAttribute(nint hwnd, uint attribute, void* value, uint size);
 }
