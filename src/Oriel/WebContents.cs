@@ -99,6 +99,7 @@ public sealed unsafe partial class WebContents
         })
         {
             Wants = WantsRequest,
+            CertificateError = OnCertificateError,
         };
     }
 

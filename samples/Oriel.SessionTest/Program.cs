@@ -572,6 +572,58 @@ async Task RunAsync()
         await Throws(() => Task.FromResult(spelling.RemoveWordFromSpellCheckerDictionary("orielword"))) is NotSupportedException
         && await Throws(() => { spelling.SetSpellCheckerDictionaryDownloadUrl("https://x/"); return Task.CompletedTask; }) is NotSupportedException);
 
+    // certificate-error: a self-signed TLS server; the page's handler runs, then the app's, as Electron's.
+    using var tlsKey = System.Security.Cryptography.RSA.Create(2048);
+    var tlsRequest = new System.Security.Cryptography.X509Certificates.CertificateRequest("CN=oriel-tls.test, O=Oriel Tests", tlsKey,
+        System.Security.Cryptography.HashAlgorithmName.SHA256, System.Security.Cryptography.RSASignaturePadding.Pkcs1);
+    using var tlsSelfSigned = tlsRequest.CreateSelfSigned(DateTimeOffset.UtcNow.AddDays(-1), DateTimeOffset.UtcNow.AddDays(30));
+    using var tlsCert = System.Security.Cryptography.X509Certificates.X509CertificateLoader.LoadPkcs12(
+        tlsSelfSigned.Export(System.Security.Cryptography.X509Certificates.X509ContentType.Pkcs12), null);
+    using var tlsListener = new TcpListener(IPAddress.Loopback, 0);
+    tlsListener.Start();
+    var tlsUrl = $"https://127.0.0.1:{((IPEndPoint)tlsListener.LocalEndpoint).Port}/";
+    _ = ServeTls(tlsListener, tlsCert);
+    async Task<(string? Body, List<string> Order, CertificateErrorEventArgs? Args)> VisitTls(string partition, Action<CertificateErrorEventArgs>? decide)
+    {
+        var order = new List<string>();
+        CertificateErrorEventArgs? seenArgs = null;
+        var w = new BrowserWindow(new BrowserWindowOptions { Show = false, WebPreferences = new WebPreferences { Partition = partition } });
+        w.WebContents.CertificateError += (_, e) =>
+        {
+            order.Add("page");
+            seenArgs = e;
+            decide?.Invoke(e);
+        };
+        EventHandler<CertificateErrorEventArgs> onApp = (sender, e) => order.Add(ReferenceEquals(sender, app) && ReferenceEquals(e, seenArgs) ? "app" : "app?");
+        app.CertificateError += onApp;
+        var failed = await Throws(() => w.LoadUrl(tlsUrl).WaitAsync(TimeSpan.FromSeconds(15)));
+        var body = failed is null ? (await w.WebContents.ExecuteJavaScriptAsync("document.body.innerText"))?.ToString() : null;
+        app.CertificateError -= onApp;
+        w.Destroy();
+        return (body, order, seenArgs);
+    }
+    var refusedTls = await VisitTls("tls-default", null);
+    Check("an invalid certificate is refused by default, as Electron's", refusedTls.Body is null && refusedTls.Order.SequenceEqual(["page", "app"]), $"{refusedTls.Body} [{string.Join(",", refusedTls.Order)}]");
+    var tlsArgs = refusedTls.Args;
+    Check("certificate-error carries the URL, error and certificate", tlsArgs is { Url: var u, Error: var err, IsMainFrame: true } && u == tlsUrl && err.StartsWith("net::ERR_CERT_")
+        && tlsArgs.Certificate is { SubjectName: "oriel-tls.test", IssuerName: "oriel-tls.test" } && tlsArgs.Certificate.Fingerprint == "sha256/" + Convert.ToBase64String(System.Security.Cryptography.SHA256.HashData(tlsCert.RawData)),
+        $"{tlsArgs?.Url} {tlsArgs?.Error} {tlsArgs?.Certificate?.SubjectName}");
+    var trustedTls = await VisitTls("tls-trust", e => { e.Cancel = true; e.Callback(true); });
+    Check("preventDefault and callback(true) trust it", trustedTls.Body == "tls ok", trustedTls.Body);
+    var laterTls = await VisitTls("tls-later", e => { e.Cancel = true; _ = Task.Delay(300).ContinueWith(_ => e.Callback(true)); });
+    Check("the callback may answer later", laterTls.Body == "tls ok", laterTls.Body);
+    var deniedTls = await VisitTls("tls-deny", e => { e.Cancel = true; e.Callback(false); });
+    Check("preventDefault and callback(false) refuse it", deniedTls.Body is null, deniedTls.Body);
+    var framed = new BrowserWindow(new BrowserWindowOptions { Show = false, WebPreferences = new WebPreferences { Partition = "tls-frame" } });
+    var frameErrors = 0;
+    framed.WebContents.CertificateError += (_, e) => { frameErrors++; e.Cancel = true; e.Callback(true); };
+    await framed.LoadUrl("data:text/html,<iframe src='" + tlsUrl + "'></iframe>");
+    await Task.Delay(3000);
+    // Drift E26: Electron raises it with isMainFrame false; CEF refuses a subframe's certificate without asking.
+    Check("a subframe's invalid certificate raises no event (CEF)", frameErrors == 0, frameErrors);
+    framed.Destroy();
+    tlsListener.Stop();
+
     // Proxy: requests go to a local listener posing as the proxy.
     var proxied = Session.FromPartition("proxied");
     using var listener = new TcpListener(IPAddress.Loopback, 0);
@@ -600,6 +652,44 @@ static async Task<T?> WaitFor<T>(Func<T?> probe) where T : class
         await Task.Delay(50);
     }
     return null;
+}
+
+// Serves "tls ok" over TLS with the given certificate, to every connection.
+static async Task ServeTls(TcpListener listener, System.Security.Cryptography.X509Certificates.X509Certificate2 certificate)
+{
+    while (true)
+    {
+        TcpClient client;
+        try { client = await listener.AcceptTcpClientAsync(); }
+        catch (Exception) { return; }
+        _ = Task.Run(async () =>
+        {
+            using (client)
+            {
+                try
+                {
+                    using var tls = new System.Net.Security.SslStream(client.GetStream());
+                    await tls.AuthenticateAsServerAsync(certificate);
+                    await Respond(tls, 200, "OK", "", "tls ok");
+                }
+                catch (Exception) { }
+            }
+        });
+    }
+}
+
+static async Task Respond(Stream stream, int status, string reason, string headers, string body)
+{
+    if (stream is System.Net.Security.SslStream)
+    {
+        var reader = new StreamReader(stream, Encoding.ASCII, leaveOpen: true);
+        while (!string.IsNullOrEmpty(await reader.ReadLineAsync())) { }
+    }
+    var bytes = Encoding.ASCII.GetBytes($"<!doctype html><body>{body}</body>");
+    var head = Encoding.ASCII.GetBytes($"HTTP/1.1 {status} {reason}\r\nContent-Type: text/html\r\nContent-Length: {bytes.Length}\r\n{headers}Connection: close\r\n\r\n");
+    await stream.WriteAsync(head);
+    await stream.WriteAsync(bytes);
+    await stream.FlushAsync();
 }
 
 // Answers one proxied request and reports its request line.

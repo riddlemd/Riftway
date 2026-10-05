@@ -309,7 +309,16 @@ public sealed unsafe class RequestHandler
         _resource = resource;
         Native = NativeObject.Create<cef_request_handler_t>(this);
         Native->get_resource_request_handler = &GetResourceRequestHandler;
+        Native->on_certificate_error = &OnCertificateError;
     }
+
+    /// <summary>A navigation hit an invalid certificate; the task's result trusts it. Null cancels. UI thread.</summary>
+    public Func<CertificateErrorInfo, Task<bool>>? CertificateError { get; init; }
+
+    [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])]
+    private static int OnCertificateError(cef_request_handler_t* self, cef_browser_t* browser, cef_errorcode_t error,
+        cef_string_utf16_t* url, cef_sslinfo_t* ssl, cef_callback_t* callback)
+        => SecurityHandlers.OnCertificateError(NativeObject.Owner<RequestHandler>(self).CertificateError, browser, error, url, ssl, callback);
 
     public cef_request_handler_t* Native { get; }
 

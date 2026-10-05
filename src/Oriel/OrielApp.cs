@@ -89,6 +89,12 @@ public sealed unsafe class OrielApp
     /// Electron's <c>window-all-closed</c>.</summary>
     public event EventHandler? WindowAllClosed;
 
+    /// <summary>A page's navigation hit an invalid certificate, after the page's own
+    /// <see cref="WebContents.CertificateError"/>. Electron's <c>app</c> <c>certificate-error</c>.</summary>
+    public event EventHandler<CertificateErrorEventArgs>? CertificateError;
+
+    internal void RaiseCertificateError(object? sender, CertificateErrorEventArgs args) => CertificateError?.Invoke(this, args);
+
     /// <summary>Creates the process's application.</summary>
     /// <param name="name">Defaults to the entry assembly's name.</param>
     /// <exception cref="InvalidOperationException">An application already exists.</exception>

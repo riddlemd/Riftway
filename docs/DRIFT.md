@@ -144,7 +144,7 @@ Entries marked _(branch `x`)_ are on that branch and not yet in `main`.
 | E6 | `ses.flushStorageData()` writes all DOM storage | `FlushStorageDataAsync` flushes cookies | CEF: only the cookie store has a flush | Patch |
 | E7 | `overrideBrowserWindowOptions` may give a popup another session | Blocked, with a console message | CEF: a popup always gets its opener's request context | Patch |
 | E8 | `clearStorageData`, `clearData`, `getCacheSize`, `clearHostResolverCache`, `resolveProxy` | Missing | CEF: no API on the request context | DevTools `Storage.clearDataForOrigin` through an open page for `clearStorageData` by origin; Patch for the rest |
-| E10 | `setDevicePermissionHandler`, `preconnect`, certificate verify proc, extensions, the deprecated `setPreloads`/`getPreloads` | Missing | Todo: CEF has handlers for some (certificate) | Later Session work (M6) |
+| E10 | `setDevicePermissionHandler`, `preconnect`, extensions, the deprecated `setPreloads`/`getPreloads` | Missing | Todo: check what CEF offers for each | Later Session work (M6) |
 | E12 | Permissions: no `setPermissionCheckHandler`; for non-media prompts `setPermissionRequestHandler` gets the requesting origin as `requestingUrl`, `isMainFrame` is always true, and there is no `requestingFrame` | Partial | Limit: CEF has no permission-check hook, and its permission prompt carries only the requesting origin (media requests carry the frame) | — |
 | E13 | `DownloadItem` `hasUserGesture`, `getLastModifiedTime`, `getETag` | `false`, `""`, `""` | CEF: its download item has no gesture, Last-Modified or ETag | Patch |
 | E14 | An interruption the download can resume from raises `updated` with `interrupted` and `canResume()` is true | Every interruption raises `done` with `interrupted`; `canResume()` is true only while paused | CEF: no resume mode for an interrupted item | Patch, or port Chromium's resume-mode table over the interrupt reason |
@@ -156,6 +156,9 @@ Entries marked _(branch `x`)_ are on that branch and not yet in `main`.
 | E21 | `registerPreloadScript` takes `service-worker` scripts | Throws `NotSupportedException`; `frame` scripts match Electron | CEF: no script runs in a service worker | Patch |
 | E22 | Spell checker: `removeWordFromSpellCheckerDictionary`, `setSpellCheckerDictionaryDownloadURL`, the `spellcheck-dictionary-*` events, `webPreferences.spellcheck` | The two methods throw `NotSupportedException`; no events; no per-page switch | CEF: no way to remove a custom word, choose the download server, hear about dictionary downloads, or turn checking off for one page | Patch |
 | E23 | `addWordToSpellCheckerDictionary` works with no page open | Needs an open page in the session; false without one | CEF: adding a word goes through a browser | — |
+| E24 | `ses.setCertificateVerifyProc` decides every certificate | Missing | CEF: it reports only certificates Chromium rejected, through `certificate-error`; nothing sees each verification | Patch |
+| E25 | `select-client-certificate` | Missing | Todo: CEF has `on_select_client_certificate`; testing it needs a client certificate in the platform store | Todo |
+| E26 | `certificate-error` also fires for a subframe, with `isMainFrame` false | Only a main-frame navigation raises it; a subframe's invalid certificate is refused without asking (checked) | CEF: `on_certificate_error` is not called for subframes | Patch |
 | E11 | Session events (`select-*-device`, ...) | None | Todo: with E10 | With E10 |
 
 ## IPC, contextBridge, protocol
