@@ -35,7 +35,7 @@ Where an implemented module differs from Electron, the difference and its reason
 
 | Electron | Oriel | Source | Wave | Status |
 |---|---|---|---|---|
-| `app` | `OrielApp` | CEF + OS | M2 | partial: `ready`, `window-all-closed`, `second-instance`, `before-quit`, `will-quit`, `quit()`, `exit()`, `enableSandbox`, `isReady`, `name`, `quit` (as `Exited`), `userAgentFallback`, `browser-window-created`, `web-contents-created`, `session-created`, `browser-window-focus`, `browser-window-blur`, `getVersion` (as `Version`), `getPath`, `setPath`, `getPreferredSystemLanguages`, `getSystemLocale`, `getLocaleCountryCode`, `certificate-error`, `login`, `select-client-certificate` (see DRIFT.md) |
+| `app` | `OrielApp` | CEF + OS | M2 | partial: `ready`, `window-all-closed`, `second-instance`, `before-quit`, `will-quit`, `quit()`, `exit()`, `enableSandbox`, `isReady`, `name`, `quit` (as `Exited`), `userAgentFallback`, `browser-window-created`, `web-contents-created`, `session-created`, `browser-window-focus`, `browser-window-blur`, `getVersion` (as `Version`), `hide`, `show`, `isHidden`, `focus`, `setBadgeCount`, `getBadgeCount`, `getPath`, `setPath`, `getPreferredSystemLanguages`, `getSystemLocale`, `getLocaleCountryCode`, `certificate-error`, `login`, `select-client-certificate` (see DRIFT.md) |
 | `process` | `OrielProcess` | .NET + CEF | M2 | — |
 | `CommandLine` (`app.commandLine`) | `OrielApp.CommandLine` | CEF | M2 | — |
 | Command-line switches | same switches | CEF | M2 | — |
@@ -115,7 +115,7 @@ Detailed item-by-item status, including `navigationHistory` and `WebFrameMain`: 
 | `Tray` | `Tray` | OS | M5 | — |
 | `Notification` | `Notification` | OS | M5 | — |
 | `globalShortcut` | `GlobalShortcut` | OS | M5 | — |
-| `Dock` (`app.dock`, macOS) | `OrielApp.Dock` | OS | M5 | — |
+| `Dock` (`app.dock`, macOS) | `OrielApp.Dock` | OS | M5 | partial: `setBadge`, `getBadge`, `bounce`, `cancelBounce`, `downloadFinished`; no `hide`, `show`, `isVisible`, `setMenu`, `setIcon` |
 | `clipboard` / `ClipboardItem` | `Clipboard` / `ClipboardItem` | OS | M5 | — |
 | `shell` | `Shell` | OS | M5 | — |
 | `nativeImage` | `NativeImage` | CEF + .NET | M5 | partial: PNG/JPEG through CEF, raw bitmaps, data URLs, `@Nx` files, crop, resize, representations; window icon, overlay and thumbar buttons take it; gaps in DRIFT B1-B5 (no `createThumbnailFromPath`, one resize filter, template images unused, no ICO) |

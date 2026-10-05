@@ -1,6 +1,7 @@
 using System.Text.Json;
 using System.Net;
 using System.Net.Sockets;
+using System.Globalization;
 using System.Text;
 using Oriel;
 using Cookie = Oriel.Cookie;
@@ -927,6 +928,37 @@ async Task RunAsync()
         Check("The locale getters follow the C library's locale on Linux", systemLocale == expectedLocale && countryCode == (region.Length == 2 ? region : "")
             && (Environment.GetEnvironmentVariable("LANGUAGE") is { Length: > 0 } || languages.Split(',', StringSplitOptions.RemoveEmptyEntries).FirstOrDefault() == (expectedLocale == "en-US@posix" ? null : expectedLocale)),
             $"{languages}|{systemLocale}|{countryCode} vs LC_MESSAGES={messages} LC_TIME={time}");
+    }
+
+    // app.hide / show / isHidden / focus, setBadgeCount and app.dock, read back by another process (macOS).
+    if (OperatingSystem.IsMacOS())
+    {
+        var pid = Environment.ProcessId;
+        string AppState() => Output("/usr/bin/osascript", "-l", "JavaScript", "-e",
+            $"ObjC.import('AppKit'); var a = $.NSRunningApplication.runningApplicationWithProcessIdentifier({pid}); [a.hidden, a.active].join('|')");
+        string DockLabel() => Output("/usr/bin/lsappinfo", "info", "-only", "StatusLabel", pid.ToString(CultureInfo.InvariantCulture));
+        var stateWin = new BrowserWindow(new BrowserWindowOptions { Width = 300, Height = 200 });
+        app.Focus(new AppFocusOptions { Steal = true });
+        var focused = Until(() => AppState() == "false|true", TimeSpan.FromSeconds(5));
+        app.Hide();
+        var hid = Until(() => app.IsHidden() && AppState() == "true|false", TimeSpan.FromSeconds(5));
+        app.Show();
+        var shown = Until(() => !app.IsHidden() && AppState() == "false|false", TimeSpan.FromSeconds(5));
+        Check("Focus activates the app, Hide hides it, Show unhides it, as AppKit reports to another process", focused && hid && shown, AppState());
+        var badges = new List<string>();
+        foreach (var count in new int?[] { 7, 150, null, 0 })
+        {
+            app.SetBadgeCount(count);
+            badges.Add($"{app.GetBadgeCount()}:{app.Dock.GetBadge()}:{DockLabel()}");
+        }
+        app.Dock.SetBadge("new");
+        var label = app.Dock.GetBadge() + ":" + DockLabel();
+        app.Dock.SetBadge("");
+        Check("SetBadgeCount shows Chromium's badge text on the Dock tile; 0 clears it", badges.SequenceEqual([
+            "7:7:\"StatusLabel\"={ \"label\"=\"7\" }", "150:99+:\"StatusLabel\"={ \"label\"=\"99+\" }",
+            "0:\u2022:\"StatusLabel\"={ \"label\"=\"\u2022\" }", "0::\"StatusLabel\"={ \"label\"=\"\" }"]) && label == "new:\"StatusLabel\"={ \"label\"=\"new\" }",
+            string.Join(" / ", badges) + " / " + label);
+        stateWin.Destroy();
     }
 
     // Proxy: requests go to a local listener posing as the proxy.
