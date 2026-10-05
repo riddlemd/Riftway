@@ -211,7 +211,6 @@ Entries marked _(branch `x`)_ are on that branch and not yet in `main`.
 | CR10 | `setUploadToServer(false)` stops uploads at once | Clears Crashpad's settings.dat flag and re-clears it whenever Chrome sets it again; a crash in that gap of milliseconds can still upload | CEF: as CR9 | With CR9 |
 | CR11 | `globalExtra` and `process_type` in every process's reports | Children get them through `--oriel-crash-keys`, which the native subprocess hands to chrome_elf; verified on Windows. Linux and macOS have no chrome_elf, and `cef_set_crash_key_value` does nothing before `cef_execute_process`, which a subprocess never returns from; the macOS NativeAOT subprocess ignores the switch. Unverified there | CEF/OS | Patch: let a subprocess set keys before `cef_execute_process` |
 | CR12 | `getUploadedReports()` right after `start()` | Empty until `Run()` has started Crashpad; Windows only (reads chrome_elf's exports), empty on macOS and Linux | CEF: the database is only reachable through chrome_elf | Read the Crashpad database files on macOS/Linux |
-| CR13 | `_version` is `app.getVersion()` | The entry assembly's informational version without `+build` metadata | Module: `app.getVersion()` is not implemented | Use it once it exists |
 | CR14 | Renderer `crashReporter` (`addExtraParameter`, `getParameters`) through a preload | Main process only | Design: no Node in renderers (S7) | Expose it over `contextBridge` |
 ## Platform and runtime
 

@@ -331,21 +331,6 @@ public static class CrashReporter
     private static string AppName()
         => OrielApp.CurrentOrNull?.Name ?? Assembly.GetEntryAssembly()?.GetName().Name ?? "Oriel";
 
-    /// <summary>Electron's <c>app.getVersion()</c>: here the entry assembly's informational version without build metadata.</summary>
-    internal static string AppVersion()
-    {
-        var entry = Assembly.GetEntryAssembly();
-        return VersionFrom(entry?.GetCustomAttribute<AssemblyInformationalVersionAttribute>()?.InformationalVersion, entry?.GetName().Version);
-    }
-
-    /// <summary>The informational version without "+build" metadata (which the SDK adds as a commit hash), else the assembly version.</summary>
-    internal static string VersionFrom(string? informational, Version? version)
-    {
-        if (informational is { Length: > 0 })
-        {
-            var plus = informational.IndexOf('+', StringComparison.Ordinal);
-            return plus > 0 ? informational[..plus] : informational;
-        }
-        return version?.ToString() ?? "0.0.0";
-    }
+    /// <summary>The crash reporter's <c>_version</c>: Electron's <c>app.getVersion()</c>.</summary>
+    internal static string AppVersion() => OrielApp.CurrentOrNull?.Version ?? OrielApp.VersionOf(Assembly.GetEntryAssembly());
 }
