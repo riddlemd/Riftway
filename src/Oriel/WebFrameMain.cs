@@ -36,6 +36,10 @@ public sealed class WebFrameMain
 
     internal void RaiseDomReady() => DomReady?.Invoke(this, EventArgs.Empty);
 
+    /// <summary>Handlers and listeners for this frame's messages, asked before its page's and <see cref="IpcMain"/>'s.
+    /// Electron's <c>frame.ipc</c>.</summary>
+    public IpcMainScope Ipc { get; } = new();
+
     /// <summary>Identifies the frame for its lifetime; Chromium's DevTools frame token. Electron's <c>frameToken</c>.</summary>
     public string FrameToken => _state.Id;
 

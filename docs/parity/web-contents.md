@@ -11,14 +11,14 @@ Percentages are over the non-n/a items; the second counts a partial item as half
 | Area | Items | Done | Partial | Missing | n/a | % done | % done + partial/2 |
 |---|---|---|---|---|---|---|---|
 | Static methods | 5 | 1 | 2 | 2 | 0 | 20.0% | 40.0% |
-| Instance events | 59 | 26 | 11 | 20 | 2 | 45.6% | 55.3% |
+| Instance events | 59 | 27 | 11 | 19 | 2 | 47.4% | 57.0% |
 | Instance methods | 118 | 37 | 21 | 52 | 8 | 33.6% | 43.2% |
-| Instance properties | 18 | 8 | 1 | 8 | 1 | 47.1% | 50.0% |
+| Instance properties | 18 | 9 | 1 | 7 | 1 | 52.9% | 55.9% |
 | navigationHistory | 14 | 12 | 0 | 2 | 0 | 85.7% | 85.7% |
 | WebFrameMain events and statics | 3 | 1 | 0 | 2 | 0 | 33.3% | 33.3% |
 | WebFrameMain methods | 9 | 1 | 4 | 4 | 0 | 11.1% | 33.3% |
-| WebFrameMain properties | 15 | 9 | 0 | 6 | 0 | 60.0% | 60.0% |
-| **Total** | 241 | 95 | 39 | 96 | 11 | 41.3% | 49.8% |
+| WebFrameMain properties | 15 | 10 | 0 | 5 | 0 | 66.7% | 66.7% |
+| **Total** | 241 | 98 | 39 | 93 | 11 | 42.6% | 51.1% |
 
 ## Checklist
 
@@ -91,7 +91,7 @@ Percentages are over the non-n/a items; the second counts a partial item as half
 | `devtools-reload-page` | — | missing |  |
 | `console-message` | `ConsoleMessage` | partial | No `frame` (C28). |
 | `preload-error` | — | missing |  |
-| `ipc-message` | — | missing | Only `IpcMain` listeners exist; no per-contents event. |
+| `ipc-message` | `IpcMessage` | done |  |
 | `ipc-message-sync` | — | missing | Sync IPC (I2). |
 | `preferred-size-changed` | — | missing |  |
 | `frame-created` | `FrameCreated` | partial | Subframes only (C29). |
@@ -231,7 +231,7 @@ Percentages are over the non-n/a items; the second counts a partial item as half
 | `mainFrame` | `MainFrame` | partial | Null until the frame tree has been read, just after window creation (F4). |
 | `hostWebContents` | — | n/a | <webview> only. |
 | `focusedFrame` | `FocusedFrame` | done | Not cross-site frames in another process (F3). |
-| `ipc` | — | missing |  |
+| `ipc` | `Ipc` | done |  |
 | `caretBrowsingEnabled` | — | missing |  |
 | `frameRate` | — | missing |  |
 | `id` | `Id` | done |  |
@@ -296,7 +296,7 @@ Percentages are over the non-n/a items; the second counts a partial item as half
 | `name` | `Name` | done |  |
 | `frameToken` | `FrameToken` | done | Chromium's DevTools frame token (F2). |
 | `detached` | `Detached` | done |  |
-| `ipc` | — | missing | F2 for the ids. |
+| `ipc` | `Ipc` | done | Kept per frame object across its navigations, where Electron's follows the frame tree node. |
 | `frameTreeNodeId` | — | missing | F2 for the ids. |
 | `osProcessId` | — | missing | F2 for the ids. |
 | `processId` | — | missing | F2 for the ids. |

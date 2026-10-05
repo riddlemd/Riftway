@@ -51,6 +51,16 @@ public sealed unsafe partial class WebContents
     private bool _hasFocus;
     private bool _closingWithoutUnload;
 
+    /// <summary>Handlers and listeners for this page's messages, asked before <see cref="IpcMain"/>'s. Electron's
+    /// <c>webContents.ipc</c>.</summary>
+    public IpcMainScope Ipc { get; } = new();
+
+    /// <summary>The page sent a message with <c>ipcRenderer.send</c>; raised before any IPC listener. Electron's
+    /// <c>ipc-message</c>.</summary>
+    public event EventHandler<IpcMessageEventArgs>? IpcMessage;
+
+    internal void RaiseIpcMessage(string channel, IpcMainEvent e) => Raise(IpcMessage, new IpcMessageEventArgs(channel, e), "ipc-message");
+
     /// <summary>The page logged a message. Electron's <c>console-message</c>.</summary>
     public event EventHandler<ConsoleMessageEventArgs>? ConsoleMessage;
 

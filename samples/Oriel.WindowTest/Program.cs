@@ -1030,10 +1030,14 @@ async Task MessagePortsAsync()
     using var gave = new ManualResetEventSlim();
     Action<IpcMainEvent> onGiven = e => { given = e.Ports.FirstOrDefault(); givenArg = e.Args.FirstOrDefault().GetString(); gave.Set(); };
     IpcMain.On("given", onGiven);
+    var postedAsIpcMessage = 0;
+    EventHandler<IpcMessageEventArgs> onPosted = (_, _) => Interlocked.Increment(ref postedAsIpcMessage);
+    w.WebContents.IpcMessage += onPosted;
     w.WebContents.Send("make");
     var arrived = await Task.Run(() => gave.Wait(step));
     IpcMain.RemoveListener("given", onGiven);
-    Check("ipcRenderer.postMessage's ports reach IpcMainEvent.Ports, with the message", arrived && given is not null && givenArg == "from-page", givenArg);
+    w.WebContents.IpcMessage -= onPosted;
+    Check("ipcRenderer.postMessage's ports reach IpcMainEvent.Ports, with the message, and raise no ipc-message, as Electron's", arrived && given is not null && givenArg == "from-page" && postedAsIpcMessage == 0, $"{givenArg} ipc-message={postedAsIpcMessage}");
     // Messages wait until Start.
     var queued = new List<string?>();
     given!.Message += (_, e) => queued.Add(e.Data?.GetValue<string>());
@@ -2537,6 +2541,45 @@ async Task FramesAsync()
     await a.ExecuteJavaScriptAsync("bridge.send(4); 1");
     Check("IpcMainEvent.Reply answers the frame that sent", Eventually(() => a.ExecuteJavaScriptAsync("document.title").Result?.ToString() == "got:pong", step));
     IpcMain.RemoveListener("frame-test", replyBack);
+
+    // Electron's dispatch order: the page's ipc-message, then the frame's ipc, the page's ipc, ipcMain.
+    var order = new List<string>();
+    void Heard(string who) { lock (order) order.Add(who); }
+    string Order() { lock (order) return string.Join(",", order); }
+    EventHandler<IpcMessageEventArgs> onIpcMessage = (_, m) => Heard($"ipc-message:{m.Channel}:{(m.Event.SenderFrame == a ? "a" : "main")}");
+    Action<IpcMainEvent> inFrame = _ => Heard("frame");
+    Action<IpcMainEvent> inContents = _ => Heard("contents");
+    Action<IpcMainEvent> inGlobal = _ => Heard("ipcMain");
+    host.WebContents.IpcMessage += onIpcMessage;
+    a.Ipc.On("frame-test", inFrame);
+    host.WebContents.Ipc.On("frame-test", inContents);
+    IpcMain.On("frame-test", inGlobal);
+    await a.ExecuteJavaScriptAsync("bridge.send(5); 1");
+    Check("a message reaches ipc-message, then the frame's ipc, the page's, and ipcMain, as Electron's",
+        Eventually(() => Order() == "ipc-message:frame-test:a,frame,contents,ipcMain", step), Order());
+    lock (order) order.Clear();
+    await main.ExecuteJavaScriptAsync("bridge.send(6); 1");
+    Check("a frame's ipc hears only that frame", Eventually(() => Order() == "ipc-message:frame-test:main,contents,ipcMain", step), Order());
+    host.WebContents.IpcMessage -= onIpcMessage;
+    a.Ipc.RemoveListener("frame-test", inFrame);
+    host.WebContents.Ipc.RemoveListener("frame-test", inContents);
+    IpcMain.RemoveListener("frame-test", inGlobal);
+
+    // invoke: the first of the frame's, the page's and ipcMain's handlers answers.
+    IpcMain.Handle("ask", _ => System.Text.Json.Nodes.JsonValue.Create("ipcMain"));
+    host.WebContents.Ipc.Handle("ask", _ => System.Text.Json.Nodes.JsonValue.Create("contents"));
+    a.Ipc.Handle("ask", _ => System.Text.Json.Nodes.JsonValue.Create("frame"));
+    var answers = new List<string?>
+    {
+        (await a.ExecuteJavaScriptAsync("bridge.ask()"))?.ToString(),
+        (await main.ExecuteJavaScriptAsync("bridge.ask()"))?.ToString(),
+    };
+    host.WebContents.Ipc.RemoveHandler("ask");
+    answers.Add((await main.ExecuteJavaScriptAsync("bridge.ask()"))?.ToString());
+    a.Ipc.RemoveHandler("ask");
+    answers.Add((await a.ExecuteJavaScriptAsync("bridge.ask()"))?.ToString());
+    IpcMain.RemoveHandler("ask");
+    Check("invoke is answered by the frame's handler, else the page's, else ipcMain's", answers.SequenceEqual(["frame", "contents", "ipcMain", "ipcMain"]), string.Join(",", answers));
 
     // The page side: ipcRenderer.once, off and removeAllListeners.
     await a.ExecuteJavaScriptAsync("bridge.listenOnce(); bridge.listenThenOff(); 1");
