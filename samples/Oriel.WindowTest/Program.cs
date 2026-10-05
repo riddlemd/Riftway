@@ -538,16 +538,118 @@ async Task ScreenAsync(BrowserWindow win)
         Check("GetCursorScreenPoint matches AppKit's mouse location", Math.Abs(cursor.X - expected.X) <= 1 && Math.Abs(cursor.Y - expected.Y) <= 1, $"{cursor} vs {expected}");
     }
 
-    // Display changes cannot be made here; subscribing starts the poll and a steady setup raises nothing.
+    // Display changes cannot be made here; subscribing starts watching and a steady setup raises nothing.
     var raised = 0;
     EventHandler<DisplayMetricsChangedEventArgs> onChanged = (_, _) => raised++;
     EventHandler<DisplayEventArgs> onAdded = (_, _) => raised++;
     Screen.DisplayMetricsChanged += onChanged;
     Screen.DisplayAdded += onAdded;
+    var checksBefore = Screen.ChecksRun;
     await Task.Delay(2500);
+    if (OperatingSystem.IsMacOS())
+        Check("macOS: displays are not polled", Screen.ChecksRun == checksBefore, Screen.ChecksRun - checksBefore);
     Screen.DisplayMetricsChanged -= onChanged;
     Screen.DisplayAdded -= onAdded;
     Check("no display events while nothing changes", raised == 0, raised);
+
+    if (OperatingSystem.IsMacOS())
+    {
+        await MacDisplayFieldsAsync(primary);
+        MacDisplayEvents(primary);
+    }
+}
+
+// The Display fields Chromium's BuildDisplayForScreen fills, against system_profiler, AppKit and Chromium's own chrome://gpu.
+async Task MacDisplayFieldsAsync(Display primary)
+{
+    var profiler = System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo("/usr/sbin/system_profiler", "SPDisplaysDataType -json") { RedirectStandardOutput = true })!;
+    var json = System.Text.Json.JsonDocument.Parse(profiler.StandardOutput.ReadToEnd());
+    profiler.WaitForExit();
+    var main = json.RootElement.GetProperty("SPDisplaysDataType").EnumerateArray()
+        .SelectMany(gpu => gpu.TryGetProperty("spdisplays_ndrvs", out var d) ? d.EnumerateArray() : Enumerable.Empty<System.Text.Json.JsonElement>())
+        .FirstOrDefault(d => d.TryGetProperty("spdisplays_main", out var m) && m.GetString() == "spdisplays_yes");
+    string Field(string name) => main.ValueKind == System.Text.Json.JsonValueKind.Object && main.TryGetProperty(name, out var v) ? v.GetString() ?? "" : "";
+    Check("macOS: the primary display's id is its CGDirectDisplayID (system_profiler)", Field("_spdisplays_displayID") == primary.Id.ToString(), $"{primary.Id} vs {Field("_spdisplays_displayID")}");
+    Check("macOS: internal matches system_profiler's connection type", primary.Internal == (Field("spdisplays_connection_type") == "spdisplays_internal"), $"{primary.Internal} vs {Field("spdisplays_connection_type")}");
+    var hz = System.Text.RegularExpressions.Regex.Match(Field("_spdisplays_resolution"), @"@ ([\d.]+)Hz");
+    Check("macOS: displayFrequency matches system_profiler's refresh rate", hz.Success && Math.Abs(primary.DisplayFrequency - double.Parse(hz.Groups[1].Value, System.Globalization.CultureInfo.InvariantCulture)) < 0.01,
+        $"{primary.DisplayFrequency} vs {Field("_spdisplays_resolution")}");
+    var (label, gray) = Oriel.Cef.CefThread.InvokeOnUi(() => (MacInterop.ScreenName((uint)primary.Id), MacInterop.CGDisplayUsesForceToGray() != 0));
+    Check("macOS: label is NSScreen's localizedName", primary.Label.Length > 0 && primary.Label == label, $"{primary.Label} vs {label}");
+    Check("macOS: monochrome is CoreGraphics' force-to-gray", primary.Monochrome == gray, primary.Monochrome);
+    Check("macOS: fields Chromium leaves unset", primary is { TouchSupport: DisplayFeatureSupport.Unknown, AccelerometerSupport: DisplayFeatureSupport.Unknown, Detected: true }
+        && primary.NativeOrigin == new Point(0, 0) && primary.MaximumCursorSize == (0, 0), primary);
+
+    // chrome://gpu prints the display as Chromium built it, from the same CEF process.
+    var gpu = new BrowserWindow(new BrowserWindowOptions { Show = false });
+    await gpu.LoadUrl("chrome://gpu");
+    var text = "";
+    Eventually(() =>
+    {
+        const string walk = "(function t(n){let s='';for(const c of [...(n.shadowRoot?[n.shadowRoot]:[]),...n.childNodes])s+=c.nodeType===3?c.textContent+'\\n':t(c);return s})(document.body)";
+        text = gpu.WebContents.ExecuteJavaScriptAsync(walk).GetAwaiter().GetResult()?.ToString() ?? "";
+        return text.Contains($"Display[{primary.Id}]") && text.Contains("Bits per pixel");
+    }, step);
+    gpu.Destroy();
+    var lines = text.Split('\n').Select(l => l.Trim()).Where(l => l.Length > 0).ToList();
+    var start = lines.FindIndex(l => l.Contains($"Display[{primary.Id}]"));
+    var block = start < 0 ? [] : lines.Skip(start).TakeWhile((l, i) => i == 0 || !l.Contains("Display[")).ToList();
+    // Each label and value is its own text node, with a ":" node between them.
+    string After(Func<string, bool> label) => block.SkipWhile(l => !label(l)).Skip(1).FirstOrDefault(l => l != ":") ?? "";
+    var info = start < 0 ? "" : lines[start];
+    Check("macOS: internal and detected match chrome://gpu", info.Contains(primary.Internal ? " internal " : " external ") && info.EndsWith(" detected", StringComparison.Ordinal), info);
+    // The WCG/alpha configuration is the one Electron prints: a group named all, SDR, WCG or listing it.
+    var colorSpace = After(l => l is "Color space (all)" or "Color space (SDR)" or "Color space (WCG)" || (l.StartsWith("Color space (", StringComparison.Ordinal) && l.Contains("WCG/alpha")));
+    Check("macOS: colorSpace matches chrome://gpu", colorSpace.Length > 0 && primary.ColorSpace == colorSpace, $"{primary.ColorSpace} vs {colorSpace}");
+    Check("macOS: colorDepth and depthPerComponent match chrome://gpu",
+        After(l => l == "Bits per pixel") == primary.ColorDepth.ToString() && After(l => l == "Bits per color component") == primary.DepthPerComponent.ToString(),
+        $"{primary.ColorDepth}/{primary.DepthPerComponent} vs {After(l => l == "Bits per pixel")}/{After(l => l == "Bits per color component")}");
+    Check("macOS: displayFrequency matches chrome://gpu", float.TryParse(After(l => l == "Refresh Rate in Hz"), System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out var rate)
+        && rate == (float)primary.DisplayFrequency, $"{primary.DisplayFrequency} vs {After(l => l == "Refresh Rate in Hz")}");
+}
+
+// No display can be attached or moved here, so each check stages the change in the last snapshot and then posts
+// the notification AppKit sends; what arrives proves the notification path end to end, not that AppKit sends it.
+void MacDisplayEvents(Display primary)
+{
+    var events = new System.Collections.Concurrent.ConcurrentQueue<string>();
+    EventHandler<DisplayMetricsChangedEventArgs> onChanged = (_, e) => events.Enqueue($"changed {e.Display.Id} {e.ChangedMetrics}");
+    EventHandler<DisplayEventArgs> onAdded = (_, e) => events.Enqueue($"added {e.Display.Id}");
+    EventHandler<DisplayEventArgs> onRemoved = (_, e) => events.Enqueue($"removed {e.Display.Id}");
+    Screen.DisplayMetricsChanged += onChanged;
+    Screen.DisplayAdded += onAdded;
+    Screen.DisplayRemoved += onRemoved;
+    try
+    {
+        string[] Post(Func<IReadOnlyList<Display>, IReadOnlyList<Display>> stage, int expected)
+        {
+            events.Clear();
+            Oriel.Cef.CefThread.InvokeOnUi(() =>
+            {
+                Screen.EditSnapshot(stage);
+                Oriel.Cef.Platform.MacScreen.PostScreenParametersChanged();
+                return 0;
+            });
+            Eventually(() => events.Count >= expected, step);
+            Thread.Sleep(300);
+            return [.. events];
+        }
+        var checks = Screen.ChecksRun;
+        var none = Post(list => list, 0);
+        Check("macOS: NSApplicationDidChangeScreenParametersNotification triggers a display check", Eventually(() => Screen.ChecksRun > checks, step) && none.Length == 0, $"{Screen.ChecksRun - checks} checks, [{string.Join(", ", none)}]");
+        var moved = Post(list => [.. list.Select(d => d.Id == primary.Id ? d with { Bounds = d.Bounds with { X = d.Bounds.X + 7 }, ScaleFactor = d.ScaleFactor + 1 } : d)], 1);
+        Check("macOS: a metrics change arrives through the notification", moved is [var m] && m == $"changed {primary.Id} {DisplayMetrics.Bounds | DisplayMetrics.ScaleFactor}", string.Join(", ", moved));
+        var recolored = Post(list => [.. list.Select(d => d.Id == primary.Id ? d with { ColorSpace = "staged" } : d)], 1);
+        Check("macOS: a color-space change arrives with no changed metrics", recolored is [var c] && c == $"changed {primary.Id} None", string.Join(", ", recolored));
+        var swapped = Post(list => [.. list.Where(d => d.Id != primary.Id), primary with { Id = 999_999 }], 2);
+        Check("macOS: removals arrive before additions", swapped.SequenceEqual(["removed 999999", $"added {primary.Id}"]), string.Join(", ", swapped));
+    }
+    finally
+    {
+        Screen.DisplayMetricsChanged -= onChanged;
+        Screen.DisplayAdded -= onAdded;
+        Screen.DisplayRemoved -= onRemoved;
+    }
 }
 
 // AppKit's mouseLocation is bottom-left based; flip it by the main display's height into CEF's top-left DIPs.
@@ -1636,6 +1738,26 @@ static class MacInterop
     [System.Runtime.InteropServices.DllImport("/usr/lib/libobjc.A.dylib", EntryPoint = "objc_msgSend")] internal static extern NSPoint MouseLocation(nint cls, nint selector);
     [System.Runtime.InteropServices.DllImport("/System/Library/Frameworks/CoreGraphics.framework/CoreGraphics")] internal static extern uint CGMainDisplayID();
     [System.Runtime.InteropServices.DllImport("/System/Library/Frameworks/CoreGraphics.framework/CoreGraphics")] internal static extern CGRect CGDisplayBounds(uint display);
+    [System.Runtime.InteropServices.DllImport("/System/Library/Frameworks/CoreGraphics.framework/CoreGraphics")] internal static extern byte CGDisplayUsesForceToGray();
+    [System.Runtime.InteropServices.DllImport("/usr/lib/libobjc.A.dylib", EntryPoint = "objc_msgSend")] private static extern nint Send(nint receiver, nint selector);
+    [System.Runtime.InteropServices.DllImport("/usr/lib/libobjc.A.dylib", EntryPoint = "objc_msgSend")] private static extern nint Send(nint receiver, nint selector, nint arg);
+    [System.Runtime.InteropServices.DllImport("/usr/lib/libobjc.A.dylib", EntryPoint = "objc_msgSend")] private static extern nint SendString(nint receiver, nint selector, string utf8);
+
+    /// <summary>The localizedName of the NSScreen whose NSScreenNumber is <paramref name="id"/>. Main thread only.</summary>
+    internal static string ScreenName(uint id)
+    {
+        var screens = Send(objc_getClass("NSScreen"), sel_registerName("screens"));
+        var key = SendString(objc_getClass("NSString"), sel_registerName("stringWithUTF8String:"), "NSScreenNumber");
+        for (var i = 0; i < (int)Send(screens, sel_registerName("count")); i++)
+        {
+            var screen = Send(screens, sel_registerName("objectAtIndex:"), i);
+            var number = Send(Send(screen, sel_registerName("deviceDescription")), sel_registerName("objectForKey:"), key);
+            if ((uint)Send(number, sel_registerName("unsignedIntValue")) != id) continue;
+            var name = Send(screen, sel_registerName("localizedName"));
+            return System.Runtime.InteropServices.Marshal.PtrToStringUTF8(Send(name, sel_registerName("UTF8String"))) ?? "";
+        }
+        return "";
+    }
 }
 
 static class MacPanel

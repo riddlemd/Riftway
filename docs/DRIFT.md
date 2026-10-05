@@ -115,8 +115,8 @@ Entries marked _(branch `x`)_ are on that branch and not yet in `main`.
 
 | ID | Electron | Oriel | Why | Possible resolution |
 |---|---|---|---|---|
-| R1 | `display-added`, `display-removed`, `display-metrics-changed` from the OS | Displays compared once a second while a handler is attached, so events come up to a second late | CEF: reports no display changes | OS notifications (`NSApplicationDidChangeScreenParametersNotification`, `WM_DISPLAYCHANGE`, XRandR events) |
-| R2 | `Display` has `label`, `internal`, `monochrome`, `colorSpace`, `colorDepth`, `depthPerComponent`, `displayFrequency`, `touchSupport`, `accelerometerSupport`, `detected`, `nativeOrigin`, `maximumCursorSize` | Only `id`, `bounds`, `workArea`, `size`, `workAreaSize`, `scaleFactor`, `rotation` | CEF: `cef_display_t` has no more | OS per field |
+| R1 | `display-added`, `display-removed`, `display-metrics-changed` from the OS | macOS matches (the notifications Chromium's `ScreenMac` observes). Windows, Linux: displays compared once a second while a handler is attached, so events come up to a second late | OS: Todo on Windows and Linux; CEF reports no display changes | `WM_DISPLAYCHANGE` / `WM_SETTINGCHANGE` (Windows), XRandR events (Linux), as `ScreenWin` and `X11ScreenOzone` |
+| R2 | `Display.label`, `internal`, `colorSpace`, `colorDepth`, `depthPerComponent`, `displayFrequency`, `nativeOrigin`, `detected` from the OS on Windows and Linux; `colorSpace` from any ICC profile on macOS | Windows, Linux: Chromium's unset defaults (`""`, `false`, sRGB, 24, 8, 0, (0, 0), `true`). macOS: matches, except a profile with a `cicp` tag is read through its matrix and curves, a malformed `A2B`/`B2A` tag is not rejected, and `--force-color-profile` is ignored | OS: Todo per OS (Windows: `ScreenWin`'s `DisplayInfo`; Linux: XRandR output properties and EDID). CEF: `cef_display_t` has none of them | Port `ScreenWin::CreateDisplayFromDisplayInfo` and `x11_display_util.cc`'s `BuildDisplaysFromXRandRInfo`; `skia::CICPGetSkColorSpace` for `cicp` |
 | R5 | `getCursorScreenPoint` under Wayland | X11 only (`XQueryPointer` on Oriel's own X connection) | OS; see P2 | Follow P2 |
 
 ## dialog
