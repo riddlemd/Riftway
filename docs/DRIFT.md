@@ -43,7 +43,7 @@ Entries marked _(branch `x`)_ are on that branch and not yet in `main`.
 | ID | Electron | Oriel | Why | Possible resolution |
 |---|---|---|---|---|
 | W1 | `show`/`hide` fire whenever the window is shown or hidden | Fire only from `Show()`/`Hide()` | Unknown (CEF reports no visibility change) | OS notifications, or poll like minimize |
-| W2 | `minimize`/`restore` events from the OS | Polled every 250 ms | CEF: reports neither; on macOS minimizing changes no bounds | OS notifications |
+| W2 | `minimize`/`restore` events from the OS | macOS and Linux: polled every 250 ms. Windows raises them, with `maximize`/`unmaximize`, from `WM_SIZE` as Electron's `HandleSizeEvent` does _(branch `win-display`)_ | CEF: reports neither; on macOS minimizing changes no bounds | OS notifications (`NSWindowDidMiniaturizeNotification`, `_NET_WM_STATE`) |
 | W5 | Modal windows disable their parent's input on Linux | The parent still takes focus under window managers that ignore the modal hint (openbox) | CEF: no input filter to block the parent | OS: X11 input shape or grab; check GNOME/KDE |
 | W7 | `openDevTools({ mode })` with docked modes | Separate window only | Unknown | CEF `show_dev_tools` with an inspector view, or `BrowserView` docking |
 | W8 | `setParentWindow` | Missing | CEF: Views sets the parent only at creation | OS: `addChildWindow:`, owner `HWND`, `XSetTransientForHint` |
@@ -64,6 +64,7 @@ Entries marked _(branch `x`)_ are on that branch and not yet in `main`.
 | W27 | `setBounds`, `setContentBounds`, `setSize`, `setContentSize`, `setPosition` take `animate` (macOS only) | No `animate` argument; changes are immediate | Todo: not yet implemented | `NSWindow setFrame:display:animate:` through the Objective-C runtime |
 | W28 | `win.loadFile()` and `win.reload()` | Missing on `BrowserWindow`; `WebContents.LoadFile` and `WebContents.Reload` exist (`BrowserWindow.LoadUrl` exists) | Todo: not yet implemented | Forward to `WebContents` |
 | W29 | `setAlwaysOnTop(flag, level, relativeLevel)` | Takes `flag` only | Todo: not yet implemented | macOS: `NSWindow.level`; Windows and Linux ignore `level` in Electron |
+| W42 | Windows: `setFullScreen` raises `enter-full-screen`/`leave-full-screen` at once, before the resize | Raised when CEF reports the transition finished; the `WM_SIZE` state follows `setFullScreen` as Electron's does _(branch `win-display`)_ | Todo | Raise them from `SetFullScreen` on Windows |
 
 ## nativeImage
 
@@ -132,8 +133,10 @@ Entries marked _(branch `x`)_ are on that branch and not yet in `main`.
 
 | ID | Electron | Oriel | Why | Possible resolution |
 |---|---|---|---|---|
-| R1 | `display-added`, `display-removed`, `display-metrics-changed` from the OS | Displays compared once a second while a handler is attached, so events come up to a second late | CEF: reports no display changes | OS notifications (`NSApplicationDidChangeScreenParametersNotification`, `WM_DISPLAYCHANGE`, XRandR events) |
-| R2 | `Display` has `label`, `internal`, `monochrome`, `colorSpace`, `colorDepth`, `depthPerComponent`, `displayFrequency`, `touchSupport`, `accelerometerSupport`, `detected`, `nativeOrigin`, `maximumCursorSize` | Only `id`, `bounds`, `workArea`, `size`, `workAreaSize`, `scaleFactor`, `rotation` | CEF: `cef_display_t` has no more | OS per field |
+| R1 | `display-added`, `display-removed`, `display-metrics-changed` from the OS | macOS and Linux: displays compared once a second while a handler is attached, so events come up to a second late. Windows hears `WM_DISPLAYCHANGE`, `WM_SETTINGCHANGE` (`SPI_SETWORKAREA`), `WM_ACTIVATEAPP` and `WM_DPICHANGED` as Chromium does (R6) _(branch `win-display`)_ | CEF: reports no display changes | OS notifications (`NSApplicationDidChangeScreenParametersNotification`, XRandR events) |
+| R2 | `Display.label`, `internal`, `colorSpace`, `colorDepth`, `depthPerComponent`, `displayFrequency`, `nativeOrigin` (and whatever else Chromium sets) from the OS on macOS and Linux | The fields exist on every OS but hold Chromium's class defaults outside Windows (empty label, not internal, 0 Hz, 24/8 bits, sRGB, origin 0,0); Windows fills them as `ScreenWin` does _(branch `win-display`)_ | CEF: `cef_display_t` has no more | OS per field (`NSScreen`, XRandR) |
+| R6 | Windows: Chromium's `SingletonHwnd` re-reads the displays inside the broadcast and notifies at once | Oriel's own hidden window, at the bottom of the z-order so a broadcast reaches it after Chromium's, diffs CEF's displays at once and again 100 ms later in case it heard first (measured: 61 ms from an app bar's work-area change to the event) _(branch `win-display`)_ | CEF: no display observer; CEF's displays change only once Chromium's window has the message | Patch: a CEF display observer |
+| R7 | Windows: `colorSpace` from the ICC profile as skcms parses it | Oriel reads matrix/TRC profiles itself (`rXYZ`/`gXYZ`/`bXYZ` with curves, the D50 white check); profiles skcms reads only through LUTs, or rejects for other reasons, may differ, and `--force-color-profile` is ignored. HDR comes from DXGI in the browser process, where Chromium waits for the GPU process _(branch `win-display`)_ | CEF: exposes no colour space | Patch, or port more of skcms |
 | R4 | `screenToDipPoint` / `dipToScreenPoint` on Windows and Linux only | Also on macOS | Design (superset) | None |
 | R5 | `getCursorScreenPoint` under Wayland | X11 only (`XQueryPointer` on Oriel's own X connection) | OS; see P2 | Follow P2 |
 

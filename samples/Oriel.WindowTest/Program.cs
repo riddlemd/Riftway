@@ -122,6 +122,7 @@ async Task RunAsync(BrowserWindow win, BrowserWindow simple)
     Check("IsMinimized", Eventually(() => win.IsMinimized, step), win.IsMinimized);
     Check("Restore raises Restored", Fires(h => win.Restored += h, h => win.Restored -= h, win.Restore, step));
     Check("not minimized", Eventually(() => !win.IsMinimized, step), win.IsMinimized);
+    if (OperatingSystem.IsWindows()) await WindowStateEventsAsync(win);
 
     Check("Hide raises Hidden", Fires(h => win.Hidden += h, h => win.Hidden -= h, win.Hide, step));
     Check("hidden", Eventually(() => !win.IsVisible, step), win.IsVisible);
@@ -484,8 +485,170 @@ async Task ScreenAsync(BrowserWindow win)
     Screen.DisplayMetricsChanged -= onChanged;
     Screen.DisplayAdded -= onAdded;
     Check("no display events while nothing changes", raised == 0, raised);
+    if (OperatingSystem.IsWindows()) await WindowsDisplayAsync(win);
 }
 
+// Electron raises these from WM_SIZE (native_window_views_win.cc HandleSizeEvent). Each step waits 600 ms, past the
+// 250 ms poll, so a late or duplicate event would show; latency runs from the call to the last event.
+async Task WindowStateEventsAsync(BrowserWindow win)
+{
+    var log = new List<(string Name, long Ms)>();
+    var clock = System.Diagnostics.Stopwatch.StartNew();
+    EventHandler Record(string name) => (_, _) => { lock (log) log.Add((name, clock.ElapsedMilliseconds)); };
+    EventHandler onMaximize = Record("maximize"), onUnmaximize = Record("unmaximize"), onMinimize = Record("minimize"), onRestore = Record("restore");
+    win.Maximized += onMaximize; win.Unmaximized += onUnmaximize; win.Minimized += onMinimize; win.Restored += onRestore;
+    var latencies = new List<long>();
+    async Task<string> Step(Action act, Func<bool> settled)
+    {
+        lock (log) log.Clear();
+        var start = clock.ElapsedMilliseconds;
+        act();
+        Eventually(settled, step);
+        await Task.Delay(600);
+        lock (log)
+        {
+            if (log.Count > 0) latencies.Add(log.Max(e => e.Ms) - start);
+            return string.Join(",", log.Select(e => e.Name));
+        }
+    }
+    try
+    {
+        var maximize = await Step(win.Maximize, () => win.IsMaximized);
+        var unmaximize = await Step(win.Unmaximize, () => !win.IsMaximized);
+        var minimize = await Step(win.Minimize, () => win.IsMinimized);
+        var restore = await Step(win.Restore, () => !win.IsMinimized);
+        Check("Windows: maximize, unmaximize, minimize, restore each raise their event exactly once",
+            (maximize, unmaximize, minimize, restore) == ("maximize", "unmaximize", "minimize", "restore"), $"{maximize} | {unmaximize} | {minimize} | {restore}");
+
+        var maximizedAgain = await Step(win.Maximize, () => win.IsMaximized);
+        var minimizedFromMaximized = await Step(win.Minimize, () => win.IsMinimized);
+        var restoredToMaximized = await Step(win.Restore, () => win.IsMaximized);
+        Check("Windows: restoring a minimized maximized window raises restore then maximize, as Electron",
+            (maximizedAgain, minimizedFromMaximized, restoredToMaximized) == ("maximize", "minimize", "restore,maximize"), $"{maximizedAgain} | {minimizedFromMaximized} | {restoredToMaximized}");
+        var leftMaximized = await Step(win.Unmaximize, () => !win.IsMaximized);
+
+        var minimizedFromNormal = await Step(win.Minimize, () => win.IsMinimized);
+        var maximizedFromMinimized = await Step(win.Maximize, () => win.IsMaximized);
+        var unmaximizedAfter = await Step(win.Unmaximize, () => !win.IsMaximized);
+        Check("Windows: maximize() on a minimized window raises restore then maximize; unmaximize follows once",
+            (leftMaximized, minimizedFromNormal, maximizedFromMinimized, unmaximizedAfter) == ("unmaximize", "minimize", "restore,maximize", "unmaximize"),
+            $"{leftMaximized} | {minimizedFromNormal} | {maximizedFromMinimized} | {unmaximizedAfter}");
+        Check("Windows: state events arrive within 100 ms of the call (the poll could take 250 ms)",
+            latencies.Count == 11 && latencies.Max() < 100, $"max {(latencies.Count > 0 ? latencies.Max() : -1)} ms, mean {(latencies.Count > 0 ? latencies.Average() : -1):F0} ms over {latencies.Count}");
+
+        // The window stays zoomed through full screen, so both ways send SIZE_MAXIMIZED; Electron sets its state from
+        // SetFullScreen before that, so each raises maximize again (native_window_views.cc SetFullScreen).
+        var maximizedBeforeFull = await Step(win.Maximize, () => win.IsMaximized);
+        var intoFull = await Step(() => win.SetFullScreen(true), () => win.IsFullScreen);
+        var outOfFull = await Step(() => win.SetFullScreen(false), () => !win.IsFullScreen && win.IsMaximized);
+        var unmaximizedAfterFull = await Step(win.Unmaximize, () => !win.IsMaximized);
+        Check("Windows: entering and leaving full screen from maximized each raise maximize, as Electron (no unmaximize)",
+            (maximizedBeforeFull, intoFull, outOfFull, unmaximizedAfterFull) == ("maximize", "maximize", "maximize", "unmaximize"),
+            $"{maximizedBeforeFull} | {intoFull} | {outOfFull} | {unmaximizedAfterFull}");
+    }
+    finally
+    {
+        win.Maximized -= onMaximize; win.Unmaximized -= onUnmaximize; win.Minimized -= onMinimize; win.Restored -= onRestore;
+    }
+}
+
+// Display fields against Windows read on the test's side (GDI, DisplayConfig, WMI) and against Chromium's own view in the
+// page; display events through Oriel's observer window, synthesized and from a real work-area change.
+async Task WindowsDisplayAsync(BrowserWindow win)
+{
+    var displays = Screen.GetAllDisplays();
+    var probes = displays.Select(d =>
+    {
+        var centre = Screen.DipToScreenPoint(new Point(d.Bounds.X + d.Bounds.Width / 2, d.Bounds.Y + d.Bounds.Height / 2));
+        return (Display: d, Monitor: WindowsDisplayProbe.At(centre.X, centre.Y));
+    }).ToList();
+    static bool InternalTech(uint? t) => t is 0x80000000 or 11 or 13;
+    var firstInternal = probes.FirstOrDefault(p => InternalTech(p.Monitor.OutputTechnology)).Display;
+    string Describe(Func<(Display Display, WindowsDisplayProbe.Monitor Monitor), object?> pick) => string.Join("; ", probes.Select(p => $"{p.Monitor.Device}: {pick(p)}"));
+
+    Check("Windows: Display.Label is DisplayConfig's EDID friendly name (empty without one)", probes.All(p => p.Display.Label == (p.Monitor.EdidName ?? "")),
+        Describe(p => $"'{p.Display.Label}' vs '{p.Monitor.EdidName}'"));
+    var wmiNames = WindowsDisplayProbe.Wmi("Get-CimInstance -Namespace root/wmi -ClassName WmiMonitorID | ForEach-Object { -join ($_.UserFriendlyName | Where-Object { $_ -ne 0 } | ForEach-Object { [char]$_ }) }");
+    Check("Windows: every non-empty label is a WMI WmiMonitorID friendly name", probes.All(p => p.Display.Label.Length == 0 || wmiNames.Contains(p.Display.Label)),
+        $"{Describe(p => p.Display.Label)} vs WMI [{string.Join(", ", wmiNames)}]");
+    Check("Windows: Display.DisplayFrequency is EnumDisplaySettings' dmDisplayFrequency", probes.All(p => p.Display.DisplayFrequency == p.Monitor.Frequency && p.Monitor.Frequency > 0),
+        Describe(p => $"{p.Display.DisplayFrequency} vs {p.Monitor.Frequency}"));
+    var wmiRates = WindowsDisplayProbe.Wmi("Get-CimInstance Win32_VideoController | ForEach-Object { $_.CurrentRefreshRate }");
+    Check("Windows: the refresh rates agree with WMI's Win32_VideoController.CurrentRefreshRate", probes.All(p => wmiRates.Contains(p.Display.DisplayFrequency.ToString(System.Globalization.CultureInfo.InvariantCulture))),
+        $"{Describe(p => p.Display.DisplayFrequency)} vs WMI [{string.Join(", ", wmiRates)}]");
+    Check("Windows: Display.Internal marks the first internal or embedded output (DisplayConfig output technology)",
+        probes.All(p => p.Display.Internal == (firstInternal is not null && p.Display.Id == firstInternal.Id)), Describe(p => $"{p.Display.Internal} tech 0x{p.Monitor.OutputTechnology:X}"));
+    var wmiTech = WindowsDisplayProbe.Wmi("Get-CimInstance -Namespace root/wmi -ClassName WmiMonitorConnectionParams | ForEach-Object { [uint32]$_.VideoOutputTechnology }");
+    Check("Windows: an internal display exactly when WMI reports an internal or embedded connection",
+        displays.Any(d => d.Internal) == wmiTech.Any(t => uint.TryParse(t, out var v) && InternalTech(v)), $"[{string.Join(", ", wmiTech)}]");
+    Check("Windows: Display.NativeOrigin is the monitor's pixel origin over its scale, floored",
+        probes.All(p => p.Display.NativeOrigin == new Point((int)Math.Floor(p.Monitor.Left / p.Display.ScaleFactor), (int)Math.Floor(p.Monitor.Top / p.Display.ScaleFactor))),
+        Describe(p => $"{p.Display.NativeOrigin} from ({p.Monitor.Left},{p.Monitor.Top}) at {p.Display.ScaleFactor}"));
+
+    // Chromium's own numbers reach the page: screen.colorDepth, the (color) and (monochrome) media features.
+    var mine = Screen.GetDisplayMatching(win.GetBounds());
+    var pageDepth = await Js(win, "screen.colorDepth + ',' + screen.pixelDepth");
+    var perComponent = await Js(win, $"matchMedia('(color: {mine.DepthPerComponent})').matches && matchMedia('(monochrome: 0)').matches");
+    Check("Windows: ColorDepth and DepthPerComponent are what Chromium gives the page (screen.colorDepth, (color: n))",
+        pageDepth?.ToString() == $"\"{mine.ColorDepth},{mine.ColorDepth}\"" && perComponent?.ToString() == "true", $"{mine.ColorDepth}/{mine.DepthPerComponent} vs page {pageDepth} {perComponent}");
+    var icc = probes.First(p => p.Display.Id == mine.Id).Monitor.IccPath;
+    // The profile is found and read here, on the test's side; the primaries arithmetic is unit-tested.
+    var expectedSpace = mine.ColorDepth == 30 ? "{primaries:P3, transfer:SRGB, matrix:RGB, range:FULL}"
+        : icc is null ? "{primaries:BT709, transfer:SRGB, matrix:RGB, range:FULL}" : DisplayMapping.SdrColorSpace(File.ReadAllBytes(icc));
+    Check("Windows: ColorSpace is sRGB without an ICC profile, else the primaries of the profile GetICMProfile names",
+        mine.ColorSpace == expectedSpace, $"{mine.ColorSpace} (profile {icc ?? "none"})");
+    Check("Windows: the fields Chromium leaves at their defaults on Windows",
+        displays.All(d => !d.Monochrome && d.TouchSupport == DisplayFeatureSupport.Unknown && d.AccelerometerSupport == DisplayFeatureSupport.Unknown && d.Detected && d.MaximumCursorSize == (0, 0)));
+
+    var observer = WindowsDisplayProbe.ObserverWindow();
+    Check("Windows: display changes are heard by a hidden top-level window of this process (broadcasts skip message-only windows)",
+        observer != 0 && WindowsDisplayProbe.IsTopLevel(observer) && !WindowsDisplayProbe.IsVisible(observer), observer);
+    var events = new List<(string Name, Display Display, long Ms)>();
+    var clock = System.Diagnostics.Stopwatch.StartNew();
+    EventHandler<DisplayEventArgs> onAdded = (_, e) => { lock (events) events.Add(("added", e.Display, clock.ElapsedMilliseconds)); };
+    EventHandler<DisplayEventArgs> onRemoved = (_, e) => { lock (events) events.Add(("removed", e.Display, clock.ElapsedMilliseconds)); };
+    EventHandler<DisplayMetricsChangedEventArgs> onChanged = (_, e) => { lock (events) events.Add(($"metrics:{e.ChangedMetrics}", e.Display, clock.ElapsedMilliseconds)); };
+    string Names() { lock (events) return string.Join(",", events.Select(e => e.Name)); }
+    Screen.DisplayAdded += onAdded; Screen.DisplayRemoved += onRemoved; Screen.DisplayMetricsChanged += onChanged;
+    var original = WindowsDisplayProbe.WorkArea();
+    try
+    {
+        var dpiRect = System.Runtime.InteropServices.Marshal.AllocHGlobal(16);
+        System.Runtime.InteropServices.Marshal.Copy(new int[4], 0, dpiRect, 4);
+        WindowsDisplayProbe.Send(observer, 0x007E /* WM_DISPLAYCHANGE */, 32, (nint)((1080 << 16) | 1920));
+        WindowsDisplayProbe.Send(observer, 0x001A /* WM_SETTINGCHANGE */, 0x002F /* SPI_SETWORKAREA */, 0);
+        WindowsDisplayProbe.Send(observer, 0x02E0 /* WM_DPICHANGED */, 0x00600060, dpiRect);
+        WindowsDisplayProbe.Send(observer, 0x001C /* WM_ACTIVATEAPP */, 1, 0);
+        await Task.Delay(600);
+        System.Runtime.InteropServices.Marshal.FreeHGlobal(dpiRect);
+        Check("Windows: synthesized display messages with nothing changed raise no display events, as Chromium's diff", Names().Length == 0, Names());
+
+        // An app bar makes Explorer shrink the work area and broadcast WM_SETTINGCHANGE(SPI_SETWORKAREA); removing it undoes both.
+        var primary = Screen.GetPrimaryDisplay();
+        var start = clock.ElapsedMilliseconds;
+        var bar = WindowsDisplayProbe.ReserveTopEdge(original.Right - original.Left, 24);
+        try
+        {
+            Eventually(() => Names().Length > 0, step);
+            await Task.Delay(800);
+        }
+        finally { bar.Dispose(); }
+        Eventually(() => Names().Split(',').Length >= 2, step);
+        await Task.Delay(800);
+        (string Name, Display Display, long Ms)[] seen;
+        lock (events) seen = [.. events];
+        string Seen() => string.Join(" ", seen.Select(e => $"{e.Name}:{e.Display.WorkArea}@{e.Ms - start}ms"));
+        Check("Windows: a real work-area change (an app bar, SPI_SETWORKAREA broadcast) raises display-metrics-changed ['workArea'] for the primary with the new area",
+            seen.Length > 0 && seen[0].Name == "metrics:WorkArea" && seen[0].Display.Id == primary.Id && seen[0].Display.WorkArea.Y > primary.WorkArea.Y && seen[0].Display.Bounds == primary.Bounds,
+            $"{Seen()} (was {primary.WorkArea})");
+        Check("Windows: removing it raises it exactly once more, back to the original, and nothing else", seen.Length == 2 && seen[1].Name == "metrics:WorkArea" && seen[1].Display.WorkArea == primary.WorkArea,
+            Seen());
+        Check("Windows: the work-area event comes as Chromium hears the broadcast (under 100 ms)", seen.Length > 0 && seen[0].Ms - start < 100, Seen());    }
+    finally
+    {
+        Screen.DisplayAdded -= onAdded; Screen.DisplayRemoved -= onRemoved; Screen.DisplayMetricsChanged -= onChanged;
+    }
+}
 // AppKit's mouseLocation is bottom-left based; flip it by the main display's height into CEF's top-left DIPs.
 static Point MacMouseLocation()
 {

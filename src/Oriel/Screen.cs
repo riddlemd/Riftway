@@ -8,7 +8,7 @@ namespace Oriel;
 public readonly record struct Point(int X, int Y);
 
 /// <summary>A display attached to the computer; Electron's <c>Display</c>.</summary>
-public sealed record Display
+public sealed partial record Display
 {
     /// <summary>Identifies the display while it stays attached.</summary>
     public long Id { get; init; }
@@ -64,7 +64,7 @@ public sealed record DisplayMetricsChangedEventArgs(Display Display, DisplayMetr
 
 /// <summary>Displays, their sizes and the pointer position; Electron's <c>screen</c>.</summary>
 /// <remarks>Use after <see cref="OrielApp.Ready"/>, from any thread. Events are raised on the UI thread.</remarks>
-public static unsafe class Screen
+public static unsafe partial class Screen
 {
     /// <summary>The display with the menu bar (macOS) or taskbar. Electron's <c>screen.getPrimaryDisplay()</c>.</summary>
     /// <exception cref="InvalidOperationException">Before <see cref="OrielApp.Ready"/>.</exception>
@@ -179,6 +179,7 @@ public static unsafe class Screen
             ScaleFactor = Math.Round(display->get_device_scale_factor(display), 4),
             Rotation = display->get_rotation(display),
         };
+        value = WithNativeDetails(value, display);
         NativeObject.Release(display);
         return value;
     }
@@ -189,7 +190,7 @@ public static unsafe class Screen
         return CefThread.InvokeOnUi(func);
     }
 
-    // CEF reports no display changes, so they are polled while anyone listens. UI thread only past the gate.
+    // CEF reports no display changes, so macOS and Linux poll while anyone listens. UI thread only past the gate.
     private static readonly TimeSpan s_pollInterval = TimeSpan.FromSeconds(1);
     private static readonly Lock s_gate = new();
     private static EventHandler<DisplayEventArgs>? s_added;
@@ -199,7 +200,7 @@ public static unsafe class Screen
     private static bool s_polling;
 
     /// <summary>A display was attached. Electron's <c>display-added</c>.</summary>
-    /// <remarks>Displays are compared once a second while a handler is attached, so events come up to a second late.</remarks>
+    /// <remarks>Windows reports changes as Chromium hears them, from display and work-area messages. On macOS and Linux displays are compared once a second while a handler is attached, so events come up to a second late.</remarks>
     public static event EventHandler<DisplayEventArgs>? DisplayAdded
     {
         add { lock (s_gate) s_added += value; StartPolling(); }
@@ -243,6 +244,7 @@ public static unsafe class Screen
             if (s_polling) return;
             s_polling = true;
             s_lastDisplays = AllDisplays();
+            if (ObservesNatively()) return;
             CefThread.PostUiDelayed(Poll, s_pollInterval);
         });
     }
@@ -255,37 +257,9 @@ public static unsafe class Screen
             return;
         }
         var now = AllDisplays();
-        var (added, removed, changed) = Compare(s_lastDisplays ?? [], now);
+        var changes = DisplayChanges.Between(s_lastDisplays ?? [], now);
         s_lastDisplays = now;
-        EventHandler<DisplayEventArgs>? onAdded, onRemoved;
-        EventHandler<DisplayMetricsChangedEventArgs>? onChanged;
-        lock (s_gate) (onAdded, onRemoved, onChanged) = (s_added, s_removed, s_metricsChanged);
-        foreach (var display in removed) onRemoved?.Invoke(null, new DisplayEventArgs(display));
-        foreach (var display in added) onAdded?.Invoke(null, new DisplayEventArgs(display));
-        foreach (var (display, metrics) in changed) onChanged?.Invoke(null, new DisplayMetricsChangedEventArgs(display, metrics));
+        foreach (var change in changes) Raise(change);
         CefThread.PostUiDelayed(Poll, s_pollInterval);
-    }
-
-    /// <summary>What differs between two snapshots, matching displays by id.</summary>
-    internal static (List<Display> Added, List<Display> Removed, List<(Display Display, DisplayMetrics Metrics)> Changed) Compare(
-        IReadOnlyList<Display> before, IReadOnlyList<Display> after)
-    {
-        var previous = before.ToDictionary(d => d.Id);
-        var added = new List<Display>();
-        var changed = new List<(Display, DisplayMetrics)>();
-        foreach (var display in after)
-        {
-            if (!previous.Remove(display.Id, out var old))
-            {
-                added.Add(display);
-                continue;
-            }
-            var metrics = (old.Bounds != display.Bounds ? DisplayMetrics.Bounds : 0)
-                | (old.WorkArea != display.WorkArea ? DisplayMetrics.WorkArea : 0)
-                | (old.ScaleFactor != display.ScaleFactor ? DisplayMetrics.ScaleFactor : 0)
-                | (old.Rotation != display.Rotation ? DisplayMetrics.Rotation : 0);
-            if (metrics != DisplayMetrics.None) changed.Add((display, metrics));
-        }
-        return (added, [.. previous.Values], changed);
     }
 }

@@ -201,7 +201,7 @@ public sealed record DefaultFontFamily
 /// Electron's event names collide with its method names in C# (<c>focus()</c> / <c>'focus'</c>), so
 /// events use .NET's past tense: <see cref="Focused"/>, <see cref="Moved"/>, <see cref="Maximized"/>, ...
 /// </remarks>
-public sealed unsafe class BrowserWindow
+public sealed unsafe partial class BrowserWindow
 {
     // Native delegates call back into these objects, so open windows must stay reachable.
     private static readonly List<BrowserWindow> s_open = [];
@@ -699,7 +699,11 @@ public sealed unsafe class BrowserWindow
     public void SetFullScreen(bool flag)
     {
         if (UsesSimpleFullScreen) SetSimpleFullScreen(flag);
-        else Command(w => w->set_fullscreen(w, flag ? 1 : 0));
+        else Command(w =>
+        {
+            _sizeState?.SetFullScreen(flag);
+            w->set_fullscreen(w, flag ? 1 : 0);
+        });
     }
 
     /// <summary>Whether the window is full screen. Electron's <c>win.isFullScreen()</c>.</summary>
@@ -717,7 +721,11 @@ public sealed unsafe class BrowserWindow
     {
         if (!OperatingSystem.IsMacOS())
         {
-            Command(w => w->set_fullscreen(w, flag ? 1 : 0));
+            Command(w =>
+            {
+                _sizeState?.SetFullScreen(flag);
+                w->set_fullscreen(w, flag ? 1 : 0);
+            });
             return;
         }
 
@@ -1140,6 +1148,7 @@ public sealed unsafe class BrowserWindow
 
     private void OnWindowCreated(cef_window_t* window)
     {
+        RouteSizeEvents(window);
         if (_menuBar is not null)
         {
             _menuBar.Attach(window, _browserView);
@@ -1209,7 +1218,7 @@ public sealed unsafe class BrowserWindow
         }
 
         _lastBounds = ToRectangle(window->@base.@base.get_bounds_in_screen(&window->@base.@base));
-        CefThread.PostUiDelayed(PollState, s_statePoll);
+        if (_sizeState is null) CefThread.PostUiDelayed(PollState, s_statePoll);
     }
 
     private void OnBrowserCreated(cef_browser_t* browser) => WebContents.OnBrowserCreated(browser);
@@ -1272,7 +1281,7 @@ public sealed unsafe class BrowserWindow
 
     private void RaiseStateChanges()
     {
-        if (_window is null) return;
+        if (_window is null || _sizeState is not null) return;
         var maximized = _window->is_maximized(_window) != 0;
         var minimized = _window->is_minimized(_window) != 0;
         if (maximized != _wasMaximized) (maximized ? Maximized : Unmaximized)?.Invoke(this, EventArgs.Empty);
@@ -1284,6 +1293,7 @@ public sealed unsafe class BrowserWindow
     private void OnFullscreenTransition(bool completed)
     {
         if (!completed || _window is null) return;
+        if (_window->is_fullscreen(_window) != 0) _sizeState?.SetFullScreen(true);
         (_window->is_fullscreen(_window) != 0 ? EnteredFullScreen : LeftFullScreen)?.Invoke(this, EventArgs.Empty);
     }
 
