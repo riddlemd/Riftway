@@ -895,6 +895,37 @@ async Task RunAsync()
     app.SetPath("userData", originalUserData);
     Directory.Delete(movedTo);
 
+    // app.getPreferredSystemLanguages / getSystemLocale / getLocaleCountryCode, read back from another process.
+    static string Output(string tool, params string[] arguments)
+    {
+        var start = new System.Diagnostics.ProcessStartInfo(tool) { RedirectStandardOutput = true };
+        foreach (var argument in arguments) start.ArgumentList.Add(argument);
+        using var process = System.Diagnostics.Process.Start(start)!;
+        // Output to EOF only: WaitForExit can hang inside the CEF process on Linux.
+        return process.StandardOutput.ReadToEnd().Trim();
+    }
+    var languages = string.Join(",", app.GetPreferredSystemLanguages());
+    var systemLocale = app.GetSystemLocale();
+    var countryCode = app.GetLocaleCountryCode();
+    if (OperatingSystem.IsMacOS())
+    {
+        var expected = Output("/usr/bin/osascript", "-l", "JavaScript", "-e",
+            "ObjC.import('Foundation'); var l = $.NSLocale.currentLocale; [ObjC.deepUnwrap($.NSLocale.preferredLanguages).join(','), l.localeIdentifier.js.replace(/_/g, '-'), l.countryCode.js || ''].join('|')");
+        Check("The locale getters answer as NSLocale does on macOS", $"{languages}|{systemLocale}|{countryCode}" == expected, $"{languages}|{systemLocale}|{countryCode} vs {expected}");
+    }
+    if (OperatingSystem.IsLinux())
+    {
+        // locale(1) resolves LC_ALL, the category and LANG as setlocale does.
+        string Category(string name) => Output("/usr/bin/locale").Split('\n').First(l => l.StartsWith(name + "=", StringComparison.Ordinal))[(name.Length + 1)..].Trim('"');
+        var messages = Category("LC_MESSAGES");
+        var time = Category("LC_TIME").Split('.')[0];
+        var region = time.Contains('_') ? time[(time.IndexOf('_') + 1)..] : "";
+        var expectedLocale = messages is "C" or "POSIX" || messages.StartsWith("C.", StringComparison.Ordinal) ? "en-US@posix" : messages.Split('.')[0].Replace('_', '-');
+        Check("The locale getters follow the C library's locale on Linux", systemLocale == expectedLocale && countryCode == (region.Length == 2 ? region : "")
+            && (Environment.GetEnvironmentVariable("LANGUAGE") is { Length: > 0 } || languages.Split(',', StringSplitOptions.RemoveEmptyEntries).FirstOrDefault() == (expectedLocale == "en-US@posix" ? null : expectedLocale)),
+            $"{languages}|{systemLocale}|{countryCode} vs LC_MESSAGES={messages} LC_TIME={time}");
+    }
+
     // Proxy: requests go to a local listener posing as the proxy.
     var proxied = Session.FromPartition("proxied");
     using var listener = new TcpListener(IPAddress.Loopback, 0);
