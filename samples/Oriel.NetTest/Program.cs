@@ -234,6 +234,30 @@ async Task NetChecks()
         Check("error mode: Electron's error, no redirect event",
             error.Events == "finish,close,error:Attempted to redirect, but redirect policy was 'error'", error.Events);
 
+        var big = Enumerable.Range(0, 1 << 20).Select(i => (byte)(i % 253)).ToArray();
+        var upload = Net.Request(new ClientRequestOptions { Url = server.Url("/echo"), Method = "POST" });
+        var before = upload.GetUploadProgress();
+        var reports = new List<UploadProgress>();
+        var duringMatches = true;
+        upload.UploadProgressChanged += (_, p) =>
+        {
+            reports.Add(p);
+            duringMatches &= upload.GetUploadProgress() == p;
+        };
+        var u = await Run(upload, body: big);
+        var after = upload.GetUploadProgress();
+        Check("getUploadProgress before sending: inactive, not started, zeros", before == new UploadProgress(false, false, 0, 0), before);
+        Check("upload-progress: reported, non-decreasing, getUploadProgress already updated inside the handler",
+            reports.Count > 0 && duringMatches && reports.Zip(reports.Skip(1)).All(pair => pair.Second.Current >= pair.First.Current), $"{reports.Count} reports");
+        Check("getUploadProgress after a 1 MB upload: started, current == total == 1048576, and active stays true (Electron never clears it)",
+            after == new UploadProgress(true, true, 1 << 20, 1 << 20) && reports[^1] == after, after);
+        Check("upload body arrived whole", u.Body.AsSpan().SequenceEqual(big), u.Body.Length);
+        var plain = Net.Request(server.Url("/hello"));
+        var plainReports = 0;
+        plain.UploadProgressChanged += (_, _) => plainReports++;
+        await Run(plain);
+        Check("a request without a body never reports upload progress", plainReports == 0 && plain.GetUploadProgress() == new UploadProgress(false, false, 0, 0), plain.GetUploadProgress());
+
         var outside = ThrowsNow(() => Net.Request(server.Url("/hello")).FollowRedirect());
         Check("followRedirect outside a redirect throws", outside?.Message == "followRedirect() called, but was not waiting for a redirect", outside?.Message);
 

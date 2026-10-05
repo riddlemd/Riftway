@@ -90,6 +90,10 @@ public sealed unsafe class ClientRequest
     /// <summary>The body has been handed over, after <see cref="End(byte[])"/>. Electron's <c>finish</c>.</summary>
     public event EventHandler? Finish;
 
+    /// <summary>The upload sent more of the body; raised for each CEF progress report of a non-empty body, after
+    /// <see cref="GetUploadProgress"/> is updated. Electron's undocumented <c>upload-progress</c>.</summary>
+    public event EventHandler<UploadProgress>? UploadProgressChanged;
+
     /// <summary>The request was aborted. Electron's <c>abort</c>.</summary>
     public event EventHandler? Aborted;
 
@@ -284,7 +288,9 @@ public sealed unsafe class ClientRequest
         };
         client.UploadProgress = (current, total) =>
         {
-            lock (_gate) _uploadProgress = new UploadProgress(true, true, current, total);
+            var progress = new UploadProgress(true, true, current, total);
+            lock (_gate) _uploadProgress = progress;
+            UploadProgressChanged?.Invoke(this, progress);
         };
         client.AuthCredentials = (isProxy, host, port, realm, scheme, callback) => OnAuth(hop, isProxy, host, port, realm, scheme, callback);
         client.Completed = r => { if (hop == _hop) OnComplete((cef_urlrequest_t*)r, url, method, headers, body); };
