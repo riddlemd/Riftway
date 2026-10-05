@@ -8,6 +8,8 @@
     <Project Path="samples/Oriel.IpcTest/Oriel.IpcTest.csproj" />
     <Project Path="samples/Oriel.ProtocolTest/Oriel.ProtocolTest.csproj" />
     <Project Path="samples/Oriel.SessionTest/Oriel.SessionTest.csproj" />
+    <Project Path="samples/Oriel.UtilityTest/Oriel.UtilityTest.csproj" />
+    <Project Path="samples/Oriel.UtilityTest.Child/Oriel.UtilityTest.Child.csproj" />
     <Project Path="samples/Oriel.Sample/Oriel.Sample.csproj" />
     <Project Path="samples/Oriel.WindowTest/Oriel.WindowTest.csproj" />
   </Folder>

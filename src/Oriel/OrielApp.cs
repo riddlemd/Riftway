@@ -199,6 +199,7 @@ public sealed unsafe partial class OrielApp
 
         CefNative.cef_run_message_loop();
         Exited?.Invoke(this, new ExitedEventArgs(_exitCode));
+        UtilityProcess.TerminateAll();
         CefNative.cef_shutdown();
         return _exitCode;
     }

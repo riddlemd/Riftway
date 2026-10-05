@@ -9,7 +9,7 @@ Recounted 2026-10-05 against `src/Oriel`. Update these figures when a row or che
 
 | Measure | Done | Partial | Not started | Total |
 |---|---|---|---|---|
-| Module rows below | 2 | 19 | 46 | 67 |
+| Module rows below | 2 | 21 | 44 | 67 |
 | M2 rows | 1 | 12 | 8 | 21 |
 
 The 67 rows include `BrowserView` (deprecated, never implemented; counted as not started).
@@ -40,9 +40,9 @@ Where an implemented module differs from Electron, the difference and its reason
 | `CommandLine` (`app.commandLine`) | `OrielApp.CommandLine` | CEF | M2 | — |
 | Command-line switches | same switches | CEF | M2 | — |
 | Environment variables | same variables | .NET | M2 | — |
-| `utilityProcess` | `UtilityProcess` (.NET child process) | .NET | M6 | — |
-| `parentPort` | `ParentPort` | .NET | M6 | — |
-| `MessageChannelMain` / `MessagePortMain` | `MessageChannelMain` / `MessagePortMain` | .NET + CEF | M6 | partial: channels in the main process, ports moved to and from pages (`webContents.postMessage`, `frame.postMessage`, `ipcRenderer.postMessage`, `event.ports`), ports through ports, `start`, `close`; JSON messages (I1); no `close` from a page's own `close()` (I7) |
+| `utilityProcess` | `UtilityProcess` (.NET child process) | .NET | M6 | partial: `fork` (a .NET entry assembly or executable), `env`, `execArgv` (host options), `cwd`, `stdio` (string and array forms), `postMessage` with ports, `kill`, `pid`, `stdout`, `stderr`, `spawn`, `exit`, `message`, `error` (on an unhandled exception); children killed on quit; no `session`/`partition`/`login` (see DRIFT.md UP1-UP6) |
+| `parentPort` | `ParentPort` | .NET | M6 | partial: `message` (with ports, queued until the first handler), `postMessage`; usable from a plain .NET app without CEF; the child ends when its parent goes (UP6) |
+| `MessageChannelMain` / `MessagePortMain` | `MessageChannelMain` / `MessagePortMain` | .NET + CEF | M6 | partial: channels in the main process, ports moved to and from pages (`webContents.postMessage`, `frame.postMessage`, `ipcRenderer.postMessage`, `event.ports`) and utility processes (`child.postMessage`, `parentPort` `event.ports`, ports through ports in the child), ports through ports, `start`, `close`; JSON messages (I1); no `close` from a page's own `close()` (I7) |
 | `crashReporter` | `CrashReporter` (Crashpad) | CEF | M4 | — |
 | `contentTracing` | `ContentTracing` | CEF | M6 | partial: `startRecording` (categories), `stopRecording`; no `getCategories`, `getTraceBufferUsage` or trace options (P6) |
 | `autoUpdater` | `AutoUpdater` (Velopack) | Pack | M4 | — |
