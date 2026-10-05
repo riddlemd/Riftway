@@ -99,3 +99,4 @@ public sealed unsafe partial class WebContents
         else LeaveHtmlFullScreen?.Invoke(this, EventArgs.Empty);
     }
 }
+

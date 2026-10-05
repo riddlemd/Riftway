@@ -1,3 +1,4 @@
+using System.Text.Json;
 using System.Net;
 using System.Net.Sockets;
 using System.Text;
@@ -731,6 +732,45 @@ async Task RunAsync()
     var unreachable = await Steps(() => Throws(() => navWin.LoadUrl("http://oriel-nowhere.invalid/").WaitAsync(TimeSpan.FromSeconds(15))), until: "start /");
     Check("a navigation that fails commits no did-navigate, as Electron's", unreachable.StartsWith("start /") && !unreachable.Contains("did "), unreachable);
     navWin.Destroy();
+
+    // contentTracing: Chromium's trace, as Electron's.
+    var traced = new BrowserWindow(new BrowserWindowOptions { Show = false, WebPreferences = new WebPreferences { Partition = "trace" } });
+    Session.FromPartition("trace").Protocol.Handle("https", _ => ProtocolResponse.Text(Page, "text/html"));
+    await traced.LoadUrl(Site);
+    async Task<(string Path, string[] Categories)> Trace(Func<Task> start, string? path = null)
+    {
+        await start();
+        await traced.LoadUrl(Site + "traced");
+        var written = await ContentTracing.StopRecordingAsync(path);
+        using var json = JsonDocument.Parse(File.ReadAllText(written));
+        var cats = json.RootElement.GetProperty("traceEvents").EnumerateArray()
+            .Select(e => e.TryGetProperty("cat", out var c) ? c.GetString() ?? "" : "").Distinct().ToArray();
+        return (written, cats);
+    }
+    var included = await Trace(() => ContentTracing.StartRecordingAsync(new TraceConfig { IncludedCategories = ["devtools.timeline"] }));
+    Check("StartRecordingAsync records the included categories only; StopRecordingAsync writes a temporary trace file",
+        File.Exists(included.Path) && included.Categories.Contains("devtools.timeline")
+        && included.Categories.All(c => c is "__metadata" or "" || c.Split(',').Contains("devtools.timeline")), string.Join(",", included.Categories));
+    File.Delete(included.Path);
+    var chosenPath = Path.Combine(Path.GetTempPath(), $"oriel-trace-{Environment.ProcessId}.json");
+    // An event in several categories stays while any of them is recorded, so only devtools.timeline alone is gone.
+    var excluded = await Trace(() => ContentTracing.StartRecordingAsync("-devtools.timeline"), chosenPath);
+    Check("an excluding filter leaves the category out, and the trace goes to the path given",
+        excluded.Path == chosenPath && File.Exists(chosenPath) && excluded.Categories.Length > 1 && !excluded.Categories.Contains("devtools.timeline"), string.Join(",", excluded.Categories.Take(8)));
+    File.Delete(chosenPath);
+    await ContentTracing.StartRecordingAsync("blink");
+    var twice = await Throws(() => ContentTracing.StartRecordingAsync("blink"));
+    File.Delete(await ContentTracing.StopRecordingAsync());
+    var unstarted = await Throws(() => ContentTracing.StopRecordingAsync());
+    Check("starting twice, or stopping what was not started, fails with the reason",
+        twice is InvalidOperationException && twice.Message.Contains("already started") && unstarted is InvalidOperationException && unstarted.Message.Contains("has not started"),
+        $"{twice?.Message} / {unstarted?.Message}");
+    Check("trace options CEF does not have throw NotSupportedException",
+        await Throws(() => ContentTracing.StartRecordingAsync(new TraceConfig { RecordingMode = "record-continuously" })) is NotSupportedException
+        && await Throws(() => ContentTracing.StartRecordingAsync(new TraceConfig { IncludedCategories = ["a"], ExcludedCategories = ["b"] })) is NotSupportedException
+        && await Throws(() => ContentTracing.StartRecordingAsync("blink", "record-until-full")) is NotSupportedException
+        && await Throws(() => ContentTracing.GetCategoriesAsync()) is NotSupportedException);
+    traced.Destroy();
 
     // Proxy: requests go to a local listener posing as the proxy.
     var proxied = Session.FromPartition("proxied");

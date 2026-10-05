@@ -169,3 +169,25 @@ public sealed unsafe class ResolveCallback : IReleaseObserver
         owner._done.TrySetResult((error, list));
     }
 }
+
+/// <summary><c>cef_end_tracing_callback_t</c>: completes with the trace file's path.</summary>
+public sealed unsafe class EndTracingCallback : IReleaseObserver
+{
+    private readonly TaskCompletionSource<string> _done = new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+    public EndTracingCallback()
+    {
+        Native = NativeObject.Create<cef_end_tracing_callback_t>(this);
+        Native->on_end_tracing_complete = &OnEndTracingComplete;
+    }
+
+    public cef_end_tracing_callback_t* Native { get; }
+
+    public Task<string> Task => _done.Task;
+
+    void IReleaseObserver.Released() => _done.TrySetException(new InvalidOperationException("CEF dropped the operation."));
+
+    [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])]
+    private static void OnEndTracingComplete(cef_end_tracing_callback_t* self, cef_string_utf16_t* tracingFile)
+        => NativeObject.Owner<EndTracingCallback>(self)._done.TrySetResult(CefString.Read(tracingFile));
+}
