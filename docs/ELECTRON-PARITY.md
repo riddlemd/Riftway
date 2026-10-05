@@ -109,7 +109,7 @@ Detailed item-by-item status, including `navigationHistory` and `WebFrameMain`: 
 
 | Electron | Oriel | Source | Wave | Status |
 |---|---|---|---|---|
-| `dialog` (file dialogs) | `Dialog` | CEF | M2 | partial: open (files, several files, a directory) and save dialogs, async and sync (see DRIFT.md) |
+| `dialog` (file dialogs) | `Dialog` | OS (Windows), CEF | M2 | partial: Windows as Electron (the shell's `IFileDialog`, every option, async and sync); macOS and Linux through CEF: open (files, several files, a directory) and save dialogs, async, and sync off the UI thread (see DRIFT.md G1-G10) |
 | `dialog` (message boxes, error box, certificate trust) | `Dialog` | OS | M5 | — |
 | `Menu` / `MenuItem` (app menu, context menus) | `Menu` / `MenuItem` | OS + CEF | M5 | partial: application and window menus, popups and context menus, roles, accelerators; no icons, sublabels or tooltips |
 | `Tray` | `Tray` | OS | M5 | — |
