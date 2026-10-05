@@ -94,6 +94,56 @@ public sealed class MenuTests
         Assert.Same(edit.Submenu, edit.Submenu);
     }
 
+    // Electron v44's role table (electron_api_menu_roles.cc), as this OS sees it.
+    [Fact]
+    public void RoleLabels_AreElectrons()
+    {
+        string? Label(MenuItemRole role) => new MenuItem { Role = role }.Label;
+        Assert.Equal(OperatingSystem.IsMacOS() ? "Close Window" : "Close", Label(MenuItemRole.Close));
+        if (OperatingSystem.IsMacOS()) Assert.StartsWith("Quit ", Label(MenuItemRole.Quit));
+        else Assert.Equal(OperatingSystem.IsWindows() ? "Exit" : "Quit", Label(MenuItemRole.Quit));
+        Assert.Equal(["File", "Edit", "View", "Window", "Help"], new[] { MenuItemRole.FileMenu, MenuItemRole.EditMenu, MenuItemRole.ViewMenu, MenuItemRole.WindowMenu, MenuItemRole.Help }.Select(Label));
+        Assert.Equal("Check Spelling While Typing", Label(MenuItemRole.ToggleSpellChecker));
+        Assert.Equal(["Start Speaking", "Stop Speaking", "Show Substitutions", "Smart Quotes", "Smart Dashes", "Text Replacement", "Clear Menu"],
+            new[] { MenuItemRole.StartSpeaking, MenuItemRole.StopSpeaking, MenuItemRole.ShowSubstitutions, MenuItemRole.ToggleSmartQuotes,
+                MenuItemRole.ToggleSmartDashes, MenuItemRole.ToggleTextReplacement, MenuItemRole.ClearRecentDocuments }.Select(Label));
+    }
+
+    [Fact]
+    public void Redo_IsControlYOnWindowsOnly()
+        => Assert.Equal(OperatingSystem.IsWindows() ? "Control+Y" : "Shift+CmdOrCtrl+Z", new MenuItem { Role = MenuItemRole.Redo }.Accelerator);
+
+    [Fact]
+    public void EditMenu_OnMacHasSubstitutionsAndSpeech()
+    {
+        var items = new MenuItem { Role = MenuItemRole.EditMenu }.Submenu!.Items;
+        if (!OperatingSystem.IsMacOS())
+        {
+            Assert.DoesNotContain(items, i => i.Label is "Substitutions" or "Speech");
+            return;
+        }
+        var substitutions = items.Single(i => i.Label == "Substitutions").Submenu!.Items.Select(i => i.Role);
+        Assert.Equal([MenuItemRole.ShowSubstitutions, MenuItemRole.None, MenuItemRole.ToggleSmartQuotes, MenuItemRole.ToggleSmartDashes, MenuItemRole.ToggleTextReplacement], substitutions);
+        Assert.Equal([MenuItemRole.StartSpeaking, MenuItemRole.StopSpeaking], items.Single(i => i.Label == "Speech").Submenu!.Items.Select(i => i.Role));
+        Assert.Equal(MenuItemType.Separator, items[^3].Type);
+    }
+
+    [Theory]
+    [InlineData(MenuItemRole.StartSpeaking, "startSpeaking:")]
+    [InlineData(MenuItemRole.StopSpeaking, "stopSpeaking:")]
+    [InlineData(MenuItemRole.ShowSubstitutions, "orderFrontSubstitutionsPanel:")]
+    [InlineData(MenuItemRole.ToggleSmartQuotes, "toggleAutomaticQuoteSubstitution:")]
+    [InlineData(MenuItemRole.ToggleSmartDashes, "toggleAutomaticDashSubstitution:")]
+    [InlineData(MenuItemRole.ToggleTextReplacement, "toggleAutomaticTextReplacement:")]
+    [InlineData(MenuItemRole.ToggleTabBar, "toggleTabBar:")]
+    [InlineData(MenuItemRole.SelectNextTab, "selectNextTab:")]
+    [InlineData(MenuItemRole.SelectPreviousTab, "selectPreviousTab:")]
+    [InlineData(MenuItemRole.ShowAllTabs, "toggleTabOverview:")]
+    [InlineData(MenuItemRole.MergeAllWindows, "mergeAllWindows:")]
+    [InlineData(MenuItemRole.MoveTabToNewWindow, "moveTabToNewWindow:")]
+    [InlineData(MenuItemRole.ClearRecentDocuments, "clearRecentDocuments:")]
+    public void MacRoles_UseElectronsSelectors(MenuItemRole role, string selector) => Assert.Equal(selector, MenuRoles.MacSelector(role));
+
     [Fact]
     public void Accelerator_RejectsAnInvalidValue()
         => Assert.ThrowsAny<ArgumentException>(() => new MenuItem { Accelerator = "Ctrl+Nope" });

@@ -128,6 +128,48 @@ public enum MenuItemRole
 
     /// <summary>The default Window menu. Electron's <c>windowMenu</c>.</summary>
     WindowMenu,
+
+    /// <summary>Turns the spell checker of the focused page's session on or off. Electron's <c>toggleSpellChecker</c>.</summary>
+    ToggleSpellChecker,
+
+    /// <summary>macOS: reads the selection aloud. Electron's <c>startSpeaking</c>.</summary>
+    StartSpeaking,
+
+    /// <summary>macOS: stops reading aloud. Electron's <c>stopSpeaking</c>.</summary>
+    StopSpeaking,
+
+    /// <summary>macOS: the Substitutions panel. Electron's <c>showSubstitutions</c>.</summary>
+    ShowSubstitutions,
+
+    /// <summary>macOS: smart quotes on or off. Electron's <c>toggleSmartQuotes</c>.</summary>
+    ToggleSmartQuotes,
+
+    /// <summary>macOS: smart dashes on or off. Electron's <c>toggleSmartDashes</c>.</summary>
+    ToggleSmartDashes,
+
+    /// <summary>macOS: text replacement on or off. Electron's <c>toggleTextReplacement</c>.</summary>
+    ToggleTextReplacement,
+
+    /// <summary>macOS: shows or hides the window tab bar. Electron's <c>toggleTabBar</c>.</summary>
+    ToggleTabBar,
+
+    /// <summary>macOS: the next window tab. Electron's <c>selectNextTab</c>.</summary>
+    SelectNextTab,
+
+    /// <summary>macOS: the previous window tab. Electron's <c>selectPreviousTab</c>.</summary>
+    SelectPreviousTab,
+
+    /// <summary>macOS: the tab overview. Electron's <c>showAllTabs</c>.</summary>
+    ShowAllTabs,
+
+    /// <summary>macOS: merges every window into tabs of one. Electron's <c>mergeAllWindows</c>.</summary>
+    MergeAllWindows,
+
+    /// <summary>macOS: moves the tab to a window of its own. Electron's <c>moveTabToNewWindow</c>.</summary>
+    MoveTabToNewWindow,
+
+    /// <summary>macOS: empties the recent documents list. Electron's <c>clearRecentDocuments</c>.</summary>
+    ClearRecentDocuments,
 }
 
 /// <summary>An entry in a <see cref="Menu"/>; Electron's <c>MenuItem</c>.</summary>

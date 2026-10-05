@@ -260,6 +260,7 @@ async Task RunAsync(BrowserWindow win, BrowserWindow simple)
     await MessagePortsAsync();
     await MacWindowApisAsync();
     await WebFrameAsync();
+    await MenuRolesAsync(win);
     await WebContentsMethodsAsync();
 
     // Closing cancelled once: the window must survive the first close.
@@ -1364,6 +1365,23 @@ async Task WebFrameAsync()
     Check("webFrame.insertText types into the focused field", Eventually(() => Page("i.value").Result == "typed", step), Page("i.value").Result);
     w.Destroy();
     Directory.Delete(dir, recursive: true);
+}
+
+async Task MenuRolesAsync(BrowserWindow win)
+{
+    // Electron v44's role table, read on this OS.
+    string? Label(MenuItemRole role) => new MenuItem { Role = role }.Label;
+    if (OperatingSystem.IsLinux())
+        Check("Linux role labels and Redo are Electron's", Label(MenuItemRole.Close) == "Close" && Label(MenuItemRole.Quit) == "Quit" && Label(MenuItemRole.About) == "About"
+            && new MenuItem { Role = MenuItemRole.Redo }.Accelerator == "Shift+CmdOrCtrl+Z", $"{Label(MenuItemRole.Close)} {Label(MenuItemRole.Quit)} {Label(MenuItemRole.About)}");
+    // toggleSpellChecker flips the focused page's session.
+    var session = win.WebContents.Session;
+    var before = session.IsSpellCheckerEnabled();
+    new MenuItem { Role = MenuItemRole.ToggleSpellChecker }.Activate(win);
+    var flipped = Eventually(() => session.IsSpellCheckerEnabled() != before, step);
+    new MenuItem { Role = MenuItemRole.ToggleSpellChecker }.Activate(win);
+    Check("the toggleSpellChecker role turns the page's spell checker off and on", flipped && Eventually(() => session.IsSpellCheckerEnabled() == before, step));
+    await Task.CompletedTask;
 }
 
 async Task MouseEventsAsync()

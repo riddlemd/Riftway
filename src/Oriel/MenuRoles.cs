@@ -27,28 +27,36 @@ internal static class MenuRoles
         MenuItemRole.ZoomOut => "Zoom Out",
         MenuItemRole.ToggleFullScreen => "Toggle Full Screen",
         MenuItemRole.Minimize => "Minimize",
-        MenuItemRole.Close => "Close Window",
+        MenuItemRole.Close => Mac ? "Close Window" : "Close",
         MenuItemRole.Zoom => "Zoom",
-        MenuItemRole.Quit => Mac ? $"Quit {AppName}" : OperatingSystem.IsWindows() ? "E&xit" : "&Quit",
-        MenuItemRole.About => $"About {AppName}",
+        MenuItemRole.Quit => Mac ? $"Quit {AppName}" : OperatingSystem.IsWindows() ? "Exit" : "Quit",
+        MenuItemRole.About => OperatingSystem.IsLinux() ? "About" : $"About {AppName}",
         MenuItemRole.Hide => $"Hide {AppName}",
         MenuItemRole.HideOthers => "Hide Others",
         MenuItemRole.Unhide => "Show All",
         MenuItemRole.Front => "Bring All to Front",
         MenuItemRole.Services => "Services",
-        MenuItemRole.Window or MenuItemRole.WindowMenu => "&Window",
-        MenuItemRole.Help => "&Help",
+        MenuItemRole.Window or MenuItemRole.WindowMenu => "Window",
+        MenuItemRole.Help => "Help",
         MenuItemRole.AppMenu => AppName,
-        MenuItemRole.FileMenu => "&File",
-        MenuItemRole.EditMenu => "&Edit",
-        MenuItemRole.ViewMenu => "&View",
+        MenuItemRole.FileMenu => "File",
+        MenuItemRole.EditMenu => "Edit",
+        MenuItemRole.ViewMenu => "View",
+        MenuItemRole.ToggleSpellChecker => "Check Spelling While Typing",
+        MenuItemRole.StartSpeaking => "Start Speaking",
+        MenuItemRole.StopSpeaking => "Stop Speaking",
+        MenuItemRole.ShowSubstitutions => "Show Substitutions",
+        MenuItemRole.ToggleSmartQuotes => "Smart Quotes",
+        MenuItemRole.ToggleSmartDashes => "Smart Dashes",
+        MenuItemRole.ToggleTextReplacement => "Text Replacement",
+        MenuItemRole.ClearRecentDocuments => "Clear Menu",
         _ => null,
     };
 
     internal static string? Accelerator(MenuItemRole role) => role switch
     {
         MenuItemRole.Undo => "CmdOrCtrl+Z",
-        MenuItemRole.Redo => Mac ? "Shift+CmdOrCtrl+Z" : "Control+Y",
+        MenuItemRole.Redo => OperatingSystem.IsWindows() ? "Control+Y" : "Shift+CmdOrCtrl+Z",
         MenuItemRole.Cut => "CmdOrCtrl+X",
         MenuItemRole.Copy => "CmdOrCtrl+C",
         MenuItemRole.Paste => "CmdOrCtrl+V",
@@ -90,7 +98,17 @@ internal static class MenuRoles
             [
                 Item(MenuItemRole.Undo), Item(MenuItemRole.Redo), Separator(),
                 Item(MenuItemRole.Cut), Item(MenuItemRole.Copy), Item(MenuItemRole.Paste),
-                Item(MenuItemRole.PasteAndMatchStyle), Item(MenuItemRole.Delete), Item(MenuItemRole.SelectAll),
+                Item(MenuItemRole.PasteAndMatchStyle), Item(MenuItemRole.Delete), Item(MenuItemRole.SelectAll), Separator(),
+                new MenuItem
+                {
+                    Label = "Substitutions",
+                    Submenu =
+                    [
+                        Item(MenuItemRole.ShowSubstitutions), Separator(), Item(MenuItemRole.ToggleSmartQuotes),
+                        Item(MenuItemRole.ToggleSmartDashes), Item(MenuItemRole.ToggleTextReplacement),
+                    ],
+                },
+                new MenuItem { Label = "Speech", Submenu = [Item(MenuItemRole.StartSpeaking), Item(MenuItemRole.StopSpeaking)] },
             ]
             :
             [
@@ -137,6 +155,19 @@ internal static class MenuRoles
         MenuItemRole.HideOthers => "hideOtherApplications:",
         MenuItemRole.Unhide => "unhideAllApplications:",
         MenuItemRole.Front => "arrangeInFront:",
+        MenuItemRole.StartSpeaking => "startSpeaking:",
+        MenuItemRole.StopSpeaking => "stopSpeaking:",
+        MenuItemRole.ShowSubstitutions => "orderFrontSubstitutionsPanel:",
+        MenuItemRole.ToggleSmartQuotes => "toggleAutomaticQuoteSubstitution:",
+        MenuItemRole.ToggleSmartDashes => "toggleAutomaticDashSubstitution:",
+        MenuItemRole.ToggleTextReplacement => "toggleAutomaticTextReplacement:",
+        MenuItemRole.ToggleTabBar => "toggleTabBar:",
+        MenuItemRole.SelectNextTab => "selectNextTab:",
+        MenuItemRole.SelectPreviousTab => "selectPreviousTab:",
+        MenuItemRole.ShowAllTabs => "toggleTabOverview:",
+        MenuItemRole.MergeAllWindows => "mergeAllWindows:",
+        MenuItemRole.MoveTabToNewWindow => "moveTabToNewWindow:",
+        MenuItemRole.ClearRecentDocuments => "clearRecentDocuments:",
         _ => null,
     };
 
@@ -169,6 +200,11 @@ internal static class MenuRoles
                 else window.Maximize();
                 return true;
             case MenuItemRole.Quit: OrielApp.CurrentOrNull?.Quit(); return true;
+            case MenuItemRole.ToggleSpellChecker:
+                // The focused page's session, else the default session, as Electron's.
+                var session = page?.Session ?? Session.DefaultSession;
+                session.SetSpellCheckerEnabled(!session.IsSpellCheckerEnabled());
+                return true;
             default: return false;
         }
     }

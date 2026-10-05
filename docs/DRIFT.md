@@ -123,7 +123,7 @@ Entries marked _(branch `x`)_ are on that branch and not yet in `main`.
 | ID | Electron | Oriel | Why | Possible resolution |
 |---|---|---|---|---|
 | M3 | Item `icon`, `sublabel`, `toolTip`, `registerAccelerator` | Missing | Todo (`icon` is Module: `NativeImage`) | `cef_menu_model` has no icon API either: Patch for Views menus |
-| M4 | macOS roles for tabs, speech, recent documents, `shareMenu`, `showSubstitutions`... | Missing | Todo | AppKit selectors for each |
+| M4 | Roles `recentDocuments` and `shareMenu` build their submenus; `toggleSpellChecker` shows a check; `about` shows the about panel on Windows and Linux; `minimize`, `close` and `togglefullscreen` are enabled by the window's state | Those two submenus are empty; no check on `toggleSpellChecker` (it toggles); `about` does nothing off macOS; the three are always enabled. Every other role and label follows Electron v44's role table, macOS speech, substitution, tab and recent-document roles included | Todo: NSDocumentController's recent menu, NSSharingService items, an about panel, checked and enabled state computed when the menu opens | Todo |
 | M5 | `Command`/`Super` accelerators on Windows and Linux | Ignored | CEF: Views accelerators have no such modifier | OS key hook, or Patch |
 | M7 | `popup({ positioningItem })` (macOS) | Missing | CEF: `show_menu` takes a point only | Patch |
 
