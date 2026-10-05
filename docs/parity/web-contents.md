@@ -12,13 +12,13 @@ Percentages are over the non-n/a items; the second counts a partial item as half
 |---|---|---|---|---|---|---|---|
 | Static methods | 5 | 2 | 2 | 1 | 0 | 40.0% | 60.0% |
 | Instance events | 59 | 30 | 14 | 13 | 2 | 52.6% | 64.9% |
-| Instance methods | 118 | 37 | 22 | 51 | 8 | 33.6% | 43.6% |
+| Instance methods | 118 | 38 | 24 | 48 | 8 | 34.5% | 45.5% |
 | Instance properties | 18 | 9 | 1 | 7 | 1 | 52.9% | 55.9% |
 | navigationHistory | 14 | 12 | 0 | 2 | 0 | 85.7% | 85.7% |
 | WebFrameMain events and statics | 3 | 1 | 0 | 2 | 0 | 33.3% | 33.3% |
 | WebFrameMain methods | 9 | 1 | 4 | 4 | 0 | 11.1% | 33.3% |
 | WebFrameMain properties | 15 | 10 | 0 | 5 | 0 | 66.7% | 66.7% |
-| **Total** | 241 | 102 | 43 | 85 | 11 | 44.3% | 53.7% |
+| **Total** | 241 | 103 | 45 | 82 | 11 | 44.8% | 54.6% |
 
 ## Checklist
 
@@ -166,9 +166,9 @@ Percentages are over the non-n/a items; the second counts a partial item as half
 | `stopFindInPage(action)` | `StopFindInPage` | partial | `activateSelection` keeps the selection (C18). |
 | `capturePage()` | `CapturePageAsync` | partial | `stayHidden`/`stayAwake` have no effect (C22). |
 | `isBeingCaptured()` | — | missing |  |
-| `getPrintersAsync()` | — | missing |  |
-| `print()` | — | missing |  |
-| `printToPDF()` | — | missing |  |
+| `getPrintersAsync()` | `GetPrintersAsync` | partial | Windows only, listed as Chromium lists them (Z4). |
+| `print()` | `Print` | partial | Electron's option checks and device-name errors; opens Chromium's print dialog without the settings; no silent printing or outcome callback (Z1-Z3). |
+| `printToPDF()` | `PrintToPDFAsync` | done | Page.printToPDF over DevTools with Electron's defaults, validation messages and per-page queue. |
 | `addWorkSpace()` | — | missing |  |
 | `removeWorkSpace()` | — | missing |  |
 | `setDevToolsWebContents()` | — | missing |  |

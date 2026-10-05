@@ -9,7 +9,7 @@ Recounted 2026-10-05 against `src/Oriel`. Update these figures when a row or che
 
 | Measure | Done | Partial | Not started | Total |
 |---|---|---|---|---|
-| Module rows below | 2 | 19 | 46 | 67 |
+| Module rows below | 2 | 21 | 44 | 67 |
 | M2 rows | 1 | 12 | 8 | 21 |
 
 The 67 rows include `BrowserView` (deprecated, never implemented; counted as not started).
@@ -17,7 +17,7 @@ The 67 rows include `BrowserView` (deprecated, never implemented; counted as not
 | Checklist | Applicable items | Done | Partial | Missing | % done | % done + partial/2 |
 |---|---|---|---|---|---|---|
 | [BrowserWindow](parity/browser-window.md) (with `BaseWindow`) | 294 | 126 | 18 | 150 | 42.9% | 45.9% |
-| [webContents](parity/web-contents.md) (with `navigationHistory`, `WebFrameMain`) | 230 | 59 | 9 | 162 | 25.7% | 27.6% |
+| [webContents](parity/web-contents.md) (with `navigationHistory`, `WebFrameMain`) | 230 | 103 | 45 | 82 | 44.8% | 54.6% |
 
 **Source** — where the implementation comes from:
 
@@ -72,7 +72,7 @@ Detailed item-by-item status, including `navigationHistory` and `WebFrameMain`: 
 
 | Electron | Oriel | Source | Wave | Status |
 |---|---|---|---|---|
-| `webContents` | `WebContents` | CEF | M2 | partial: 102 of 230 applicable items done (44.3%) across `webContents`, `navigationHistory` and `WebFrameMain`, see parity/web-contents.md; `loadURL`/`loadFile`/`reload`, `send`, IPC, window-open handler, context menu, input events, zoom, user agent, DevTools |
+| `webContents` | `WebContents` | CEF | M2 | partial: 103 of 230 applicable items done (44.8%) across `webContents`, `navigationHistory` and `WebFrameMain`, see parity/web-contents.md; `loadURL`/`loadFile`/`reload`, `send`, IPC, window-open handler, context menu, input events, zoom, user agent, DevTools |
 | `webFrameMain` | `WebFrameMain` | CEF | M2 | partial: frame tree, url/origin/name, `executeJavaScript`, `reload`, `send`, IPC `senderFrame`; in-process frames only (see DRIFT.md) |
 | `NavigationHistory` | `NavigationHistory` | CEF | M2 | partial: back/forward, index/offset moves, entries, clear; no `removeEntryAtIndex` or `restore` (see DRIFT.md) |
 | `Debugger` (`webContents.debugger`) | `Debugger` (DevTools protocol) | CEF | M2 | — |
@@ -98,8 +98,8 @@ Detailed item-by-item status, including `navigationHistory` and `WebFrameMain`: 
 | `Cookies` | `Cookies` | CEF | M6 | partial: `get`, `set`, `remove`, `flushStore`; no `changed` event, no rejection reason (DRIFT E4, E5) |
 | `WebRequest` | `WebRequest` | CEF | M6 | — |
 | `DownloadItem` | `DownloadItem` | CEF | M6 | — |
-| `net` | `Net` | CEF | M6 | — |
-| `ClientRequest` / `IncomingMessage` | `ClientRequest` / `IncomingMessage` | CEF | M6 | — |
+| `net` | `Net` | CEF | M6 | partial _(branch `win-net-print`)_: `request`, `fetch` (and `Session.FetchAsync`, reaching the session's protocol handlers), `isOnline`/`online`, `resolveHost`; cookies follow credentials, no `Set-Cookie`, buffered chunked bodies, no `WebSocket` (DRIFT X1-X11) |
+| `ClientRequest` / `IncomingMessage` | `ClientRequest` / `IncomingMessage` | CEF | M6 | partial _(branch `win-net-print`)_: headers with Electron's rules and errors, write/end, abort, redirect modes with `followRedirect`, `login`, Electron's event order and `net::ERR_*` errors; gaps in DRIFT X1-X7 |
 | `WebSocket` (main process) | `WebSocket` | CEF or Patch (verify) | M6 | — |
 | `netLog` | `NetLog` | CEF | M6 | — |
 | `ServiceWorkers` / `ServiceWorkerMain` | `ServiceWorkers` / `ServiceWorkerMain` | CEF + Patch (verify) | M6 | — |

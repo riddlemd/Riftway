@@ -60,6 +60,9 @@ public enum ReferrerPolicy
 
     /// <summary><c>strict-origin</c>.</summary>
     StrictOrigin,
+
+    /// <summary><c>origin-when-cross-origin</c>.</summary>
+    OriginWhenCrossOrigin,
 }
 
 /// <summary>One part of <see cref="LoadUrlOptions.PostData"/>: <see cref="UploadRawData"/> or <see cref="UploadFile"/>.</summary>
@@ -178,6 +181,7 @@ internal sealed record PendingLoad(
         ReferrerPolicy.Origin => cef_referrer_policy_t.REFERRER_POLICY_ORIGIN,
         ReferrerPolicy.SameOrigin => cef_referrer_policy_t.REFERRER_POLICY_CLEAR_REFERRER_ON_TRANSITION_CROSS_ORIGIN,
         ReferrerPolicy.StrictOrigin => cef_referrer_policy_t.REFERRER_POLICY_ORIGIN_CLEAR_ON_TRANSITION_FROM_SECURE_TO_INSECURE,
+        ReferrerPolicy.OriginWhenCrossOrigin => cef_referrer_policy_t.REFERRER_POLICY_ORIGIN_ONLY_ON_TRANSITION_CROSS_ORIGIN,
         // Blink's kDefault resolves to strict-origin-when-cross-origin; CEF's DEFAULT is the older policy.
         _ => cef_referrer_policy_t.REFERRER_POLICY_REDUCE_REFERRER_GRANULARITY_ON_TRANSITION_CROSS_ORIGIN,
     };
