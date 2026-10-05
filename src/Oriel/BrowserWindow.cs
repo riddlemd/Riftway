@@ -83,7 +83,8 @@ public sealed record BrowserWindowOptions
     /// Electron's <c>opacity</c>.</summary>
     public double Opacity { get; init; } = 1.0;
 
-    /// <summary>Whether the window has a shadow. Electron's <c>hasShadow</c>.</summary>
+    /// <summary>Whether the window has a shadow. Stored only: on Windows, as in Electron, it changes nothing, and macOS and
+    /// Linux are not done yet. Electron's <c>hasShadow</c>.</summary>
     public bool HasShadow { get; init; } = true;
 
     /// <summary>Opens the window in kiosk mode: full screen. Electron's <c>kiosk</c>.</summary>
@@ -248,7 +249,10 @@ public sealed unsafe class BrowserWindow
     private bool _skipTaskbar;
     private double _opacity;
     private bool _hasShadow;
+    // macOS: Electron's is_kiosk_; elsewhere kiosk is full screen itself.
     private bool _kiosk;
+    // Electron's layered_: once given an opacity, the window stays layered when click-through ends.
+    private bool _layered;
     private Rectangle _normalBounds;
     private TitleBarOverlayView? _titleBarOverlay;
     private IReadOnlyList<DraggableRegion> _pageRegions = [];
@@ -794,14 +798,26 @@ public sealed unsafe class BrowserWindow
     /// <summary>Changes the colours or height of the buttons drawn over a hidden title bar; null fields keep their value.
     /// Electron's <c>win.setTitleBarOverlay()</c>.</summary>
     /// <exception cref="InvalidOperationException">The window was not created with a hidden title bar and an overlay.</exception>
-    /// <exception cref="FormatException">A colour is not <c>#RRGGBB</c> or <c>#AARRGGBB</c>.</exception>
+    /// <exception cref="ArgumentException">A colour Chromium's CSS colour parser rejects; Electron's <c>TypeError</c>,
+    /// with its message. As in Electron, a valid colour given with an invalid symbol colour is still kept.</exception>
     public void SetTitleBarOverlay(TitleBarOverlayOptions options)
     {
         ArgumentNullException.ThrowIfNull(options);
         if (!TitleBar.HasOverlay(_options.TitleBarStyle, _options.TitleBarOverlay, OperatingSystem.IsMacOS()))
             throw new InvalidOperationException("The title bar overlay is not enabled: create the window with a hidden TitleBarStyle and TitleBarOverlay.");
-        var color = options.Color is { } c ? ParseColor(c) : (uint?)null;
-        var symbol = options.SymbolColor is { } s ? ParseColor(s) : (uint?)null;
+        uint? color = null, symbol = null;
+        if (options.Color is { } c)
+            color = CssColor.TryParse(c, out var argb) ? argb : throw new ArgumentException("Could not parse color as CSS color");
+        if (options.SymbolColor is { } s)
+        {
+            if (!CssColor.TryParse(s, out var argb))
+            {
+                // Electron stores the colour before it rejects the symbol colour, and repaints nothing.
+                if (color is { } kept) Command(_ => _titleBarColors.Color = kept);
+                throw new ArgumentException("Could not parse symbol color as CSS color");
+            }
+            symbol = argb;
+        }
         Command(_ =>
         {
             if (_titleBarOverlay is not { } overlay) return;
@@ -812,9 +828,8 @@ public sealed unsafe class BrowserWindow
         });
     }
 
-    /// <summary>The overlay's area in the window, in DIPs from the window's top left; empty without one. The space the page
-    /// should leave free, as Electron's Window Controls Overlay reports it to the page.</summary>
-    public Rectangle GetTitleBarOverlayBounds() => Query(w =>
+    // Not in Electron, whose page reads this through the Window Controls Overlay API (DRIFT W34); kept for tests.
+    internal Rectangle GetTitleBarOverlayBounds() => Query(w =>
     {
         if (_titleBarOverlay is not { } overlay) return default;
         var bounds = ToRectangle(w->@base.@base.get_bounds_in_screen(&w->@base.@base));
@@ -825,12 +840,15 @@ public sealed unsafe class BrowserWindow
 
     private (uint Color, uint Symbol) _titleBarColors;
 
+    private static uint CaptionForeground() => TitleBar.CaptionForeground(TitleBar.DefaultFrame(OperatingSystem.IsWindows() && WindowsWindowStyle.AppsUseDarkTheme()));
+
     private void AttachTitleBarOverlay(cef_window_t* w, TitleBarOverlayOptions options)
     {
         var (face, text) = OperatingSystem.IsWindows() ? WindowsWindowStyle.ButtonColors() : (0xFFF0F0F0u, 0xFF000000u);
-        _titleBarColors = (options.Color is { } c ? ParseColor(c) : face, options.SymbolColor is { } s ? ParseColor(s) : text);
-        var height = options.Height ?? (OperatingSystem.IsWindows() ? WindowsWindowStyle.CaptionHeight(Hwnd(w)) : 30);
-        _titleBarOverlay = new TitleBarOverlayView(this);
+        // Electron ignores a colour it cannot parse here and keeps the default.
+        _titleBarColors = (CssColor.TryParse(options.Color, out var color) ? color : face, CssColor.TryParse(options.SymbolColor, out var symbol) ? symbol : text);
+        var height = options.Height ?? (OperatingSystem.IsWindows() ? WindowsWindowStyle.CaptionHeight(Hwnd(w)) : TitleBar.FallbackHeight);
+        _titleBarOverlay = new TitleBarOverlayView(this, CaptionForeground);
         _titleBarOverlay.Attach(w, _titleBarColors.Color, _titleBarColors.Symbol, height);
         _titleBarOverlay.SetMaximized(w->is_maximized(w) != 0);
     }
@@ -891,21 +909,24 @@ public sealed unsafe class BrowserWindow
     /// <summary>The window's opacity, as set. Electron's <c>win.getOpacity()</c>.</summary>
     public double GetOpacity() => Query(_ => _opacity, 1.0);
 
-    /// <summary>Gives the window a shadow or takes it away. Electron's <c>win.setHasShadow()</c>.</summary>
-    public void SetHasShadow(bool hasShadow) => Command(w =>
-    {
-        _hasShadow = hasShadow;
-        if (OperatingSystem.IsWindows()) ApplyShadow(w);
-    });
+    /// <summary>Gives the window a shadow or takes it away. Stored only: on Windows, as in Electron, it changes nothing,
+    /// and macOS and Linux are not done yet. Electron's <c>win.setHasShadow()</c>.</summary>
+    public void SetHasShadow(bool hasShadow) => Command(_ => _hasShadow = hasShadow);
 
     /// <summary>Whether the window has a shadow, as set. Electron's <c>win.hasShadow()</c>.</summary>
     public bool GetHasShadow() => Query(_ => _hasShadow, true);
 
-    /// <summary>Lets mouse input pass through the window to whatever is below it, or stops that. Windows only for now.
+    /// <summary>Lets mouse input pass through the window to whatever is below it, or stops that; with
+    /// <see cref="IgnoreMouseEventsOptions.Forward"/> the page still gets mouse moves. Windows only for now.
     /// Electron's <c>win.setIgnoreMouseEvents()</c>.</summary>
     public void SetIgnoreMouseEvents(bool ignore, IgnoreMouseEventsOptions? options = null) => Command(w =>
     {
-        if (OperatingSystem.IsWindows()) WindowsWindowStyle.SetClickThrough(Hwnd(w), ignore, keepLayered: _opacity < 1);
+        if (!OperatingSystem.IsWindows()) return;
+        var hwnd = Hwnd(w);
+        WindowsWindowStyle.SetClickThrough(hwnd, ignore, keepLayered: _layered);
+        // Forwarding only applies while ignoring; taking the mouse back always ends it.
+        if (!WindowsSubclass.ForwardMouseMoves(hwnd, ignore && options?.Forward == true))
+            Console.Error.WriteLine("[Oriel] Mouse moves cannot be forwarded to the page.");
     });
 
     /// <summary>Keeps the window out of screenshots and screen recordings, or lets it back in. Windows only for now.
@@ -927,8 +948,9 @@ public sealed unsafe class BrowserWindow
         SetFullScreen(flag);
     }
 
-    /// <summary>Whether the window is in kiosk mode. Electron's <c>win.isKiosk()</c>.</summary>
-    public bool IsKiosk() => Query(_ => _kiosk, false);
+    /// <summary>Whether the window is in kiosk mode: on Windows and Linux, whether it is full screen, however it got
+    /// there, as Electron answers. Electron's <c>win.isKiosk()</c>.</summary>
+    public bool IsKiosk() => OperatingSystem.IsMacOS() ? Query(_ => _kiosk, false) : IsFullScreen;
 
     /// <summary>The bounds the window has, or returns to, when it is neither maximized, minimized nor full screen.
     /// Electron's <c>win.getNormalBounds()</c>.</summary>
@@ -945,7 +967,6 @@ public sealed unsafe class BrowserWindow
     private void ApplyWindowsStyles(cef_window_t* w)
     {
         if (_opacity < 1) ApplyOpacity(w);
-        if (!_hasShadow) ApplyShadow(w);
         var hwnd = Hwnd(w);
         WindowsSubclass.RouteSizing(hwnd, (wmsz, r) => Cancelled(WillResize, new WillResizeEventArgs(PixelsToDips(r), WindowPolish.EdgeFromWmsz(wmsz))));
         WindowsSubclass.RouteMoving(hwnd, r => Cancelled(WillMove, new WillMoveEventArgs(PixelsToDips(r))));
@@ -964,16 +985,9 @@ public sealed unsafe class BrowserWindow
     [System.Runtime.Versioning.SupportedOSPlatform("windows")]
     private void ApplyOpacity(cef_window_t* w)
     {
+        _layered = true;
         if (!WindowsWindowStyle.SetAlpha(Hwnd(w), WindowPolish.ToAlpha(_opacity)))
             Console.Error.WriteLine("[Oriel] Windows did not take the opacity.");
-    }
-
-    // A framed window keeps DWM's shadow: it cannot go without the frame going too.
-    [System.Runtime.Versioning.SupportedOSPlatform("windows")]
-    private void ApplyShadow(cef_window_t* w)
-    {
-        if (IsFrameless && !WindowsWindowStyle.SetFramelessShadow(Hwnd(w), _hasShadow))
-            Console.Error.WriteLine("[Oriel] DWM did not take the shadow setting.");
     }
 
     /// <summary>Sets the title bar text. Electron's <c>win.setTitle()</c>.</summary>

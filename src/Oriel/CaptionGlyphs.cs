@@ -62,6 +62,33 @@ internal static class CaptionGlyphs
         return new ImageBitmap(side, side, bgra);
     }
 
+    /// <summary>A whole caption button at <paramref name="scale"/>, premultiplied BGRA: transparent over the
+    /// <paramref name="spacing"/> on the left, <paramref name="fill"/> (straight ARGB) after it, and the symbol in
+    /// <paramref name="symbol"/> centred on the whole button, as Electron paints its background inset and its symbol in
+    /// the contents bounds.</summary>
+    internal static ImageBitmap RenderButton(CaptionGlyph glyph, float scale, int width, int height, int spacing, uint fill, uint symbol)
+    {
+        var (w, h) = ((int)Math.Round(width * scale), (int)Math.Round(height * scale));
+        var bgra = new byte[w * h * 4];
+        var a = (fill >> 24) / 255.0;
+        byte[] premultiplied = [(byte)Math.Round((fill & 0xFF) * a), (byte)Math.Round(((fill >> 8) & 0xFF) * a), (byte)Math.Round(((fill >> 16) & 0xFF) * a), (byte)(fill >> 24)];
+        for (var y = 0; y < h; y++)
+        for (var x = (int)Math.Round(spacing * scale); x < w; x++)
+            premultiplied.CopyTo(bgra, (y * w + x) * 4);
+        var g = Render(glyph, scale, symbol);
+        // gfx::Rect::ToCenteredSize: integer halves.
+        var (gx, gy) = ((w - g.Width) / 2, (h - g.Height) / 2);
+        for (var y = 0; y < g.Height; y++)
+        for (var x = 0; x < g.Width; x++)
+        {
+            int s = (y * g.Width + x) * 4, d = ((gy + y) * w + gx + x) * 4;
+            if (gy + y < 0 || gy + y >= h || gx + x < 0 || gx + x >= w) continue;
+            var keep = 255 - g.Bgra[s + 3];
+            for (var c = 0; c < 4; c++) bgra[d + c] = (byte)(g.Bgra[s + c] + (bgra[d + c] * keep + 127) / 255);
+        }
+        return new ImageBitmap(w, h, bgra);
+    }
+
     internal static double DistanceToSegment(double px, double py, double x0, double y0, double x1, double y1)
     {
         var (dx, dy) = (x1 - x0, y1 - y0);

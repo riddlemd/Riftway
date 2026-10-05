@@ -81,19 +81,6 @@ public static unsafe class WindowsWindowStyle
         return (r.Left, r.Top, r.Right - r.Left, r.Bottom - r.Top);
     }
 
-    /// <summary>Gives a frameless window DWM's shadow or takes it away. False if DWM refused.</summary>
-    /// <remarks>The shadow, and Windows 11's one-pixel border, need both DWM's non-client rendering and a frame margin
-    /// extended into the client area; any margin brings them back as they were, and Chromium does not restore its own.
-    /// A framed window's shadow cannot go without its frame going too.</remarks>
-    public static bool SetFramelessShadow(nint hwnd, bool shadow)
-    {
-        var policy = shadow ? 0 /* DWMNCRP_USEWINDOWSTYLE */ : 1 /* DWMNCRP_DISABLED */;
-        if (DwmSetWindowAttribute(hwnd, 2 /* DWMWA_NCRENDERING_POLICY */, &policy, sizeof(int)) < 0) return false;
-        // MARGINS is left, right, top, bottom.
-        var margins = new Rect { Bottom = shadow ? 1 : 0 };
-        return DwmExtendFrameIntoClientArea(hwnd, &margins) >= 0;
-    }
-
     /// <summary>Whether DWM renders the window's non-client area (<c>DWMWA_NCRENDERING_ENABLED</c>).</summary>
     public static bool IsDwmNonClientRendering(nint hwnd)
     {
@@ -114,6 +101,10 @@ public static unsafe class WindowsWindowStyle
             + GetSystemMetricsForDpi(92 /* SM_CXPADDEDBORDER */, dpi);
         return (int)Math.Round(pixels * 96.0 / dpi);
     }
+
+    /// <summary>Whether apps use the dark theme (<c>AppsUseLightTheme</c> is 0), which Chromium's colours follow.</summary>
+    public static bool AppsUseDarkTheme()
+        => Microsoft.Win32.Registry.GetValue(@"HKEY_CURRENT_USER\Software\Microsoft\Windows\CurrentVersion\Themes\Personalize", "AppsUseLightTheme", 1) is 0;
 
     /// <summary>The system's button face and button text colours as ARGB, Electron's default overlay colours.</summary>
     public static (uint Face, uint Text) ButtonColors() => (Argb(GetSysColor(15 /* COLOR_BTNFACE */)), Argb(GetSysColor(18 /* COLOR_BTNTEXT */)));
@@ -171,7 +162,5 @@ public static unsafe class WindowsWindowStyle
     [DllImport("user32.dll")] private static extern int GetSystemMetricsForDpi(int index, uint dpi);
     [DllImport("user32.dll")] private static extern uint GetSysColor(int index);
     [DllImport("user32.dll")] private static extern int SetWindowPos(nint hwnd, nint after, int x, int y, int cx, int cy, uint flags);
-    [DllImport("dwmapi.dll")] private static extern int DwmExtendFrameIntoClientArea(nint hwnd, Rect* margins);
-    [DllImport("dwmapi.dll")] private static extern int DwmSetWindowAttribute(nint hwnd, uint attribute, void* value, uint size);
     [DllImport("dwmapi.dll")] private static extern int DwmGetWindowAttribute(nint hwnd, uint attribute, void* value, uint size);
 }

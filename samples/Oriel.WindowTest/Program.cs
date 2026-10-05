@@ -1210,23 +1210,65 @@ async Task TitleBarAsync(BrowserWindow win)
     await Task.Delay(800);
     var oh = overlaid.GetNativeWindowHandle();
     var box = overlaid.GetTitleBarOverlayBounds();
-    Check("the overlay sits at the top right, three 46-DIP buttons wide, at the height asked", box == new Rectangle(500 - 138, 0, 138, 40), box);
-    (int X, int Y) Button(int index, int dy = 0) { var (x, y, w, _) = WindowsShell.Bounds(oh); return (x + w - 138 + index * 46 + 6, y + 6 + dy); }
+    // Electron's buttons: 45 DIPs, the second and third one DIP wider for the spacing on their left.
+    Check("the overlay sits at the top right, 45 + 46 + 46 DIPs wide, at the height asked", box == new Rectangle(500 - 137, 0, 137, 40), box);
+    int ButtonLeft(int index) { var (x, _, w, _) = WindowsShell.Bounds(oh); return x + w - 137 + (index == 0 ? 0 : 45 + (index - 1) * 46); }
+    (int X, int Y) Button(int index, int dy = 0) => (ButtonLeft(index) + 6, WindowsShell.Bounds(oh).Y + 6 + dy);
     var resting = WindowsShell.ScreenPixel(Button(0).X, Button(0).Y);
     Check("the overlay has its colour", IsBlue(resting), Rgb(resting));
     var under = WindowsShell.ScreenPixel(Button(0).X, Button(0, 40).Y);
     Check("the page shows just below the overlay", under.R > 150 && under.G > 150 && under.B < 100, Rgb(under));
-    WindowsShell.Hover(Button(2).X, Button(2).Y + 10);
+    // The hover fade: Electron's 150 ms ease-out, so colours between resting and red show on the way in and out.
+    List<(byte R, byte G, byte B)> Samples(int ms, int x, int y)
+    {
+        var seen = new List<(byte R, byte G, byte B)>();
+        for (var end = DateTime.UtcNow.AddMilliseconds(ms); DateTime.UtcNow < end; Thread.Sleep(4)) seen.Add(WindowsShell.ScreenPixel(x, y));
+        return seen;
+    }
+    static bool Between((byte R, byte G, byte B) c, (byte R, byte G, byte B) a, (byte R, byte G, byte B) b)
+        => !Near(c, a, 12) && !Near(c, b, 12) && c.R >= Math.Min(a.R, b.R) - 6 && c.R <= Math.Max(a.R, b.R) + 6 && c.B >= Math.Min(a.B, b.B) - 6 && c.B <= Math.Max(a.B, b.B) + 6;
+    var closeResting = WindowsShell.ScreenPixel(Button(2).X, Button(2).Y);
+    WindowsShell.MovePointer(Button(2).X, Button(2).Y + 10);
+    var fadeIn = Samples(400, Button(2).X, Button(2).Y);
+    var red = fadeIn[^1];
     Check("the close button turns red under the pointer", Eventually(() => IsRed(WindowsShell.ScreenPixel(Button(2).X, Button(2).Y)), step), Rgb(WindowsShell.ScreenPixel(Button(2).X, Button(2).Y)));
+    Check("the close button fades to red: in-between colours show on the way", IsRed(red) && fadeIn.Any(c => Between(c, closeResting, red)), string.Join(" ", fadeIn.Select(Rgb).Distinct()));
+    var gap = WindowsShell.ScreenPixel(ButtonLeft(2), Button(2).Y);
+    var firstFilled = WindowsShell.ScreenPixel(ButtonLeft(2) + 1, Button(2).Y);
+    Check("the close button's one-DIP spacing stays the overlay colour while its background turns red", Near(gap, closeResting, 12) && IsRed(firstFilled), $"gap {Rgb(gap)} next {Rgb(firstFilled)} resting {Rgb(closeResting)}");
+    WindowsShell.MovePointer(Button(0).X, Button(0).Y + 120);
+    var fadeOut = Samples(400, Button(2).X, Button(2).Y);
+    Check("leaving the close button fades it back", Near(fadeOut[^1], closeResting, 12) && fadeOut.Any(c => Between(c, red, closeResting)), string.Join(" ", fadeOut.Select(Rgb).Distinct()));
     WindowsShell.Hover(Button(0).X, Button(0).Y + 10);
-    var hovered = WindowsShell.ScreenPixel(Button(0).X, Button(0).Y);
-    Check("a button lightens towards the symbol colour under the pointer", hovered.R > resting.R + 8 && hovered.G > resting.G + 8 && hovered.B >= resting.B, $"{Rgb(resting)} -> {Rgb(hovered)}");
+    // Electron: the caption foreground (black on a light frame, white on a dark one) at 0x1A x 1.3 over an opaque colour.
+    var foreground = TitleBar.CaptionForeground(TitleBar.DefaultFrame(WindowsWindowStyle.AppsUseDarkTheme())) & 0xFF;
+    byte Toward(byte from) => (byte)Math.Round(from + (foreground - from) * 0x22 / 255.0);
+    static bool Near((byte R, byte G, byte B) a, (byte R, byte G, byte B) b, int within = 6) => Math.Abs(a.R - b.R) <= within && Math.Abs(a.G - b.G) <= within && Math.Abs(a.B - b.B) <= within;
+    var tinted = (Toward(resting.R), Toward(resting.G), Toward(resting.B));
+    Check("a hovered button lays the caption foreground at alpha 0x22 over its colour", Eventually(() => Near(WindowsShell.ScreenPixel(Button(0).X, Button(0).Y), tinted), step),
+        $"{Rgb(resting)} -> {Rgb(WindowsShell.ScreenPixel(Button(0).X, Button(0).Y))}, expected {Rgb(tinted)}");
     overlaid.SetTitleBarOverlay(new TitleBarOverlayOptions { Color = "#20A050", Height = 32 });
     WindowsShell.Hover(Button(0).X, Button(0).Y + 120);
     Check("SetTitleBarOverlay changes the colour and height", Eventually(() => IsGreen(WindowsShell.ScreenPixel(Button(0).X, Button(0).Y)) && overlaid.GetTitleBarOverlayBounds().Height == 32, step),
         $"{Rgb(WindowsShell.ScreenPixel(Button(0).X, Button(0).Y))} {overlaid.GetTitleBarOverlayBounds()}");
     var shrunk = WindowsShell.ScreenPixel(Button(0).X, Button(0, 30).Y);
     Check("the page shows below the shorter overlay (its blue drag strip)", IsBlue(shrunk), Rgb(shrunk));
+    static string? ErrorOf(Action act) { try { act(); return null; } catch (Exception e) { return $"{e.GetType().Name}: {e.Message}"; } }
+    var badColor = ErrorOf(() => overlaid.SetTitleBarOverlay(new TitleBarOverlayOptions { Color = "nonsense" }));
+    Check("SetTitleBarOverlay rejects a colour Chromium cannot parse, with Electron's message", badColor == "ArgumentException: Could not parse color as CSS color", badColor);
+    var badSymbol = ErrorOf(() => overlaid.SetTitleBarOverlay(new TitleBarOverlayOptions { Color = "rgb(255, 0, 0)", SymbolColor = "#12345" }));
+    await Task.Delay(500);
+    var notRepainted = WindowsShell.ScreenPixel(Button(0).X, Button(0).Y);
+    overlaid.SetTitleBarOverlay(new TitleBarOverlayOptions { Height = 32 });
+    Check("a bad symbol colour throws Electron's message, the colour before it is kept unpainted until the next update",
+        badSymbol == "ArgumentException: Could not parse symbol color as CSS color" && IsGreen(notRepainted) && Eventually(() => IsRed(WindowsShell.ScreenPixel(Button(0).X, Button(0).Y)), step),
+        $"{badSymbol} {Rgb(notRepainted)} -> {Rgb(WindowsShell.ScreenPixel(Button(0).X, Button(0).Y))}");
+    overlaid.SetTitleBarOverlay(new TitleBarOverlayOptions { Color = "hsl(120, 100%, 25%)" });
+    Check("SetTitleBarOverlay takes hsl() colours", Eventually(() => IsGreen(WindowsShell.ScreenPixel(Button(0).X, Button(0).Y)), step), Rgb(WindowsShell.ScreenPixel(Button(0).X, Button(0).Y)));
+    overlaid.SetTitleBarOverlay(new TitleBarOverlayOptions { Color = "#00000000" });
+    Check("a transparent overlay colour shows the page through the buttons", Eventually(() => IsBlue(WindowsShell.ScreenPixel(Button(0).X, Button(0).Y)), step), Rgb(WindowsShell.ScreenPixel(Button(0).X, Button(0).Y)));
+    overlaid.SetTitleBarOverlay(new TitleBarOverlayOptions { Color = "#20A050" });
+    await Task.Delay(500);
     WindowsShell.Click(Button(1).X, Button(1).Y + 8);
     Check("the maximize button maximizes", Eventually(() => overlaid.IsMaximized, step));
     WindowsShell.Click(Button(1).X, Button(1).Y + 8);
@@ -1247,10 +1289,14 @@ async Task TitleBarAsync(BrowserWindow win)
     Check("the close button closes the window", Eventually(() => closed, step));
 
     // Defaults: the system's caption height and button colours.
-    var plain = new BrowserWindow(new BrowserWindowOptions { Title = "Oriel window test: default overlay", X = 260, Y = 260, Width = 400, Height = 250, TitleBarStyle = TitleBarStyle.Hidden, TitleBarOverlay = new() });
+    var plain = new BrowserWindow(new BrowserWindowOptions { Title = "Oriel window test: default overlay", X = 260, Y = 260, Width = 400, Height = 250, TitleBarStyle = TitleBarStyle.Hidden, TitleBarOverlay = new() { Color = "not a colour" } });
     await Task.Delay(1500);
     var caption = WindowsWindowStyle.CaptionHeight(plain.GetNativeWindowHandle());
     Check("an overlay without a height takes the system caption height", plain.GetTitleBarOverlayBounds().Height == caption && caption is > 20 and < 50, $"{plain.GetTitleBarOverlayBounds()} caption={caption}");
+    var (px, py, pw, _) = WindowsShell.Bounds(plain.GetNativeWindowHandle());
+    var face = WindowsWindowStyle.ButtonColors().Face;
+    var plainPixel = WindowsShell.ScreenPixel(px + pw - 137 + 6, py + 6);
+    Check("an unparsable Color option is ignored: the button face colour shows, as Electron", Near(plainPixel, ((byte)(face >> 16), (byte)(face >> 8), (byte)face), within: 12), $"{Rgb(plainPixel)} vs face {face:X8}");
     plain.Destroy();
     win.Focus();
     await Task.Delay(300);
@@ -1338,6 +1384,42 @@ async Task WindowPolishAsync(BrowserWindow win)
     clicky.Destroy();
     faded.Destroy();
 
+    // Forward: the page still sees mouse moves while clicks pass through; without it, it sees none.
+    var hover = new BrowserWindow(new BrowserWindowOptions { Title = "Oriel window test: forward", X = 450, Y = 120, Width = 300, Height = 200, BackgroundColor = "#0000FF" });
+    _ = hover.LoadUrl("data:text/html," + Uri.EscapeDataString("<body style='margin:0;height:100vh;background:#0000FF' onmousemove='moves++' onmousedown='downs++'><script>var moves=0,downs=0</script></body>"));
+    await Task.Delay(1500);
+    var hh = hover.GetNativeWindowHandle();
+    var (hx, hy) = Centre(hover);
+    async Task<int> PageCount(string name) => int.TryParse(await Js(hover, name) as string, out var n) ? n : -1;
+    async Task<int> MovesOver()
+    {
+        await Js(hover, "moves=0,downs=0");
+        WindowsShell.MoveMouse(hx, hy);
+        WindowsShell.MoveMouse(hx + 20, hy + 10);
+        await Task.Delay(400);
+        return await PageCount("moves");
+    }
+    hover.SetIgnoreMouseEvents(true, new IgnoreMouseEventsOptions { Forward = true });
+    await Task.Delay(300);
+    var forwarded = await MovesOver();
+    Check("SetIgnoreMouseEvents(true, Forward) still delivers mouse moves to the page", forwarded > 0 && WindowsShell.ClickThrough(hh) && WindowsShell.Forwarding(hh), $"moves={forwarded} forwarding={WindowsShell.Forwarding(hh)}");
+    WindowsShell.Drag(hx, hy, hx, hy);
+    var downs = await PageCount("downs");
+    Check("with Forward a click still passes through to the window below", WindowsShell.RootAt(hx, hy) != hh && downs == 0, $"{WindowsShell.RootAt(hx, hy)} vs {hh} downs={downs}");
+    hover.SetIgnoreMouseEvents(true);
+    await Task.Delay(300);
+    var unforwarded = await MovesOver();
+    Check("SetIgnoreMouseEvents(true) without Forward delivers no mouse moves", unforwarded == 0 && !WindowsShell.Forwarding(hh) && WindowsShell.ClickThrough(hh), $"moves={unforwarded}");
+    hover.SetIgnoreMouseEvents(true, new IgnoreMouseEventsOptions { Forward = true });
+    await Task.Delay(300);
+    // The pass-through clicks activated the window below; bring this one back over it before hit-testing.
+    hover.Focus();
+    await Task.Delay(300);
+    var wasForwarding = WindowsShell.Forwarding(hh);
+    hover.SetIgnoreMouseEvents(false, new IgnoreMouseEventsOptions { Forward = true });
+    Check("SetIgnoreMouseEvents(false, Forward) takes the mouse back and ends forwarding", wasForwarding && Eventually(() => !WindowsShell.Forwarding(hh) && !WindowsShell.ClickThrough(hh) && WindowsShell.RootAt(hx, hy) == hh, step), $"was={wasForwarding} forwarding={WindowsShell.Forwarding(hh)} root={WindowsShell.RootAt(hx, hy)}");
+    hover.Destroy();
+
     // Content protection: capture sees what is behind the window.
     var secret = Solid("Oriel window test: content protection", "#0000FF", 200, 200, 300, 200);
     await Task.Delay(1500);
@@ -1349,7 +1431,7 @@ async Task WindowPolishAsync(BrowserWindow win)
     Check("SetContentProtection(false) shows it again", Eventually(() => !secret.IsContentProtected() && IsBlue(WindowsShell.ScreenPixel(sx, sy)), step), Rgb(WindowsShell.ScreenPixel(sx, sy)));
     secret.Destroy();
 
-    // Shadow: a frameless window darkens the backdrop just below it, until the shadow is taken away.
+    // Shadow: Electron only stores hasShadow on Windows; a frameless window keeps darkening the backdrop just below it.
     var flat = Solid("Oriel window test: shadow", "#FF0000", 220, 160, 300, 200, frame: false);
     await Task.Delay(1500);
     var lh = flat.GetNativeWindowHandle();
@@ -1358,9 +1440,10 @@ async Task WindowPolishAsync(BrowserWindow win)
     var white = WindowsShell.ScreenPixel(WindowsShell.Bounds(lh).X - 60, WindowsShell.Bounds(lh).Y + WindowsShell.Bounds(lh).Height + 8).R;
     var shaded = Below();
     flat.SetHasShadow(false);
-    Check("SetHasShadow(false) removes a frameless window's shadow", shaded.R < white - 20 && Eventually(() => Below().R >= white - 3, step) && !flat.GetHasShadow(), $"white={white} {Rgb(shaded)} -> {Rgb(Below())}");
+    await Task.Delay(800);
+    Check("SetHasShadow(false) keeps a frameless window's shadow, as Electron on Windows, and reads back false", shaded.R < white - 20 && Below().R < white - 20 && !flat.GetHasShadow(), $"white={white} {Rgb(shaded)} -> {Rgb(Below())}");
     flat.SetHasShadow(true);
-    Check("SetHasShadow(true) brings it back", Eventually(() => Below().R < white - 20, step) && flat.GetHasShadow(), $"white={white} {Rgb(Below())}");
+    Check("SetHasShadow(true) reads back true", flat.GetHasShadow() && Below().R < white - 20, $"white={white} {Rgb(Below())}");
     flat.Destroy();
     var framed = Solid("Oriel window test: framed shadow", "#FF0000", 220, 160, 300, 200);
     await Task.Delay(1200);
@@ -1420,6 +1503,10 @@ async Task WindowPolishAsync(BrowserWindow win)
     Check("SetKiosk(false) leaves full screen", Eventually(() => !kiosk.IsFullScreen && !kiosk.IsKiosk(), step), $"{kiosk.IsFullScreen} {kiosk.GetBounds()}");
     kiosk.SetKiosk(true);
     Check("SetKiosk(true) enters it again", Eventually(() => kiosk.IsFullScreen && kiosk.IsKiosk(), step));
+    kiosk.SetFullScreen(false);
+    Check("IsKiosk is IsFullScreen, as Electron answers: SetFullScreen(false) ends it", Eventually(() => !kiosk.IsFullScreen && !kiosk.IsKiosk(), step), $"{kiosk.IsFullScreen} {kiosk.IsKiosk()}");
+    kiosk.SetFullScreen(true);
+    Check("SetFullScreen(true) makes IsKiosk true", Eventually(() => kiosk.IsFullScreen && kiosk.IsKiosk(), step), $"{kiosk.IsFullScreen} {kiosk.IsKiosk()}");
     kiosk.Destroy();
     inactive.Destroy();
     backdrop.Destroy();

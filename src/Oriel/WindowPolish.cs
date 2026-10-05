@@ -50,8 +50,8 @@ public sealed class WillMoveEventArgs(Rectangle newBounds) : CancelEventArgs
 /// <summary>Options for <see cref="BrowserWindow.SetIgnoreMouseEvents"/>; Electron's <c>options</c>.</summary>
 public sealed record IgnoreMouseEventsOptions
 {
-    /// <summary>Still deliver mouse moves to the page while ignoring clicks. Electron's <c>forward</c>; not supported
-    /// yet, so it is ignored.</summary>
+    /// <summary>Still deliver mouse moves to the page while ignoring clicks; applies only when ignoring. Windows only for
+    /// now. Electron's <c>forward</c>.</summary>
     public bool Forward { get; init; }
 }
 
