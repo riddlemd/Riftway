@@ -98,4 +98,14 @@ public sealed class WebFrameMain
         ArgumentNullException.ThrowIfNull(channel);
         _page.SendToFrame(_state, new JsonObject { ["t"] = "msg", ["ch"] = channel, ["args"] = new JsonArray(args) }.ToJsonString());
     }
+
+    /// <summary>Sends <paramref name="message"/> to this frame with ports moved into it. Electron's
+    /// <c>frame.postMessage()</c>.</summary>
+    /// <exception cref="InvalidOperationException">A port was already moved.</exception>
+    public void PostMessage(string channel, JsonNode? message, IReadOnlyList<MessagePortMain>? transfer = null)
+    {
+        ArgumentNullException.ThrowIfNull(channel);
+        var ports = PortLink.CheckTransfer(transfer, null);
+        Oriel.Cef.CefThread.RunOnUi(() => _page.PostToFrame(_state, channel, message, ports));
+    }
 }

@@ -950,6 +950,7 @@ public sealed unsafe partial class WebContents
             case "Runtime.executionContextDestroyed":
                 var gone = parameters.GetProperty("executionContextId").GetInt32();
                 if (gone == _isolatedContext) _isolatedContext = null;
+                PortLink.ContextGone(this, gone);
                 if (_contextFrames.Remove(gone, out var owner) && _frames.TryGetValue(owner, out var ownerFrame))
                 {
                     if (ownerFrame.DefaultContext == gone) ownerFrame.DefaultContext = null;
@@ -958,6 +959,7 @@ public sealed unsafe partial class WebContents
                 break;
 
             case "Runtime.executionContextsCleared":
+                foreach (var cleared in _contextFrames.Keys) PortLink.ContextGone(this, cleared);
                 _isolatedContext = null;
                 _contextFrames.Clear();
                 foreach (var frame in _frames.Values) frame.DefaultContext = frame.IsolatedContext = null;
@@ -976,6 +978,21 @@ public sealed unsafe partial class WebContents
         {
             case "send":
                 IpcMain.DispatchSend(this, FrameForContext(context), channel, args);
+                break;
+
+            case "post" when _contextFrames.TryGetValue(context, out var postFrameId) && _frames.TryGetValue(postFrameId, out var postFrame):
+                var made = PortIds(root).Select(id => PortLink.FromPage(this, postFrame, context, id)).ToList();
+                IpcMain.DispatchSend(this, WrapperOf(postFrame), channel, args, made);
+                break;
+
+            case "port-msg" when PortLink.ForRemote(root.GetProperty("id").GetString()!) is { } link:
+                var portId = root.GetProperty("id").GetString()!;
+                if (link.RemoteEnd(portId) is { } origin)
+                    link.FromPageEnd(portId, root.GetProperty("data"), [.. PortIds(root).Select(id => (id, context))], origin);
+                break;
+
+            case "port-close" when PortLink.ForRemote(root.GetProperty("id").GetString()!) is { } closing:
+                closing.Close(root.GetProperty("id").GetString()!);
                 break;
 
             case "invoke":
@@ -1081,6 +1098,53 @@ public sealed unsafe partial class WebContents
     }
 
     // Runs in the isolated world's context, so only Oriel's preload runtime can receive it.
+    private static IEnumerable<string> PortIds(JsonElement root)
+        => root.TryGetProperty("ports", out var ports) ? ports.EnumerateArray().Select(p => p.GetString()!) : [];
+
+    /// <summary>Sends <paramref name="message"/> to the main frame with ports moved into it. Electron's
+    /// <c>webContents.postMessage()</c>.</summary>
+    /// <exception cref="InvalidOperationException">A port was already moved.</exception>
+    public void PostMessage(string channel, JsonNode? message, IReadOnlyList<MessagePortMain>? transfer = null)
+    {
+        ArgumentNullException.ThrowIfNull(channel);
+        var ports = PortLink.CheckTransfer(transfer, null);
+        CefThread.RunOnUi(() =>
+        {
+            if (_mainFrameId is { } id && _frames.TryGetValue(id, out var frame)) PostToFrame(frame, channel, message, ports);
+            else foreach (var port in ports) port.Close();
+        });
+    }
+
+    // UI thread.
+    internal void PostToFrame(FrameState frame, string channel, JsonNode? message, IReadOnlyList<MessagePortMain> ports)
+    {
+        var ids = ports.Select(p => PortLink.MoveToPage(p, this, frame)).ToList();
+        var envelope = new JsonObject { ["t"] = "msg", ["ch"] = channel, ["args"] = new JsonArray(message?.DeepClone()), ["ports"] = new JsonArray([.. ids.Select(i => (JsonNode?)i)]) };
+        DeliverTo(frame, envelope.ToJsonString(), null);
+    }
+
+    // UI thread: a port message for the page's end; a document that has gone takes the port with it.
+    internal void DeliverPort(RemoteEnd end, JsonObject message)
+    {
+        if (end.Context is { } known && end.Frame.IsolatedContext != known)
+        {
+            PortLink.ForRemote(end.Id)?.Close(end);
+            return;
+        }
+        DeliverTo(end.Frame, message.ToJsonString(), end);
+    }
+
+    // The main frame's messages wait for its preload; another frame without one gets nothing.
+    private void DeliverTo(FrameState frame, string message, RemoteEnd? end)
+    {
+        if (frame.IsolatedContext is { } context)
+        {
+            if (end is not null) end.Context ??= context;
+            Deliver(context, message);
+        }
+        else if (frame.Id == _mainFrameId) _pendingDeliveries.Add(message);
+    }
+
     private void Deliver(int context, string message)
         => _devTools.Send("Runtime.evaluate", w =>
         {

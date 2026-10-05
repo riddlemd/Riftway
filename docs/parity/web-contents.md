@@ -12,13 +12,13 @@ Percentages are over the non-n/a items; the second counts a partial item as half
 |---|---|---|---|---|---|---|---|
 | Static methods | 5 | 1 | 2 | 2 | 0 | 20.0% | 40.0% |
 | Instance events | 59 | 20 | 8 | 29 | 2 | 35.1% | 42.1% |
-| Instance methods | 118 | 25 | 7 | 78 | 8 | 22.7% | 25.9% |
+| Instance methods | 118 | 25 | 8 | 77 | 8 | 22.7% | 26.4% |
 | Instance properties | 18 | 7 | 1 | 9 | 1 | 41.2% | 44.1% |
 | navigationHistory | 14 | 12 | 0 | 2 | 0 | 85.7% | 85.7% |
 | WebFrameMain events and statics | 3 | 1 | 0 | 2 | 0 | 33.3% | 33.3% |
-| WebFrameMain methods | 9 | 1 | 3 | 5 | 0 | 11.1% | 27.8% |
+| WebFrameMain methods | 9 | 1 | 4 | 4 | 0 | 11.1% | 33.3% |
 | WebFrameMain properties | 15 | 9 | 0 | 6 | 0 | 60.0% | 60.0% |
-| **Total** | 241 | 76 | 21 | 133 | 11 | 33.0% | 37.6% |
+| **Total** | 241 | 76 | 23 | 131 | 11 | 33.0% | 38.0% |
 
 ## Checklist
 
@@ -181,7 +181,7 @@ Percentages are over the non-n/a items; the second counts a partial item as half
 | `getAllSharedWorkers()` | — | missing |  |
 | `inspectServiceWorker()` | — | missing |  |
 | `sendToFrame()` | — | missing |  |
-| `postMessage()` | — | missing |  |
+| `postMessage(channel, message, transfer)` | `PostMessage` | partial | JSON messages (I1). |
 | `enableDeviceEmulation()` | — | missing |  |
 | `disableDeviceEmulation()` | — | missing |  |
 | `beginFrameSubscription()` | — | missing |  |
@@ -277,7 +277,7 @@ Percentages are over the non-n/a items; the second counts a partial item as half
 | `reload()` | `Reload` | partial | Cross-process frames cannot reload (F1). |
 | `isDestroyed()` | `IsDestroyed` | done |  |
 | `send(channel, ...args)` | `Send` | partial | Dropped for cross-process frames and before the preload runs (F1). |
-| `postMessage(channel, message, transfer)` | — | missing | F2. |
+| `postMessage(channel, message, transfer)` | `WebFrameMain.PostMessage` | partial | JSON messages (I1). |
 | `collectJavaScriptCallStack()` | — | missing | F2. |
 | `copyVideoFrameAt(x, y)` | — | missing |  |
 | `saveVideoFrameAs(x, y)` | — | missing |  |

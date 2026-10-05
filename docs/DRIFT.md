@@ -81,7 +81,7 @@ Entries marked _(branch `x`)_ are on that branch and not yet in `main`.
 | ID | Electron | Oriel | Why | Possible resolution |
 |---|---|---|---|---|
 | F1 | Every frame runs script and receives messages, cross-site iframes included | A frame in another process (a cross-site iframe, with site isolation) is listed but cannot run script, `send` or `reload` | CEF/DevTools: out-of-process frames are separate DevTools targets, which Oriel does not attach to | DevTools `Target.setAutoAttach` with flattened sessions |
-| F2 | `frameTreeNodeId`, `processId`, `routingId`, `osProcessId`, `visibilityState`, `postMessage`, `collectJavaScriptCallStack`; `webFrameMain.fromId` / `fromFrameToken` | Missing; `frameToken` is Chromium's DevTools frame token | Todo, or CEF: the numeric ids are not exposed | Add what DevTools gives (frame lookup by token) |
+| F2 | `frameTreeNodeId`, `processId`, `routingId`, `osProcessId`, `visibilityState`, `collectJavaScriptCallStack`; `webFrameMain.fromId` / `fromFrameToken` | Missing; `frameToken` is Chromium's DevTools frame token | Todo, or CEF: the numeric ids are not exposed | Add what DevTools gives (frame lookup by token) |
 | F3 | `webContents.focusedFrame` includes a cross-site iframe in another process | Such a frame taking focus is not seen; same-process frames are | Follows F1: Oriel's runtime does not run in out-of-process frames | With F1 |
 | F4 | `webContents.mainFrame` always exists | Null until the page's frame tree has been read, just after the window is created | Design: frames come from DevTools | None |
 
@@ -173,11 +173,12 @@ Entries marked _(branch `x`)_ are on that branch and not yet in `main`.
 | ID | Electron | Oriel | Why | Possible resolution |
 |---|---|---|---|---|
 | I1 | Structured clone (Map, Set, Date, ArrayBuffer, ...) | JSON only | Design: messages cross through DevTools bindings as JSON | Typed serializers for the common types |
-| I2 | `ipcRenderer.sendSync/sendToHost/postMessage`; listeners get an `IpcRendererEvent` | Missing; listeners get `{ sender }`. `once`, `off` and `removeAllListeners` are done | CEF/DevTools: no synchronous path from the page to the main process | `postMessage` over the binding; `sendSync` needs a Patch |
+| I2 | `ipcRenderer.sendSync/sendToHost`; listeners get an `IpcRendererEvent` | Missing; listeners get `{ sender, ports }`. `once`, `off` and `removeAllListeners` are done | CEF/DevTools: no synchronous path from the page to the main process | `sendSync` needs a Patch |
 | I3 | `event.returnValue` (answers `sendSync`) | Missing; `ipcMain.once`, `handleOnce`, `removeAllListeners` and `event.reply` are done (`off` is `RemoveListener`) | Follows I2 | With `sendSync` |
 | I4 | `contextBridge` exposes live objects and nested functions | Values are copied once and frozen; only top-level functions, which return promises; callbacks one level deep; no `exposeInIsolatedWorld` | Design/CEF: worlds share only the DOM, so values cross as JSON | Deeper proxying |
 | I5 | `protocol.handle` takes and returns Fetch `Request`/`Response` | `ProtocolRequest` → `Task<ProtocolResponse>`; Oriel answers `Range` itself | Design | None |
 | I6 | Privileges `allowServiceWorkers`, `codeCache` | Throw `NotSupportedException` | CEF: no service workers or V8 code cache for custom schemes | Patch |
+| I7 | `MessagePortMain` raises `close` when the page closes its end | Raised when the page navigates away or the main side closes; not when the page calls `close()` on its end | CEF: Chromium 154 gives the bridged end no `close` event, and a close marker would leak into the page's own channels | Patch |
 
 ## Platform and runtime
 

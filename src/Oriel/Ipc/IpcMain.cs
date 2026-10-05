@@ -30,6 +30,9 @@ public class IpcMainEvent
 
     /// <summary>The message arguments, as sent by the page.</summary>
     public IReadOnlyList<JsonElement> Args { get; }
+
+    /// <summary>Ports the page sent with <c>ipcRenderer.postMessage</c>. Electron's <c>event.ports</c>.</summary>
+    public IReadOnlyList<MessagePortMain> Ports { get; init; } = [];
 }
 
 /// <summary>An <c>ipcRenderer.invoke</c> call: Electron's <c>IpcMainInvokeEvent</c>.</summary>
@@ -136,7 +139,8 @@ public static class IpcMain
         }
     }
 
-    internal static void DispatchSend(WebContents sender, WebFrameMain? senderFrame, string channel, IReadOnlyList<JsonElement> args)
+    internal static void DispatchSend(WebContents sender, WebFrameMain? senderFrame, string channel, IReadOnlyList<JsonElement> args,
+        IReadOnlyList<MessagePortMain>? ports = null)
     {
         Action<IpcMainEvent>[] listeners;
         lock (s_gate)
@@ -146,7 +150,7 @@ public static class IpcMain
             list?.RemoveAll(l => l.Once);
         }
 
-        var e = new IpcMainEvent(sender, senderFrame, args);
+        var e = new IpcMainEvent(sender, senderFrame, args) { Ports = ports ?? [] };
         foreach (var listener in listeners)
         {
             try { listener(e); }

@@ -42,7 +42,7 @@ Where an implemented module differs from Electron, the difference and its reason
 | Environment variables | same variables | .NET | M2 | — |
 | `utilityProcess` | `UtilityProcess` (.NET child process) | .NET | M6 | — |
 | `parentPort` | `ParentPort` | .NET | M6 | — |
-| `MessageChannelMain` / `MessagePortMain` | `MessageChannel` / `MessagePort` | .NET + CEF | M6 | — |
+| `MessageChannelMain` / `MessagePortMain` | `MessageChannelMain` / `MessagePortMain` | .NET + CEF | M6 | partial: channels in the main process, ports moved to and from pages (`webContents.postMessage`, `frame.postMessage`, `ipcRenderer.postMessage`, `event.ports`), ports through ports, `start`, `close`; JSON messages (I1); no `close` from a page's own `close()` (I7) |
 | `crashReporter` | `CrashReporter` (Crashpad) | CEF | M4 | — |
 | `contentTracing` | `ContentTracing` | CEF | M6 | — |
 | `autoUpdater` | `AutoUpdater` (Velopack) | Pack | M4 | — |
@@ -85,7 +85,7 @@ Detailed item-by-item status, including `navigationHistory` and `WebFrameMain`: 
 | Electron | Oriel | Source | Wave | Status |
 |---|---|---|---|---|
 | `ipcMain` | `IpcMain` | CEF | M2 | partial: handle, handleOnce, on, once, removeHandler, removeListener, removeAllListeners, event.reply, event.senderFrame; no `event.returnValue` (see DRIFT.md) |
-| `ipcRenderer` | `oriel.ipcRenderer` in the page | CEF | M2 | partial: invoke, send, on, once, off, removeListener, removeAllListeners; no `sendSync`, `sendToHost`, `postMessage` (see DRIFT.md) |
+| `ipcRenderer` | `oriel.ipcRenderer` in the page | CEF | M2 | partial: invoke, send, on, once, off, removeListener, removeAllListeners, postMessage with ports; no `sendSync`, `sendToHost` (see DRIFT.md) |
 | `contextBridge` | `oriel.contextBridge` (isolated world) | CEF | M2 | partial: exposeInMainWorld (methods return promises; function args one level deep); no `exposeInIsolatedWorld` (see DRIFT.md) |
 | `ipcMainServiceWorker` | `IpcMainServiceWorker` | CEF | M6 | — |
 

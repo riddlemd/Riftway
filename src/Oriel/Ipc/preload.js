@@ -11,6 +11,29 @@
   // The frame that last took focus is webContents.focusedFrame. Captured: an element's focus does not bubble.
   globalThis.addEventListener('focus', () => post(JSON.stringify({ t: 'focus', ch: '', args: [] })), true);
 
+  // Ports bridged to the main process: this world holds one end of each under an id, and relays it.
+  const bridged = new Map();
+  const hold = (id, port) => {
+    bridged.set(id, port);
+    port.onmessage = (event) =>
+      post(JSON.stringify({ t: 'port-msg', id, ch: '', args: [], data: event.data, ports: event.ports.map(adopt) }));
+    port.addEventListener('close', () => {
+      if (bridged.delete(id)) post(JSON.stringify({ t: 'port-close', id, ch: '', args: [] }));
+    });
+  };
+  // A port this page made, moving to the main process.
+  const adopt = (port) => {
+    const id = crypto.randomUUID();
+    hold(id, port);
+    return id;
+  };
+  // A port arriving from the main process: the page gets one end of a new channel; this world keeps the other.
+  const bridge = (id) => {
+    const channel = new MessageChannel();
+    hold(id, channel.port2);
+    return channel.port1;
+  };
+
   let nextInvokeId = 1;
   const pendingInvokes = new Map();
   const channelListeners = new Map();
@@ -24,8 +47,14 @@
         pendingInvokes.delete(message.id);
         if (message.ok) pending.resolve(message.value);
         else pending.reject(new Error(message.error));
+      } else if (message.t === 'port-msg') {
+        bridged.get(message.id)?.postMessage(message.data, (message.ports ?? []).map(bridge));
+      } else if (message.t === 'port-close') {
+        const port = bridged.get(message.id);
+        bridged.delete(message.id);
+        port?.close();
       } else if (message.t === 'msg') {
-        const event = { sender: ipcRenderer };
+        const event = { sender: ipcRenderer, ports: (message.ports ?? []).map(bridge) };
         for (const listener of [...(channelListeners.get(message.ch) ?? [])]) listener(event, ...message.args);
       }
     },
@@ -41,6 +70,9 @@
     },
     send(channel, ...args) {
       post(JSON.stringify({ t: 'send', ch: String(channel), args }));
+    },
+    postMessage(channel, message, transfer = []) {
+      post(JSON.stringify({ t: 'post', ch: String(channel), args: [message], ports: transfer.map(adopt) }));
     },
     on(channel, listener) {
       if (!channelListeners.has(channel)) channelListeners.set(channel, new Set());

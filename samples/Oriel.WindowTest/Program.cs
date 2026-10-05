@@ -257,6 +257,7 @@ async Task RunAsync(BrowserWindow win, BrowserWindow simple)
     await NativeImageAsync();
     await WebContentsLifecycleAsync(win);
     await PageEventsAsync();
+    await MessagePortsAsync();
 
     // Closing cancelled once: the window must survive the first close.
     var closingCount = 0;
@@ -841,6 +842,120 @@ async Task PageEventsAsync()
     var aborted = Eventually(() => provisional.Contains(-3), step);
     Check("a cancelled load raises DidFailProvisionalLoad (ERR_ABORTED) but not DidFailLoad, as Electron's", aborted && !failed.Contains(-3),
         $"{string.Join(",", provisional)} / {string.Join(",", failed)}");
+    w.Destroy();
+    Directory.Delete(dir, recursive: true);
+}
+
+async Task MessagePortsAsync()
+{
+    var dir = Directory.CreateTempSubdirectory("oriel-ports-").FullName;
+    var preload = Path.Combine(dir, "preload.js");
+    File.WriteAllText(preload, string.Join("\n",
+        "const { ipcRenderer } = oriel;",
+        // A port from the main process echoes what it hears, and answers on any port sent through it.
+        "ipcRenderer.on('port', (event, msg) => {",
+        "  const [port] = event.ports;",
+        "  port.onmessage = (e) => {",
+        "    if (e.ports.length) { e.ports[0].postMessage('via-second:' + e.data); return; }",
+        "    port.postMessage({ echo: e.data, msg, top: window === window.top });",
+        "  };",
+        "});",
+        // A port the page makes goes to the main process, which talks to this end.
+        "ipcRenderer.on('make', () => {",
+        "  const { port1, port2 } = new MessageChannel();",
+        "  port1.onmessage = (e) => port1.postMessage('pong:' + e.data);",
+        "  ipcRenderer.postMessage('given', 'from-page', [port2]);",
+        "});",
+        ""));
+    var page = Path.Combine(dir, "ports.html");
+    File.WriteAllText(page, "<!doctype html><title>ports</title><iframe srcdoc='<p>frame'></iframe>");
+    var w = new BrowserWindow(new BrowserWindowOptions { Show = false, WebPreferences = new WebPreferences { Preload = preload } });
+    Fires(h => w.WebContents.DidFinishLoad += h, h => w.WebContents.DidFinishLoad -= h, () => w.WebContents.LoadFile(page), step);
+
+    static async Task<MessagePortEvent?> Next(MessagePortMain port, Action send)
+    {
+        var got = new TaskCompletionSource<MessagePortEvent>(TaskCreationOptions.RunContinuationsAsynchronously);
+        EventHandler<MessagePortEvent> on = (_, e) => got.TrySetResult(e);
+        port.Message += on;
+        send();
+        var result = await got.Task.WaitAsync(TimeSpan.FromSeconds(10)).ContinueWith(t => t.IsCompletedSuccessfully ? t.Result : null);
+        port.Message -= on;
+        return result;
+    }
+
+    // Main to page: one end moves into the page; the page answers on it.
+    var channel = new MessageChannelMain();
+    channel.Port1.Start();
+    w.WebContents.PostMessage("port", new System.Text.Json.Nodes.JsonObject { ["hello"] = "page" }, [channel.Port2]);
+    var echo = await Next(channel.Port1, () => channel.Port1.PostMessage("ping"));
+    Check("WebContents.PostMessage moves a port into the page; ipcRenderer listeners get it in event.ports",
+        echo?.Data?["echo"]?.GetValue<string>() == "ping" && echo.Data["msg"]?["hello"]?.GetValue<string>() == "page", echo?.Data?.ToJsonString());
+    Check("a port that moved can't move again, and a port can't send itself",
+        Throws<InvalidOperationException>(() => w.WebContents.PostMessage("port", null, [channel.Port2]))
+        && Throws<InvalidOperationException>(() => channel.Port1.PostMessage("x", [channel.Port1])));
+
+    // A port sent through a port arrives with the message.
+    var second = new MessageChannelMain();
+    second.Port1.Start();
+    var viaSecond = await Next(second.Port1, () => channel.Port1.PostMessage("hi", [second.Port2]));
+    Check("a port sent through a port arrives in the page's event.ports", viaSecond?.Data?.GetValue<string>() == "via-second:hi", viaSecond?.Data?.ToJsonString());
+
+    // Page to main: ipcRenderer.postMessage's ports arrive in ipcMain's event.ports.
+    MessagePortMain? given = null;
+    string? givenArg = null;
+    using var gave = new ManualResetEventSlim();
+    Action<IpcMainEvent> onGiven = e => { given = e.Ports.FirstOrDefault(); givenArg = e.Args.FirstOrDefault().GetString(); gave.Set(); };
+    IpcMain.On("given", onGiven);
+    w.WebContents.Send("make");
+    var arrived = await Task.Run(() => gave.Wait(step));
+    IpcMain.RemoveListener("given", onGiven);
+    Check("ipcRenderer.postMessage's ports reach IpcMainEvent.Ports, with the message", arrived && given is not null && givenArg == "from-page", givenArg);
+    // Messages wait until Start.
+    var queued = new List<string?>();
+    given!.Message += (_, e) => queued.Add(e.Data?.GetValue<string>());
+    given.PostMessage("hi");
+    await Task.Delay(500);
+    var beforeStart = queued.Count;
+    given.Start();
+    Check("a page's port answers, and its messages wait until Start", beforeStart == 0 && Eventually(() => queued.Contains("pong:hi"), step), $"{beforeStart} {string.Join(",", queued)}");
+
+    // In the main process: a channel's two ends, and closing one.
+    var local = new MessageChannelMain();
+    local.Port2.Start();
+    var localGot = await Next(local.Port2, () => local.Port1.PostMessage(new System.Text.Json.Nodes.JsonObject { ["n"] = 1 }));
+    var inner = new MessageChannelMain();
+    var carried = await Next(local.Port2, () => local.Port1.PostMessage("carry", [inner.Port2]));
+    var through = carried?.Ports.FirstOrDefault();
+    inner.Port1.Start();
+    var innerGot = through is null ? null : await Next(inner.Port1, () => through.PostMessage("back"));
+    Check("a port sent through a channel here arrives as a new port that still reaches its partner",
+        carried?.Ports.Count == 1 && !ReferenceEquals(through, inner.Port2) && innerGot?.Data?.GetValue<string>() == "back", innerGot?.Data?.ToJsonString());
+    var closed = false;
+    local.Port2.Closed += (_, _) => closed = true;
+    local.Port1.Close();
+    Check("a channel in the main process delivers, and Close raises Closed on the other end",
+        localGot?.Data?["n"]?.GetValue<int>() == 1 && Eventually(() => closed, step), localGot?.Data?.ToJsonString());
+
+    // A frame's PostMessage reaches that frame's preload.
+    var frame = Eventually(() => w.WebContents.MainFrame?.Frames.Count == 1, step) ? w.WebContents.MainFrame!.Frames[0] : null;
+    var frameChannel = new MessageChannelMain();
+    frameChannel.Port1.Start();
+    var frameEcho = frame is null ? null : await Next(frameChannel.Port1, () =>
+    {
+        frame.PostMessage("port", "frame", [frameChannel.Port2]);
+        frameChannel.Port1.PostMessage("to-frame");
+    });
+    Check("WebFrameMain.PostMessage moves a port into that frame", frameEcho?.Data?["msg"]?.GetValue<string>() == "frame" && frameEcho.Data["top"]?.GetValue<bool>() == false, frameEcho?.Data?.ToJsonString());
+    var frameClosed = false;
+    frameChannel.Port1.Closed += (_, _) => frameClosed = true;
+    await w.WebContents.ExecuteJavaScriptAsync("document.querySelector('iframe').srcdoc = '<p>next'; 1");
+    Check("an iframe that loads a new document closes the ports it held", Eventually(() => frameClosed, step));
+
+    // Navigating away closes the ports the page held (Chromium 154 reports no close from the page itself: drift I7).
+    var navigated = false;
+    channel.Port1.Closed += (_, _) => navigated = true;
+    Fires(h => w.WebContents.DidFinishLoad += h, h => w.WebContents.DidFinishLoad -= h, () => w.WebContents.LoadFile(page), step);
+    Check("a page that navigates away closes the ports it held", Eventually(() => navigated, step));
     w.Destroy();
     Directory.Delete(dir, recursive: true);
 }
