@@ -1235,6 +1235,42 @@ async Task WindowPolishAsync(BrowserWindow win)
     clicky.Destroy();
     faded.Destroy();
 
+    // Forward: the page still sees mouse moves while clicks pass through; without it, it sees none.
+    var hover = new BrowserWindow(new BrowserWindowOptions { Title = "Oriel window test: forward", X = 450, Y = 120, Width = 300, Height = 200, BackgroundColor = "#0000FF" });
+    _ = hover.LoadUrl("data:text/html," + Uri.EscapeDataString("<body style='margin:0;height:100vh;background:#0000FF' onmousemove='moves++' onmousedown='downs++'><script>var moves=0,downs=0</script></body>"));
+    await Task.Delay(1500);
+    var hh = hover.GetNativeWindowHandle();
+    var (hx, hy) = Centre(hover);
+    async Task<int> PageCount(string name) => int.TryParse(await Js(hover, name) as string, out var n) ? n : -1;
+    async Task<int> MovesOver()
+    {
+        await Js(hover, "moves=0,downs=0");
+        WindowsShell.MoveMouse(hx, hy);
+        WindowsShell.MoveMouse(hx + 20, hy + 10);
+        await Task.Delay(400);
+        return await PageCount("moves");
+    }
+    hover.SetIgnoreMouseEvents(true, new IgnoreMouseEventsOptions { Forward = true });
+    await Task.Delay(300);
+    var forwarded = await MovesOver();
+    Check("SetIgnoreMouseEvents(true, Forward) still delivers mouse moves to the page", forwarded > 0 && WindowsShell.ClickThrough(hh) && WindowsShell.Forwarding(hh), $"moves={forwarded} forwarding={WindowsShell.Forwarding(hh)}");
+    WindowsShell.Drag(hx, hy, hx, hy);
+    var downs = await PageCount("downs");
+    Check("with Forward a click still passes through to the window below", WindowsShell.RootAt(hx, hy) != hh && downs == 0, $"{WindowsShell.RootAt(hx, hy)} vs {hh} downs={downs}");
+    hover.SetIgnoreMouseEvents(true);
+    await Task.Delay(300);
+    var unforwarded = await MovesOver();
+    Check("SetIgnoreMouseEvents(true) without Forward delivers no mouse moves", unforwarded == 0 && !WindowsShell.Forwarding(hh) && WindowsShell.ClickThrough(hh), $"moves={unforwarded}");
+    hover.SetIgnoreMouseEvents(true, new IgnoreMouseEventsOptions { Forward = true });
+    await Task.Delay(300);
+    // The pass-through clicks activated the window below; bring this one back over it before hit-testing.
+    hover.Focus();
+    await Task.Delay(300);
+    var wasForwarding = WindowsShell.Forwarding(hh);
+    hover.SetIgnoreMouseEvents(false, new IgnoreMouseEventsOptions { Forward = true });
+    Check("SetIgnoreMouseEvents(false, Forward) takes the mouse back and ends forwarding", wasForwarding && Eventually(() => !WindowsShell.Forwarding(hh) && !WindowsShell.ClickThrough(hh) && WindowsShell.RootAt(hx, hy) == hh, step), $"was={wasForwarding} forwarding={WindowsShell.Forwarding(hh)} root={WindowsShell.RootAt(hx, hy)}");
+    hover.Destroy();
+
     // Content protection: capture sees what is behind the window.
     var secret = Solid("Oriel window test: content protection", "#0000FF", 200, 200, 300, 200);
     await Task.Delay(1500);
@@ -1246,7 +1282,7 @@ async Task WindowPolishAsync(BrowserWindow win)
     Check("SetContentProtection(false) shows it again", Eventually(() => !secret.IsContentProtected() && IsBlue(WindowsShell.ScreenPixel(sx, sy)), step), Rgb(WindowsShell.ScreenPixel(sx, sy)));
     secret.Destroy();
 
-    // Shadow: a frameless window darkens the backdrop just below it, until the shadow is taken away.
+    // Shadow: Electron only stores hasShadow on Windows; a frameless window keeps darkening the backdrop just below it.
     var flat = Solid("Oriel window test: shadow", "#FF0000", 220, 160, 300, 200, frame: false);
     await Task.Delay(1500);
     var lh = flat.GetNativeWindowHandle();
@@ -1255,9 +1291,10 @@ async Task WindowPolishAsync(BrowserWindow win)
     var white = WindowsShell.ScreenPixel(WindowsShell.Bounds(lh).X - 60, WindowsShell.Bounds(lh).Y + WindowsShell.Bounds(lh).Height + 8).R;
     var shaded = Below();
     flat.SetHasShadow(false);
-    Check("SetHasShadow(false) removes a frameless window's shadow", shaded.R < white - 20 && Eventually(() => Below().R >= white - 3, step) && !flat.GetHasShadow(), $"white={white} {Rgb(shaded)} -> {Rgb(Below())}");
+    await Task.Delay(800);
+    Check("SetHasShadow(false) keeps a frameless window's shadow, as Electron on Windows, and reads back false", shaded.R < white - 20 && Below().R < white - 20 && !flat.GetHasShadow(), $"white={white} {Rgb(shaded)} -> {Rgb(Below())}");
     flat.SetHasShadow(true);
-    Check("SetHasShadow(true) brings it back", Eventually(() => Below().R < white - 20, step) && flat.GetHasShadow(), $"white={white} {Rgb(Below())}");
+    Check("SetHasShadow(true) reads back true", flat.GetHasShadow() && Below().R < white - 20, $"white={white} {Rgb(Below())}");
     flat.Destroy();
     var framed = Solid("Oriel window test: framed shadow", "#FF0000", 220, 160, 300, 200);
     await Task.Delay(1200);
@@ -1317,6 +1354,10 @@ async Task WindowPolishAsync(BrowserWindow win)
     Check("SetKiosk(false) leaves full screen", Eventually(() => !kiosk.IsFullScreen && !kiosk.IsKiosk(), step), $"{kiosk.IsFullScreen} {kiosk.GetBounds()}");
     kiosk.SetKiosk(true);
     Check("SetKiosk(true) enters it again", Eventually(() => kiosk.IsFullScreen && kiosk.IsKiosk(), step));
+    kiosk.SetFullScreen(false);
+    Check("IsKiosk is IsFullScreen, as Electron answers: SetFullScreen(false) ends it", Eventually(() => !kiosk.IsFullScreen && !kiosk.IsKiosk(), step), $"{kiosk.IsFullScreen} {kiosk.IsKiosk()}");
+    kiosk.SetFullScreen(true);
+    Check("SetFullScreen(true) makes IsKiosk true", Eventually(() => kiosk.IsFullScreen && kiosk.IsKiosk(), step), $"{kiosk.IsFullScreen} {kiosk.IsKiosk()}");
     kiosk.Destroy();
     inactive.Destroy();
     backdrop.Destroy();

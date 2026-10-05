@@ -83,7 +83,8 @@ public sealed record BrowserWindowOptions
     /// Electron's <c>opacity</c>.</summary>
     public double Opacity { get; init; } = 1.0;
 
-    /// <summary>Whether the window has a shadow. Electron's <c>hasShadow</c>.</summary>
+    /// <summary>Whether the window has a shadow. Stored only: on Windows, as in Electron, it changes nothing, and macOS and
+    /// Linux are not done yet. Electron's <c>hasShadow</c>.</summary>
     public bool HasShadow { get; init; } = true;
 
     /// <summary>Opens the window in kiosk mode: full screen. Electron's <c>kiosk</c>.</summary>
@@ -240,7 +241,10 @@ public sealed unsafe class BrowserWindow
     private bool _skipTaskbar;
     private double _opacity;
     private bool _hasShadow;
+    // macOS: Electron's is_kiosk_; elsewhere kiosk is full screen itself.
     private bool _kiosk;
+    // Electron's layered_: once given an opacity, the window stays layered when click-through ends.
+    private bool _layered;
     private Rectangle _normalBounds;
     // Whether the app means the window to be shown; CEF activates windows that are not.
     private bool _meantVisible;
@@ -810,21 +814,24 @@ public sealed unsafe class BrowserWindow
     /// <summary>The window's opacity, as set. Electron's <c>win.getOpacity()</c>.</summary>
     public double GetOpacity() => Query(_ => _opacity, 1.0);
 
-    /// <summary>Gives the window a shadow or takes it away. Electron's <c>win.setHasShadow()</c>.</summary>
-    public void SetHasShadow(bool hasShadow) => Command(w =>
-    {
-        _hasShadow = hasShadow;
-        if (OperatingSystem.IsWindows()) ApplyShadow(w);
-    });
+    /// <summary>Gives the window a shadow or takes it away. Stored only: on Windows, as in Electron, it changes nothing,
+    /// and macOS and Linux are not done yet. Electron's <c>win.setHasShadow()</c>.</summary>
+    public void SetHasShadow(bool hasShadow) => Command(_ => _hasShadow = hasShadow);
 
     /// <summary>Whether the window has a shadow, as set. Electron's <c>win.hasShadow()</c>.</summary>
     public bool GetHasShadow() => Query(_ => _hasShadow, true);
 
-    /// <summary>Lets mouse input pass through the window to whatever is below it, or stops that. Windows only for now.
+    /// <summary>Lets mouse input pass through the window to whatever is below it, or stops that; with
+    /// <see cref="IgnoreMouseEventsOptions.Forward"/> the page still gets mouse moves. Windows only for now.
     /// Electron's <c>win.setIgnoreMouseEvents()</c>.</summary>
     public void SetIgnoreMouseEvents(bool ignore, IgnoreMouseEventsOptions? options = null) => Command(w =>
     {
-        if (OperatingSystem.IsWindows()) WindowsWindowStyle.SetClickThrough(Hwnd(w), ignore, keepLayered: _opacity < 1);
+        if (!OperatingSystem.IsWindows()) return;
+        var hwnd = Hwnd(w);
+        WindowsWindowStyle.SetClickThrough(hwnd, ignore, keepLayered: _layered);
+        // Forwarding only applies while ignoring; taking the mouse back always ends it.
+        if (!WindowsSubclass.ForwardMouseMoves(hwnd, ignore && options?.Forward == true))
+            Console.Error.WriteLine("[Oriel] Mouse moves cannot be forwarded to the page.");
     });
 
     /// <summary>Keeps the window out of screenshots and screen recordings, or lets it back in. Windows only for now.
@@ -846,8 +853,9 @@ public sealed unsafe class BrowserWindow
         SetFullScreen(flag);
     }
 
-    /// <summary>Whether the window is in kiosk mode. Electron's <c>win.isKiosk()</c>.</summary>
-    public bool IsKiosk() => Query(_ => _kiosk, false);
+    /// <summary>Whether the window is in kiosk mode: on Windows and Linux, whether it is full screen, however it got
+    /// there, as Electron answers. Electron's <c>win.isKiosk()</c>.</summary>
+    public bool IsKiosk() => OperatingSystem.IsMacOS() ? Query(_ => _kiosk, false) : IsFullScreen;
 
     /// <summary>The bounds the window has, or returns to, when it is neither maximized, minimized nor full screen.
     /// Electron's <c>win.getNormalBounds()</c>.</summary>
@@ -864,7 +872,6 @@ public sealed unsafe class BrowserWindow
     private void ApplyWindowsStyles(cef_window_t* w)
     {
         if (_opacity < 1) ApplyOpacity(w);
-        if (!_hasShadow) ApplyShadow(w);
         var hwnd = Hwnd(w);
         WindowsSubclass.RouteSizing(hwnd, (wmsz, r) => Cancelled(WillResize, new WillResizeEventArgs(PixelsToDips(r), WindowPolish.EdgeFromWmsz(wmsz))));
         WindowsSubclass.RouteMoving(hwnd, r => Cancelled(WillMove, new WillMoveEventArgs(PixelsToDips(r))));
@@ -883,16 +890,9 @@ public sealed unsafe class BrowserWindow
     [System.Runtime.Versioning.SupportedOSPlatform("windows")]
     private void ApplyOpacity(cef_window_t* w)
     {
+        _layered = true;
         if (!WindowsWindowStyle.SetAlpha(Hwnd(w), WindowPolish.ToAlpha(_opacity)))
             Console.Error.WriteLine("[Oriel] Windows did not take the opacity.");
-    }
-
-    // A framed window keeps DWM's shadow: it cannot go without the frame going too.
-    [System.Runtime.Versioning.SupportedOSPlatform("windows")]
-    private void ApplyShadow(cef_window_t* w)
-    {
-        if (!_options.Frame && !WindowsWindowStyle.SetFramelessShadow(Hwnd(w), _hasShadow))
-            Console.Error.WriteLine("[Oriel] DWM did not take the shadow setting.");
     }
 
     /// <summary>Sets the title bar text. Electron's <c>win.setTitle()</c>.</summary>

@@ -148,6 +148,19 @@ static unsafe class WindowsShell
     /// <summary>Whether the window has <c>WS_EX_TRANSPARENT</c>.</summary>
     internal static bool ClickThrough(nint hwnd) => OperatingSystem.IsWindows() && Oriel.Cef.Platform.WindowsWindowStyle.IsClickThrough(hwnd);
 
+    /// <summary>Whether the window forwards mouse moves to its page, read back from Oriel's hook set.</summary>
+    internal static bool Forwarding(nint hwnd) => OperatingSystem.IsWindows() && Oriel.Cef.Platform.WindowsSubclass.IsForwardingMouseMoves(hwnd);
+
+    /// <summary>Puts the real cursor at a screen point and wiggles it a mickey, so low-level mouse hooks see moves.</summary>
+    internal static void MoveMouse(int x, int y)
+    {
+        _ = SetCursorPos(x, y);
+        mouse_event(0x0001 /* MOVE */, 1, 0, 0, 0);
+        Thread.Sleep(40);
+        mouse_event(0x0001 /* MOVE */, -1, 0, 0, 0);
+        Thread.Sleep(40);
+    }
+
     /// <summary>Whether DWM renders the window's frame.</summary>
     internal static bool NcRendering(nint hwnd) => OperatingSystem.IsWindows() && Oriel.Cef.Platform.WindowsWindowStyle.IsDwmNonClientRendering(hwnd);
 

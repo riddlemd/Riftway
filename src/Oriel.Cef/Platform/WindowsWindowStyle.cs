@@ -81,19 +81,6 @@ public static unsafe class WindowsWindowStyle
         return (r.Left, r.Top, r.Right - r.Left, r.Bottom - r.Top);
     }
 
-    /// <summary>Gives a frameless window DWM's shadow or takes it away. False if DWM refused.</summary>
-    /// <remarks>The shadow, and Windows 11's one-pixel border, need both DWM's non-client rendering and a frame margin
-    /// extended into the client area; any margin brings them back as they were, and Chromium does not restore its own.
-    /// A framed window's shadow cannot go without its frame going too.</remarks>
-    public static bool SetFramelessShadow(nint hwnd, bool shadow)
-    {
-        var policy = shadow ? 0 /* DWMNCRP_USEWINDOWSTYLE */ : 1 /* DWMNCRP_DISABLED */;
-        if (DwmSetWindowAttribute(hwnd, 2 /* DWMWA_NCRENDERING_POLICY */, &policy, sizeof(int)) < 0) return false;
-        // MARGINS is left, right, top, bottom.
-        var margins = new Rect { Bottom = shadow ? 1 : 0 };
-        return DwmExtendFrameIntoClientArea(hwnd, &margins) >= 0;
-    }
-
     /// <summary>Whether DWM renders the window's non-client area (<c>DWMWA_NCRENDERING_ENABLED</c>).</summary>
     public static bool IsDwmNonClientRendering(nint hwnd)
     {
@@ -152,7 +139,5 @@ public static unsafe class WindowsWindowStyle
     [DllImport("user32.dll")] private static extern int GetWindowRect(nint hwnd, Rect* rect);
     [DllImport("user32.dll")] private static extern nint GetAncestor(nint hwnd, uint flags);
     [DllImport("user32.dll")] private static extern int SetWindowPos(nint hwnd, nint after, int x, int y, int cx, int cy, uint flags);
-    [DllImport("dwmapi.dll")] private static extern int DwmExtendFrameIntoClientArea(nint hwnd, Rect* margins);
-    [DllImport("dwmapi.dll")] private static extern int DwmSetWindowAttribute(nint hwnd, uint attribute, void* value, uint size);
     [DllImport("dwmapi.dll")] private static extern int DwmGetWindowAttribute(nint hwnd, uint attribute, void* value, uint size);
 }
