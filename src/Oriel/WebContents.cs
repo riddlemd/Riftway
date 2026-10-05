@@ -147,6 +147,9 @@ public sealed unsafe partial class WebContents
             CefString.Clear(&word);
         }
         CefNative.cef_string_list_free(suggestions);
+        var misspelled = CefString.ReadUserFree(p->get_misspelled_word(p));
+        // macOS checks with the system spell checker, whose guesses Chromium fetches only when it builds its own menu.
+        if (OperatingSystem.IsMacOS() && words.Count == 0 && misspelled.Length > 0) words = [.. Oriel.Cef.Platform.MacSpelling.Guesses(misspelled)];
 
         var args = new ContextMenuParams
         {
@@ -164,7 +167,7 @@ public sealed unsafe partial class WebContents
             TitleText = CefString.ReadUserFree(p->get_title_text(p)),
             IsEditable = p->is_editable(p) != 0,
             SpellcheckEnabled = p->is_spell_check_enabled(p) != 0,
-            MisspelledWord = CefString.ReadUserFree(p->get_misspelled_word(p)),
+            MisspelledWord = misspelled,
             DictionarySuggestions = words,
             EditFlags = new ContextMenuEditFlags(
                 Has(cef_context_menu_edit_state_flags_t.CM_EDITFLAG_CAN_UNDO), Has(cef_context_menu_edit_state_flags_t.CM_EDITFLAG_CAN_REDO),
@@ -493,6 +496,28 @@ public sealed unsafe partial class WebContents
         });
     }
 
+    /// <summary>Replaces the misspelled word at the caret with <paramref name="text"/>. Electron's
+    /// <c>webContents.replaceMisspelling()</c>.</summary>
+    public void ReplaceMisspelling(string text)
+    {
+        ArgumentNullException.ThrowIfNull(text);
+        WithHost(host =>
+        {
+            cef_string_utf16_t native = default;
+            CefString.Set(&native, text);
+            host->replace_misspelling(host, &native);
+            CefString.Clear(&native);
+        });
+    }
+
+    internal void AddWordToDictionary(string word) => WithHost(host =>
+    {
+        cef_string_utf16_t native = default;
+        CefString.Set(&native, word);
+        host->add_word_to_dictionary(host, &native);
+        CefString.Clear(&native);
+    });
+
     /// <summary>Reloads the page. Electron's <c>webContents.reload()</c>.</summary>
     public void Reload() => CefThread.RunOnUi(() =>
     {
@@ -775,6 +800,8 @@ public sealed unsafe partial class WebContents
     }
 
     internal cef_browser_t* Browser => _browser;
+
+    internal bool HasBrowser => _browser is not null;
 
     internal void OnBrowserCreated(cef_browser_t* browser)
     {

@@ -265,7 +265,15 @@ public sealed unsafe partial class Session
     // An empty cache path gives an in-memory profile; a path inside the root cache path gives a profile on disk.
     private static Session Create(string? path)
     {
-        var handler = new RequestContextHandler { Initialized = context => ApplyElectronDefaults((cef_request_context_t*)context) };
+        var initialized = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var handler = new RequestContextHandler
+        {
+            Initialized = context =>
+            {
+                ApplyElectronDefaults((cef_request_context_t*)context);
+                initialized.TrySetResult();
+            },
+        };
         var context = CefThread.InvokeOnUi(() =>
         {
             var settings = new cef_request_context_settings_t { size = (nuint)sizeof(cef_request_context_settings_t) };
@@ -276,7 +284,16 @@ public sealed unsafe partial class Session
             return (nint)created;
         });
         if (context == 0) throw new InvalidOperationException($"CEF could not create a session{(path is null ? "" : $" at {path}")}.");
-        return new Session((cef_request_context_t*)context, path, handler);
+        return new Session((cef_request_context_t*)context, path, handler) { _initialized = initialized.Task };
+    }
+
+    // Preferences read before the profile finishes loading can be wrong. The default session is ready with the app.
+    private Task _initialized = Task.CompletedTask;
+
+    /// <summary>Waits, off the UI thread, until the session's profile has loaded.</summary>
+    private void WaitUntilInitialized()
+    {
+        if (!CefThread.IsOnUiThread) _initialized.Wait(TimeSpan.FromSeconds(10));
     }
 
     private Task Complete(CompletionStart start)

@@ -498,6 +498,74 @@ async Task RunAsync()
         && await Throws(() => Task.FromResult(preloaded.RegisterPreloadScript(new PreloadScriptRegistration("service-worker", PreloadFile("sw"))))) is NotSupportedException);
     Directory.Delete(preloadDir, recursive: true);
 
+    // Spell checker: Chromium's, driven through the session as Electron's.
+    var spelling = Session.FromPartition("persist:spell");
+    // A data: page: an https handler here would also answer Chromium's dictionary download.
+    const string SpellPage = "data:text/html,<!doctype html><textarea id=t spellcheck=true style='font:20px monospace;width:400px;height:60px'></textarea>";
+    Check("the spell checker is on by default, with a language", spelling.IsSpellCheckerEnabled() && (OperatingSystem.IsMacOS() || spelling.GetSpellCheckerLanguages().Count > 0),
+        string.Join(",", spelling.GetSpellCheckerLanguages()));
+    if (!OperatingSystem.IsMacOS())
+    {
+        spelling.SetSpellCheckerLanguages(["fr", "en-US"]);
+        Check("SetSpellCheckerLanguages / GetSpellCheckerLanguages", spelling.GetSpellCheckerLanguages().SequenceEqual(["fr", "en-US"]), string.Join(",", spelling.GetSpellCheckerLanguages()));
+        spelling.SetSpellCheckerLanguages(["en-US"]);
+    }
+    var badLanguage = await Throws(() => { spelling.SetSpellCheckerLanguages(["en-US", "xx"]); return Task.CompletedTask; });
+    Check("an unknown language throws Electron's error", badLanguage is ArgumentException && badLanguage.Message.StartsWith("Invalid language code provided: \"xx\" is not a valid language code"), badLanguage?.Message);
+    var spellWin = new BrowserWindow(new BrowserWindowOptions { Width = 500, Height = 200, WebPreferences = new WebPreferences { Session = spelling } });
+    await spellWin.LoadUrl(SpellPage);
+    // Chromium checks what is typed, once a word ends.
+    async Task TypeMisspelling()
+    {
+        spellWin.Focus();
+        await spellWin.WebContents.ExecuteJavaScriptAsync("t.value = ''; t.focus(); 1", userGesture: true);
+        foreach (var c in "helo world ") spellWin.WebContents.SendInputEvent(new KeyboardInputEvent(KeyboardInputEventType.Char, c.ToString()));
+        await Task.Delay(1500);
+    }
+    async Task<ContextMenuParams?> RightClickFirstWord()
+    {
+        var asked = new TaskCompletionSource<ContextMenuParams>(TaskCreationOptions.RunContinuationsAsynchronously);
+        EventHandler<ContextMenuParams> onMenu = (_, p) => asked.TrySetResult(p);
+        spellWin.WebContents.ContextMenu += onMenu;
+        var x = int.Parse((await spellWin.WebContents.ExecuteJavaScriptAsync("String(Math.round(t.getBoundingClientRect().left + 20))"))!.ToString()!);
+        var y = int.Parse((await spellWin.WebContents.ExecuteJavaScriptAsync("String(Math.round(t.getBoundingClientRect().top + 14))"))!.ToString()!);
+        spellWin.WebContents.SendInputEvent(new MouseInputEvent(MouseInputEventType.MouseDown, x, y) { Button = MouseButton.Right });
+        spellWin.WebContents.SendInputEvent(new MouseInputEvent(MouseInputEventType.MouseUp, x, y) { Button = MouseButton.Right });
+        var menu = await asked.Task.WaitAsync(TimeSpan.FromSeconds(5)).ContinueWith(t => t.IsCompletedSuccessfully ? t.Result : null);
+        spellWin.WebContents.ContextMenu -= onMenu;
+        return menu;
+    }
+    // Linux and Windows download the dictionary first; text typed before it arrives stays unchecked.
+    ContextMenuParams? misspelled = null;
+    for (var i = 0; i < 15 && misspelled?.MisspelledWord is not { Length: > 0 }; i++)
+    {
+        await TypeMisspelling();
+        misspelled = await RightClickFirstWord();
+    }
+    Check("a misspelled word reaches the context menu with suggestions", misspelled is { MisspelledWord: "helo" } && misspelled.DictionarySuggestions.Contains("hello"),
+        $"{misspelled?.MisspelledWord} [{string.Join(",", misspelled?.DictionarySuggestions ?? [])}] menu={misspelled is not null} editable={misspelled?.IsEditable} spellcheck={misspelled?.SpellcheckEnabled} value={await spellWin.WebContents.ExecuteJavaScriptAsync("t.value")}");
+    spellWin.WebContents.ReplaceMisspelling("hello");
+    await Task.Delay(300);
+    var replaced = (await spellWin.WebContents.ExecuteJavaScriptAsync("t.value"))?.ToString();
+    Check("ReplaceMisspelling replaces the word", replaced == "hello world ", replaced);
+    Check("AddWordToSpellCheckerDictionary adds to a persistent session's dictionary", spelling.AddWordToSpellCheckerDictionary("orielword")
+        && (await spelling.ListWordsInSpellCheckerDictionaryAsync()).Contains("orielword"));
+    var memoryPage = new BrowserWindow(new BrowserWindowOptions { Show = false, WebPreferences = new WebPreferences { Session = Session.FromPartition("spell-memory") } });
+    await memoryPage.LoadUrl(SpellPage);
+    Check("an in-memory session has no dictionary to add to, as Electron's", !Session.FromPartition("spell-memory").AddWordToSpellCheckerDictionary("orielword"));
+    memoryPage.Destroy();
+    spelling.SetSpellCheckerEnabled(false);
+    await spellWin.LoadUrl(SpellPage + "<!-- off -->");
+    await TypeMisspelling();
+    var unchecked_ = await RightClickFirstWord();
+    Check("SetSpellCheckerEnabled(false) turns it off", !spelling.IsSpellCheckerEnabled() && unchecked_ is { MisspelledWord: "" }, unchecked_?.MisspelledWord);
+    spelling.SetSpellCheckerEnabled(true);
+    Check("IsSpellCheckerEnabled follows SetSpellCheckerEnabled", spelling.IsSpellCheckerEnabled());
+    spellWin.Destroy();
+    Check("removing a dictionary word and the download URL are not supported (CEF)",
+        await Throws(() => Task.FromResult(spelling.RemoveWordFromSpellCheckerDictionary("orielword"))) is NotSupportedException
+        && await Throws(() => { spelling.SetSpellCheckerDictionaryDownloadUrl("https://x/"); return Task.CompletedTask; }) is NotSupportedException);
+
     // Proxy: requests go to a local listener posing as the proxy.
     var proxied = Session.FromPartition("proxied");
     using var listener = new TcpListener(IPAddress.Loopback, 0);

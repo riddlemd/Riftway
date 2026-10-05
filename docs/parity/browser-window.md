@@ -103,7 +103,7 @@ Counted from the Checklist at the end: `BaseWindow` and `BrowserWindow` are one 
 ## Next, by importance
 
 1. Remaining webPreferences:
-   - Need other modules: `spellcheck` (Session, E10), `offscreen` (offscreen
+   - Need other modules: `spellcheck` (no per-page switch, E22), `offscreen` (offscreen
      rendering), `transparent`. `session`/`partition` landed with the `Session` module (DRIFT E1-E11).
    - Process-wide in CEF (Chromium switches, not per window): `webSecurity`, `allowRunningInsecureContent`,
      `experimentalFeatures`, `enableBlinkFeatures`/`disableBlinkFeatures`, `autoplayPolicy`, `sandbox`. Decide between
@@ -249,7 +249,7 @@ Parameters in brackets are optional in Electron. `webContents` members are in [w
 | `autoplayPolicy` | — | missing | Process-wide in CEF (W13). |
 | `disableHtmlFullscreenWindowResize` | — | missing |  |
 | `accessibleTitle` | — | missing |  |
-| `spellcheck` | — | missing | Needs the Session module. |
+| `spellcheck` | — | missing | No per-page switch in CEF (E22); the session's `SetSpellCheckerEnabled` covers every page. |
 | `enableWebSQL` | — | n/a | Not applicable (listed in "Not applicable"). |
 | `v8CacheOptions` | — | n/a | Node/V8 option. |
 | `enablePreferredSizeMode` | — | missing |  |
