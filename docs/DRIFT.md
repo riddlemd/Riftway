@@ -39,7 +39,7 @@ Entries marked _(branch `x`)_ are on that branch and not yet in `main`.
 | A14 | `app.getPath('assets')` | Missing; the other names follow Chromium's PathService (checked on macOS and Linux, Windows untested) | Todo: CEF's resources directory per OS | Todo |
 | A15 | `app.getPreferredSystemLanguages()`, `getSystemLocale()`, `getLocaleCountryCode()` on Windows | .NET's `CultureInfo` and `RegionInfo` stand in for `GetUserPreferredUILanguages`, ICU's default locale and `GetLocaleInfoEx` | Todo: the Win32 calls are not ported yet | Port them (windows-laptop) |
 | A16 | The Linux locale getters follow what the C library and GLib make of the environment | They parse `LANGUAGE`, `LC_*` and `LANG` directly: a locale that is not installed still counts (Electron's `setlocale` falls back to C, so `getLocaleCountryCode()` is empty), and GLib's `locale.alias` names are not expanded | Todo | Query `setlocale(LC_TIME, NULL)` in-process; resolve aliases as GLib does |
-| A17 | `app.setBadgeCount()` on Linux (Unity launcher count) and Windows (taskbar overlay badge) | Returns false and shows nothing off macOS | Todo: Linux needs the D-Bus `com.canonical.Unity.LauncherEntry` signal; Windows needs a drawn overlay icon per window | Port both |
+| A17 | `app.setBadgeCount()` on Linux (Unity launcher count); on Windows the badge text is rasterized by Skia | Linux: returns false and shows nothing. Windows: the overlay badge is ported, but its text is rasterized by GDI (grayscale anti-aliasing, pixel ink bounds) rather than Skia, so glyph edges, the fitted font size and centring can differ by a pixel | Todo: Linux needs the D-Bus `com.canonical.Unity.LauncherEntry` signal; Windows: Skia is not available in-process | Port the Linux signal |
 
 ## BrowserWindow
 

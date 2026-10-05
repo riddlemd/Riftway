@@ -1045,7 +1045,7 @@ public sealed unsafe partial class BrowserWindow
         {
             if (!OperatingSystem.IsWindows()) return;
             var hwnd = Hwnd(w);
-            var done = overlay is null ? WindowsTaskbar.ClearOverlayIcon(hwnd) : SetOverlayIconOn(hwnd, overlay, description);
+            var done = overlay is null ? WindowsTaskbar.ClearOverlayIcon(hwnd, description) : SetOverlayIconOn(hwnd, overlay, description);
             if (!done) Console.Error.WriteLine("[Oriel] The taskbar did not take the overlay icon.");
         });
     }

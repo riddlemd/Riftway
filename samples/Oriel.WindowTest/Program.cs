@@ -253,6 +253,7 @@ async Task RunAsync(BrowserWindow win, BrowserWindow simple)
     await NavigationAsync();
     await FramesAsync();
     await TaskbarAsync(win);
+    await BadgeAsync(win);
     await WindowsApisAsync();
     await NativeImageAsync();
     await WebContentsLifecycleAsync(win);
@@ -2090,15 +2091,12 @@ async Task TaskbarAsync(BrowserWindow win)
     later.Destroy();
 
     // ITaskbarList3 is write-only, and the shell answers S_OK to progress calls even for a wrong window, so
-    // progress has no check here. The overlay can at least fail to build its icon; Oriel logs that to stderr.
-    var refusals = new StringWriter();
-    var stderr = Console.Error;
-    Console.SetError(refusals);
+    // progress has no check here. The overlay's description comes back as the button's UI Automation help text.
+    string? OverlayHelp() => WindowsShell.TaskbarButton(app + " - ")?.Help;
     tb.SetOverlayIcon(NativeImage.CreateFromPath(OverlayPng()), "Oriel overlay test");
+    var overlaid = Eventually(() => OverlayHelp() == "Oriel overlay test", step);
     tb.SetOverlayIcon(null, "");
-    await Task.Delay(500);
-    Console.SetError(stderr);
-    Check("the shell takes the overlay icon (weak: no read-back)", refusals.ToString().Length == 0, refusals.ToString().Trim());
+    Check("SetOverlayIcon shows its description on the taskbar button; null removes it (UI Automation help text)", overlaid && Eventually(() => OverlayHelp() == "", step), $"{overlaid} [{OverlayHelp()}]");
 
     // The shell hook's HSHELL_FLASH is the only read-back of a flash. The first comes about 0.5 s after the call;
     // a later one can come from the shell itself, so only an early one counts.
@@ -2114,6 +2112,89 @@ async Task TaskbarAsync(BrowserWindow win)
     Check("FlashFrame(false) stops it", WindowsShell.Count(WindowsShell.FlashCode, hwnd) == flashes, $"{flashes} -> {WindowsShell.Count(WindowsShell.FlashCode, hwnd)}");
     tb.Destroy();
     await Task.Delay(300);
+}
+
+// app.setBadgeCount on Windows: the shell exposes the overlay's description as the taskbar button's UI Automation
+// help text, and the badge itself shows up as screen pixels over the button.
+async Task BadgeAsync(BrowserWindow win)
+{
+    if (!OperatingSystem.IsWindows()) return;
+    var prefix = System.Diagnostics.Process.GetCurrentProcess().ProcessName + " - ";
+    string? Help() => WindowsShell.TaskbarButton(prefix)?.Help;
+    win.Show();
+    await Task.Delay(1000);
+    if (WindowsShell.TaskbarButton(prefix) is not { } button)
+    {
+        Check("the taskbar button is found for the badge checks", false, prefix);
+        return;
+    }
+    var before = WindowsShell.ScreenPixels(button.Bounds);
+    (int Changed, int Dark, int Bright) Diff((byte R, byte G, byte B)[] now)
+    {
+        int changed = 0, dark = 0, bright = 0;
+        for (var i = 0; i < Math.Min(now.Length, before.Length); i++)
+        {
+            var (a, b) = (before[i], now[i]);
+            if (Math.Max(Math.Abs(a.R - b.R), Math.Max(Math.Abs(a.G - b.G), Math.Abs(a.B - b.B))) <= 60) continue;
+            changed++;
+            if (Math.Max(b.R, Math.Max(b.G, b.B)) < 90) dark++;
+            if (Math.Min(b.R, Math.Min(b.G, b.B)) > 200) bright++;
+        }
+        return (changed, dark, bright);
+    }
+
+    var set = app.SetBadgeCount(5);
+    Check("SetBadgeCount(5) returns true and GetBadgeCount reads 5", set && app.GetBadgeCount() == 5, $"{set} {app.GetBadgeCount()}");
+    Check("SetBadgeCount gives the taskbar button Chromium's description (UI Automation help text)", Eventually(() => Help() == "5 Unread Notifications", step), Help());
+    await Task.Delay(500);
+    var drawn = Diff(WindowsShell.ScreenPixels(button.Bounds));
+    Check("the badge is drawn over the taskbar button: dark circle, white text (screen pixels)", drawn is { Dark: >= 20, Bright: >= 2 }, $"{drawn} {button.Bounds}");
+    set = app.SetBadgeCount(150);
+    Check("past 99 the description says more than 99 and GetBadgeCount keeps the count", set && Eventually(() => Help() == "More than 99 unread notifications", step) && app.GetBadgeCount() == 150, $"{Help()} {app.GetBadgeCount()}");
+    set = app.SetBadgeCount();
+    Check("SetBadgeCount() shows the unspecified badge and GetBadgeCount reads 0", set && Eventually(() => Help() == "Unread Notifications", step) && app.GetBadgeCount() == 0, $"{Help()} {app.GetBadgeCount()}");
+    app.SetBadgeCount(7);
+    set = app.SetBadgeCount(0);
+    // Electron passes the description with the null icon, and the shell keeps it as the help text.
+    var cleared = Eventually(() => Help() == "0 Unread Notifications", step);
+    await Task.Delay(500);
+    var after = Diff(WindowsShell.ScreenPixels(button.Bounds));
+    Check("SetBadgeCount(0) returns true and removes the overlay's pixels, leaving Electron's '0 Unread Notifications'", set && cleared && app.GetBadgeCount() == 0 && after.Changed <= 4, $"{set} [{Help()}] {app.GetBadgeCount()} {after}");
+
+    // Electron badges the windows open at the call and no later ones; the button shows the overlay of any window that has one.
+    var later = new BrowserWindow(new BrowserWindowOptions { Title = "Oriel window test: badge, opened later", Width = 300, Height = 200 });
+    await Task.Delay(1500);
+    bool KeptWithout(BrowserWindow dropped)
+    {
+        app.SetBadgeCount(4);
+        if (!Eventually(() => Help() == "4 Unread Notifications", step)) return false;
+        dropped.SetOverlayIcon(null, "");
+        return Stays(() => Help() == "4 Unread Notifications");
+    }
+    var keptWithoutFirst = KeptWithout(win);
+    var keptWithoutSecond = KeptWithout(later);
+    Check("SetBadgeCount badges every open window: the button keeps it when either window drops its overlay", keptWithoutFirst && keptWithoutSecond, $"{keptWithoutFirst} {keptWithoutSecond} [{Help()}]");
+    app.SetBadgeCount(3);
+    var newest = new BrowserWindow(new BrowserWindowOptions { Title = "Oriel window test: badge, opened after the call", Width = 300, Height = 200 });
+    await Task.Delay(1500);
+    var shown = Eventually(() => Help() == "3 Unread Notifications", step);
+    win.SetOverlayIcon(null, "");
+    later.SetOverlayIcon(null, "");
+    Check("a window opened after SetBadgeCount gets no badge", shown && Eventually(() => Help() == "", step), Help());
+    app.SetBadgeCount(0);
+    newest.Destroy();
+    later.Destroy();
+    await Task.Delay(300);
+
+    bool Stays(Func<bool> condition)
+    {
+        for (var i = 0; i < 10; i++)
+        {
+            if (!condition()) return false;
+            Thread.Sleep(150);
+        }
+        return true;
+    }
 }
 
 async Task WindowsApisAsync()

@@ -171,13 +171,14 @@ public sealed partial class OrielApp
         BrowserWindow.GetAllWindows().FirstOrDefault(w => w.IsVisible)?.Focus();
     }
 
-    /// <summary>Shows <paramref name="count"/> on the app's badge: the Dock tile on macOS, "99+" past 99 and a dot when
-    /// null; 0 removes it. Returns whether it is shown, false where the OS has no badge. Electron's
-    /// <c>app.setBadgeCount()</c>.</summary>
+    /// <summary>Shows <paramref name="count"/> on the app's badge: the Dock tile on macOS, an overlay drawn on the taskbar
+    /// button of every open window on Windows; "99+" past 99 and a dot when null; 0 removes it. Returns whether it is
+    /// shown: true on macOS and Windows, false on Linux, which has no badge yet. Electron's <c>app.setBadgeCount()</c>.</summary>
     public bool SetBadgeCount(int? count = null)
     {
-        if (!OperatingSystem.IsMacOS()) return false;
-        Dock.SetBadge(count == 0 ? "" : BadgeText(count));
+        if (OperatingSystem.IsWindows()) SetWindowsBadge(count);
+        else if (OperatingSystem.IsMacOS()) Dock.SetBadge(count == 0 ? "" : BadgeText(count));
+        else return false;
         _badgeCount = count ?? 0;
         return true;
     }
@@ -190,6 +191,6 @@ public sealed partial class OrielApp
     {
         null => "\u2022",
         > 99 => "99+",
-        _ => count.Value.ToString(System.Globalization.CultureInfo.InvariantCulture),
+        _ => FormatBadgeNumber(count.Value),
     };
 }
