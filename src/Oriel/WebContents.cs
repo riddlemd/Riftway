@@ -17,7 +17,9 @@ public sealed unsafe partial class WebContents
     private static readonly string s_preloadRuntime = ReadResource("Oriel.Ipc.preload.js");
     private static readonly string s_mainWorldStub = ReadResource("Oriel.Ipc.main-world.js");
 
-    private readonly string _isolatedScript;
+    private readonly string? _appPreload;
+    // DevTools' id for the registered isolated-world script, so a session preload change can replace it.
+    private string? _isolatedScriptId;
     private readonly DevToolsChannel _devTools = new();
     private readonly List<string> _pendingDeliveries = [];
     private readonly CancellationTokenSource _destroyed = new();
@@ -55,10 +57,7 @@ public sealed unsafe partial class WebContents
         if (!preferences.DevTools)
             Command = new CommandHandler(["IDC_DEV_TOOLS", "IDC_DEV_TOOLS_CONSOLE", "IDC_DEV_TOOLS_DEVICES", "IDC_DEV_TOOLS_INSPECT",
                 "IDC_DEV_TOOLS_TOGGLE", "IDC_CONTENT_CONTEXT_INSPECTELEMENT", "IDC_CONTENT_CONTEXT_INSPECTBACKGROUNDPAGE"]);
-        // The app's preload gets its own scope, after Oriel's runtime has defined `oriel`.
-        _isolatedScript = appPreload is null
-            ? s_preloadRuntime
-            : $"{s_preloadRuntime}\n;(() => {{\n{appPreload}\n}})();\n";
+        _appPreload = appPreload;
         _devTools.EventReceived += OnDevToolsEvent;
 
         Display = new DisplayHandler { TitleChanged = OnTitleChanged };
@@ -664,6 +663,38 @@ public sealed unsafe partial class WebContents
     private string? _acceptLanguages;
 
     /// <summary>UI thread: the page's session changed its user agent; the page's own override still wins.</summary>
+    // Oriel's runtime defines `oriel` first; then the session's preloads and the app's, each in its own scope, as Electron runs them.
+    private string IsolatedScript()
+    {
+        var script = new System.Text.StringBuilder(s_preloadRuntime);
+        foreach (var preload in Session.GetPreloadScripts())
+        {
+            string? source;
+            try { source = File.ReadAllText(preload.FilePath); }
+            catch (IOException) { source = null; }
+            catch (UnauthorizedAccessException) { source = null; }
+            script.Append(source is null
+                ? $"\n;console.error({JsonValue.Create("Unable to load preload script: " + preload.FilePath).ToJsonString()});\n"
+                : $"\n;(() => {{\n{source}\n}})();\n");
+        }
+        if (_appPreload is not null) script.Append($"\n;(() => {{\n{_appPreload}\n}})();\n");
+        return script.ToString();
+    }
+
+    private void AddIsolatedScript() => _devTools.Send("Page.addScriptToEvaluateOnNewDocument", w =>
+    {
+        w.WriteString("source", IsolatedScript());
+        w.WriteString("worldName", IsolatedWorld);
+    }, onResult: (result, _) => _isolatedScriptId = result.TryGetProperty("identifier", out var id) ? id.GetString() : null);
+
+    /// <summary>UI thread: the session's preloads changed; the page's next load runs the new set.</summary>
+    internal void OnSessionPreloadsChanged()
+    {
+        if (_browser is null) return;
+        if (_isolatedScriptId is { } previous) _devTools.Send("Page.removeScriptToEvaluateOnNewDocument", w => w.WriteString("identifier", previous));
+        AddIsolatedScript();
+    }
+
     internal void OnSessionUserAgent(string userAgent, string? acceptLanguages)
     {
         _defaultUserAgent = userAgent;
@@ -784,11 +815,7 @@ public sealed unsafe partial class WebContents
         });
         // Main world first: its listeners must exist when the isolated preload exposes APIs.
         _devTools.Send("Page.addScriptToEvaluateOnNewDocument", w => w.WriteString("source", s_mainWorldStub));
-        _devTools.Send("Page.addScriptToEvaluateOnNewDocument", w =>
-        {
-            w.WriteString("source", _isolatedScript);
-            w.WriteString("worldName", IsolatedWorld);
-        });
+        AddIsolatedScript();
         _devTools.Send("Page.getFrameTree", onResult: (result, _) =>
         {
             var frame = result.GetProperty("frameTree").GetProperty("frame");

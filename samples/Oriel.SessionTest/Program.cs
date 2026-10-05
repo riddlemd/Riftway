@@ -453,6 +453,51 @@ async Task RunAsync()
     }) is ArgumentException);
     requestWin.Destroy();
 
+    // Session preload scripts: run in every page of the session, in order, before the page's own preload, as Electron's.
+    var preloaded = Session.FromPartition("preloads");
+    preloaded.Protocol.Handle("https", _ => ProtocolResponse.Text(Page, "text/html"));
+    var preloadDir = Directory.CreateTempSubdirectory("oriel-preloads-").FullName;
+    string PreloadFile(string name)
+    {
+        var path = Path.Combine(preloadDir, name + ".js");
+        File.WriteAllText(path, $"(globalThis.order ??= []).push('{name}');" +
+            "document.addEventListener('DOMContentLoaded', () => document.body.dataset.order = globalThis.order.join(','));");
+        return path;
+    }
+    var s1 = preloaded.RegisterPreloadScript(new PreloadScriptRegistration("frame", PreloadFile("s1")) { Id = "first" });
+    var s2 = preloaded.RegisterPreloadScript(new PreloadScriptRegistration("frame", PreloadFile("s2")));
+    Check("RegisterPreloadScript keeps a given id and makes one otherwise; GetPreloadScripts lists them in order",
+        s1 == "first" && Guid.TryParse(s2, out _) && preloaded.GetPreloadScripts().Select(p => (p.Id, p.Type, Path.GetFileName(p.FilePath))).SequenceEqual([("first", "frame", "s1.js"), (s2, "frame", "s2.js")]));
+    var preloadWin = new BrowserWindow(new BrowserWindowOptions { Show = false, WebPreferences = new WebPreferences { Session = preloaded, Preload = PreloadFile("app") } });
+    async Task<string?> Order(string path)
+    {
+        await preloadWin.LoadUrl(Site + path);
+        return (await preloadWin.WebContents.ExecuteJavaScriptAsync("document.body.dataset.order ?? 'none'"))?.ToString();
+    }
+    var first = await Order("one");
+    Check("session preloads run in order, before the page's own", first == "s1,s2,app", first);
+    preloaded.RegisterPreloadScript(new PreloadScriptRegistration("frame", PreloadFile("s3")));
+    var added = await Order("two");
+    Check("a preload registered later runs from an open page's next load", added == "s1,s2,s3,app", added);
+    preloaded.UnregisterPreloadScript("first");
+    var removed = await Order("three");
+    Check("UnregisterPreloadScript stops it from the next load", removed == "s2,s3,app" && preloaded.GetPreloadScripts().Count == 2, removed);
+    preloaded.RegisterPreloadScript(new PreloadScriptRegistration("frame", Path.Combine(preloadDir, "missing.js")));
+    var missing = await Order("four");
+    Check("a missing preload file leaves the others running", missing == "s2,s3,app", missing);
+    preloadWin.Destroy();
+    var elsewhere = new BrowserWindow(new BrowserWindowOptions { Show = false, WebPreferences = new WebPreferences { Session = Session.FromPartition("preloads-otherOrder") } });
+    Session.FromPartition("preloads-otherOrder").Protocol.Handle("https", _ => ProtocolResponse.Text(Page, "text/html"));
+    await elsewhere.LoadUrl(Site);
+    var otherOrder = (await elsewhere.WebContents.ExecuteJavaScriptAsync("document.body.dataset.order ?? 'none'"))?.ToString();
+    Check("another session's pages run none of them", otherOrder == "none", otherOrder);
+    elsewhere.Destroy();
+    Check("RegisterPreloadScript refuses a relative path, a taken id and a service worker script, as Electron's",
+        await Throws(() => Task.FromResult(preloaded.RegisterPreloadScript(new PreloadScriptRegistration("frame", "relative.js")))) is ArgumentException
+        && await Throws(() => Task.FromResult(preloaded.RegisterPreloadScript(new PreloadScriptRegistration("frame", PreloadFile("again")) { Id = s2 }))) is ArgumentException
+        && await Throws(() => Task.FromResult(preloaded.RegisterPreloadScript(new PreloadScriptRegistration("service-worker", PreloadFile("sw"))))) is NotSupportedException);
+    Directory.Delete(preloadDir, recursive: true);
+
     // Proxy: requests go to a local listener posing as the proxy.
     var proxied = Session.FromPartition("proxied");
     using var listener = new TcpListener(IPAddress.Loopback, 0);
