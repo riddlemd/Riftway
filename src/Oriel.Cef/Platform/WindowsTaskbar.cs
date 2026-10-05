@@ -47,6 +47,9 @@ public static unsafe class WindowsTaskbar
     private static void* s_taskbar;
     private static bool s_unavailable;
 
+    /// <summary>Whether the shell's taskbar list could be created; Electron's <c>InitializeTaskbar</c>.</summary>
+    public static bool IsAvailable => Taskbar() is not null;
+
     /// <summary>Sets the button's progress: <paramref name="percent"/> of 100, or none for states without a value.
     /// False if the shell refused.</summary>
     public static bool SetProgress(nint hwnd, TaskbarProgressState state, int? percent)
@@ -85,7 +88,7 @@ public static unsafe class WindowsTaskbar
     }
 
     /// <summary>Adds <paramref name="buttons"/> to the window's thumbnail toolbar (<paramref name="add"/>, once per
-    /// window) or updates them. False if the shell refused.</summary>
+    /// window) or updates them; each button's mask says which of its fields the shell takes. False if the shell refused.</summary>
     /// <remarks>The shell keeps using the icons, so destroy them only after they are replaced.</remarks>
     public static bool SetThumbButtons(nint hwnd, ReadOnlySpan<ThumbButton> buttons, bool add)
     {
@@ -95,7 +98,7 @@ public static unsafe class WindowsTaskbar
         for (var i = 0; i < buttons.Length; i++)
         {
             var b = buttons[i];
-            native[i] = new ThumbButtonNative { Mask = ThbIcon | ThbTooltip | ThbFlags, Id = b.Id, Icon = b.Icon, Flags = b.Flags };
+            native[i] = new ThumbButtonNative { Mask = b.Mask, Id = b.Id, Icon = b.Icon, Flags = b.Flags };
             var tip = (b.Tooltip ?? "").AsSpan();
             tip[..Math.Min(tip.Length, 259)].CopyTo(new Span<char>(native[i].Tip, 260));
         }
@@ -247,10 +250,6 @@ public static unsafe class WindowsTaskbar
         public uint Count;
         public uint Timeout;
     }
-
-    private const uint ThbIcon = 2;
-    private const uint ThbTooltip = 4;
-    private const uint ThbFlags = 8;
 
     [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)]
     private struct ThumbButtonNative

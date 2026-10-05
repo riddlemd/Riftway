@@ -5,8 +5,8 @@ using System.Runtime.Versioning;
 namespace Oriel.Cef.Platform;
 
 /// <summary>A thumbnail toolbar button for <see cref="WindowsTaskbar.SetThumbButtons"/>; <paramref name="Flags"/> are
-/// Win32's <c>THBF_</c> flags.</summary>
-public readonly record struct ThumbButton(uint Id, nint Icon, string? Tooltip, uint Flags);
+/// Win32's <c>THBF_</c> flags and <paramref name="Mask"/> its <c>THB_</c> flags, which say which fields the shell takes.</summary>
+public readonly record struct ThumbButton(uint Id, nint Icon, string? Tooltip, uint Flags, uint Mask);
 
 /// <summary>What the pointer did on a drawn maximize button that answers <c>HTMAXBUTTON</c>.</summary>
 public enum MaximizeButtonEvent
@@ -24,8 +24,8 @@ public enum MaximizeButtonEvent
     Click,
 }
 
-/// <summary>Routes a window's messages that CEF does not surface to callbacks: thumbnail toolbar clicks
-/// (<c>WM_COMMAND</c> with <c>THBN_CLICKED</c>) and the user's move and resize drags (<c>WM_MOVING</c>, <c>WM_SIZING</c>);
+/// <summary>Routes a window's messages that CEF does not surface to callbacks: every message to an observer, thumbnail
+/// toolbar clicks (<c>WM_COMMAND</c> with <c>THBN_CLICKED</c>), <c>TaskbarCreated</c>, and the user's move and resize drags (<c>WM_MOVING</c>, <c>WM_SIZING</c>);
 /// and forwards mouse moves to a click-through window's page.</summary>
 /// <remarks>UI thread only: a subclass belongs to the thread that owns the window.</remarks>
 [SupportedOSPlatform("windows")]
@@ -43,13 +43,16 @@ public static unsafe class WindowsSubclass
     // Top-level windows forwarding mouse moves, to their page window; Electron's forwarding_windows_.
     private static readonly ConcurrentDictionary<nint, nint> s_forwarding = new();
     private static nint s_mouseHook;
+    private static uint s_taskbarCreated;
 
     private sealed class Hooks
     {
         public bool NoActivate;
         public bool SwallowMouseLeave;
         public Func<bool>? MeantHidden;
-        public Action<int>? ThumbClick;
+        public Action<uint, nint, nint>? Message;
+        public Func<int, bool>? ThumbClick;
+        public Action? TaskbarCreated;
         public Func<int, (int Left, int Top, int Right, int Bottom), bool>? Sizing;
         public Func<(int Left, int Top, int Right, int Bottom), bool>? Moving;
         public Func<int, int, bool>? OverMaximize;
@@ -58,10 +61,27 @@ public static unsafe class WindowsSubclass
         public bool TrackingLeave;
     }
 
+    /// <summary>Calls <paramref name="onMessage"/> with every message <paramref name="hwnd"/> receives, before anything
+    /// else handles it; the message then goes on as usual. False if the window could not be subclassed.</summary>
+    public static bool RouteMessages(nint hwnd, Action<uint, nint, nint> onMessage)
+        => Hook(hwnd) is { } hooks && (hooks.Message = onMessage) is not null;
+
     /// <summary>Calls <paramref name="onClick"/> with the button id whenever a thumbnail button of
-    /// <paramref name="hwnd"/> is clicked. False if the window could not be subclassed.</summary>
-    public static bool RouteThumbButtonClicks(nint hwnd, Action<int> onClick)
+    /// <paramref name="hwnd"/> is clicked; returning true marks the click handled, false passes it on.
+    /// False if the window could not be subclassed.</summary>
+    public static bool RouteThumbButtonClicks(nint hwnd, Func<int, bool> onClick)
         => Hook(hwnd) is { } hooks && (hooks.ThumbClick = onClick) is not null;
+
+    /// <summary>Calls <paramref name="onCreated"/> when Explorer broadcasts <c>TaskbarCreated</c> (the taskbar came
+    /// back, losing its thumbnail toolbars), and marks the message handled. False if the window could not be subclassed.</summary>
+    public static bool RouteTaskbarCreated(nint hwnd, Action onCreated)
+    {
+        if (Hook(hwnd) is not { } hooks) return false;
+        if (s_taskbarCreated == 0)
+            fixed (char* name = "TaskbarCreated") s_taskbarCreated = RegisterWindowMessageW(name);
+        hooks.TaskbarCreated = onCreated;
+        return true;
+    }
 
     /// <summary>Calls <paramref name="onSizing"/> with the <c>WMSZ_</c> edge and the proposed screen rectangle while the
     /// user drags a window edge; returning true keeps the window's current size. False if the window could not be subclassed.</summary>
@@ -196,6 +216,17 @@ public static unsafe class WindowsSubclass
             // An exception must not cross into the window procedure.
             try
             {
+                // Electron's PreHandleMSG: observers see every message first and it goes on whatever they do.
+                if (hooks.Message is { } onMessage)
+                {
+                    try { onMessage(message, wParam, lParam); }
+                    catch (Exception e) { Console.Error.WriteLine($"[Oriel] A window message hook threw: {e}"); }
+                }
+                if (message == s_taskbarCreated && s_taskbarCreated != 0 && hooks.TaskbarCreated is { } onTaskbarCreated)
+                {
+                    onTaskbarCreated();
+                    return 0;
+                }
                 // WM_ACTIVATE names the window losing activation; it gets it back once the activation has settled.
                 if (message == WmActivate && (wParam & 0xFFFF) != 0 && lParam != 0 && hooks.MeantHidden is { } meantHidden && meantHidden())
                 {
@@ -238,11 +269,10 @@ public static unsafe class WindowsSubclass
                 if (message == WmMouseLeave && hooks.SwallowMouseLeave) return 0;
                 if (message == WmWindowPosChanging && hooks.NoActivate)
                     ((WindowPosNative*)lParam)->Flags |= SwpNoActivate;
-                if (message == WmCommand && ((wParam >> 16) & 0xFFFF) == ThbnClicked && hooks.ThumbClick is { } onClick)
-                {
-                    onClick((int)(wParam & 0xFFFF));
+                // Electron's HandleThumbarButtonEvent: an id it does not know goes on to Chromium.
+                if (message == WmCommand && ((wParam >> 16) & 0xFFFF) == ThbnClicked && hooks.ThumbClick is { } onClick
+                    && onClick((int)(wParam & 0xFFFF)))
                     return 0;
-                }
                 // Electron's rule: a cancelled drag puts the current window rectangle back and reports the message handled.
                 if (message == WmSizing && hooks.Sizing is { } onSizing && onSizing((int)wParam, Read(lParam)))
                 {
@@ -340,6 +370,7 @@ public static unsafe class WindowsSubclass
     [DllImport("user32.dll")] private static extern nint CallNextHookEx(nint hook, int code, nint wParam, nint lParam);
     [DllImport("user32.dll")] private static extern int TrackMouseEvent(TrackMouseEventNative* track);
     [DllImport("user32.dll")] private static extern int SetForegroundWindow(nint hwnd);
+    [DllImport("user32.dll")] private static extern uint RegisterWindowMessageW(char* name);
     [DllImport("comctl32.dll")] private static extern int SetWindowSubclass(nint hwnd, delegate* unmanaged<nint, uint, nint, nint, nuint, nuint, nint> proc, nuint id, nuint data);
     [DllImport("comctl32.dll")] private static extern int RemoveWindowSubclass(nint hwnd, delegate* unmanaged<nint, uint, nint, nint, nuint, nuint, nint> proc, nuint id);
     [DllImport("comctl32.dll")] private static extern nint DefSubclassProc(nint hwnd, uint message, nint wParam, nint lParam);

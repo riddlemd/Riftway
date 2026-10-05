@@ -26,6 +26,21 @@ internal static partial class CssColor
         return false;
     }
 
+    /// <summary>Electron's <c>ParseCSSColor</c>: as <see cref="TryParse"/>, except that <c>#ARGB</c> and
+    /// <c>#AARRGGBB</c> put the alpha first, Electron's historical hex order.</summary>
+    internal static bool TryParseElectron(string? color, out uint argb)
+    {
+        // IsHexFormatWithAlpha: five or nine characters, all hex digits after the '#'.
+        if (color is { Length: 5 or 9 } && color[0] == '#' && !color.AsSpan(1).ContainsAnyExcept(HexDigits))
+        {
+            var alpha = color.Length == 5 ? 1 : 2;
+            color = "#" + color[(1 + alpha)..] + color.Substring(1, alpha);
+        }
+        return TryParse(color, out argb);
+    }
+
+    private static readonly System.Buffers.SearchValues<char> HexDigits = System.Buffers.SearchValues.Create("0123456789ABCDEFabcdef");
+
     private static bool TryParseHex(string color, out uint argb)
     {
         argb = 0;

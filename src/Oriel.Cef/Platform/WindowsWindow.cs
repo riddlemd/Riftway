@@ -52,24 +52,31 @@ public static unsafe class WindowsWindow
 
     private const ushort VtLpwstr = 31;
     private const uint SystemBackdropType = 38; // DWMWA_SYSTEMBACKDROP_TYPE
+    private const uint WindowCornerPreference = 33; // DWMWA_WINDOW_CORNER_PREFERENCE
+    private const uint BorderColor = 34; // DWMWA_BORDER_COLOR
+    private const uint CaptionColor = 35; // DWMWA_CAPTION_COLOR
 
-    /// <summary>Writes <paramref name="values"/> to the window's property store and commits them.
-    /// False if the store could not be opened or refused a value.</summary>
+    /// <summary>Writes each of <paramref name="values"/> to the window's property store and commits it, going on past a
+    /// value the store refuses, as Chromium's <c>SetAppDetailsForWindow</c>. False if the store could not be opened or
+    /// refused any value.</summary>
     public static bool SetAppUserModel(nint hwnd, IEnumerable<(AppUserModelProperty Property, string Value)> values)
     {
         var store = OpenStore(hwnd);
         if (store is null) return false;
         try
         {
+            var all = true;
             foreach (var (property, value) in values)
             {
                 var key = Key(property);
                 var variant = new PropVariant { Vt = VtLpwstr, Pointer = (char*)Marshal.StringToCoTaskMemUni(value) };
                 var hr = ((delegate* unmanaged<void*, PropertyKey*, PropVariant*, int>)Slot(store, SetValueSlot))(store, &key, &variant);
                 PropVariantClear(&variant);
-                if (hr < 0) return false;
+                // base::win::SetPropVariantValueForPropertyStore commits only after S_OK.
+                if (hr == 0) hr = ((delegate* unmanaged<void*, int>)Slot(store, CommitSlot))(store);
+                all &= hr >= 0;
             }
-            return ((delegate* unmanaged<void*, int>)Slot(store, CommitSlot))(store) >= 0;
+            return all;
         }
         finally { Release(store); }
     }
@@ -103,6 +110,82 @@ public static unsafe class WindowsWindow
     {
         int value;
         return DwmGetWindowAttribute(hwnd, SystemBackdropType, &value, sizeof(int)) >= 0 ? (WindowsBackdrop)value : null;
+    }
+
+    /// <summary>Whether this is Windows 11 (build 22000 or later), Chromium's <c>base::win::Version::WIN11</c>.</summary>
+    public static bool IsWindows11 => Environment.OSVersion.Version.Build >= 22000;
+
+    /// <summary>Sets <c>DWMWA_WINDOW_CORNER_PREFERENCE</c>: <c>DWMWCP_ROUND</c> or <c>DWMWCP_DONOTROUND</c>.
+    /// False if DWM refused, which it does before Windows 11.</summary>
+    public static bool SetRoundedCorners(nint hwnd, bool rounded)
+    {
+        var value = rounded ? 2 /* DWMWCP_ROUND */ : 1 /* DWMWCP_DONOTROUND */;
+        return DwmSetWindowAttribute(hwnd, WindowCornerPreference, &value, sizeof(int)) >= 0;
+    }
+
+    /// <summary>Sets the window's border colour (<c>DWMWA_BORDER_COLOR</c>) and, with <paramref name="caption"/>, its
+    /// caption colour (<c>DWMWA_CAPTION_COLOR</c>) to the COLORREF <paramref name="colorRef"/>. False if DWM refused either.</summary>
+    public static bool SetBorderAndCaptionColor(nint hwnd, uint colorRef, bool caption)
+    {
+        var ok = !caption || DwmSetWindowAttribute(hwnd, CaptionColor, &colorRef, sizeof(uint)) >= 0;
+        return DwmSetWindowAttribute(hwnd, BorderColor, &colorRef, sizeof(uint)) >= 0 && ok;
+    }
+
+    /// <summary>A 32-bit DWM window attribute, or null if DWM would not say.</summary>
+    public static uint? GetDwmAttribute(nint hwnd, uint attribute)
+    {
+        uint value;
+        return DwmGetWindowAttribute(hwnd, attribute, &value, sizeof(uint)) >= 0 ? value : null;
+    }
+
+    /// <summary>Whether Windows shows the accent colour on title bars and borders (<c>DWM\ColorPrevalence</c> is 1);
+    /// Chromium's <c>AccentColorObserver::ShouldUseAccentColorForWindowFrame</c>.</summary>
+    public static bool AccentColorOnTitleBars()
+        => Microsoft.Win32.Registry.GetValue(DwmKey, "ColorPrevalence", null) is int prevalence && prevalence == 1;
+
+    /// <summary>The system accent colour as opaque ARGB, or null if there is none; Chromium's
+    /// <c>AccentColorObserver::accent_color</c>: <c>UISettings</c>, then the <c>DWM\AccentColor</c> registry value.</summary>
+    public static uint? SystemAccentColor()
+    {
+        if (UISettingsAccent() is { } accent) return accent;
+        // The registry holds a COLORREF, 0x00BBGGRR; skia::COLORREFToSkColor ignores the top byte.
+        return Microsoft.Win32.Registry.GetValue(DwmKey, "AccentColor", null) is int value
+            ? 0xFF000000 | (((uint)value & 0xFF) << 16) | ((uint)value & 0xFF00) | (((uint)value >> 16) & 0xFF)
+            : null;
+    }
+
+    // Windows coerces unsupported registry colours; UISettings reports the colour actually used.
+    private static uint? UISettingsAccent()
+    {
+        nint name = 0;
+        void* inspectable = null, settings3 = null;
+        try
+        {
+            fixed (char* className = "Windows.UI.ViewManagement.UISettings")
+                if (WindowsCreateString(className, 36, &name) < 0) return null;
+            if (RoActivateInstance(name, &inspectable) < 0 || inspectable is null) return null;
+            var iid = s_iidUISettings3;
+            if (((delegate* unmanaged<void*, Guid*, void**, int>)Slot(inspectable, 0))(inspectable, &iid, &settings3) < 0 || settings3 is null) return null;
+            UIColor color;
+            // IUISettings3::GetColorValue follows IInspectable's six slots; UIColorType_Accent is 5.
+            if (((delegate* unmanaged<void*, int, UIColor*, int>)Slot(settings3, 6))(settings3, 5, &color) < 0) return null;
+            return 0xFF000000 | ((uint)color.R << 16) | ((uint)color.G << 8) | color.B;
+        }
+        finally
+        {
+            if (settings3 is not null) Release(settings3);
+            if (inspectable is not null) Release(inspectable);
+            if (name != 0) WindowsDeleteString(name);
+        }
+    }
+
+    private const string DwmKey = @"HKEY_CURRENT_USER\Software\Microsoft\Windows\DWM";
+    private static readonly Guid s_iidUISettings3 = new("03021BE4-5254-4781-8194-5168F7D06D7B");
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct UIColor
+    {
+        public byte A, R, G, B;
     }
 
     /// <summary>The window's DPI scale: 1 at 96 DPI.</summary>
@@ -141,4 +224,7 @@ public static unsafe class WindowsWindow
     [DllImport("dwmapi.dll")] private static extern int DwmSetWindowAttribute(nint hwnd, uint attribute, void* value, uint size);
     [DllImport("dwmapi.dll")] private static extern int DwmGetWindowAttribute(nint hwnd, uint attribute, void* value, uint size);
     [DllImport("user32.dll")] private static extern uint GetDpiForWindow(nint hwnd);
+    [DllImport("combase.dll")] private static extern int WindowsCreateString(char* source, uint length, nint* hstring);
+    [DllImport("combase.dll")] private static extern int WindowsDeleteString(nint hstring);
+    [DllImport("combase.dll")] private static extern int RoActivateInstance(nint classId, void** instance);
 }

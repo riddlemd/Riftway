@@ -38,13 +38,17 @@ internal static class AppDetails
         return values;
     }
 
-    /// <summary>A thumbnail clip in DIPs to client pixels, Chromium's <c>ScaleToEnclosingRect</c>: the near edges
-    /// round down and the far edges up. An empty region means the whole window.</summary>
-    internal static (int Left, int Top, int Right, int Bottom)? ClipToPixels(Rectangle region, double scale)
+    /// <summary>A thumbnail clip in DIPs to pixels, Chromium's <c>ScreenWin::DIPToScreenRect</c> as Electron calls it:
+    /// the origin is <paramref name="origin"/>, the region's origin converted as a screen point on the window's display,
+    /// and the size is that of <c>ScaleToEnclosingRect</c>. An empty region means the whole window.</summary>
+    /// <remarks>Electron treats the client-relative region as screen DIPs, so off the primary display's origin the clip
+    /// shifts by the display's offset, as here.</remarks>
+    internal static (int Left, int Top, int Right, int Bottom)? ClipToPixels(Rectangle region, float scale, (int X, int Y) origin)
     {
         if (region.Width <= 0 || region.Height <= 0) return null;
-        return ((int)Math.Floor(region.X * scale), (int)Math.Floor(region.Y * scale),
-            (int)Math.Ceiling((region.X + region.Width) * scale), (int)Math.Ceiling((region.Y + region.Height) * scale));
+        var width = (int)MathF.Ceiling((region.X + region.Width) * scale) - (int)MathF.Floor(region.X * scale);
+        var height = (int)MathF.Ceiling((region.Y + region.Height) * scale) - (int)MathF.Floor(region.Y * scale);
+        return (origin.X, origin.Y, origin.X + width, origin.Y + height);
     }
 }
 

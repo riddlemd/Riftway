@@ -199,6 +199,7 @@ async Task RunAsync(BrowserWindow win, BrowserWindow simple)
     await FramesAsync();
     await TaskbarAsync(win);
     await WindowsApisAsync();
+    await ShellApisAsync();
     await NativeImageAsync();
     await WindowPolishAsync(win);
     await TitleBarAsync(win);
@@ -1154,6 +1155,158 @@ async Task WindowsApisAsync()
     await Task.Delay(300);
 }
 
+async Task ShellApisAsync()
+{
+    if (!OperatingSystem.IsWindows()) return;
+
+    // hookWindowMessage: the callback runs inside the window procedure, so SendMessage returns after it.
+    var w = new BrowserWindow(new BrowserWindowOptions { Title = "Oriel window test: hooks", Width = 320, Height = 220 });
+    await Task.Delay(1000);
+    var hwnd = w.GetNativeWindowHandle();
+    const uint custom = 0x0400 + 0x77; // WM_USER + 0x77
+    var seen = new List<(nint W, nint L, bool OnWindowThread)>();
+    var hooked = w.HookWindowMessage(custom, (wp, lp) => seen.Add((wp, lp, WindowsShell.OnWindowThread(hwnd))));
+    WindowsShell.Send(hwnd, custom, 0x1234, -5);
+    Check("HookWindowMessage: the callback gets wParam and lParam, synchronously on the window's thread",
+        hooked && seen is [(0x1234, -5, true)], string.Join(";", seen));
+    Check("IsWindowMessageHooked after HookWindowMessage", w.IsWindowMessageHooked(custom) && !w.IsWindowMessageHooked(custom + 1));
+    var replaced = new List<string>();
+    w.HookWindowMessage(custom, (_, _) => replaced.Add("second"));
+    seen.Clear();
+    WindowsShell.Send(hwnd, custom, 1, 2);
+    Check("a second HookWindowMessage replaces the callback", seen.Count == 0 && replaced is ["second"], $"{seen.Count} {string.Join(",", replaced)}");
+    w.UnhookWindowMessage(custom);
+    replaced.Clear();
+    WindowsShell.Send(hwnd, custom, 1, 2);
+    Check("UnhookWindowMessage stops the callback", replaced.Count == 0 && !w.IsWindowMessageHooked(custom), $"{replaced.Count} {w.IsWindowMessageHooked(custom)}");
+    var all = new List<uint>();
+    w.HookWindowMessage(custom, (_, _) => all.Add(custom));
+    w.HookWindowMessage(custom + 1, (_, _) => all.Add(custom + 1));
+    w.UnhookAllWindowMessages();
+    WindowsShell.Send(hwnd, custom, 0, 0);
+    WindowsShell.Send(hwnd, custom + 1, 0, 0);
+    Check("UnhookAllWindowMessages stops every callback", all.Count == 0 && !w.IsWindowMessageHooked(custom) && !w.IsWindowMessageHooked(custom + 1), all.Count);
+
+    // The message goes on to Chromium and DefWindowProc: WM_SETTEXT still retitles, WM_GETTEXT still answers.
+    string? setTextSeen = null;
+    w.HookWindowMessage(0x000C /* WM_SETTEXT */, (_, lp) => setTextSeen = WindowsShell.ReadString(lp));
+    WindowsShell.SetText(hwnd, "hooked title");
+    Check("a hooked WM_SETTEXT reaches the callback and still sets the title", setTextSeen == "hooked title" && WindowsShell.GetText(hwnd) == "hooked title",
+        $"{setTextSeen} / {WindowsShell.GetText(hwnd)}");
+    var getTexts = 0;
+    w.HookWindowMessage(0x000D /* WM_GETTEXT */, (_, _) => getTexts++);
+    var text = WindowsShell.GetText(hwnd);
+    Check("a hooked WM_GETTEXT reaches the callback and still answers", getTexts >= 1 && text == "hooked title", $"{getTexts} {text}");
+    var stderr = Console.Error;
+    var logged = new StringWriter();
+    Console.SetError(logged);
+    w.HookWindowMessage(0x000C, (_, _) => throw new InvalidOperationException("hook threw"));
+    WindowsShell.SetText(hwnd, "after a throw");
+    Console.SetError(stderr);
+    Check("a throwing hook does not stop the message or cross into the window procedure",
+        WindowsShell.GetText(hwnd) == "after a throw" && logged.ToString().Contains("hook threw"), WindowsShell.GetText(hwnd));
+    w.UnhookAllWindowMessages();
+    w.Destroy();
+    await Task.Delay(300);
+
+    // thickFrame and roundedCorners: GWL_STYLE and DWMWA_WINDOW_CORNER_PREFERENCE read back.
+    const uint caption = 0x00C00000, thick = 0x00040000, sysMenu = 0x00080000, minBox = 0x00020000, maxBox = 0x00010000;
+    BrowserWindow Open(BrowserWindowOptions o) => new(o with { Width = 300, Height = 200, Title = "Oriel window test: frame" });
+    var frameless = Open(new BrowserWindowOptions { Frame = false });
+    var noThick = Open(new BrowserWindowOptions { Frame = false, ThickFrame = false });
+    var square = Open(new BrowserWindowOptions { Frame = false, RoundedCorners = false });
+    var fixedSize = Open(new BrowserWindowOptions { Frame = false, Resizable = false });
+    var framedNoThick = Open(new BrowserWindowOptions { ThickFrame = false });
+    await Task.Delay(1500);
+    uint Style(BrowserWindow b) => WindowsShell.Style(b.GetNativeWindowHandle());
+    uint? Corners(BrowserWindow b) => WindowsShell.Dwm(b.GetNativeWindowHandle(), 33);
+    string Hex(uint? v) => v is { } x ? $"0x{x:X8}" : "null";
+    var fs = Style(frameless);
+    Check("frameless: Electron's style (caption, thick frame, min and max boxes, no system menu)",
+        (fs & (caption | thick | minBox | maxBox)) == (caption | thick | minBox | maxBox) && (fs & sysMenu) == 0, Hex(fs));
+    Check("thickFrame = false: a frameless window loses WS_THICKFRAME and WS_CAPTION", (Style(noThick) & (caption | thick)) == 0 && (Style(noThick) & minBox) != 0, Hex(Style(noThick)));
+    Check("resizable = false: a frameless window has no thick frame and no maximize box", (Style(fixedSize) & (thick | maxBox)) == 0 && (Style(fixedSize) & caption) == caption, Hex(Style(fixedSize)));
+    Check("thickFrame = false: a framed window loses WS_THICKFRAME only, and is not resizable",
+        (Style(framedNoThick) & thick) == 0 && (Style(framedNoThick) & caption) == caption && !framedNoThick.IsResizable, $"{Hex(Style(framedNoThick))} {framedNoThick.IsResizable}");
+    Check("roundedCorners: a frameless window asks DWM to round (DWMWCP_ROUND)", Corners(frameless) == 2, Hex(Corners(frameless)));
+    Check("roundedCorners = false: DWMWCP_DONOTROUND", Corners(square) == 1, Hex(Corners(square)));
+    Check("thickFrame = false squares the corners too", Corners(noThick) == 1, Hex(Corners(noThick)));
+    noThick.SetResizable(false);
+    noThick.SetResizable(true);
+    noThick.Maximize();
+    await Task.Delay(500);
+    noThick.Unmaximize();
+    await Task.Delay(500);
+    Check("thickFrame = false stays off through SetResizable and maximize", (Style(noThick) & (caption | thick)) == 0, Hex(Style(noThick)));
+    framedNoThick.SetResizable(true);
+    Check("a framed window without a thick frame stays unresizable after SetResizable(true)", !framedNoThick.IsResizable && (Style(framedNoThick) & thick) == 0, Hex(Style(framedNoThick)));
+    foreach (var b in new[] { frameless, noThick, square, fixedSize, framedNoThick }) b.Destroy();
+    await Task.Delay(300);
+
+    // Full screen squares a framed window's corners and rounds them again after, as Electron's SetFullScreen.
+    var framed = Open(new BrowserWindowOptions());
+    await Task.Delay(1000);
+    framed.SetFullScreen(true);
+    var fullCorners = Eventually(() => Corners(framed) == 1, step);
+    framed.SetFullScreen(false);
+    Check("full screen sets DWMWCP_DONOTROUND, leaving it DWMWCP_ROUND", fullCorners && Eventually(() => Corners(framed) == 2, step), Hex(Corners(framed)));
+    framed.Destroy();
+    await Task.Delay(300);
+
+    // accentColor: DWM takes DWMWA_BORDER_COLOR and DWMWA_CAPTION_COLOR but will not read them back, so the frame's
+    // pixels are the read-back: the caption's middle and the 1px border along the bottom. The display is colour-managed.
+    static bool Near((byte R, byte G, byte B) c, uint argb) => Math.Abs(c.R - (int)((argb >> 16) & 0xFF)) < 40 && Math.Abs(c.G - (int)((argb >> 8) & 0xFF)) < 40 && Math.Abs(c.B - (int)(argb & 0xFF)) < 40;
+    static string Px((byte R, byte G, byte B) c) => $"{c.R},{c.G},{c.B}";
+    (byte, byte, byte) CaptionPixel(BrowserWindow b) => WindowsShell.FramePixel(b.GetNativeWindowHandle(), caption: true);
+    (byte, byte, byte) BorderPixel(BrowserWindow b) => WindowsShell.FramePixel(b.GetNativeWindowHandle(), caption: false);
+    var system = WindowsWindow.SystemAccentColor() ?? 0;
+    var dwmLog = new StringWriter();
+    Console.SetError(dwmLog);
+    BrowserWindow Accent(AccentColor? accent, bool frame = true, int x = 60) => new(new BrowserWindowOptions
+    {
+        Title = "accent", X = x, Y = 60, Width = 640, Height = 240, AlwaysOnTop = true, Frame = frame, AccentColor = accent,
+    });
+    var red = Accent("#FF0000");
+    await Task.Delay(1200);
+    red.Focus();
+    Check("accentColor string: the caption and border take the colour (pixels)",
+        Eventually(() => Near(CaptionPixel(red), 0xFF0000) && Near(BorderPixel(red), 0xFF0000), step), $"{Px(CaptionPixel(red))} / {Px(BorderPixel(red))}");
+    Check("GetAccentColor returns the colour as #RRGGBB", red.GetAccentColor().Color == "#FF0000", red.GetAccentColor().Color);
+    red.SetAccentColor("rgb(0, 255, 0)");
+    Check("SetAccentColor(string) recolours caption and border", Eventually(() => Near(CaptionPixel(red), 0x00FF00) && Near(BorderPixel(red), 0x00FF00), step), $"{Px(CaptionPixel(red))} / {Px(BorderPixel(red))}");
+    red.SetAccentColor("not a colour");
+    await Task.Delay(400);
+    Check("SetAccentColor with an unparsable string changes nothing", Near(CaptionPixel(red), 0x00FF00) && red.GetAccentColor().Color == "#00FF00", $"{Px(CaptionPixel(red))} {red.GetAccentColor().Color}");
+    red.SetAccentColor(true);
+    Check("SetAccentColor(true): the system accent colour", Eventually(() => Near(CaptionPixel(red), system) && Near(BorderPixel(red), system), step), $"{Px(CaptionPixel(red))} / {Px(BorderPixel(red))} vs {system:X6}");
+    Check("GetAccentColor after true is the system colour", red.GetAccentColor().Color == $"#{system & 0xFFFFFF:X6}", red.GetAccentColor().Color);
+    red.SetAccentColor(false);
+    Check("SetAccentColor(false): DWM's default frame, and GetAccentColor is false",
+        Eventually(() => !Near(CaptionPixel(red), system) && !Near(CaptionPixel(red), 0x00FF00), step) && red.GetAccentColor() == AccentColor.None, $"{Px(CaptionPixel(red))} {red.GetAccentColor()}");
+    red.Destroy();
+    var on = Accent(true, x: 80);
+    var off = Accent(false, frame: false, x: 760);
+    await Task.Delay(1200);
+    on.Focus();
+    await Task.Delay(500);
+    off.Focus();
+    await Task.Delay(500);
+    Check("accentColor = true: the system accent colour, even inactive", Eventually(() => Near(CaptionPixel(on), system), step), $"{Px(CaptionPixel(on))} vs {system:X6}");
+    Check("accentColor = false: GetAccentColor is false", off.GetAccentColor() == AccentColor.None, off.GetAccentColor());
+    on.Destroy();
+    off.Destroy();
+    // Created hidden, the window gets its colour from the activation that showing it brings, as in Electron.
+    var late = new BrowserWindow(new BrowserWindowOptions { Title = "accent", X = 60, Y = 60, Width = 640, Height = 240, AlwaysOnTop = true, Show = false, AccentColor = "#0000FF" });
+    await Task.Delay(800);
+    late.Show();
+    late.Focus();
+    Check("accentColor on a window created hidden applies when it is shown and activated", Eventually(() => Near(CaptionPixel(late), 0x0000FF), step), Px(CaptionPixel(late)));
+    late.Destroy();
+    await Task.Delay(300);
+    Console.SetError(stderr);
+    Check("DWM takes every accent colour (frameless: border only)", !dwmLog.ToString().Contains("accent colour"), dwmLog.ToString().Trim());
+}
+
 async Task TitleBarAsync(BrowserWindow win)
 {
     if (!OperatingSystem.IsWindows()) return;
@@ -1669,18 +1822,39 @@ async Task NativeImageAsync()
             new ThumbarButton { Icon = green, Tooltip = "Play", Click = () => clicks.Add("play") },
             new ThumbarButton { Icon = redIcon, Tooltip = "Stop", Flags = ThumbarButtonFlags.DismissOnClick, Click = () => clicks.Add("stop") },
         ]);
-        WindowsShell.ClickThumbButton(hwnd, 1);
-        WindowsShell.ClickThumbButton(hwnd, 0);
+        WindowsShell.ClickThumbButton(hwnd, 40002);
+        WindowsShell.ClickThumbButton(hwnd, 40001);
         Check("SetThumbarButtons adds buttons whose clicks reach their handlers", addedButtons && clicks.SequenceEqual(["stop", "play"]), $"{addedButtons} {string.Join(",", clicks)}");
+        // A hook sees WM_COMMAND first; its exception must not keep Oriel's own handling from the click.
+        clicks.Clear();
+        w.HookWindowMessage(0x0111 /* WM_COMMAND */, (_, _) => throw new InvalidOperationException("command hook threw"));
+        Console.SetError(TextWriter.Null);
+        WindowsShell.ClickThumbButton(hwnd, 40001);
+        Console.SetError(stderr);
+        w.UnhookAllWindowMessages();
+        Check("a throwing WM_COMMAND hook does not stop the thumbar click", clicks.SequenceEqual(["play"]), string.Join(",", clicks));
         clicks.Clear();
         var updated = w.SetThumbarButtons([new ThumbarButton { Icon = redIcon, Click = () => clicks.Add("next") }]);
-        WindowsShell.ClickThumbButton(hwnd, 0);
-        WindowsShell.ClickThumbButton(hwnd, 1);
+        WindowsShell.ClickThumbButton(hwnd, 40001);
+        WindowsShell.ClickThumbButton(hwnd, 40002);
         Check("a second SetThumbarButtons updates them; a removed button's handler is gone", updated && clicks.SequenceEqual(["next"]), $"{updated} {string.Join(",", clicks)}");
         Check("SetThumbarButtons refuses more than seven", !w.SetThumbarButtons([.. Enumerable.Range(0, 8).Select(_ => new ThumbarButton { Icon = green })]));
+        // Electron's ids are 40001 + slot; THBN_CLICKED for another id is not a thumbar click.
+        clicks.Clear();
+        WindowsShell.ClickThumbButton(hwnd, 0);
+        WindowsShell.ClickThumbButton(hwnd, 40000);
+        Check("thumbar clicks route by Electron's ids (40001 + slot) only", clicks.Count == 0, string.Join(",", clicks));
+        // Electron replaces the callbacks before a bad flag stops the call: earlier buttons take their new handlers.
+        var badFlag = w.SetThumbarButtons([
+            new ThumbarButton { Icon = green, Click = () => clicks.Add("new") },
+            new ThumbarButton { Icon = green, Flags = (ThumbarButtonFlags)32, Click = () => clicks.Add("bad") },
+        ]);
+        WindowsShell.ClickThumbButton(hwnd, 40001);
+        WindowsShell.ClickThumbButton(hwnd, 40002);
+        Check("SetThumbarButtons with an unknown flag fails after replacing the earlier handlers", !badFlag && clicks.SequenceEqual(["new"]), $"{badFlag} {string.Join(",", clicks)}");
         clicks.Clear();
         var cleared = w.SetThumbarButtons([]);
-        WindowsShell.ClickThumbButton(hwnd, 0);
+        WindowsShell.ClickThumbButton(hwnd, 40001);
         Check("SetThumbarButtons([]) removes them", cleared && clicks.Count == 0, $"{cleared} {string.Join(",", clicks)}");
         w.Destroy();
         await Task.Delay(300);

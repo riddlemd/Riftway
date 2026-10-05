@@ -102,6 +102,22 @@ public sealed record BrowserWindowOptions
     /// ignored on macOS and Linux. Electron's <c>backgroundMaterial</c>.</summary>
     public BackgroundMaterial? BackgroundMaterial { get; init; }
 
+    /// <summary>Windows: whether a frameless window keeps <c>WS_THICKFRAME</c> and <c>WS_CAPTION</c>, which give it a
+    /// shadow, the minimize and maximize animations and resizing from its edges; false also squares its corners. On a
+    /// framed window false removes only <c>WS_THICKFRAME</c>, and the window can no longer be resized. Ignored on macOS
+    /// and Linux. Electron's <c>thickFrame</c>.</summary>
+    public bool ThickFrame { get; init; } = true;
+
+    /// <summary>Whether a frameless window has rounded corners: Windows 11 only, through DWM, and only with
+    /// <see cref="ThickFrame"/>. Not yet applied on macOS and Linux. Electron's <c>roundedCorners</c>.</summary>
+    public bool RoundedCorners { get; init; } = true;
+
+    /// <summary>The window's border (and, when framed, caption) colour on Windows 11; null follows the system
+    /// setting, which shows the system accent colour only on the active window when "Show accent colour on title bars"
+    /// is on. A colour string Electron cannot parse is ignored. Ignored on macOS and Linux. Electron's
+    /// <c>accentColor</c>.</summary>
+    public AccentColor? AccentColor { get; init; }
+
     /// <summary>Whether the window stays above other windows.</summary>
     public bool AlwaysOnTop { get; init; }
 
@@ -261,7 +277,16 @@ public sealed unsafe class BrowserWindow
     private readonly NativeImage? _icon;
     private bool _thumbarAdded;
     private readonly nint[] _thumbarIcons = new nint[Thumbar.MaxButtons];
-    private readonly Action?[] _thumbarClicks = new Action?[Thumbar.MaxButtons];
+    // Electron's callback_map_, by button id; UI thread only.
+    private readonly Dictionary<int, Action?> _thumbarClicks = [];
+    private IReadOnlyList<ThumbarButton> _lastThumbarButtons = [];
+    // Electron's messages_callback_map_: read inside the window procedure, changed from any thread.
+    private readonly System.Collections.Concurrent.ConcurrentDictionary<uint, Action<nint, nint>> _messageHooks = new();
+    // Electron's accent_color_: null follows the system; UI thread only.
+    private WindowsFrame.Accent? _accent;
+    // Electron's rounded_corner_: true unless a frameless window turned it off.
+    private bool _roundedCorners = true;
+    private bool _resizable;
     // macOS: the Dock bounce FlashFrame started, to cancel.
     private nint _attentionRequest;
     // Set by Close()/Destroy(): a close from code goes through even when the user may not close.
@@ -309,6 +334,8 @@ public sealed unsafe class BrowserWindow
         _opacity = WindowPolish.ClampOpacity(_options.Opacity);
         _hasShadow = _options.HasShadow;
         _kiosk = _options.Kiosk;
+        _accent = WindowsFrame.FromOption(_options.AccentColor);
+        _resizable = _options.Resizable;
         _icon = _options.IconImage ?? (_options.Icon is { } iconPath ? NativeImage.CreateFromBuffer(File.ReadAllBytes(iconPath)) : null);
         _backgroundColor = _options.BackgroundColor;
         var session = _options.WebPreferences.Session ?? Session.FromPartition(_options.WebPreferences.Partition ?? "");
@@ -352,7 +379,7 @@ public sealed unsafe class BrowserWindow
             ActivationChanged = OnActivationChanged,
             BoundsChanged = OnBoundsChanged,
             FullscreenTransition = OnFullscreenTransition,
-            Resizable = _options.Resizable,
+            Resizable = CanResize(_options.Resizable),
             Minimizable = _options.Minimizable,
             Maximizable = _options.Maximizable,
             Frameless = IsFrameless,
@@ -1001,6 +1028,45 @@ public sealed unsafe class BrowserWindow
         var hwnd = Hwnd(w);
         WindowsSubclass.RouteSizing(hwnd, (wmsz, r) => Cancelled(WillResize, new WillResizeEventArgs(PixelsToDips(r), WindowPolish.EdgeFromWmsz(wmsz))));
         WindowsSubclass.RouteMoving(hwnd, r => Cancelled(WillMove, new WillMoveEventArgs(PixelsToDips(r))));
+        WindowsSubclass.RouteMessages(hwnd, OnWindowMessage);
+        WindowsSubclass.RouteThumbButtonClicks(hwnd, OnThumbarClick);
+        WindowsSubclass.RouteTaskbarCreated(hwnd, () =>
+        {
+            if (_window is not null) RestoreThumbarButtons(_window);
+        });
+    }
+
+    // Electron's frameless block in the NativeWindowViews constructor, and FlipWindowStyle for a framed window.
+    [System.Runtime.Versioning.SupportedOSPlatform("windows")]
+    private void ApplyFrameStyles(cef_window_t* w)
+    {
+        var hwnd = Hwnd(w);
+        if (IsFrameless)
+        {
+            WindowsWindowStyle.SetStyle(hwnd, WindowsFrame.FramelessStyle(_resizable, _options.Minimizable, _options.Maximizable, _options.ThickFrame));
+            _roundedCorners = WindowsFrame.RoundedCorners(_options.ThickFrame, _options.RoundedCorners);
+            if (WindowsWindow.IsWindows11) WindowsWindow.SetRoundedCorners(hwnd, _roundedCorners);
+        }
+        else if (!_options.ThickFrame) WindowsWindowStyle.FlipStyle(hwnd, false, WindowsFrame.WsThickFrame);
+    }
+
+    // Electron's OnWindowMessage after PreHandleMSG's NotifyWindowMessage; the colour messages stand in for
+    // AccentColorObserver's registry watch.
+    private void OnWindowMessage(uint message, nint wParam, nint lParam)
+    {
+        if (message is 0x0320 /* WM_DWMCOLORIZATIONCOLORCHANGED */ or 0x001A /* WM_SETTINGCHANGE */)
+            Command(w => UpdateAccentColor(w, w->is_active(w) != 0));
+        if (_messageHooks.TryGetValue(message, out var callback)) callback(wParam, lParam);
+    }
+
+    // Electron's UpdateWindowAccentColor.
+    private void UpdateAccentColor(cef_window_t* w, bool active)
+    {
+        if (!OperatingSystem.IsWindows() || !WindowsWindow.IsWindows11) return;
+        var system = _accent is { Argb: not null } ? null : WindowsWindow.SystemAccentColor();
+        var color = WindowsFrame.BorderColor(_accent, active, _accent is null && WindowsWindow.AccentColorOnTitleBars(), system);
+        if (!WindowsWindow.SetBorderAndCaptionColor(Hwnd(w), color, caption: !IsFrameless))
+            Console.Error.WriteLine("[Oriel] DWM did not take the accent colour.");
     }
 
     private bool Cancelled<T>(EventHandler<T>? handler, T args) where T : CancelEventArgs
@@ -1091,7 +1157,14 @@ public sealed unsafe class BrowserWindow
     });
 
     /// <summary>Lets the user resize the window, or stops. Electron's <c>win.setResizable()</c>.</summary>
-    public void SetResizable(bool flag) => Command(_ => _windowDelegate.Resizable = flag);
+    public void SetResizable(bool flag) => Command(_ =>
+    {
+        _resizable = flag;
+        _windowDelegate.Resizable = CanResize(flag);
+    });
+
+    // Electron's CanResize: on Windows a framed window without a thick frame cannot be resized.
+    private bool CanResize(bool resizable) => OperatingSystem.IsWindows() ? WindowsFrame.CanResize(!IsFrameless, resizable, _options.ThickFrame) : resizable;
 
     /// <summary>Whether the user can resize the window. Electron's <c>win.isResizable()</c>.</summary>
     public bool IsResizable => Query(_ => _windowDelegate.Resizable, false);
@@ -1263,12 +1336,57 @@ public sealed unsafe class BrowserWindow
     /// <summary>Sets the buttons in the window's taskbar thumbnail, at most seven; an empty list removes them. False if
     /// there are more than seven, the shell refused, or not on Windows. Electron's <c>win.setThumbarButtons()</c>.</summary>
     /// <remarks>Call it once the window is shown: the shell adds the toolbar to an existing taskbar button.</remarks>
+    /// <exception cref="ArgumentException">A button or its icon is null.</exception>
     public bool SetThumbarButtons(IReadOnlyList<ThumbarButton> buttons)
     {
         ArgumentNullException.ThrowIfNull(buttons);
-        var plan = Thumbar.Plan(buttons);
-        return plan is not null && Query(w => OperatingSystem.IsWindows() && SetThumbarButtonsOn(w, plan), false);
+        if (buttons.Any(b => b?.Icon is null)) throw new ArgumentException("Every thumbar button needs an icon.", nameof(buttons));
+        var copy = buttons.ToArray();
+        return Query(w => OperatingSystem.IsWindows() && SetThumbarButtonsOn(w, copy), false);
     }
+
+    /// <summary>Calls <paramref name="callback"/> with the raw <c>wParam</c> and <c>lParam</c> whenever the window
+    /// receives <paramref name="message"/>, synchronously on the UI thread inside the window procedure, before Chromium
+    /// handles the message, which then goes on as usual. One callback per message: hooking it again replaces the
+    /// callback. Always true. Windows only: the callback never runs on macOS and Linux.
+    /// Electron's <c>win.hookWindowMessage()</c>.</summary>
+    /// <remarks>An exception from the callback is written to standard error and does not stop the message.</remarks>
+    public bool HookWindowMessage(uint message, Action<nint, nint> callback)
+    {
+        ArgumentNullException.ThrowIfNull(callback);
+        _messageHooks[message] = callback;
+        return true;
+    }
+
+    /// <summary>Whether <paramref name="message"/> is hooked. Electron's <c>win.isWindowMessageHooked()</c>.</summary>
+    public bool IsWindowMessageHooked(uint message) => _messageHooks.ContainsKey(message);
+
+    /// <summary>Removes the callback for <paramref name="message"/>, if any. Electron's <c>win.unhookWindowMessage()</c>.</summary>
+    public void UnhookWindowMessage(uint message) => _messageHooks.TryRemove(message, out _);
+
+    /// <summary>Removes every message callback. Electron's <c>win.unhookAllWindowMessages()</c>.</summary>
+    public void UnhookAllWindowMessages() => _messageHooks.Clear();
+
+    /// <summary>Sets the window's accent colour (border, and caption when framed) on Windows 11: a colour, the system
+    /// accent colour (<see langword="true"/>), none (<see langword="false"/>), or null to follow the system setting
+    /// again. A colour string Electron cannot parse changes nothing. Ignored on macOS and Linux.
+    /// Electron's <c>win.setAccentColor()</c>.</summary>
+    public void SetAccentColor(AccentColor? accentColor) => Command(w =>
+    {
+        if (accentColor is { Color: { } color } && !CssColor.TryParseElectron(color, out _)) return;
+        _accent = WindowsFrame.FromOption(accentColor);
+        UpdateAccentColor(w, w->is_active(w) != 0);
+    });
+
+    /// <summary>The window's accent colour as <c>#RRGGBB</c>: the colour set, else the system accent colour; or
+    /// <see cref="AccentColor.None"/> when turned off or the system has none. Windows only: <see cref="AccentColor.None"/>
+    /// on macOS and Linux. Electron's <c>win.getAccentColor()</c>, whose <c>false</c> is <see cref="AccentColor.None"/>.</summary>
+    public AccentColor GetAccentColor() => Query(_ =>
+    {
+        if (!OperatingSystem.IsWindows()) return AccentColor.None;
+        var hex = WindowsFrame.Report(_accent, _accent is { Argb: not null } ? null : WindowsWindow.SystemAccentColor());
+        return hex is null ? AccentColor.None : AccentColor.FromColor(hex);
+    }, AccentColor.None);
 
     /// <summary>Sets the window's App User Model ID and relaunch details, which decide how the taskbar groups and pins
     /// it; empty options are left as they are. Windows only: does nothing on macOS and Linux.
@@ -1291,7 +1409,7 @@ public sealed unsafe class BrowserWindow
     {
         if (!OperatingSystem.IsWindows()) return;
         var hwnd = Hwnd(w);
-        WindowsTaskbar.SetThumbnailClip(hwnd, AppDetails.ClipToPixels(region, WindowsWindow.ScaleFactor(hwnd)), done =>
+        WindowsTaskbar.SetThumbnailClip(hwnd, ClipToPixels(w, region), done =>
         {
             if (!done) Console.Error.WriteLine("[Oriel] The taskbar did not take the thumbnail clip.");
         });
@@ -1321,26 +1439,57 @@ public sealed unsafe class BrowserWindow
             Console.Error.WriteLine("[Oriel] DWM did not take the background material (it needs Windows 11 22H2).");
     }
 
+    // Electron's TaskbarHost::SetThumbarButtons, including its order: the callbacks are replaced before a bad flag
+    // stops the call, and the toolbar counts as added whatever the shell answers.
     [System.Runtime.Versioning.SupportedOSPlatform("windows")]
-    private bool SetThumbarButtonsOn(cef_window_t* w, (int Slot, ThumbarButton? Button, uint Flags)[] plan)
+    private bool SetThumbarButtonsOn(cef_window_t* w, IReadOnlyList<ThumbarButton> buttons)
     {
-        var hwnd = Hwnd(w);
-        if (!WindowsSubclass.RouteThumbButtonClicks(hwnd, slot => _thumbarClicks[slot]?.Invoke())) return false;
-        var icons = plan.Select(s => s.Button is { } b ? StraightIcon(b.Icon) : 0).ToArray();
-        var native = plan.Select(s => new ThumbButton((uint)s.Slot, icons[s.Slot], s.Button?.Tooltip, s.Flags)).ToArray();
-        if (!WindowsTaskbar.SetThumbButtons(hwnd, native, add: !_thumbarAdded))
-        {
-            foreach (var icon in icons) WindowsTaskbar.DestroyIconHandle(icon);
-            return false;
-        }
+        if (Thumbar.Plan(buttons) is not { } plan || !WindowsTaskbar.IsAvailable) return false;
+        _thumbarClicks.Clear();
+        for (var i = 0; i < (plan.InvalidAt ?? buttons.Count); i++) _thumbarClicks[(int)plan.Slots[i].Id] = buttons[i].Click;
+        if (plan.InvalidAt is not null) return false;
+        var icons = plan.Slots.Select(s => (s.Mask & Thumbar.MaskIcon) != 0 ? StraightIcon(s.Button!.Icon) : 0).ToArray();
+        var native = plan.Slots.Select((s, i) => new ThumbButton(s.Id, icons[i], s.Button?.Tooltip, s.Flags, s.Mask)).ToArray();
+        var ok = WindowsTaskbar.SetThumbButtons(Hwnd(w), native, add: !_thumbarAdded);
         _thumbarAdded = true;
+        _lastThumbarButtons = buttons;
+        // A slot sent without an icon keeps the shell's previous one, so its handle stays alive.
         for (var i = 0; i < Thumbar.MaxButtons; i++)
         {
+            if (icons[i] == 0) continue;
             WindowsTaskbar.DestroyIconHandle(_thumbarIcons[i]);
             _thumbarIcons[i] = icons[i];
-            _thumbarClicks[i] = plan[i].Button?.Click;
         }
+        return ok;
+    }
+
+    // Electron's HandleThumbarButtonEvent: a known id is handled even without a callback.
+    private bool OnThumbarClick(int id)
+    {
+        if (!_thumbarClicks.TryGetValue(id, out var click)) return false;
+        click?.Invoke();
         return true;
+    }
+
+    // Electron's RestoreThumbarButtons: Explorer restarted, so the toolbar is added again.
+    [System.Runtime.Versioning.SupportedOSPlatform("windows")]
+    private void RestoreThumbarButtons(cef_window_t* w)
+    {
+        if (!_thumbarAdded) return;
+        _thumbarAdded = false;
+        SetThumbarButtonsOn(w, _lastThumbarButtons);
+    }
+
+    // DIPToScreenRect(hwnd, region) as Electron calls it: the origin goes through the window's display as a screen point.
+    private static (int Left, int Top, int Right, int Bottom)? ClipToPixels(cef_window_t* w, Rectangle region)
+    {
+        var bounds = w->@base.@base.get_bounds_in_screen(&w->@base.@base);
+        var display = CefNative.cef_display_get_matching_bounds(&bounds, 0);
+        var origin = new cef_point_t { x = region.X, y = region.Y };
+        display->convert_point_to_pixels(display, &origin);
+        var scale = display->get_device_scale_factor(display);
+        NativeObject.Release(display);
+        return AppDetails.ClipToPixels(region, scale, (origin.x, origin.y));
     }
 
     // Electron takes the 1x representation; icon DIBs take straight alpha.
@@ -1487,6 +1636,8 @@ public sealed unsafe class BrowserWindow
             _routedNSWindow = MacWindow.RouteFullScreenToggle((nint)window->get_window_handle(window), () => SetSimpleFullScreen(!IsSimpleFullScreen));
         if (_options.AlwaysOnTop) window->set_always_on_top(window, 1);
         if (OperatingSystem.IsWindows()) ApplyWindowsStyles(window);
+        // Late, still before the first show: CEF recomputes the styles while the window is set up.
+        if (OperatingSystem.IsWindows()) ApplyFrameStyles(window);
         if (TitleBar.HasOverlay(_options.TitleBarStyle, _options.TitleBarOverlay, OperatingSystem.IsMacOS())) AttachTitleBarOverlay(window, _options.TitleBarOverlay!);
         if (_options.Show)
         {
@@ -1498,6 +1649,9 @@ public sealed unsafe class BrowserWindow
             if (UsesSimpleFullScreen && OperatingSystem.IsMacOS()) MacWindow.SetSimpleFullScreen((nint)window->get_window_handle(window), true);
             else window->set_fullscreen(window, 1);
         }
+
+        // The show above activates the window before _window is set, so OnActivationChanged could not apply it.
+        if (OperatingSystem.IsWindows() && window->is_active(window) != 0) UpdateAccentColor(window, true);
 
         _lastBounds = ToRectangle(window->@base.@base.get_bounds_in_screen(&window->@base.@base));
         CefThread.PostUiDelayed(PollState, s_statePoll);
@@ -1536,6 +1690,7 @@ public sealed unsafe class BrowserWindow
 
     private void OnActivationChanged(bool active)
     {
+        if (OperatingSystem.IsWindows() && _window is not null) UpdateAccentColor(_window, active);
         if (!active) _menuBar?.OnWindowBlurred();
         (active ? Focused : Blurred)?.Invoke(this, EventArgs.Empty);
     }
@@ -1592,6 +1747,8 @@ public sealed unsafe class BrowserWindow
     {
         if (!completed || _window is null) return;
         var fullscreen = _window->is_fullscreen(_window) != 0;
+        // Electron's SetFullScreen: corners that round square up in full screen, framed windows included.
+        if (OperatingSystem.IsWindows() && _roundedCorners && WindowsWindow.IsWindows11) WindowsWindow.SetRoundedCorners(Hwnd(_window), !fullscreen);
         _titleBarOverlay?.SetVisible(!fullscreen);
         (fullscreen ? EnteredFullScreen : LeftFullScreen)?.Invoke(this, EventArgs.Empty);
     }

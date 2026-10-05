@@ -17,13 +17,13 @@ Counted from the Checklist at the end: `BaseWindow` and `BrowserWindow` are one 
 
 | Area | Items | Done | Partial | Missing | n/a | % done | % done + partial/2 |
 |---|---|---|---|---|---|---|---|
-| BaseWindow + BrowserWindow options | 54 | 26 | 7 | 21 | 0 | 48.1% | 54.6% |
+| BaseWindow + BrowserWindow options | 54 | 27 | 9 | 18 | 0 | 50.0% | 58.3% |
 | webPreferences | 46 | 11 | 3 | 25 | 7 | 28.2% | 32.1% |
-| Instance methods | 143 | 65 | 19 | 53 | 6 | 47.4% | 54.4% |
+| Instance methods | 143 | 71 | 19 | 47 | 6 | 51.8% | 58.8% |
 | Instance properties | 24 | 11 | 2 | 11 | 0 | 45.8% | 50.0% |
 | Events | 35 | 12 | 6 | 17 | 0 | 34.3% | 42.9% |
 | Static methods | 6 | 4 | 0 | 1 | 1 | 80.0% | 80.0% |
-| **Total** | 308 | 129 | 37 | 128 | 14 | 43.9% | 50.2% |
+| **Total** | 308 | 136 | 39 | 119 | 14 | 46.3% | 52.9% |
 
 ## Done since the audit
 
@@ -44,6 +44,11 @@ Counted from the Checklist at the end: `BaseWindow` and `BrowserWindow` are one 
   because the shell's proxy rejects the NULL clip that clears them), `BackgroundMaterial` option and
   `SetBackgroundMaterial` (`DWMWA_SYSTEMBACKDROP_TYPE`, Windows 11 22H2+). The material is set but hidden behind CEF's
   opaque painting (DRIFT W24).
+- Windows shell APIs (branch `win-shell-apis`): `HookWindowMessage`/`UnhookWindowMessage`/`IsWindowMessageHooked`/
+  `UnhookAllWindowMessages` (the window subclass calls the hook first, synchronously, and the message goes on),
+  `ThickFrame`, `RoundedCorners`, `AccentColor`/`SetAccentColor`/`GetAccentColor` (`DWMWA_BORDER_COLOR`/`DWMWA_CAPTION_COLOR`).
+  Thumbar, app details and thumbnail clip re-audited against `taskbar_host.cc` and Chromium's `SetAppDetailsForWindow`.
+  Gaps: DRIFT W38-W41.
 - `getNativeWindowHandle` (`W.get_window_handle`: the content `NSView`, `HWND` or X11 `Window`).
 - webContents: `LoadFile` (query, hash), `Reload`, `GetUrl`, `GetTitle`, `did-start-loading`, `did-stop-loading`,
   `did-finish-load`, `did-fail-load`.
@@ -218,10 +223,10 @@ Parameters in brackets are optional in Electron. `webContents` members are in [w
 | `visualEffectState` | — | missing |  |
 | `titleBarStyle` | `TitleBarStyle` | partial | Windows (and Linux, unchecked): anything but `Default` is frameless; macOS keeps its title bar (W37). |
 | `titleBarOverlay` | `TitleBarOverlay` | partial | Windows: Views buttons docked top right, CSS colours as Chromium parses them; no page API (W34); snap layouts through `HTMAXBUTTON`, buttons follow the window's flags. |
-| `accentColor` | — | missing |  |
+| `accentColor` | `AccentColor` | done | Windows 11, as in Electron: `bool` or CSS string (`AccentColor`); system changes re-applied on DWM's broadcasts (W39). |
 | `trafficLightPosition` | — | missing |  |
-| `roundedCorners` | — | missing |  |
-| `thickFrame` | — | missing |  |
+| `roundedCorners` | `RoundedCorners` | partial | Windows 11 (`DWMWA_WINDOW_CORNER_PREFERENCE`, frameless, off without `thickFrame`, squared in full screen); Linux and the macOS full-screen rule not done (W40). |
+| `thickFrame` | `ThickFrame` | partial | Windows: Electron's frameless `GWL_STYLE`, framed loses `WS_THICKFRAME`; full screen and resize insets follow CEF, not Electron (W40). |
 | `vibrancy` | — | missing |  |
 | `backgroundMaterial` | `BackgroundMaterial` | partial | Windows 11 22H2+ only; set but hidden behind CEF's opaque painting (W24). |
 | `zoomToPageWidth` | — | missing |  |
@@ -359,10 +364,10 @@ Parameters in brackets are optional in Electron. `webContents` members are in [w
 | `isTabletMode()` | — | missing |  |
 | `getMediaSourceId()` | — | missing |  |
 | `getNativeWindowHandle()` | `GetNativeWindowHandle` | done | Returns `nint`, not a Buffer (S6). |
-| `hookWindowMessage(message, callback)` | — | missing |  |
-| `isWindowMessageHooked(message)` | — | missing |  |
-| `unhookWindowMessage(message)` | — | missing |  |
-| `unhookAllWindowMessages()` | — | missing |  |
+| `hookWindowMessage(message, callback)` | `HookWindowMessage` | done | Windows only, as in Electron; `Action<nint, nint>` with the raw values, not Buffers (W38). |
+| `isWindowMessageHooked(message)` | `IsWindowMessageHooked` | done |  |
+| `unhookWindowMessage(message)` | `UnhookWindowMessage` | done |  |
+| `unhookAllWindowMessages()` | `UnhookAllWindowMessages` | done |  |
 | `setRepresentedFilename(filename)` | — | missing |  |
 | `getRepresentedFilename()` | — | missing |  |
 | `setDocumentEdited(edited)` | — | missing |  |
@@ -383,12 +388,12 @@ Parameters in brackets are optional in Electron. `webContents` members are in [w
 | `setOpacity(opacity)` | `SetOpacity` | partial | Windows only for now (W30). |
 | `getOpacity()` | `GetOpacity` | done |  |
 | `setShape(rects)` | — | missing |  |
-| `setThumbarButtons(buttons)` | `SetThumbarButtons` | done | Windows only, as in Electron. |
+| `setThumbarButtons(buttons)` | `SetThumbarButtons` | done | Windows only, as in Electron: ids `40001 + slot`, icon/tooltip sent only when set, callbacks replaced before a bad flag fails the call, re-added on `TaskbarCreated`. |
 | `setThumbnailClip(region)` | `SetThumbnailClip` | done | Windows only, as in Electron. |
 | `setThumbnailToolTip(toolTip)` | `SetThumbnailToolTip` | done | Windows only, as in Electron. |
 | `setAppDetails(options)` | `SetAppDetails` | done | Windows only, as in Electron. |
-| `setAccentColor(accentColor)` | — | missing |  |
-| `getAccentColor()` | — | missing |  |
+| `setAccentColor(accentColor)` | `SetAccentColor` | done | Windows only, as in Electron; null follows the system again. |
+| `getAccentColor()` | `GetAccentColor` | done | Returns `AccentColor`: `#RRGGBB`, or `AccentColor.None` for Electron's `false` (W39). |
 | `showDefinitionForSelection()` | — | missing |  |
 | `setIcon(icon)` | `SetIcon` | done | Path or `NativeImage`; Windows and Linux only, as in Electron. |
 | `setWindowButtonVisibility(visible)` | — | missing |  |

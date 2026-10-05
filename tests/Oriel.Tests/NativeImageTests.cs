@@ -147,10 +147,47 @@ public sealed class NativeImageTests
         var a = new ThumbarButton { Icon = icon, Flags = ThumbarButtonFlags.DismissOnClick | ThumbarButtonFlags.NoBackground };
         var b = new ThumbarButton { Icon = icon };
         var plan = Thumbar.Plan([a, b])!;
-        Assert.Equal(7, plan.Length);
-        Assert.Equal((0, a, 6u), plan[0]);
-        Assert.Equal((1, b, 0u), plan[1]);
-        for (var i = 2; i < 7; i++) Assert.Equal((i, (ThumbarButton?)null, 8u), plan[i]);
+        Assert.Null(plan.InvalidAt);
+        Assert.Equal(7, plan.Slots.Length);
+        Assert.Equal(new ThumbarSlot(40001, a, 6u, 8u), plan.Slots[0]);
+        Assert.Equal(new ThumbarSlot(40002, b, 0u, 8u), plan.Slots[1]);
+        for (var i = 2; i < 7; i++) Assert.Equal(new ThumbarSlot((uint)(40001 + i), null, 8u, 8u), plan.Slots[i]);
+    }
+
+    [Fact]
+    public void ThumbarPlan_SendsIconAndTooltip_OnlyWhenTheButtonHasThem()
+    {
+        var empty = NativeImage.CreateEmpty();
+        var icon = Bitmap(2, 2);
+        var plan = Thumbar.Plan([
+            new ThumbarButton { Icon = icon, Tooltip = "tip" },
+            new ThumbarButton { Icon = icon },
+            new ThumbarButton { Icon = empty, Tooltip = "tip" },
+            new ThumbarButton { Icon = empty, Tooltip = "" },
+        ])!;
+        Assert.Equal([0xEu, 0xAu, 0xCu, 0x8u], plan.Slots[..4].Select(s => s.Mask));
+    }
+
+    [Theory]
+    [InlineData(ThumbarButtonFlags.Enabled, 0u)]
+    [InlineData(ThumbarButtonFlags.Disabled, 1u)]
+    [InlineData(ThumbarButtonFlags.DismissOnClick, 2u)]
+    [InlineData(ThumbarButtonFlags.NoBackground, 4u)]
+    [InlineData(ThumbarButtonFlags.Hidden, 8u)]
+    [InlineData(ThumbarButtonFlags.NonInteractive, 16u)]
+    public void ThumbarPlan_FlagsAreThbfValues(ThumbarButtonFlags flags, uint thbf)
+        => Assert.Equal(thbf, Thumbar.Plan([new ThumbarButton { Icon = NativeImage.CreateEmpty(), Flags = flags }])!.Slots[0].Flags);
+
+    [Fact]
+    public void ThumbarPlan_UnknownFlag_MarksTheFirstBadButton()
+    {
+        var icon = NativeImage.CreateEmpty();
+        var plan = Thumbar.Plan([
+            new ThumbarButton { Icon = icon, Flags = ThumbarButtonFlags.NonInteractive },
+            new ThumbarButton { Icon = icon, Flags = (ThumbarButtonFlags)32 },
+            new ThumbarButton { Icon = icon, Flags = (ThumbarButtonFlags)64 },
+        ])!;
+        Assert.Equal(1, plan.InvalidAt);
     }
 
     [Fact]
