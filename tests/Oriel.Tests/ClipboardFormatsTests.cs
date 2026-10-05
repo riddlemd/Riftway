@@ -1,523 +1,268 @@
 using System.Buffers.Binary;
 using System.Text;
-using Xunit;
 
 namespace Oriel.Tests;
 
-public class ClipboardFormatsTests
+public sealed class ClipboardFormatsTests
 {
-    private static int Offset(string cfHtml, string key)
-    {
-        var start = cfHtml.IndexOf(key + ":", StringComparison.Ordinal) + key.Length + 1;
-        Assert.Equal(10, cfHtml.IndexOf("\r\n", start, StringComparison.Ordinal) - start);
-        return int.Parse(cfHtml.AsSpan(start, 10));
-    }
-
-    // CF_HTML
-
     [Fact]
-    public void BuildCfHtml_header_offsets_are_byte_offsets_of_the_utf8_form()
-    {
-        var cf = ClipboardFormats.BuildCfHtml("<b>hi</b>");
-        var bytes = Encoding.UTF8.GetBytes(cf);
+    public void StandardTypes_follow_chromiums_order()
+        => Assert.Equal(["text/plain", "text/html", "image/svg+xml", "text/rtf", "image/png", "text/uri-list"], ClipboardFormats.StandardTypes(true, true, true, true, true, true));
 
-        Assert.StartsWith("Version:0.9\r\nStartHTML:0000000105\r\nEndHTML:", cf);
-        Assert.Equal(105,Offset(cf, "StartHTML"));
-        Assert.Equal("<html><body><!--StartFragment--><b>hi</b><!--EndFragment--></body></html>",
-            Encoding.UTF8.GetString(bytes, Offset(cf, "StartHTML"), Offset(cf, "EndHTML") - Offset(cf, "StartHTML")));
-        Assert.Equal("<b>hi</b>", Encoding.UTF8.GetString(bytes, Offset(cf, "StartFragment"), Offset(cf, "EndFragment") - Offset(cf, "StartFragment")));
-        Assert.Equal(bytes.Length, Offset(cf, "EndHTML"));
+    [Theory]
+    [InlineData(0, "text/plain")]
+    [InlineData(1, "text/html")]
+    [InlineData(2, "image/svg+xml")]
+    [InlineData(3, "text/rtf")]
+    [InlineData(4, "image/png")]
+    [InlineData(5, "text/uri-list")]
+    public void StandardTypes_lists_each_type_only_when_its_format_is_there(int which, string mime)
+    {
+        var f = Enumerable.Range(0, 6).Select(i => i == which).ToArray();
+        Assert.Equal([mime], ClipboardFormats.StandardTypes(f[0], f[1], f[2], f[3], f[4], f[5]));
     }
 
     [Fact]
-    public void BuildCfHtml_counts_bytes_not_chars_for_non_ascii()
+    public void AvailableTypes_lists_custom_then_standard_then_registered_by_id_then_bookmark()
     {
-        const string Fragment = "<p>héllo € \U0001F600</p>";
-        var cf = ClipboardFormats.BuildCfHtml(Fragment);
-        var bytes = Encoding.UTF8.GetBytes(cf);
-
-        var start = Offset(cf, "StartFragment");
-        var end = Offset(cf, "EndFragment");
-        Assert.Equal(Encoding.UTF8.GetByteCount(Fragment), end - start);
-        Assert.NotEqual(Fragment.Length, end - start);
-        Assert.Equal(Fragment, Encoding.UTF8.GetString(bytes, start, end - start));
-        Assert.Equal(bytes.Length, Offset(cf, "EndHTML"));
-    }
-
-    [Fact]
-    public void FragmentFromCfHtml_round_trips_ascii_and_non_ascii()
-    {
-        Assert.Equal("<b>hi</b>", ClipboardFormats.FragmentFromCfHtml(ClipboardFormats.BuildCfHtml("<b>hi</b>")));
-        Assert.Equal("", ClipboardFormats.FragmentFromCfHtml(ClipboardFormats.BuildCfHtml("")));
-        const string Fragment = "<p>héllo € \U0001F600</p>";
-        Assert.Equal(Fragment, ClipboardFormats.FragmentFromCfHtml(ClipboardFormats.BuildCfHtml(Fragment)));
-    }
-
-    [Fact]
-    public void FragmentFromCfHtml_uses_the_offsets_over_the_markers()
-    {
-        // Offsets pick "BBB" while the markers surround "AAA".
-        const string Html = "<!--StartFragment-->AAA<!--EndFragment-->BBB";
-        var header = "Version:0.9\r\nStartFragment:{0:D10}\r\nEndFragment:{1:D10}\r\n";
-        var prefixLength = string.Format(header, 0, 0).Length;
-        var text = string.Format(header, prefixLength + Html.Length - 3, prefixLength + Html.Length) + Html;
-
-        Assert.Equal("BBB", ClipboardFormats.FragmentFromCfHtml(text));
-    }
-
-    [Fact]
-    public void FragmentFromCfHtml_accepts_an_empty_offset_range_over_the_markers()
-    {
-        const string Html = "<!--StartFragment-->AAA<!--EndFragment-->";
-        var header = "Version:0.9\r\nStartFragment:{0:D10}\r\nEndFragment:{0:D10}\r\n";
-        var length = string.Format(header, 0).Length;
-
-        Assert.Equal("", ClipboardFormats.FragmentFromCfHtml(string.Format(header, length) + Html));
-    }
-
-    [Fact]
-    public void FragmentFromCfHtml_accepts_an_offset_range_ending_at_the_last_byte()
-    {
-        var header = "Version:0.9\r\nStartFragment:{0:D10}\r\nEndFragment:{1:D10}\r\n";
-        var length = string.Format(header, 0, 0).Length;
-
-        Assert.Equal("tail", ClipboardFormats.FragmentFromCfHtml(string.Format(header, length, length + 4) + "tail"));
-    }
-
-    [Fact]
-    public void FragmentFromCfHtml_tolerates_missing_StartHTML_and_EndHTML()
-    {
-        var header = "Version:1.0\r\nStartFragment:{0:D10}\r\nEndFragment:{1:D10}\r\n";
-        var length = string.Format(header, 0, 0).Length;
-        Assert.Equal("xyz", ClipboardFormats.FragmentFromCfHtml(string.Format(header, length, length + 3) + "xyz"));
-    }
-
-    [Fact]
-    public void FragmentFromCfHtml_handles_bare_line_feeds_and_padding_spaces()
-    {
-        const string Header = "Version:0.9\nStartFragment: 0000000062 \nEndFragment:0000000065\n";
-        Assert.Equal(62, Header.Length);
-        Assert.Equal("abc", ClipboardFormats.FragmentFromCfHtml(Header + "abc"));
+        (uint, string?)[] formats =
+        [
+            (0xC005, "Zed"), (0xC001, "Alpha"), (13, null), (0xBFFF, "Below the registered range"), (0xC003, "Ünicode"),
+            (0xC004, "web c/d"), (0xC001, "Alpha"), (0xC006, ""),
+        ];
+        var types = ClipboardFormats.AvailableTypes(["web b/x", "web a/y"], ["text/plain"], formats, bookmark: true);
+        Assert.Equal(
+            ["web a/y", "web b/x", "text/plain", "electron application/osclipboard;format=\"Alpha\"", "web c/d", "electron application/osclipboard;format=\"Zed\"", "electron application/bookmark"],
+            types);
     }
 
     [Theory]
-    [InlineData("StartFragment:0000000999\r\nEndFragment:0000001000\r\n")] // past the end
-    [InlineData("StartFragment:0000000050\r\nEndFragment:0000000040\r\n")] // reversed
-    [InlineData("StartFragment:-000000001\r\nEndFragment:0000000040\r\n")] // negative
-    [InlineData("StartFragment:abc\r\nEndFragment:def\r\n")] // not numbers
-    [InlineData("StartFragment:0000000040\r\n")] // end missing
-    [InlineData("EndFragment:0000000040\r\n")] // start missing
-    public void FragmentFromCfHtml_falls_back_to_the_markers_when_offsets_are_unusable(string offsets)
+    [InlineData("HTML Format")]
+    [InlineData("image/svg+xml")]
+    [InlineData("Rich Text Format")]
+    [InlineData("PNG")]
+    [InlineData("FileNameW")]
+    public void AvailableTypes_skips_the_formats_listed_under_a_mime_type(string name)
+        => Assert.Equal(["electron application/osclipboard;format=\"Other\""], ClipboardFormats.AvailableTypes([], [], [(0xC001, name), (0xC002, "Other")], false));
+
+    [Fact]
+    public void AvailableTypes_lists_a_registered_web_name_once()
+        => Assert.Equal(["web a/b"], ClipboardFormats.AvailableTypes(["web a/b"], [], [(0xC001, "web a/b")], false));
+
+    [Fact]
+    public void OsFormat_wraps_and_parses_back()
     {
-        var text = "Version:0.9\r\n" + offsets + "<html><!--StartFragment-->frag<!--EndFragment--></html>";
-        Assert.Equal("frag", ClipboardFormats.FragmentFromCfHtml(text));
+        var mime = ClipboardFormats.WrapOsFormat("HTML Format");
+        Assert.Equal("electron application/osclipboard;format=\"HTML Format\"", mime);
+        Assert.Equal("HTML Format", ClipboardFormats.ParseOsFormat(mime));
+        Assert.Equal("", ClipboardFormats.ParseOsFormat("electron application/osclipboard;format=\"\""));
+    }
+
+    [Theory]
+    [InlineData("text/plain")]
+    [InlineData("electron application/osclipboardx;format=\"a\"")]
+    [InlineData("electron application/osclipboarX;format=\"a\"")]
+    [InlineData("electron application/osclipboard;fmt=\"a\"")]
+    [InlineData("electron application/osclipboard;format=\"a")]
+    public void ParseOsFormat_is_null_for_anything_else(string mime) => Assert.Null(ClipboardFormats.ParseOsFormat(mime));
+
+    [Fact]
+    public void BuildCfHtml_is_chromiums_document_with_utf8_byte_offsets()
+    {
+        // "<b>é</b>" is 9 UTF-8 bytes: the fragment runs from 141 to 150 and the document ends 36 bytes later.
+        Assert.Equal(
+            "Version:0.9\r\nStartHTML:0000000105\r\nEndHTML:0000000186\r\nStartFragment:0000000141\r\nEndFragment:0000000150\r\n"
+            + "<html>\r\n<body>\r\n<!--StartFragment--><b>é</b><!--EndFragment-->\r\n</body>\r\n</html>",
+            ClipboardFormats.BuildCfHtml("<b>é</b>"));
+        Assert.Equal("", ClipboardFormats.BuildCfHtml(""));
     }
 
     [Fact]
-    public void FragmentFromCfHtml_falls_back_to_the_markers_when_there_are_no_offsets()
+    public void BuildCfHtml_offsets_frame_the_fragment_bytes()
     {
-        Assert.Equal("mé", ClipboardFormats.FragmentFromCfHtml("Version:0.9\r\n<!--StartFragment-->mé<!--EndFragment-->"));
+        var bytes = Encoding.UTF8.GetBytes(ClipboardFormats.BuildCfHtml("x✓y"));
+        var text = Encoding.ASCII.GetString(bytes);
+        int Field(string name) => int.Parse(text.Split(name + ":")[1][..10]);
+        Assert.Equal("x✓y", Encoding.UTF8.GetString(bytes, Field("StartFragment"), Field("EndFragment") - Field("StartFragment")));
+        Assert.Equal(bytes.Length, Field("EndHTML"));
+        Assert.Equal("<html>", Encoding.ASCII.GetString(bytes, Field("StartHTML"), 6));
     }
 
     [Fact]
-    public void FragmentFromCfHtml_ignores_markers_in_the_wrong_order()
+    public void HtmlFragment_reads_back_BuildCfHtml_with_a_trailing_nul()
+        => Assert.Equal("<i>ü ✓</i>", ClipboardFormats.HtmlFragment([.. Encoding.UTF8.GetBytes(ClipboardFormats.BuildCfHtml("<i>ü ✓</i>")), 0, 0]));
+
+    [Fact]
+    public void HtmlFragment_ignores_whatever_follows_a_nul()
+        => Assert.Equal("a", Html("Version:0.9\r\n<html><!--StartFragment-->a<!--EndFragment--></html>\0b<!--EndFragment-->"));
+
+    [Fact]
+    public void HtmlFragment_finds_the_html_tag_in_any_case_and_ends_at_the_last_end_comment()
+        => Assert.Equal("a<!--EndFragment-->b", Html("Version:0.9\r\n<HTML><body><!--StartFragment-->a<!--EndFragment-->b<!--EndFragment--></body></HTML>"));
+
+    [Fact]
+    public void HtmlFragment_without_an_end_comment_ends_at_the_last_tag()
+        => Assert.Equal("a</b>", Html("Version:0.9\r\n<html><!--StartFragment-->a</b></html>"));
+
+    [Fact]
+    public void HtmlFragment_without_comments_uses_the_header_byte_offsets()
     {
-        const string Text = "Version:0.9\r\n<!--EndFragment-->a<!--StartFragment-->";
-        Assert.Null(ClipboardFormats.FragmentFromCfHtml(Text));
+        const string Body = "<html><body>xé<p>y</body></html>";
+        var header = "Version:0.9\r\nStartFragment:{0:D10}\r\nEndFragment:{1:D10}\r\n";
+        var length = string.Format(header, 0, 0).Length;
+        // "é<p>" starts one byte after "<html><body>x" and is five bytes long.
+        var cf = string.Format(header, length + 13, length + 18) + Body;
+        Assert.Equal("é<p>", Html(cf));
     }
 
     [Fact]
-    public void FragmentFromCfHtml_ignores_a_start_marker_without_an_end_marker()
+    public void HtmlFragment_is_empty_without_an_html_tag()
     {
-        Assert.Null(ClipboardFormats.FragmentFromCfHtml("Version:0.9\r\n<html><!--StartFragment-->abc</html>"));
+        Assert.Equal("", Html("Version:0.9\r\n<body><!--StartFragment-->a<!--EndFragment--></body>"));
+        Assert.Equal("", Html("Version:0.9\r\nStartFragment:0000000001\r\nEndFragment:0000000002\r\n<body>a</body>"));
     }
 
     [Fact]
-    public void FragmentFromCfHtml_takes_the_html_range_when_there_is_no_fragment()
-    {
-        var header = "Version:0.9\r\nStartHTML:{0:D10}\r\nEndHTML:{1:D10}\r\n";
-        var prefixLength = string.Format(header, 0, 0).Length;
-        const string Html = "<html>é</html>";
-        var text = string.Format(header, prefixLength, prefixLength + Encoding.UTF8.GetByteCount(Html)) + Html;
+    public void HtmlFragment_is_empty_when_the_fragment_starts_before_the_html()
+        => Assert.Equal("", Html("Version:0.9\r\nStartFragment:0000000002\r\nEndFragment:0000000060\r\n<html>abc</html>"));
 
-        Assert.Equal(Html, ClipboardFormats.FragmentFromCfHtml(text));
+    [Fact]
+    public void HtmlFragment_is_empty_when_the_fragment_ends_before_it_starts()
+        => Assert.Equal("", Html("Version:0.9\r\nStartFragment:0000000070\r\nEndFragment:0000000069\r\n<html>abcdefghijklmnopqrstuvwxyz</html>"));
+
+    [Fact]
+    public void HtmlFragment_is_empty_without_offsets_or_comments() => Assert.Equal("", Html("Version:0.9\r\n<html>abc</html>"));
+
+    [Fact]
+    public void HtmlFragment_clamps_an_end_past_the_markup()
+    {
+        var header = "Version:0.9\r\nStartFragment:{0:D10}\r\nEndFragment:{1:D10}\r\n";
+        var length = string.Format(header, 0, 0).Length;
+        Assert.Equal("bc</html>", Html(string.Format(header, length + 7, length + 999) + "<html>abc</html>"));
     }
 
     [Fact]
-    public void FragmentFromCfHtml_rejects_an_html_range_past_the_end()
+    public void HtmlFragment_drops_a_fragment_starting_inside_a_character()
     {
-        Assert.Null(ClipboardFormats.FragmentFromCfHtml("Version:0.9\r\nStartHTML:0000000030\r\nEndHTML:0000009999\r\n<html></html>"));
+        var header = "Version:0.9\r\nStartFragment:{0:D10}\r\nEndFragment:{1:D10}\r\n";
+        var length = string.Format(header, 0, 0).Length;
+        // Byte 7 of "<html>é" is the second byte of "é".
+        Assert.Equal("", Html(string.Format(header, length + 7, length + 9) + "<html>é</html>"));
+    }
+
+    private static string Html(string cf) => ClipboardFormats.HtmlFragment(Encoding.UTF8.GetBytes(cf));
+
+    [Fact]
+    public void BuildDibV5_is_skias_header_and_premultiplied_rows_bottom_up()
+    {
+        // 1x2: top pixel half-transparent premultiplied red, bottom opaque blue.
+        var dib = ClipboardFormats.BuildDibV5(new ImageBitmap(1, 2, [0, 0, 128, 128, 255, 0, 0, 255]));
+        Assert.Equal(124 + 8, dib.Length);
+        var h = dib.AsSpan();
+        Assert.Equal((124, 1, 2), (BinaryPrimitives.ReadInt32LittleEndian(h), BinaryPrimitives.ReadInt32LittleEndian(h[4..]), BinaryPrimitives.ReadInt32LittleEndian(h[8..])));
+        Assert.Equal((1, 32), (BinaryPrimitives.ReadInt16LittleEndian(h[12..]), BinaryPrimitives.ReadInt16LittleEndian(h[14..])));
+        Assert.Equal(0, BinaryPrimitives.ReadInt32LittleEndian(h[16..])); // BI_RGB
+        Assert.Equal(0u, BinaryPrimitives.ReadUInt32LittleEndian(h[40..])); // no red mask
+        Assert.Equal(0xFF000000u, BinaryPrimitives.ReadUInt32LittleEndian(h[52..]));
+        Assert.Equal(0x57696E20u, BinaryPrimitives.ReadUInt32LittleEndian(h[56..]));
+        Assert.Equal(4, BinaryPrimitives.ReadInt32LittleEndian(h[108..]));
+        Assert.Equal(new byte[] { 255, 0, 0, 255, 0, 0, 128, 128 }, dib[124..]);
+    }
+
+    [Fact]
+    public void FinishDib_keeps_valid_premultiplied_alpha_at_32_bits()
+        => Assert.Equal(new byte[] { 10, 20, 30, 40 }, ClipboardFormats.FinishDib(1, 1, [10, 20, 30, 40], 32).Bgra);
+
+    [Theory]
+    [InlineData(50, 20, 30)]
+    [InlineData(10, 50, 30)]
+    [InlineData(10, 20, 50)]
+    public void FinishDib_makes_every_pixel_opaque_when_a_channel_exceeds_alpha(byte b, byte g, byte r)
+        => Assert.Equal(new byte[] { 1, 1, 1, 255, b, g, r, 255 }, ClipboardFormats.FinishDib(2, 1, [1, 1, 1, 5, b, g, r, 40], 32).Bgra);
+
+    [Fact]
+    public void FinishDib_makes_every_pixel_opaque_below_32_bits()
+        => Assert.Equal(new byte[] { 0, 0, 0, 255 }, ClipboardFormats.FinishDib(1, 1, [0, 0, 0, 0], 24).Bgra);
+
+    [Theory]
+    [InlineData("text/plain", "text", "plain")]
+    [InlineData("  application/x.my-app+json  ", "application", "x.my-app+json")]
+    [InlineData("A!#$%&'*+-.^_`|~9/b", "A!#$%&'*+-.^_`|~9", "b")]
+    public void TryParseMimeType_accepts_tokens(string text, string type, string subtype)
+    {
+        Assert.True(ClipboardFormats.TryParseMimeType(text, out var t, out var s));
+        Assert.Equal((type, subtype), (t, s));
+    }
+
+    [Theory]
+    [InlineData("text")]
+    [InlineData("a/b/c")]
+    [InlineData("a /b")]
+    [InlineData("a/ b")]
+    [InlineData("/b")]
+    [InlineData("a/")]
+    [InlineData("a/b;c=d")]
+    [InlineData("é/b")]
+    public void TryParseMimeType_rejects_non_tokens(string text) => Assert.False(ClipboardFormats.TryParseMimeType(text, out _, out _));
+
+    [Fact]
+    public void WebCustomFormatMapJson_sorts_keys_and_escapes_like_chromium()
+        => Assert.Equal("{\"a\\\"\\u003C\\u003C\\n\\u0001\":\"Web Custom Format1\",\"b/c\":\"Web Custom Format0\"}",
+            ClipboardFormats.WebCustomFormatMapJson([new("b/c", "Web Custom Format0"), new("a\"<<\n\u0001", "Web Custom Format1")]));
+
+    [Fact]
+    public void ParseWebCustomFormatMap_keys_valid_mime_types_with_the_web_prefix()
+    {
+        var map = ClipboardFormats.ParseWebCustomFormatMap(Encoding.UTF8.GetBytes("{\"text/x\":\"Web Custom Format0\",\"bad\":\"Web Custom Format1\",\"a/b\":3, \" c/d \":\"F\"}"));
+        Assert.Equal([new("web c/d", "F"), new("web text/x", "Web Custom Format0")], map);
     }
 
     [Theory]
     [InlineData("")]
-    [InlineData("<html><!--StartFragment-->a<!--EndFragment--></html>")]
-    [InlineData("StartFragment:0000000000\r\nEndFragment:0000000000\r\n")]
-    [InlineData("Version:0.9\r\n")]
-    public void FragmentFromCfHtml_is_null_when_it_is_not_cf_html(string text)
+    [InlineData("not json")]
+    [InlineData("[\"a/b\"]")]
+    public void ParseWebCustomFormatMap_is_empty_for_anything_but_an_object(string json)
+        => Assert.Empty(ClipboardFormats.ParseWebCustomFormatMap(Encoding.UTF8.GetBytes(json)));
+
+    [Fact]
+    public void UriListToPaths_reads_file_urls_as_windows_paths()
     {
-        Assert.Null(ClipboardFormats.FragmentFromCfHtml(text));
+        var list = " file:///C:/a%20b/%C3%A9.txt \r\n\r\nhttps://x/y\r\nfile://host/share/f\r\nfile:///usr/x\r\nfile://\r\nfile:///C:rel";
+        Assert.Equal([@"C:\a b\é.txt", @"\\host\share\f", @"\usr\x", @"\C:rel"], ClipboardFormats.UriListToPaths(list));
     }
 
     [Fact]
-    public void FragmentFromCfHtml_reads_header_keys_only_before_the_body()
-    {
-        // The body mentions StartFragment: but the real header has none, so the markers decide.
-        var text = "Version:0.9\r\n<html>\r\nStartFragment:0000000000\r\nEndFragment:0000000005\r\n<!--StartFragment-->ok<!--EndFragment--></html>";
-        Assert.Equal("ok", ClipboardFormats.FragmentFromCfHtml(text));
-    }
+    public void PathsToUriList_escapes_like_chromium_on_windows()
+        => Assert.Equal("file:///C:/a%20b/%C3%A9%3B%23%3F%25.txt\r\nfile://host/x\r\nfile:///x",
+            ClipboardFormats.PathsToUriList([@"C:\a b\é;#?%.txt", @"\\host\x", @"\x"]));
 
-    // DIB
-
-    private static byte[] Dib(int headerSize, int width, int height, int bits, int compression, byte[] pixels,
-        uint red = 0x00FF0000, uint green = 0x0000FF00, uint blue = 0x000000FF, uint alpha = 0xFF000000, uint colorsUsed = 0)
+    [Fact]
+    public void BuildDropFiles_is_a_wide_dropfiles_block()
     {
-        var maskBytes = compression == 3 && headerSize == 40 ? 12 : 0;
-        var dib = new byte[headerSize + maskBytes + pixels.Length];
-        BinaryPrimitives.WriteInt32LittleEndian(dib.AsSpan(0), headerSize);
-        BinaryPrimitives.WriteInt32LittleEndian(dib.AsSpan(4), width);
-        BinaryPrimitives.WriteInt32LittleEndian(dib.AsSpan(8), height);
-        BinaryPrimitives.WriteInt16LittleEndian(dib.AsSpan(12), 1);
-        BinaryPrimitives.WriteInt16LittleEndian(dib.AsSpan(14), (short)bits);
-        BinaryPrimitives.WriteInt32LittleEndian(dib.AsSpan(16), compression);
-        BinaryPrimitives.WriteUInt32LittleEndian(dib.AsSpan(32), colorsUsed);
-        if (compression == 3)
-        {
-            BinaryPrimitives.WriteUInt32LittleEndian(dib.AsSpan(40), red);
-            BinaryPrimitives.WriteUInt32LittleEndian(dib.AsSpan(44), green);
-            BinaryPrimitives.WriteUInt32LittleEndian(dib.AsSpan(48), blue);
-            if (headerSize > 40) BinaryPrimitives.WriteUInt32LittleEndian(dib.AsSpan(52), alpha);
-        }
-        pixels.CopyTo(dib, headerSize + maskBytes);
-        return dib;
+        var block = ClipboardFormats.BuildDropFiles([@"C:\a", "b"])!;
+        Assert.Equal(20, BinaryPrimitives.ReadInt32LittleEndian(block));
+        Assert.Equal(1, BinaryPrimitives.ReadInt32LittleEndian(block.AsSpan(16)));
+        Assert.Equal("C:\\a\0b\0\0", Encoding.Unicode.GetString(block, 20, block.Length - 20));
+        Assert.Null(ClipboardFormats.BuildDropFiles([]));
     }
 
     [Fact]
-    public void BuildDibV5_writes_the_v5_header_and_bottom_up_straight_alpha_pixels()
-    {
-        // 2x2, top row first, premultiplied BGRA. Row 0: opaque red, half-transparent (premultiplied) blue.
-        // Row 1: fully transparent, opaque (10,20,30).
-        byte[] bgra =
-        [
-            0, 0, 255, 255,   64, 0, 0, 128,
-            0, 0, 0, 0,       10, 20, 30, 255,
-        ];
-        var dib = ClipboardFormats.BuildDibV5(new ImageBitmap(2, 2, bgra));
-
-        Assert.Equal(124 + 16, dib.Length);
-        Assert.Equal(124, BinaryPrimitives.ReadInt32LittleEndian(dib.AsSpan(0)));
-        Assert.Equal(2, BinaryPrimitives.ReadInt32LittleEndian(dib.AsSpan(4)));
-        Assert.Equal(2, BinaryPrimitives.ReadInt32LittleEndian(dib.AsSpan(8)));
-        Assert.Equal(1, BinaryPrimitives.ReadInt16LittleEndian(dib.AsSpan(12)));
-        Assert.Equal(32, BinaryPrimitives.ReadInt16LittleEndian(dib.AsSpan(14)));
-        Assert.Equal(3, BinaryPrimitives.ReadInt32LittleEndian(dib.AsSpan(16)));
-        Assert.Equal(16, BinaryPrimitives.ReadInt32LittleEndian(dib.AsSpan(20)));
-        Assert.Equal(0u, BinaryPrimitives.ReadUInt32LittleEndian(dib.AsSpan(24)));
-        Assert.Equal(0u, BinaryPrimitives.ReadUInt32LittleEndian(dib.AsSpan(28)));
-        Assert.Equal(0u, BinaryPrimitives.ReadUInt32LittleEndian(dib.AsSpan(32)));
-        Assert.Equal(0u, BinaryPrimitives.ReadUInt32LittleEndian(dib.AsSpan(36)));
-        Assert.Equal(0x00FF0000u, BinaryPrimitives.ReadUInt32LittleEndian(dib.AsSpan(40)));
-        Assert.Equal(0x0000FF00u, BinaryPrimitives.ReadUInt32LittleEndian(dib.AsSpan(44)));
-        Assert.Equal(0x000000FFu, BinaryPrimitives.ReadUInt32LittleEndian(dib.AsSpan(48)));
-        Assert.Equal(0xFF000000u, BinaryPrimitives.ReadUInt32LittleEndian(dib.AsSpan(52)));
-        Assert.Equal(0x73524742u, BinaryPrimitives.ReadUInt32LittleEndian(dib.AsSpan(56)));
-        Assert.Equal(4, BinaryPrimitives.ReadInt32LittleEndian(dib.AsSpan(108)));
-        Assert.All(dib[60..108], b => Assert.Equal(0, b));
-        Assert.All(dib[112..124], b => Assert.Equal(0, b));
-        // Bottom row first; 64 at alpha 128 un-premultiplies to 128.
-        Assert.Equal(new byte[] { 0, 0, 0, 0, 10, 20, 30, 255, 0, 0, 255, 255, 128, 0, 0, 128 }, dib[124..]);
-    }
+    public void RtfToUtf8_keeps_ascii_up_to_the_nul()
+        => Assert.Equal(new byte[] { (byte)'{', (byte)'}' }, ClipboardFormats.RtfToUtf8([(byte)'{', (byte)'}', 0, 0xE9]));
 
     [Fact]
-    public void BuildDibV5_caps_an_out_of_range_premultiplied_channel_at_255()
-    {
-        var dib = ClipboardFormats.BuildDibV5(new ImageBitmap(1, 1, [200, 100, 1, 100]));
-        Assert.Equal(new byte[] { 255, 255, 3, 100 }, dib[124..]);
-    }
+    public void RtfToUtf8_normalizes_utf8_to_nfc()
+        => Assert.Equal(new byte[] { 0xC3, 0xA9 }, ClipboardFormats.RtfToUtf8(Encoding.UTF8.GetBytes("é")));
 
     [Fact]
-    public void BuildDibV5_rounds_the_unpremultiplied_channel()
-    {
-        // 1 * 255 / 2 = 127.5 rounds up; 1 * 255 / 3 = 85 exactly; 2 * 255 / 5 = 102.
-        Assert.Equal(128, ClipboardFormats.Unpremultiply(1, 2));
-        Assert.Equal(85, ClipboardFormats.Unpremultiply(1, 3));
-        Assert.Equal(102, ClipboardFormats.Unpremultiply(2, 5));
-        Assert.Equal(0, ClipboardFormats.Unpremultiply(0, 0));
-        Assert.Equal(0, ClipboardFormats.Unpremultiply(5, 0));
-    }
+    public void RtfToUtf8_reads_other_bytes_as_windows_1252()
+        => Assert.Equal(Encoding.UTF8.GetBytes("é€"), ClipboardFormats.RtfToUtf8([0xE9, 0x80]));
 
     [Fact]
-    public void Premultiply_rounds_to_nearest()
+    public void TrimAfterNull_and_Utf16Text_stop_at_the_first_nul()
     {
-        Assert.Equal(0, ClipboardFormats.Premultiply(255, 0));
-        Assert.Equal(255, ClipboardFormats.Premultiply(255, 255));
-        Assert.Equal(128, ClipboardFormats.Premultiply(255, 128)); // 128.49
-        Assert.Equal(1, ClipboardFormats.Premultiply(2, 128));     // 1.004
-        Assert.Equal(1, ClipboardFormats.Premultiply(3, 85));      // 1.0
-        Assert.Equal(0, ClipboardFormats.Premultiply(1, 127));     // 0.498 rounds down
-        Assert.Equal(1, ClipboardFormats.Premultiply(1, 128));     // 0.502 rounds up
-    }
-
-    [Fact]
-    public void ParseDib_round_trips_BuildDibV5_including_semi_transparent_pixels()
-    {
-        byte[] bgra =
-        [
-            0, 0, 255, 255,   64, 0, 0, 128,   0, 32, 0, 128,
-            0, 0, 0, 0,       10, 20, 30, 255, 0, 0, 0, 64,
-        ];
-        var parsed = ClipboardFormats.ParseDib(ClipboardFormats.BuildDibV5(new ImageBitmap(3, 2, bgra)));
-
-        Assert.NotNull(parsed);
-        Assert.Equal(3, parsed.Value.Width);
-        Assert.Equal(2, parsed.Value.Height);
-        Assert.Equal(bgra, parsed.Value.Bgra);
-    }
-
-    [Fact]
-    public void ParseDib_reads_bottom_up_with_positive_height_and_top_down_with_negative()
-    {
-        byte[] rowA = [1, 2, 3, 255, 4, 5, 6, 255];
-        byte[] rowB = [7, 8, 9, 255, 10, 11, 12, 255];
-
-        var bottomUp = ClipboardFormats.ParseDib(Dib(40, 2, 2, 32, 3, [.. rowB, .. rowA]));
-        var topDown = ClipboardFormats.ParseDib(Dib(40, 2, -2, 32, 3, [.. rowA, .. rowB]));
-
-        Assert.Equal([.. rowA, .. rowB], bottomUp!.Value.Bgra);
-        Assert.Equal([.. rowA, .. rowB], topDown!.Value.Bgra);
-        Assert.Equal(2, bottomUp.Value.Height);
-        Assert.Equal(2, topDown.Value.Height);
-    }
-
-    [Fact]
-    public void ParseDib_reads_24bpp_rows_padded_to_four_bytes_as_opaque()
-    {
-        // Width 3: 9 pixel bytes padded to 12. Bottom-up, so the first stored row is the image's bottom row.
-        byte[] bottom = [1, 2, 3, 4, 5, 6, 7, 8, 9, 0xEE, 0xEE, 0xEE];
-        byte[] top = [11, 12, 13, 14, 15, 16, 17, 18, 19, 0xEE, 0xEE, 0xEE];
-        var parsed = ClipboardFormats.ParseDib(Dib(40, 3, 2, 24, 0, [.. bottom, .. top]));
-
-        Assert.Equal(
-            new byte[] { 11, 12, 13, 255, 14, 15, 16, 255, 17, 18, 19, 255, 1, 2, 3, 255, 4, 5, 6, 255, 7, 8, 9, 255 },
-            parsed!.Value.Bgra);
-    }
-
-    [Fact]
-    public void ParseDib_reads_24bpp_width_four_without_padding()
-    {
-        var pixels = new byte[12];
-        for (var i = 0; i < 12; i++) pixels[i] = (byte)(i + 1);
-        var parsed = ClipboardFormats.ParseDib(Dib(40, 4, 1, 24, 0, pixels));
-
-        Assert.Equal(new byte[] { 1, 2, 3, 255, 4, 5, 6, 255, 7, 8, 9, 255, 10, 11, 12, 255 }, parsed!.Value.Bgra);
-    }
-
-    [Fact]
-    public void ParseDib_takes_BI_RGB_32bpp_with_all_zero_alpha_as_opaque()
-    {
-        var parsed = ClipboardFormats.ParseDib(Dib(40, 2, 1, 32, 0, [10, 20, 30, 0, 40, 50, 60, 0]));
-        Assert.Equal(new byte[] { 10, 20, 30, 255, 40, 50, 60, 255 }, parsed!.Value.Bgra);
-    }
-
-    [Fact]
-    public void ParseDib_keeps_BI_RGB_32bpp_alpha_when_any_pixel_has_it_and_premultiplies()
-    {
-        var parsed = ClipboardFormats.ParseDib(Dib(40, 2, 1, 32, 0, [255, 255, 255, 128, 100, 100, 100, 0]));
-        Assert.Equal(new byte[] { 128, 128, 128, 128, 0, 0, 0, 0 }, parsed!.Value.Bgra);
-    }
-
-    [Fact]
-    public void ParseDib_reads_BI_BITFIELDS_in_an_info_header_with_masks_after_the_header()
-    {
-        var parsed = ClipboardFormats.ParseDib(Dib(40, 1, 1, 32, 3, [10, 20, 30, 255]));
-        Assert.Equal(new byte[] { 10, 20, 30, 255 }, parsed!.Value.Bgra);
-    }
-
-    [Fact]
-    public void ParseDib_takes_info_bitfields_with_all_zero_alpha_as_opaque()
-    {
-        var parsed = ClipboardFormats.ParseDib(Dib(40, 1, 1, 32, 3, [10, 20, 30, 0]));
-        Assert.Equal(new byte[] { 10, 20, 30, 255 }, parsed!.Value.Bgra);
-    }
-
-    [Theory]
-    [InlineData(108)]
-    [InlineData(124)]
-    public void ParseDib_reads_v4_and_v5_headers_with_the_alpha_mask_trusted(int headerSize)
-    {
-        var parsed = ClipboardFormats.ParseDib(Dib(headerSize, 2, 1, 32, 3, [200, 100, 50, 128, 1, 2, 3, 0]));
-        // Fully transparent stays transparent: the alpha mask is declared, so zero alpha is real.
-        Assert.Equal(new byte[] { 100, 50, 25, 128, 0, 0, 0, 0 }, parsed!.Value.Bgra);
-    }
-
-    [Theory]
-    [InlineData(108)]
-    [InlineData(124)]
-    public void ParseDib_reads_v4_and_v5_bitfields_without_an_alpha_mask_as_opaque(int headerSize)
-    {
-        var parsed = ClipboardFormats.ParseDib(Dib(headerSize, 1, 1, 32, 3, [10, 20, 30, 77], alpha: 0));
-        Assert.Equal(new byte[] { 10, 20, 30, 255 }, parsed!.Value.Bgra);
-    }
-
-    [Theory]
-    [InlineData(108)]
-    [InlineData(124)]
-    public void ParseDib_reads_v4_and_v5_headers_with_BI_RGB_24bpp(int headerSize)
-    {
-        var parsed = ClipboardFormats.ParseDib(Dib(headerSize, 1, 1, 24, 0, [1, 2, 3, 0]));
-        Assert.Equal(new byte[] { 1, 2, 3, 255 }, parsed!.Value.Bgra);
-    }
-
-    [Fact]
-    public void ParseDib_accepts_a_buffer_with_trailing_bytes()
-    {
-        var parsed = ClipboardFormats.ParseDib(Dib(40, 1, 1, 32, 0, [1, 2, 3, 255, 9, 9, 9, 9]));
-        Assert.Equal(new byte[] { 1, 2, 3, 255 }, parsed!.Value.Bgra);
-    }
-
-    [Fact]
-    public void ParseDib_rejects_unsupported_or_malformed_blocks()
-    {
-        byte[] px = [1, 2, 3, 255];
-
-        Assert.Null(ClipboardFormats.ParseDib([]));
-        Assert.Null(ClipboardFormats.ParseDib(new byte[39]));
-        Assert.Null(ClipboardFormats.ParseDib(Dib(40, 1, 1, 32, 0, px)[..43])); // pixels short
-        Assert.Null(ClipboardFormats.ParseDib(Dib(40, 1, 1, 32, 0, px)[..40])); // no pixels
-        Assert.Null(ClipboardFormats.ParseDib(Dib(40, 2, 1, 32, 0, px))); // one pixel short of two
-        Assert.Null(ClipboardFormats.ParseDib(Dib(40, 1, 2, 32, 0, px))); // two rows, one stored
-        Assert.Null(ClipboardFormats.ParseDib(Dib(40, 1, 1, 32, 1, px))); // BI_RLE8
-        Assert.Null(ClipboardFormats.ParseDib(Dib(40, 1, 1, 32, 4, px))); // BI_JPEG
-        Assert.Null(ClipboardFormats.ParseDib(Dib(40, 1, 1, 24, 3, [1, 2, 3, 0]))); // bitfields 24bpp
-        Assert.Null(ClipboardFormats.ParseDib(Dib(40, 1, 1, 8, 0, px))); // paletted 8bpp
-        Assert.Null(ClipboardFormats.ParseDib(Dib(40, 1, 1, 16, 0, px))); // 16bpp
-        Assert.Null(ClipboardFormats.ParseDib(Dib(40, 1, 1, 32, 0, px, colorsUsed: 2))); // colour table
-        Assert.Null(ClipboardFormats.ParseDib(Dib(40, 0, 1, 32, 0, []))); // zero width
-        Assert.Null(ClipboardFormats.ParseDib(Dib(40, -1, 1, 32, 0, px))); // negative width
-        Assert.Null(ClipboardFormats.ParseDib(Dib(40, 1, 0, 32, 0, []))); // zero height
-        Assert.Null(ClipboardFormats.ParseDib(Dib(40, 1, int.MinValue, 32, 0, px))); // unrepresentable height
-    }
-
-    [Fact]
-    public void ParseDib_rejects_unknown_header_sizes_and_headers_cut_short()
-    {
-        byte[] px = [1, 2, 3, 255];
-        var dib = Dib(40, 1, 1, 32, 0, px);
-        BinaryPrimitives.WriteInt32LittleEndian(dib, 12); // BITMAPCOREHEADER
-        Assert.Null(ClipboardFormats.ParseDib(dib));
-        BinaryPrimitives.WriteInt32LittleEndian(dib, 56);
-        Assert.Null(ClipboardFormats.ParseDib(dib));
-        BinaryPrimitives.WriteInt32LittleEndian(dib, 124); // claims V5 but is 44 bytes
-        Assert.Null(ClipboardFormats.ParseDib(dib));
-        Assert.Null(ClipboardFormats.ParseDib(Dib(124, 1, 1, 32, 0, [])[..123]));
-    }
-
-    [Fact]
-    public void ParseDib_rejects_non_standard_bitfield_masks()
-    {
-        byte[] px = [1, 2, 3, 255];
-        Assert.Null(ClipboardFormats.ParseDib(Dib(124, 1, 1, 32, 3, px, red: 0x000000FF)));
-        Assert.Null(ClipboardFormats.ParseDib(Dib(124, 1, 1, 32, 3, px, green: 0x00FF0000)));
-        Assert.Null(ClipboardFormats.ParseDib(Dib(124, 1, 1, 32, 3, px, blue: 0x0000FF00)));
-        Assert.Null(ClipboardFormats.ParseDib(Dib(124, 1, 1, 32, 3, px, alpha: 0x000000FF)));
-        Assert.Null(ClipboardFormats.ParseDib(Dib(40, 1, 1, 32, 3, px, red: 0x000000FF)));
-        Assert.Null(ClipboardFormats.ParseDib(Dib(40, 1, 1, 32, 3, px, green: 0)));
-        Assert.Null(ClipboardFormats.ParseDib(Dib(40, 1, 1, 32, 3, px, blue: 0)));
-    }
-
-    [Fact]
-    public void ParseDib_rejects_an_info_bitfields_block_cut_inside_the_masks()
-    {
-        var dib = Dib(40, 1, 1, 32, 3, []);
-        Assert.Equal(52, dib.Length);
-        Assert.Null(ClipboardFormats.ParseDib(dib[..51]));
-        Assert.Null(ClipboardFormats.ParseDib(dib[..45]));
-    }
-
-    [Fact]
-    public void ParseDib_ignores_declared_planes_and_sizeimage()
-    {
-        // Real writers leave biSizeImage 0 for BI_RGB; the stride rule decides the size.
-        var dib = Dib(40, 1, 1, 32, 0, [1, 2, 3, 255]);
-        BinaryPrimitives.WriteInt32LittleEndian(dib.AsSpan(20), 0);
-        Assert.Equal(new byte[] { 1, 2, 3, 255 }, ClipboardFormats.ParseDib(dib)!.Value.Bgra);
-    }
-
-    // MIME mapping
-
-    [Theory]
-    [InlineData("CF_UNICODETEXT", "text/plain")]
-    [InlineData("CF_TEXT", "text/plain")]
-    [InlineData("HTML Format", "text/html")]
-    [InlineData("Rich Text Format", "text/rtf")]
-    [InlineData("PNG", "image/png")]
-    [InlineData("CF_DIB", "image/png")]
-    [InlineData("CF_DIBV5", "image/png")]
-    [InlineData("UniformResourceLocatorW", null)]
-    [InlineData("MyFormat", null)]
-    [InlineData("", null)]
-    public void MimeOf_name(string name, string? mime)
-    {
-        Assert.Equal(mime, ClipboardFormats.MimeOf(name));
-    }
-
-    [Theory]
-    [InlineData(1u, null, "text/plain")]
-    [InlineData(13u, null, "text/plain")]
-    [InlineData(8u, null, "image/png")]
-    [InlineData(17u, null, "image/png")]
-    [InlineData(2u, null, null)]
-    [InlineData(49400u, "HTML Format", "text/html")]
-    [InlineData(49401u, "Rich Text Format", "text/rtf")]
-    [InlineData(49402u, "PNG", "image/png")]
-    [InlineData(49403u, "UniformResourceLocatorW", null)]
-    [InlineData(49404u, null, null)]
-    public void MimeOf_id(uint id, string? name, string? mime)
-    {
-        Assert.Equal(mime, ClipboardFormats.MimeOf(id, name));
-    }
-
-    [Fact]
-    public void MimeOf_id_does_not_map_the_registered_name_of_a_predefined_id_differently()
-    {
-        Assert.Equal("text/plain", ClipboardFormats.MimeOf(13, "MyFormat"));
-    }
-
-    [Fact]
-    public void WindowsNamesOf_lists_the_formats_best_first()
-    {
-        Assert.Equal(["CF_UNICODETEXT", "CF_TEXT"], ClipboardFormats.WindowsNamesOf("text/plain"));
-        Assert.Equal(["HTML Format"], ClipboardFormats.WindowsNamesOf("text/html"));
-        Assert.Equal(["Rich Text Format"], ClipboardFormats.WindowsNamesOf("text/rtf"));
-        Assert.Equal(["PNG", "CF_DIBV5", "CF_DIB"], ClipboardFormats.WindowsNamesOf("image/png"));
-        Assert.Empty(ClipboardFormats.WindowsNamesOf("image/jpeg"));
-        Assert.Empty(ClipboardFormats.WindowsNamesOf("MyFormat"));
-    }
-
-    [Fact]
-    public void PredefinedId_maps_cf_names_only()
-    {
-        Assert.Equal(1u, ClipboardFormats.PredefinedId("CF_TEXT"));
-        Assert.Equal(8u, ClipboardFormats.PredefinedId("CF_DIB"));
-        Assert.Equal(13u, ClipboardFormats.PredefinedId("CF_UNICODETEXT"));
-        Assert.Equal(17u, ClipboardFormats.PredefinedId("CF_DIBV5"));
-        Assert.Null(ClipboardFormats.PredefinedId("PNG"));
-        Assert.Null(ClipboardFormats.PredefinedId("HTML Format"));
-    }
-
-    [Fact]
-    public void AvailableMimes_lists_each_type_once_in_a_stable_order()
-    {
-        (uint, string?)[] formats =
-        [
-            (17, null), (8, null), (49402, "PNG"), (49403, "UniformResourceLocatorW"),
-            (49401, "Rich Text Format"), (13, null), (1, null), (49400, "HTML Format"), (49500, "Custom"), (2, null),
-        ];
-
-        Assert.Equal(["text/plain", "text/html", "text/rtf", "image/png"], ClipboardFormats.AvailableMimes(formats));
-        Assert.Equal(["text/html"], ClipboardFormats.AvailableMimes([(49400, "HTML Format"), (49400, "HTML Format")]));
-        Assert.Equal(["text/plain", "image/png"], ClipboardFormats.AvailableMimes([(8, null), (1, null)]));
-        Assert.Empty(ClipboardFormats.AvailableMimes([(49403, "UniformResourceLocatorW"), (49500, null)]));
-        Assert.Empty(ClipboardFormats.AvailableMimes([]));
+        Assert.Equal(new byte[] { 1, 2 }, ClipboardFormats.TrimAfterNull([1, 2, 0, 3]));
+        Assert.Equal(new byte[] { 1, 2 }, ClipboardFormats.TrimAfterNull([1, 2]));
+        Assert.Equal("ab", ClipboardFormats.Utf16Text([.. Encoding.Unicode.GetBytes("ab\0c"), 7]));
     }
 }

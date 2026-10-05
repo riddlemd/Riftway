@@ -171,18 +171,19 @@ Entries marked _(branch `x`)_ are on that branch and not yet in `main`.
 | ID | Electron | Oriel | Why | Possible resolution |
 |---|---|---|---|---|
 | H1 | `shell` on macOS and Linux | Windows only: macOS and Linux throw `PlatformNotSupportedException` behind `IShellBackend` _(branch `shell-clipboard`)_ | OS | macOS `NSWorkspace`; Linux `xdg-open`, the FreeDesktop trash and file manager D-Bus interfaces |
-| H2 | `openExternal` options `activate` (macOS) and `logUsage` (Windows) | `Activate` is accepted and ignored on Windows; no `logUsage` _(branch `shell-clipboard`)_ | OS; Todo | `logUsage`: Windows' shell execute usage logging flag |
-| H3 | `writeShortcutLink` documents `target` as required for create and replace, without saying what happens otherwise | A missing target on create or replace throws `ArgumentException` (unverified against Electron) _(branch `shell-clipboard`)_ | Design | Match Electron once checked |
+| H3 | `writeShortcutLink` create or replace without `target` reaches `NOTREACHED()` in Chromium's `CreateOrUpdateShortcutLink`, which stops the process (verified in `base/win/shortcut.cc` at 152.0.7977.130) | Throws `ArgumentException` before touching the file _(branch `shell-clipboard`)_ | Design: the safe equivalent of a crash | None needed |
+| H4 | `openExternal` and the clipboard bookmark canonicalize the string with `GURL` at any time | GURL itself through CEF's `cef_parse_url` once the app is ready; before `Ready`, `System.Uri` stands in (special schemes) and other schemes keep their text, so unusual URLs (IDN hosts, dot segments in non-special URLs) can differ _(branch `shell-clipboard`)_ | CEF: GURL's IDN handling needs the ICU data `CefInitialize` loads | None while CEF has to be initialized first |
 
 ## clipboard
 
 | ID | Electron | Oriel | Why | Possible resolution |
 |---|---|---|---|---|
-| K1 | `clipboard` on macOS and Linux | Windows only: macOS and Linux throw `PlatformNotSupportedException` behind `IClipboardBackend` _(branch `shell-clipboard`)_ | OS | macOS `NSPasteboard`; Linux X11 selections or the Wayland data device |
-| K2 | The `type` argument (`selection`, Linux's primary selection) on every read and write | Missing _(branch `shell-clipboard`)_ | OS | Add with the Linux backend |
-| K3 | `readFindText`/`writeFindText` (macOS), `ClipboardItem` in the renderer | Missing _(branch `shell-clipboard`)_ | OS; Module | Add with the macOS backend |
-| K4 | `availableFormats()` lists whatever the clipboard holds | The four MIME types Oriel maps (`text/plain`, `text/html`, `text/rtf`, `image/png`); bookmarks and custom formats are not listed _(branch `shell-clipboard`)_ | Unknown: Chromium's list on Windows is unchecked | Compare with Electron on Windows |
-
+| K1 | `clipboard` on macOS and Linux, including `electron application/findtext` (macOS) | Windows only: macOS and Linux throw `PlatformNotSupportedException` behind `IClipboardBackend` _(branch `shell-clipboard`)_ | OS | macOS `NSPasteboard` (and the find pasteboard); Linux X11 selections or the Wayland data device |
+| K2 | `clipboard.selection` (Linux) | Missing; `undefined` on Windows in Electron too _(branch `shell-clipboard`)_ | OS | Add with the Linux backend |
+| K5 | `getType()` resolves to a `Blob` (or a `ClipboardBookmark`); payloads are `Blob`, `string`, `ClipboardBookmark` or a `Promise` of one | `GetTypeAsync` returns `Task<object>`: a `byte[]` for a Blob, or a `ClipboardBookmark`; payloads are `byte[]`, `string`, `ClipboardBookmark` or a `Task<T>` of one _(branch `shell-clipboard`)_ | Design: .NET has no `Blob`; the bytes are what a Blob carries | None needed |
+| K6 | `getType('text/rtf')` converts the RTF to NFC UTF-8 from the encoding CED (`base::DetectEncoding`) guesses | Same conversion, but the guess is: valid UTF-8 (ASCII included) as UTF-8, anything else as windows-1252, where CED may pick another legacy or 7-bit encoding from its statistics _(branch `shell-clipboard`)_ | Design: CED is a statistical detector with megabytes of trained tables; RTF is 7-bit by spec, so only malformed RTF reaches the guess | Port CED's tables if a real case appears |
+| K7 | Chromium writes with its message window as the clipboard owner | Same once the app is ready: a message-only window on CEF's UI thread owns every write and clear. Before `Ready` writes go out with no owner _(branch `shell-clipboard`)_ | Design: before CEF's UI thread runs there is no thread to pump the window, and other apps block on `WM_DESTROYCLIPBOARD` sent to it | None needed |
+| K8 | `write()` of an `image/*` payload works before `app` is ready (reading one rejects until then in both) | Decoding and encoding go through CEF's image codecs, so writing an image needs CEF loaded (after `OrielApp.Create`) _(branch `shell-clipboard`)_ | Module: `NativeImage` codecs are CEF's | A managed PNG/JPEG codec |
 ## IPC, contextBridge, protocol
 
 | ID | Electron | Oriel | Why | Possible resolution |
