@@ -134,7 +134,7 @@ async Task NetChecks()
         Check("headers: lower-case names, repeated values joined", h?.GetValueOrDefault("x-multi") is ["1, 2"] && h.GetValueOrDefault("x-custom") is ["a"],
             h is null ? null : string.Join("; ", h.Select(kv => kv.Key + "=" + string.Join("|", kv.Value))));
         Check("headers: content-type keeps the first value", h?.GetValueOrDefault("content-type") is ["text/plain"], string.Join("|", h?.GetValueOrDefault("content-type") ?? []));
-        Check("headers: set-cookie is not exposed (DRIFT X2, Electron lists every value)", h is not null && !h.ContainsKey("set-cookie") && !raw0.Contains("Set-Cookie"),
+        Check("headers: set-cookie is not exposed (DRIFT L2, Electron lists every value)", h is not null && !h.ContainsKey("set-cookie") && !raw0.Contains("Set-Cookie"),
             string.Join("|", h?.GetValueOrDefault("set-cookie") ?? []));
         var raw = r.Response?.RawHeaders ?? [];
         var rawPairs = Enumerable.Range(0, raw.Count / 2).Select(i => (raw[2 * i], raw[2 * i + 1])).ToList();
@@ -198,7 +198,7 @@ async Task NetChecks()
         var chunkedSeen = server.Last("/echo");
         Check("chunkedEncoding: the whole body arrives and echoes back", chunkedSeen?.Body.AsSpan().SequenceEqual(sent.ToArray()) == true
             && c.Body.AsSpan().SequenceEqual(sent.ToArray()), $"{chunkedSeen?.Body.Length} / {c.Body.Length}");
-        Check("chunkedEncoding: sent with Content-Length (DRIFT X3, Electron sends Transfer-Encoding: chunked)",
+        Check("chunkedEncoding: sent with Content-Length (DRIFT L3, Electron sends Transfer-Encoding: chunked)",
             chunkedSeen is { Chunked: false } && chunkedSeen.Header("Content-Length") == "102400", chunkedSeen?.Header("Content-Length"));
         Check("chunkedEncoding can't be set after the request started", setTwice?.Message == "chunkedEncoding can only be set before the request is started", setTwice?.Message);
         var once = Net.Request(server.Url("/echo"));
@@ -337,13 +337,13 @@ async Task NetChecks()
         var session = Session.FromPartition("nettest-cookies");
         await Run(Net.Request(new ClientRequestOptions { Url = server.Url("/setcookie"), Session = session }));
         var afterDefault = await session.Cookies.GetAsync(new CookieFilter { Name = "netc" });
-        Check("default: a response's cookie is stored (DRIFT X1, Electron blocks cookies by default)", afterDefault.Count == 1, afterDefault.Count);
+        Check("default: a response's cookie is stored (DRIFT L1, Electron blocks cookies by default)", afterDefault.Count == 1, afterDefault.Count);
         await session.Cookies.RemoveAsync(server.Url("/"), "netc");
         await Run(Net.Request(new ClientRequestOptions { Url = server.Url("/setcookie"), Session = session, UseSessionCookies = true }));
         var stored = await session.Cookies.GetAsync(new CookieFilter { Name = "netc" });
         Check("useSessionCookies: a response's cookie is stored", stored.Count == 1, stored.Count);
         var sentDefault = await Run(Net.Request(new ClientRequestOptions { Url = server.Url("/cookies"), Session = session }));
-        Check("default: the session's cookies are sent (DRIFT X1)", sentDefault.BodyText == "netc=1", sentDefault.BodyText);
+        Check("default: the session's cookies are sent (DRIFT L1)", sentDefault.BodyText == "netc=1", sentDefault.BodyText);
         var omitted = await Run(Net.Request(new ClientRequestOptions { Url = server.Url("/cookies"), Session = session, Credentials = RequestCredentials.Omit }));
         Check("credentials omit: cookies not sent", omitted.BodyText == "", omitted.BodyText);
         var sentWith = await Run(Net.Request(new ClientRequestOptions { Url = server.Url("/cookies"), Session = session, UseSessionCookies = true }));

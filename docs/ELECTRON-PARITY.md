@@ -98,8 +98,8 @@ Detailed item-by-item status, including `navigationHistory` and `WebFrameMain`: 
 | `Cookies` | `Cookies` | CEF | M6 | partial: `get`, `set`, `remove`, `flushStore`; no `changed` event, no rejection reason (DRIFT E4, E5) |
 | `WebRequest` | `WebRequest` | CEF | M6 | — |
 | `DownloadItem` | `DownloadItem` | CEF | M6 | — |
-| `net` | `Net` | CEF | M6 | partial _(branch `win-net-print`)_: `request`, `fetch` (and `Session.FetchAsync`, reaching the session's protocol handlers), `isOnline`/`online`, `resolveHost`; cookies follow credentials, no `Set-Cookie`, buffered chunked bodies, no `WebSocket` (DRIFT X1-X11) |
-| `ClientRequest` / `IncomingMessage` | `ClientRequest` / `IncomingMessage` | CEF | M6 | partial _(branch `win-net-print`)_: headers with Electron's rules and errors, write/end, abort, redirect modes with `followRedirect`, `login`, Electron's event order and `net::ERR_*` errors; gaps in DRIFT X1-X7 |
+| `net` | `Net` | CEF | M6 | partial _(branch `win-net-print`)_: `request`, `fetch` (and `Session.FetchAsync`, reaching the session's protocol handlers), `isOnline`/`online`, `resolveHost`; cookies follow credentials, no `Set-Cookie`, buffered chunked bodies, no `WebSocket` (DRIFT L1-L11) |
+| `ClientRequest` / `IncomingMessage` | `ClientRequest` / `IncomingMessage` | CEF | M6 | partial _(branch `win-net-print`)_: headers with Electron's rules and errors, write/end, abort, redirect modes with `followRedirect`, `login`, Electron's event order and `net::ERR_*` errors; gaps in DRIFT L1-L7 |
 | `WebSocket` (main process) | `WebSocket` | CEF or Patch (verify) | M6 | — |
 | `netLog` | `NetLog` | CEF | M6 | — |
 | `ServiceWorkers` / `ServiceWorkerMain` | `ServiceWorkers` / `ServiceWorkerMain` | CEF + Patch (verify) | M6 | — |
