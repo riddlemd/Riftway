@@ -52,8 +52,15 @@ async Task<bool> Completes(Task task, TimeSpan? timeout = null)
     catch (TimeoutException) { return false; }
 }
 
-Watched Fork(IReadOnlyList<string>? args = null, UtilityProcessOptions? options = null, string? module = null)
-    => new(UtilityProcess.Fork(module ?? childDll, args, options));
+// Forked and subscribed in one UI-thread task, as Electron's fork() and on() run in one JS turn: from a worker thread
+// the UI thread could raise spawn before the listener is added. setup runs in the same task.
+Watched Fork(IReadOnlyList<string>? args = null, UtilityProcessOptions? options = null, string? module = null, Action<Watched>? setup = null)
+    => Oriel.Cef.CefThread.InvokeOnUi(() =>
+    {
+        var watched = new Watched(UtilityProcess.Fork(module ?? childDll, args, options));
+        setup?.Invoke(watched);
+        return watched;
+    });
 
 // Before ready, as Electron's: forking throws.
 try
@@ -94,11 +101,15 @@ async Task Drive()
     Watched? echo = null;
     await Step("spawn", async () =>
     {
-        echo = Fork(["late"]);
-        var pidBefore = echo.Process.Pid;
-        var killBefore = echo.Process.Kill();
-        // Sent before the child is even running: queued until its listener is added.
-        echo.Process.PostMessage(new JsonObject { ["cmd"] = "echo", ["v"] = "early" });
+        int? pidBefore = null;
+        var killBefore = true;
+        echo = Fork(["late"], setup: w =>
+        {
+            pidBefore = w.Process.Pid;
+            killBefore = w.Process.Kill();
+            // Sent before the child is even running: queued until its listener is added.
+            w.Process.PostMessage(new JsonObject { ["cmd"] = "echo", ["v"] = "early" });
+        });
         Check("pid is null right after fork", pidBefore is null, pidBefore);
         Check("kill before spawn returns false", !killBefore);
         Check("spawn is raised", await Completes(echo.Spawned.Task));
@@ -210,6 +221,16 @@ async Task Drive()
         catch (InvalidOperationException e) { Check("postMessage after exit moves no port", false, e.Message); }
     });
 
+    await Step("messages before exit", async () =>
+    {
+        var flooder = Fork();
+        await Completes(flooder.Spawned.Task);
+        flooder.Process.PostMessage(new JsonObject { ["cmd"] = "flood" });
+        var code = await Within(flooder.Exited.Task, TimeSpan.FromSeconds(20));
+        Check("messages posted just before exiting all arrive before exit", flooder.Exited.Task.IsCompleted && code == 3 && flooder.MessagesAtExit == 301,
+            $"code {code}, {flooder.MessagesAtExit} of 301 before exit");
+    });
+
     await Step("crash", async () =>
     {
         var crasher = Fork();
@@ -221,6 +242,13 @@ async Task Drive()
             && err.Location.Length > 0, crasher.Error?.Location);
         Check("error comes before exit", crasher.Order.SequenceEqual(["spawn", "error", "exit"]), string.Join(",", crasher.Order));
         Check("crash exit code is the runtime's", crasher.Exited.Task.IsCompleted && code == expected, code);
+
+        var big = Fork();
+        await Completes(big.Spawned.Task);
+        big.Process.PostMessage(new JsonObject { ["cmd"] = "throw-big" });
+        await Within(big.Exited.Task, TimeSpan.FromSeconds(20));
+        Check("a large error report still comes before exit", big.Order.SequenceEqual(["spawn", "error", "exit"]) && big.Error?.Report.Length > 8_000_000,
+            $"{string.Join(",", big.Order)}, report {big.Error?.Report.Length}");
     });
 
     await Step("env, cwd, args", async () =>
@@ -350,7 +378,11 @@ sealed class Watched
             PidAtSpawn = process.Pid;
             Spawned.TrySetResult();
         };
-        process.Message += (_, m) => _messages.Writer.TryWrite(m);
+        process.Message += (_, m) =>
+        {
+            Messages++;
+            _messages.Writer.TryWrite(m);
+        };
         process.Error += (_, e) =>
         {
             Order.Add("error");
@@ -360,6 +392,7 @@ sealed class Watched
         {
             Order.Add("exit");
             PidAtExit = process.Pid;
+            MessagesAtExit = Messages;
             StdoutAtExit = process.Stdout;
             Exited.TrySetResult(e.Code);
         };
@@ -371,6 +404,8 @@ sealed class Watched
     public List<string> Order { get; } = [];
     public int? PidAtSpawn { get; private set; }
     public int? PidAtExit { get; private set; }
+    public int Messages { get; private set; }
+    public int MessagesAtExit { get; private set; }
     public Stream? StdoutAtExit { get; private set; }
     public UtilityProcessErrorEventArgs? Error { get; private set; }
 

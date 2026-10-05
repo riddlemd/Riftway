@@ -90,6 +90,8 @@ public static class ParentPort
         };
         wire.Start();
         AppDomain.CurrentDomain.UnhandledException += (_, e) => wire.SendNow(Fatal(e.ExceptionObject));
+        // Environment.Exit would otherwise drop messages posted just before it.
+        AppDomain.CurrentDomain.ProcessExit += (_, _) => wire.SendNow(null);
         PortThread.KeepProcessAlive(true);
         return wire;
     }

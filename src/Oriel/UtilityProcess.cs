@@ -77,6 +77,8 @@ public sealed partial class UtilityProcess
     /// <param name="args">The child's command-line arguments (its <c>Main(args)</c>).</param>
     /// <param name="options">How to start it.</param>
     /// <exception cref="ArgumentException"><paramref name="modulePath"/> is empty, or <c>stdio</c> is not valid.</exception>
+    /// <remarks>Events are queued on the UI thread, so a caller on the UI thread subscribes before <see cref="Spawn"/>, as in
+    /// Electron; from another thread <see cref="Spawn"/> may already have been raised when this returns.</remarks>
     /// <exception cref="InvalidOperationException">The application is not ready.</exception>
     public static UtilityProcess Fork(string modulePath, IReadOnlyList<string>? args = null, UtilityProcessOptions? options = null)
     {

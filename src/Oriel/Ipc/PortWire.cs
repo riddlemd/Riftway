@@ -53,8 +53,8 @@ internal sealed class PortWire
 
     internal void SendPortClose(string id) => Enqueue(new WireFrame("port-close", id));
 
-    /// <summary>Writes <paramref name="frame"/> before returning, after what is queued: for a process about to die.</summary>
-    internal void SendNow(WireFrame frame)
+    /// <summary>Writes what is queued, then <paramref name="frame"/> if any, before returning: for a process about to end.</summary>
+    internal void SendNow(WireFrame? frame)
     {
         // A process failing just after it first used its parent port may still be connecting.
         try { if (!_connection.Wait(TimeSpan.FromSeconds(2))) return; }
@@ -65,7 +65,7 @@ internal sealed class PortWire
             try
             {
                 while (_outgoing.Reader.TryRead(out var queued)) WireFrame.Write(stream, queued);
-                WireFrame.Write(stream, frame.Encode());
+                if (frame is not null) WireFrame.Write(stream, frame.Encode());
                 stream.Flush();
             }
             catch (IOException) { }
@@ -76,6 +76,9 @@ internal sealed class PortWire
     internal void Attach(string id, PortLink link) => _links[id] = link;
 
     internal void Detach(string id) => _links.Remove(id);
+
+    // Port thread. Links whose far end is across this wire; a closed one must not stay registered.
+    internal int PortCount => _links.Count;
 
     /// <summary>Ends the wire from this side; the peer sees end of stream.</summary>
     internal void Close()

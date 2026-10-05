@@ -233,7 +233,7 @@ public class PortWireTests
         public TaskCompletionSource<(string, string)> Fatal { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
     }
 
-    private static (Side A, Side B) Pair()
+    private static (Side A, Side B) Pair(bool startA = true)
     {
         var name = "oriel-test-" + Guid.NewGuid().ToString("N")[..16];
         var server = new NamedPipeServerStream(name, PipeDirection.InOut, 1, PipeTransmissionMode.Byte, PipeOptions.Asynchronous | PipeOptions.CurrentUserOnly);
@@ -241,17 +241,17 @@ public class PortWireTests
         var accept = server.WaitForConnectionAsync();
         client.Connect(5000);
         accept.Wait(s_wait);
-        var a = Wire(server);
-        var b = Wire(client);
+        var a = Wire(server, startA);
+        var b = Wire(client, true);
         return (a, b);
 
-        static Side Wire(Stream stream)
+        static Side Wire(Stream stream, bool start)
         {
             var side = new Side(new PortWire(Task.FromResult(stream)));
             side.Wire.Message = (data, ports) => side.Message.TrySetResult((data, ports));
             side.Wire.Gone = () => side.Gone.TrySetResult();
             side.Wire.Fatal = (location, report) => side.Fatal.TrySetResult((location, report));
-            side.Wire.Start();
+            if (start) side.Wire.Start();
             return side;
         }
     }
@@ -373,7 +373,8 @@ public class PortWireTests
     [Fact]
     public async Task SendNow_ArrivesAfterWhatWasQueued()
     {
-        var (a, b) = Pair();
+        // A never starts its writer, so only SendNow can put the queued message on the wire, and only first.
+        var (a, b) = Pair(startA: false);
         var order = new List<string>();
         var done = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         b.Wire.Message = (data, _) => order.Add(data!.GetValue<string>());
@@ -390,6 +391,44 @@ public class PortWireTests
         await done.Task.WaitAsync(s_wait);
         Assert.Equal(["queued", "fatal"], order);
         a.Wire.Close();
+    }
+
+    [Fact]
+    public async Task SendNow_WithNoFrameFlushesTheQueue()
+    {
+        var (a, b) = Pair(startA: false);
+        PortThread.Run(() =>
+        {
+            a.Wire.SendMessage("\"queued\"", []);
+            a.Wire.SendNow(null);
+        });
+        var (data, _) = await b.Message.Task.WaitAsync(s_wait);
+        Assert.Equal("queued", data!.GetValue<string>());
+        a.Wire.Close();
+    }
+
+    [Fact]
+    public async Task Close_UnregistersThePortOnBothWires()
+    {
+        var (a, b) = Pair();
+        var channel = new MessageChannelMain();
+        var closedAtA = Closed(channel.Port1);
+        Send(a, null, channel.Port2);
+        var (_, ports) = await b.Message.Task.WaitAsync(s_wait);
+        Assert.Equal(1, Count(a));
+        Assert.Equal(1, Count(b));
+        ports[0].Close();
+        await closedAtA.WaitAsync(s_wait);
+        Assert.Equal(0, Count(a));
+        Assert.Equal(0, Count(b));
+        a.Wire.Close();
+
+        static int Count(Side side)
+        {
+            var count = new TaskCompletionSource<int>(TaskCreationOptions.RunContinuationsAsynchronously);
+            PortThread.Run(() => count.TrySetResult(side.Wire.PortCount));
+            return count.Task.WaitAsync(s_wait).GetAwaiter().GetResult();
+        }
     }
 
     [Fact]

@@ -71,8 +71,20 @@ ParentPort.Message += (_, e) =>
         case "hold":
             ParentPort.PostMessage("holding");
             break;
+        case "flood":
+            // Many large messages, then exit at once: every one must reach the parent before its exit event.
+            var chunk = new string('x', 20_000);
+            for (var i = 0; i < 300; i++) ParentPort.PostMessage(new JsonObject { ["flood"] = i, ["pad"] = chunk });
+            // The last is large: the parent is still reading it when this process has gone.
+            ParentPort.PostMessage(new JsonObject { ["flood"] = 300, ["pad"] = new string('x', 40_000_000) });
+            Environment.Exit(3);
+            break;
         case "exit":
             Environment.Exit(e.Data!["code"]!.GetValue<int>());
+            break;
+        case "throw-big":
+            // A large report: the process aborts while the parent is still reading it.
+            new Thread(() => throw new InvalidOperationException(new string('x', 8_000_000))).Start();
             break;
         case "throw":
             new Thread(() => throw new InvalidOperationException("child exploded")).Start();
