@@ -184,6 +184,95 @@ static unsafe class WindowsShell
     [DllImport("gdi32.dll")] private static extern int GetDIBits(nint dc, nint bitmap, uint start, uint lines, void* bits, BitmapInfoHeader* info, uint usage);
     [DllImport("gdi32.dll")] private static extern int DeleteObject(nint obj);
 
+    /// <summary>Oriel's hidden tray host window, or 0.</summary>
+    internal static nint TrayHost() => FindWindowW("OrielTrayHost", null);
+
+    /// <summary>Sends (or posts, which does not wait for a menu to close) a version 4 tray callback to the host.</summary>
+    internal static void TrayCallback(nint host, uint id, uint code, int x, int y, bool post = false)
+    {
+        var wParam = (nint)(((y & 0xFFFF) << 16) | (x & 0xFFFF));
+        var lParam = (nint)(((id & 0xFFFF) << 16) | (code & 0xFFFF));
+        if (post) _ = PostMessageW(host, 0x8001, wParam, lParam);
+        else
+        {
+            nint result;
+            _ = SendMessageTimeoutW(host, 0x8001, wParam, lParam, 2, 2000, &result);
+        }
+    }
+
+    /// <summary>Sends the host a registered window message by name, such as <c>TaskbarCreated</c>.</summary>
+    internal static void SendRegistered(nint hwnd, string name)
+    {
+        uint message;
+        fixed (char* n = name) message = RegisterWindowMessageW(n);
+        nint result;
+        _ = SendMessageTimeoutW(hwnd, message, 0, 0, 2, 2000, &result);
+    }
+
+    /// <summary>Whether the shell holds an icon (host, id), asked by modifying its tooltip; or deletes it.</summary>
+    internal static bool NotifyIcon(nint host, uint id, bool delete)
+    {
+        var data = new NotifyIconData { Size = (uint)sizeof(NotifyIconData), Hwnd = host, Id = id, Flags = delete ? 0u : 0x4u /* NIF_TIP */ };
+        return Shell_NotifyIconW(delete ? 2u : 1u, &data) != 0;
+    }
+
+    /// <summary>The visible popup menu window (<c>#32768</c>), or 0.</summary>
+    internal static nint MenuWindow()
+    {
+        var menu = FindWindowW("#32768", null);
+        return menu != 0 && IsWindowVisible(menu) != 0 ? menu : 0;
+    }
+
+    /// <summary>The items of the menu a <c>#32768</c> window shows: text (accelerator after a tab) and <c>MF_</c> state.</summary>
+    internal static List<(string Text, uint State)> MenuItems(nint menuWindow)
+    {
+        var items = new List<(string, uint)>();
+        nint result;
+        if (SendMessageTimeoutW(menuWindow, 0x01E1 /* MN_GETHMENU */, 0, 0, 2, 1000, &result) == 0 || result == 0) return items;
+        var count = GetMenuItemCount(result);
+        var buffer = stackalloc char[256];
+        for (var i = 0; i < count; i++)
+        {
+            var length = GetMenuStringW(result, (uint)i, buffer, 256, 0x400 /* MF_BYPOSITION */);
+            items.Add((new string(buffer, 0, Math.Max(0, length)), GetMenuState(result, (uint)i, 0x400)));
+        }
+        return items;
+    }
+
+    /// <summary>Posts a key to a window, as a menu's loop reads keys from its thread's queue.</summary>
+    internal static void PostKey(nint hwnd, int virtualKey)
+    {
+        _ = PostMessageW(hwnd, 0x0100 /* WM_KEYDOWN */, virtualKey, 0);
+        _ = PostMessageW(hwnd, 0x0101 /* WM_KEYUP */, virtualKey, unchecked((nint)0xC0000001));
+    }
+
+    [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)]
+    private struct NotifyIconData
+    {
+        public uint Size;
+        public nint Hwnd;
+        public uint Id;
+        public uint Flags;
+        public uint CallbackMessage;
+        public nint Icon;
+        public fixed char Tip[128];
+        public uint State;
+        public uint StateMask;
+        public fixed char Info[256];
+        public uint Version;
+        public fixed char InfoTitle[64];
+        public uint InfoFlags;
+        public Guid Guid;
+        public nint BalloonIcon;
+    }
+
+    [DllImport("shell32.dll")] private static extern int Shell_NotifyIconW(uint message, NotifyIconData* data);
+    [DllImport("user32.dll")] private static extern int PostMessageW(nint hwnd, uint message, nint wParam, nint lParam);
+    [DllImport("user32.dll")] private static extern int IsWindowVisible(nint hwnd);
+    [DllImport("user32.dll")] private static extern int GetMenuItemCount(nint menu);
+    [DllImport("user32.dll")] private static extern int GetMenuStringW(nint menu, uint item, char* text, int max, uint flags);
+    [DllImport("user32.dll")] private static extern uint GetMenuState(nint menu, uint item, uint flags);
+
     private static void* Slot(void* com, int index) => (*(void***)com)[index];
 
     private static void Release(void* com)

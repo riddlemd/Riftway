@@ -166,6 +166,15 @@ Entries marked _(branch `x`)_ are on that branch and not yet in `main`.
 | E10 | `webRequest`, permission handlers, downloads (`will-download`), spellchecker, `preconnect`, certificate verify proc, extensions, `getPreloads`/`registerPreloadScript` | Missing | Todo: CEF has handlers for most (resource request, permission, download, certificate) | Later Session work (M6) |
 | E11 | Session events (`will-download`, `select-*-device`, ...) | None | Todo: with E10 | With E10 |
 
+## Tray
+
+| ID | Electron | Oriel | Why | Possible resolution |
+|---|---|---|---|---|
+| T1 | `Tray` on macOS and Linux | Windows only: macOS and Linux throw `PlatformNotSupportedException` behind `ITrayBackend` _(branch `tray`)_ | OS | macOS `NSStatusItem`; Linux StatusNotifierItem over D-Bus |
+| T2 | `mouse-enter`/`mouse-leave` (macOS, Windows), `mouse-up`/`mouse-down` and the drop events (macOS) | Missing on Windows; the macOS-only setters (`setPressedImage`, `setTitle`, `setIgnoreDoubleClickEvents`) are stored only _(branch `tray`)_ | OS; Todo | Windows: `NIN_POPUPOPEN`/`NIN_POPUPCLOSE` for enter and leave |
+| T3 | The context menu is drawn by Chromium's Views, as Electron's other menus | A native Win32 menu: the system look; item icons, sublabels and tooltips are not shown (as in Oriel's other menus, M3) _(branch `tray`)_ | Design | None needed |
+| T4 | `Tray` methods return at once while its context menu is open | They wait for the menu to close (except `CloseContextMenu`): the UI thread is in the menu's loop, where CEF runs no posted tasks _(branch `tray`)_ | CEF | Post the work as window messages to the tray host |
+
 ## IPC, contextBridge, protocol
 
 | ID | Electron | Oriel | Why | Possible resolution |

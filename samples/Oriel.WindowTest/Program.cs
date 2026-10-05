@@ -200,6 +200,7 @@ async Task RunAsync(BrowserWindow win, BrowserWindow simple)
     await TaskbarAsync(win);
     await WindowsApisAsync();
     await NativeImageAsync();
+    await TrayAsync();
 
     // Closing cancelled once: the window must survive the first close.
     var closingCount = 0;
@@ -1150,6 +1151,99 @@ async Task WindowsApisAsync()
     Check("the shell takes the thumbnail clip and tooltip (weak: no read-back)", refusals.ToString().Length == 0, refusals.ToString().Trim());
     w.Destroy();
     await Task.Delay(300);
+}
+
+async Task TrayAsync()
+{
+    static NativeImage Square(byte b, byte g, byte r)
+    {
+        var pixels = new byte[16 * 16 * 4];
+        for (var i = 0; i < pixels.Length; i += 4) (pixels[i], pixels[i + 1], pixels[i + 2], pixels[i + 3]) = (b, g, r, 255);
+        return NativeImage.CreateFromBitmap(pixels, new NativeImageBitmapOptions { Width = 16, Height = 16 });
+    }
+    if (!OperatingSystem.IsWindows())
+    {
+        Check("Tray throws PlatformNotSupportedException off Windows", Throws<PlatformNotSupportedException>(() => _ = new Tray(Square(0, 0, 255))));
+        return;
+    }
+
+    // This is the process's first tray icon, so its notification icon id is 1.
+    const uint Id = 1;
+    var tray = new Tray(Square(0, 0, 255));
+    tray.SetToolTip("Oriel tray test");
+    var host = WindowsShell.TrayHost();
+    Check("a Tray puts an icon in the notification area (the shell holds it)", host != 0 && WindowsShell.NotifyIcon(host, Id, delete: false), host);
+    var bounds = tray.GetBounds();
+    Check("GetBounds is the icon's place, or empty while it sits in the overflow", bounds == default || Screen.GetAllDisplays().Any(d => d.Bounds.X <= bounds.X && bounds.X < d.Bounds.X + d.Bounds.Width), bounds);
+
+    // Version 4 callbacks: the event in the low word, the anchor point in wParam.
+    var events = new List<string>();
+    Point? clickedAt = null;
+    tray.Clicked += (_, e) => { events.Add("click"); clickedAt = e.Position; };
+    tray.DoubleClicked += (_, _) => events.Add("double");
+    tray.MiddleClicked += (_, _) => events.Add("middle");
+    tray.RightClicked += (_, _) => events.Add("right");
+    tray.MouseMoved += (_, _) => events.Add("move");
+    tray.BalloonShown += (_, _) => events.Add("balloon-show");
+    tray.BalloonClicked += (_, _) => events.Add("balloon-click");
+    tray.BalloonClosed += (_, _) => events.Add("balloon-closed");
+    foreach (var code in new uint[] { 0x0201, 0x0203, 0x0207, 0x007B, 0x0200, 0x0401, 0x0402, 0x0405, 0x0404, 0x0202 })
+        WindowsShell.TrayCallback(host, Id, code, 300, 400);
+    Check("the shell's callbacks raise Electron's events", events.SequenceEqual(["click", "double", "middle", "right", "move", "click", "balloon-show", "balloon-click", "balloon-closed"]), string.Join(",", events));
+    Check("a click reports where it happened", clickedAt == Screen.ScreenToDipPoint(new Point(300, 400)), clickedAt);
+
+    // The context menu: a native menu built from Oriel's Menu, opened by a right click, read back from its window.
+    var shown = false;
+    var menu = new Menu
+    {
+        new MenuItem { Label = "&Show", Accelerator = "CmdOrCtrl+S", Click = (_, _) => shown = true },
+        new MenuItem { Type = MenuItemType.Separator },
+        new MenuItem { Label = "Pinned", Type = MenuItemType.Checkbox, Checked = true },
+        new MenuItem { Label = "Off", Enabled = false },
+        new MenuItem { Label = "Hidden", Visible = false },
+        new MenuItem { Label = "More", Submenu = new Menu { new MenuItem { Label = "Deep" } } },
+    };
+    tray.SetContextMenu(menu);
+    events.Clear();
+    WindowsShell.TrayCallback(host, Id, 0x007B, 300, 400, post: true);
+    var menuWindow = 0;
+    Check("a right click opens the context menu instead of raising RightClicked", Eventually(() => (menuWindow = (int)WindowsShell.MenuWindow()) != 0, step) && !events.Contains("right"), string.Join(",", events));
+    var items = menuWindow != 0 ? WindowsShell.MenuItems(menuWindow) : [];
+    Check("the menu has the items, accelerators and states of Oriel's Menu", items.Count == 5 && items[0].Text == "&Show\tCtrl+S" && (items[1].State & 0x800) != 0 /* MF_SEPARATOR */
+        && items[2].Text == "Pinned" && (items[2].State & 0x8) != 0 /* MF_CHECKED */ && items[3].Text == "Off" && (items[3].State & 0x3) != 0 /* MF_GRAYED */ && items[4].Text == "More" && (items[4].State & 0x10) != 0 /* MF_POPUP */,
+        string.Join(" | ", items.Select(i => $"{i.Text.Replace("\t", "\\t")}:{i.State:X}")));
+    WindowsShell.PostKey(menuWindow, 0x28 /* VK_DOWN */);
+    WindowsShell.PostKey(menuWindow, 0x0D /* VK_RETURN */);
+    Check("choosing an item runs its click", Eventually(() => shown && WindowsShell.MenuWindow() == 0, step), $"shown={shown} open={WindowsShell.MenuWindow() != 0}");
+    var popped = Task.Run(() => tray.PopUpContextMenu(position: new Point(200, 200)));
+    Check("PopUpContextMenu opens it from code", Eventually(() => WindowsShell.MenuWindow() != 0, step));
+    tray.CloseContextMenu();
+    Check("CloseContextMenu closes it", Eventually(() => WindowsShell.MenuWindow() == 0 && popped.IsCompleted, step));
+    // A menu left open would hold every later tray call; Escape closes it so the run goes on.
+    if (WindowsShell.MenuWindow() is var stillOpen and not 0) { WindowsShell.PostKey(stillOpen, 0x1B); WindowsShell.PostKey(stillOpen, 0x1B); popped.Wait(step); }
+
+    // Explorer restarting broadcasts TaskbarCreated; the icon must come back.
+    WindowsShell.NotifyIcon(host, Id, delete: true);
+    var goneBehindOurBack = !WindowsShell.NotifyIcon(host, Id, delete: false);
+    WindowsShell.SendRegistered(host, "TaskbarCreated");
+    Check("TaskbarCreated adds the icon again", goneBehindOurBack && WindowsShell.NotifyIcon(host, Id, delete: false), goneBehindOurBack);
+
+    // A balloon is a toast on Windows 11; the shell reports it shown unless notifications are off or quiet hours hold it.
+    events.Clear();
+    tray.DisplayBalloon(new DisplayBalloonOptions { Title = "Oriel", Content = "Tray balloon test", IconType = BalloonIconType.Info, NoSound = true });
+    Check("DisplayBalloon shows a balloon (BalloonShown)", Eventually(() => events.Contains("balloon-show"), TimeSpan.FromSeconds(8)), string.Join(",", events));
+    tray.RemoveBalloon();
+    tray.SetImage(Square(0, 200, 0));
+    Check("SetImage keeps the icon in place", WindowsShell.NotifyIcon(host, Id, delete: false));
+    Check("title and double-click setting are stored", Ok(() => { tray.SetTitle("t"); tray.SetIgnoreDoubleClickEvents(true); }) && tray.GetTitle() == "t" && tray.GetIgnoreDoubleClickEvents());
+    tray.Destroy();
+    Check("Destroy removes the icon", tray.IsDestroyed() && !WindowsShell.NotifyIcon(host, Id, delete: false) && tray.GetBounds() == default);
+}
+
+static bool Ok(Action action)
+{
+    action();
+    return true;
 }
 
 async Task NativeImageAsync()
