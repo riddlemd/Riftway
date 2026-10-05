@@ -80,12 +80,24 @@ public sealed unsafe partial class WebContents
             },
             LoadFailed = (isMain, code, text, url) =>
             {
+                // CEF aborts a navigation a webRequest listener cancelled; Electron reports it blocked.
+                if (isMain && code == AbortedError && Interlocked.Exchange(ref _blockedNavigation, null) == url)
+                    (code, text) = (BlockedByClientError, "ERR_BLOCKED_BY_CLIENT");
                 // An aborted load was superseded by a newer one, whose task stays pending; LoadUrl already failed the old one.
                 if (isMain && _navigated && code != AbortedError) CompleteLoad(new LoadFailedException(code, text, url));
                 if (_navigated) DidFailLoad?.Invoke(this, new LoadFailedEventArgs(code, text, url, isMain));
             },
         };
-        Request = new RequestHandler(new ResourceRequestHandler { BeforeResourceLoad = OnBeforeResourceLoad })
+        var webRequest = session.WebRequest;
+        Request = new RequestHandler(new ResourceRequestHandler
+        {
+            BeforeResourceLoad = OnBeforeResourceLoad,
+            Decide = request => WatchBlocked(request, webRequest.Decide(this, request)),
+            Sent = request => webRequest.Sent(this, request),
+            Redirected = (request, response, url) => webRequest.Redirected(this, request, response, url),
+            ResponseStarted = (request, response) => webRequest.ResponseStarted(this, request, response),
+            Completed = (request, response, status) => webRequest.Completed(this, request, response, status),
+        })
         {
             Wants = WantsRequest,
         };
@@ -595,6 +607,22 @@ public sealed unsafe partial class WebContents
     // net::ERR_ABORTED: a navigation stopped, typically because a newer one replaced it.
     private const int AbortedError = -3;
 
+    // net::ERR_BLOCKED_BY_CLIENT.
+    private const int BlockedByClientError = -20;
+
+    // The main-frame URL a webRequest listener last cancelled; set off the UI thread.
+    private string? _blockedNavigation;
+
+    private Task<RequestDecision>? WatchBlocked(RequestInfo request, Task<RequestDecision>? decision)
+    {
+        if (decision is null || request.ResourceType != cef_resource_type_t.RT_MAIN_FRAME) return decision;
+        return decision.ContinueWith(t =>
+        {
+            if (t.Result.Cancel) Volatile.Write(ref _blockedNavigation, request.Url);
+            return t.Result;
+        }, TaskContinuationOptions.ExecuteSynchronously);
+    }
+
     // net::ERR_UPLOAD_FILE_CHANGED.
     private const int UploadFileChangedError = -14;
 
@@ -682,12 +710,15 @@ public sealed unsafe partial class WebContents
     // IO thread: only the main-frame navigation a LoadUrl with options started needs the hop.
     private bool WantsRequest(cef_frame_t* frame, cef_request_t* request, bool isNavigation)
     {
+        if (Session.WebRequest.HasListeners) return true;
         if (!isNavigation || frame is null || frame->is_main(frame) == 0) return false;
         lock (_pendingLoadGate) return _pendingLoad is not null;
     }
 
     private void OnBeforeResourceLoad(cef_frame_t* frame, cef_request_t* request)
     {
+        // With webRequest listeners every request comes here; loadURL options are for the main frame's navigation only.
+        if (frame is null || frame->is_main(frame) == 0 || request->get_resource_type(request) != cef_resource_type_t.RT_MAIN_FRAME) return;
         var url = CefString.ReadUserFree(request->get_url(request));
         PendingLoad? load;
         lock (_pendingLoadGate)

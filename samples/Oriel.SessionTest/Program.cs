@@ -339,6 +339,120 @@ async Task RunAsync()
     downloadWin.Destroy();
     Directory.Delete(downloadDir, recursive: true);
 
+    // webRequest: the session's listeners see, cancel, redirect and change requests, as Electron's.
+    var watched = Session.FromPartition("webrequest");
+    watched.Protocol.Handle("https", request =>
+    {
+        var path = new Uri(request.Url).AbsolutePath;
+        return path switch
+        {
+            "/data" => ProtocolResponse.Text("data"),
+            "/echo" => ProtocolResponse.Text($"added={request.Headers.GetValueOrDefault("X-Added")} removed={request.Headers.GetValueOrDefault("X-Removed")}"),
+            "/server-redirect" => new ProtocolResponse { StatusCode = 302, Headers = new Dictionary<string, string> { ["Location"] = Site + "data" } },
+            _ => ProtocolResponse.Text(Page, "text/html"),
+        };
+    });
+    var requestWin = new BrowserWindow(new BrowserWindowOptions { Show = false, WebPreferences = new WebPreferences { Session = watched } });
+    var events = new System.Collections.Concurrent.ConcurrentQueue<(string Event, WebRequestDetails Details)>();
+    WebRequestDetails? Saw(string ev, string path) => events.LastOrDefault(s => s.Event == ev && s.Details.Url == Site + path).Details;
+    async Task<string?> Fetch(string path, string init = "{}")
+        => (await requestWin.WebContents.ExecuteJavaScriptAsync($"fetch('{path}', {init}).then(r => r.text()).catch(e => 'failed')"))?.ToString();
+
+    watched.WebRequest.OnBeforeRequest(new WebRequestFilter { Urls = ["https://oriel.test/*"], ExcludeUrls = ["https://oriel.test/unfiltered"] }, details =>
+    {
+        events.Enqueue(("before", details));
+        var path = new Uri(details.Url).AbsolutePath;
+        return Task.FromResult(path switch
+        {
+            "/blocked" => new WebRequestResponse { Cancel = true },
+            "/moved" => new WebRequestResponse { RedirectUrl = Site + "data" },
+            _ => new WebRequestResponse(),
+        });
+    });
+    watched.WebRequest.OnBeforeSendHeaders(new WebRequestFilter { Urls = ["https://oriel.test/echo"] }, async details =>
+    {
+        events.Enqueue(("beforeSend", details));
+        await Task.Delay(50);
+        if (details.RequestHeaders!.ContainsKey("X-Cancel")) return new BeforeSendHeadersResponse { Cancel = true };
+        var headers = details.RequestHeaders!.Where(kv => !kv.Key.Equals("X-Removed", StringComparison.OrdinalIgnoreCase)).ToDictionary();
+        headers["X-Added"] = "yes";
+        return new BeforeSendHeadersResponse { RequestHeaders = headers };
+    });
+    watched.WebRequest.OnSendHeaders(null, details => events.Enqueue(("send", details)));
+    watched.WebRequest.OnHeadersReceived(null, details => events.Enqueue(("headers", details)));
+    watched.WebRequest.OnResponseStarted(null, details => events.Enqueue(("started", details)));
+    watched.WebRequest.OnBeforeRedirect(null, details => events.Enqueue(("redirect", details)));
+    watched.WebRequest.OnCompleted(null, details => events.Enqueue(("completed", details)));
+    watched.WebRequest.OnErrorOccurred(null, details => events.Enqueue(("error", details)));
+
+    await requestWin.LoadUrl(Site);
+    var page = await WaitFor(() => Saw("before", ""));
+    Check("onBeforeRequest sees the page's navigation", page is { Method: "GET", ResourceType: "mainFrame" } && ReferenceEquals(page.WebContents, requestWin.WebContents) && page.Timestamp > 0,
+        $"{page?.Method} {page?.ResourceType} {page?.Timestamp}");
+    var data = await Fetch("/data");
+    var fetched = await WaitFor(() => Saw("completed", "data"));
+    Check("a fetch is an xhr, and onCompleted reports its response", data == "data" && Saw("before", "data")?.ResourceType == "xhr"
+        && fetched is { StatusCode: 200, StatusLine: "HTTP/1.1 200 OK", Error: "net::OK" } && fetched.ResponseHeaders?["Content-Type"].Single().StartsWith("text/plain") == true
+        && fetched.Id == Saw("before", "data")?.Id, $"{data} {fetched?.StatusCode} {fetched?.StatusLine} {fetched?.Error}");
+    Check("onHeadersReceived and onResponseStarted see the response", Saw("headers", "data")?.StatusCode == 200 && Saw("started", "data")?.StatusCode == 200);
+    Check("onSendHeaders sees the request being sent", Saw("send", "data")?.RequestHeaders is not null);
+
+    var blocked = await Fetch("/blocked");
+    var blockedError = await WaitFor(() => Saw("error", "blocked"));
+    Check("cancel in onBeforeRequest stops the request, and onErrorOccurred reports it", blocked == "failed" && blockedError?.Error == "net::ERR_BLOCKED_BY_CLIENT"
+        && Saw("completed", "blocked") is null, $"{blocked} {blockedError?.Error}");
+
+    var moved = await Fetch("/moved");
+    var internalRedirect = await WaitFor(() => Saw("redirect", "moved"));
+    Check("redirectURL in onBeforeRequest sends the request elsewhere, as an internal redirect", moved == "data"
+        && internalRedirect is { StatusCode: 307, StatusLine: "HTTP/1.1 307 Internal Redirect", RedirectUrl: Site + "data" },
+        $"{moved} {internalRedirect?.StatusLine} {internalRedirect?.RedirectUrl}");
+
+    var echoed = await Fetch("/echo", "{ headers: { 'X-Removed': 'gone' } }");
+    var sentEcho = await WaitFor(() => Saw("send", "echo"));
+    Check("onBeforeSendHeaders sees the headers and can replace them", echoed == "added=yes removed="
+        && Saw("beforeSend", "echo")?.RequestHeaders?.GetValueOrDefault("X-Removed") == "gone", echoed);
+    Check("onSendHeaders sees the replaced headers", sentEcho?.RequestHeaders?.GetValueOrDefault("X-Added") == "yes" && sentEcho.RequestHeaders.ContainsKey("X-Removed") == false,
+        sentEcho is null ? "none" : string.Join(",", sentEcho.RequestHeaders!.Keys));
+    Check("onBeforeSendHeaders follows its filter", Saw("beforeSend", "data") is null);
+    var refused = await Fetch("/echo", "{ headers: { 'X-Cancel': '1' } }");
+    Check("cancel in onBeforeSendHeaders stops the request", refused == "failed", refused);
+    var failedLoads = new List<int>();
+    requestWin.WebContents.DidFailLoad += (_, e) => failedLoads.Add(e.ErrorCode);
+    var blockedLoad = await Throws(() => requestWin.LoadUrl(Site + "blocked").WaitAsync(TimeSpan.FromSeconds(10)));
+    Check("a navigation a listener cancels fails LoadUrl and DidFailLoad with ERR_BLOCKED_BY_CLIENT, as Electron's",
+        blockedLoad is LoadFailedException { ErrorCode: -20 } && failedLoads.SequenceEqual([-20]), $"{blockedLoad?.Message} [{string.Join(",", failedLoads)}]");
+    var unfiltered = await Fetch("/unfiltered");
+    Check("onBeforeRequest follows its filter", unfiltered == Page && Saw("before", "unfiltered") is null && await WaitFor(() => Saw("completed", "unfiltered")) is not null);
+
+    var followed = await Fetch("/server-redirect");
+    var redirect = await WaitFor(() => Saw("redirect", "server-redirect"));
+    Check("onBeforeRedirect reports a server redirect", followed == "data" && redirect is { StatusCode: 302, RedirectUrl: Site + "data" },
+        $"{followed} {redirect?.StatusCode} {redirect?.RedirectUrl}");
+
+    var typed = new System.Collections.Concurrent.ConcurrentQueue<string>();
+    watched.WebRequest.OnCompleted(new WebRequestFilter { Types = ["mainFrame"] }, details => typed.Enqueue(details.Url));
+    await Fetch("/data");
+    await requestWin.LoadUrl(Site + "typed");
+    await WaitFor(() => typed.IsEmpty ? null : "x");
+    Check("a types filter limits the listener", typed.SequenceEqual([Site + "typed"]), string.Join(",", typed));
+
+    watched.WebRequest.OnBeforeRequest(null, _ => throw new InvalidOperationException("listener failure"));
+    var survived = await Fetch("/data");
+    Check("a listener that throws leaves the request as it was", survived == "data", survived);
+    watched.WebRequest.OnBeforeRequest(null, _ => Task.FromResult(new WebRequestResponse { Cancel = true }));
+    watched.WebRequest.OnBeforeRequest(null);
+    var countBefore = events.Count(s => s.Event == "before");
+    var unwatched = await Fetch("/blocked");
+    Check("OnBeforeRequest(null) removes the listener", unwatched == Page && events.Count(s => s.Event == "before") == countBefore, unwatched);
+    Check("onSendHeaders sees a request no listener decides", await WaitFor(() => Saw("send", "blocked")) is not null);
+    Check("an invalid URL pattern throws, as Electron's", await Throws(() =>
+    {
+        watched.WebRequest.OnCompleted(new WebRequestFilter { Urls = ["oriel.test"] }, _ => { });
+        return Task.CompletedTask;
+    }) is ArgumentException);
+    requestWin.Destroy();
+
     // Proxy: requests go to a local listener posing as the proxy.
     var proxied = Session.FromPartition("proxied");
     using var listener = new TcpListener(IPAddress.Loopback, 0);

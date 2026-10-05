@@ -202,6 +202,9 @@ public sealed unsafe partial class Session
 
     private volatile Func<WebContents, string, PermissionRequestDetails, Task<bool>>? _permissionRequestHandler;
 
+    /// <summary>Watches and changes this session's requests. Electron's <c>ses.webRequest</c>.</summary>
+    public WebRequest WebRequest { get; } = new();
+
     /// <summary>The native context with a reference for the caller.</summary>
     internal cef_request_context_t* AddRefNative()
     {

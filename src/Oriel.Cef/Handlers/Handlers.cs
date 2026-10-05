@@ -342,6 +342,9 @@ public sealed unsafe class ResourceRequestHandler
     {
         Native = NativeObject.Create<cef_resource_request_handler_t>(this);
         Native->on_before_resource_load = &OnBeforeResourceLoad;
+        Native->on_resource_redirect = &OnResourceRedirect;
+        Native->on_resource_response = &OnResourceResponse;
+        Native->on_resource_load_complete = &OnResourceLoadComplete;
     }
 
     public cef_resource_request_handler_t* Native { get; }
@@ -349,17 +352,117 @@ public sealed unsafe class ResourceRequestHandler
     /// <summary>A request is about to be sent. Runs on the IO thread.</summary>
     public BeforeResourceLoadCallback? BeforeResourceLoad { get; init; }
 
+    /// <summary>After <see cref="BeforeResourceLoad"/>: decides the request; null sends it unchanged without waiting.
+    /// Runs on the IO thread; the task may finish on any thread.</summary>
+    public Func<RequestInfo, Task<RequestDecision>?>? Decide { get; init; }
+
+    /// <summary>The request was sent; its headers are final. Runs on the IO thread.</summary>
+    public Action<RequestInfo>? Sent { get; init; }
+
+    /// <summary>The server redirected the request to the given URL. Runs on the IO thread.</summary>
+    public Action<RequestInfo, ResponseInfo, string>? Redirected { get; init; }
+
+    /// <summary>The response's headers arrived. Runs on the IO thread.</summary>
+    public Action<RequestInfo, ResponseInfo>? ResponseStarted { get; init; }
+
+    /// <summary>The request finished, failed or was cancelled. Runs on the IO thread.</summary>
+    public Action<RequestInfo, ResponseInfo, cef_urlrequest_status_t>? Completed { get; init; }
+
     [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])]
     private static cef_return_value_t OnBeforeResourceLoad(
         cef_resource_request_handler_t* self, cef_browser_t* browser, cef_frame_t* frame, cef_request_t* request, cef_callback_t* callback)
     {
         var owner = NativeObject.Owner<ResourceRequestHandler>(self);
         if (owner.BeforeResourceLoad is { } handler) Guard.Run(() => handler(frame, request));
-        NativeObject.Release(callback);
+        var decision = owner.Decide is { } decide ? Guard.Run(() => decide(HeaderMap.Info(request)), null) : null;
+        if (frame is not null) NativeObject.Release(frame);
+        if (browser is not null) NativeObject.Release(browser);
+        if (decision is null)
+        {
+            owner.Notify(owner.Sent, request);
+            NativeObject.Release(callback);
+            NativeObject.Release(request);
+            return cef_return_value_t.RV_CONTINUE;
+        }
+        // The request and callback are kept until the decision comes; CEF reads the request again on continue.
+        decision.ContinueWith(t =>
+        {
+            var answer = t.IsCompletedSuccessfully ? t.Result : new RequestDecision(Cancel: true);
+            if (!t.IsCompletedSuccessfully) Console.Error.WriteLine($"[Oriel] A request decision failed; cancelling the request: {t.Exception?.InnerException}");
+            if (answer.Cancel) callback->cancel(callback);
+            else
+            {
+                if (answer.Headers is { } headers) HeaderMap.Write(request, headers);
+                if (answer.RedirectUrl is { } url)
+                {
+                    cef_string_utf16_t native = default;
+                    CefString.Set(&native, url);
+                    request->set_url(request, &native);
+                    CefString.Clear(&native);
+                }
+                else owner.Notify(owner.Sent, request);
+                callback->cont(callback);
+            }
+            NativeObject.Release(callback);
+            NativeObject.Release(request);
+        }, TaskScheduler.Default);
+        return cef_return_value_t.RV_CONTINUE_ASYNC;
+    }
+
+    private void Notify(Action<RequestInfo>? action, cef_request_t* request)
+    {
+        if (action is null) return;
+        var info = HeaderMap.Info(request);
+        Guard.Run(() => action(info));
+    }
+
+    [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])]
+    private static void OnResourceRedirect(cef_resource_request_handler_t* self, cef_browser_t* browser, cef_frame_t* frame,
+        cef_request_t* request, cef_response_t* response, cef_string_utf16_t* newUrl)
+    {
+        var owner = NativeObject.Owner<ResourceRequestHandler>(self);
+        if (owner.Redirected is { } redirected)
+        {
+            var (info, answer, url) = (HeaderMap.Info(request), HeaderMap.Info(response), CefString.Read(newUrl));
+            Guard.Run(() => redirected(info, answer, url));
+        }
+        ReleaseAll(browser, frame, request, response);
+    }
+
+    [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])]
+    private static int OnResourceResponse(cef_resource_request_handler_t* self, cef_browser_t* browser, cef_frame_t* frame,
+        cef_request_t* request, cef_response_t* response)
+    {
+        var owner = NativeObject.Owner<ResourceRequestHandler>(self);
+        if (owner.ResponseStarted is { } started)
+        {
+            var (info, answer) = (HeaderMap.Info(request), HeaderMap.Info(response));
+            Guard.Run(() => started(info, answer));
+        }
+        ReleaseAll(browser, frame, request, response);
+        return 0;
+    }
+
+    [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])]
+    private static void OnResourceLoadComplete(cef_resource_request_handler_t* self, cef_browser_t* browser, cef_frame_t* frame,
+        cef_request_t* request, cef_response_t* response, cef_urlrequest_status_t status, long receivedContentLength)
+    {
+        var owner = NativeObject.Owner<ResourceRequestHandler>(self);
+        if (owner.Completed is { } completed)
+        {
+            var (info, answer) = (HeaderMap.Info(request), HeaderMap.Info(response));
+            Guard.Run(() => completed(info, answer, status));
+        }
+        ReleaseAll(browser, frame, request, response);
+    }
+
+    // Browser and frame are null for requests without a page, such as a service worker's.
+    private static void ReleaseAll(cef_browser_t* browser, cef_frame_t* frame, cef_request_t* request, cef_response_t* response)
+    {
+        NativeObject.Release(response);
         NativeObject.Release(request);
-        NativeObject.Release(frame);
-        NativeObject.Release(browser);
-        return cef_return_value_t.RV_CONTINUE;
+        if (frame is not null) NativeObject.Release(frame);
+        if (browser is not null) NativeObject.Release(browser);
     }
 }
 
