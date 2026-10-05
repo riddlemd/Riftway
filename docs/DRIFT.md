@@ -98,7 +98,6 @@ Entries marked _(branch `x`)_ are on that branch and not yet in `main`.
 | ID | Electron | Oriel | Why | Possible resolution |
 |---|---|---|---|---|
 | C1 | `loadURL(url, { baseURLForDataURL })` | Throws `NotSupportedException` | CEF cannot commit a `data:` URL under another base | Patch |
-| C2 | `UploadFile` `offset`/`length` | Throw; `modificationTime` ignored | CEF uploads whole files and does not check the time | Copy the slice to a temp file |
 | C3 | User agent override sets client hints | No `Sec-CH-UA*` or `navigator.userAgentData` change | CEF/DevTools: `Emulation.setUserAgentOverride` without metadata | Pass `userAgentMetadata` through DevTools |
 | C5 | A reload repeats the `loadURL` options | Likely a plain request (untested) | Todo | Keep the options with the navigation entry |
 | C6 | `executeJavaScript` resolves a structured clone | JSON only (`JsonNode?`); undefined is null | Design: DevTools `Runtime.evaluate` returns JSON | Typed overloads |

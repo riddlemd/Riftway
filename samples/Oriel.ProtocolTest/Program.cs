@@ -121,6 +121,14 @@ async Task RunLoadUrlChecks(List<(string Name, bool Pass, string Detail)> result
     Check("loadURL postData: POST with raw bytes and file", withOptions.Method == "POST" && withOptions.BodyText == "a=1&b=2"
         && withOptions.UploadFiles.SequenceEqual([upload]),
         $"{withOptions.Method} body={withOptions.BodyText} files={string.Join(",", withOptions.UploadFiles)}");
+    // Electron's UploadFile ranges: "file part" from byte 5, 3 bytes.
+    var (slice, _) = await Load("app://test/nav?step=slice", new LoadUrlOptions { PostData = [new UploadFile(upload) { Offset = 5, Length = 3 }] });
+    Check("loadURL postData: an UploadFile range sends that part", slice.BodyText == "par" && slice.UploadFiles.Count == 0, slice.BodyText);
+    var stale = await Assert(() => window!.LoadUrl("app://test/nav?step=stale", new LoadUrlOptions { PostData = [new UploadFile(upload) { ModificationTime = 1 }] }));
+    Check("loadURL postData: a file changed since its modificationTime fails the load", stale is LoadFailedException { ErrorDescription: "ERR_UPLOAD_FILE_CHANGED" }, stale?.Message);
+    var written = new DateTimeOffset(File.GetLastWriteTimeUtc(upload)).ToUnixTimeMilliseconds() / 1000.0;
+    var (current, _) = await Load("app://test/nav?step=current", new LoadUrlOptions { PostData = [new UploadFile(upload) { ModificationTime = written }] });
+    Check("loadURL postData: an unchanged file's modificationTime passes", current.UploadFiles.SequenceEqual([upload]), string.Join(",", current.UploadFiles));
     Check("loadURL userAgent: request header", Header(withOptions, "User-Agent") == "OrielTest/1.0", Header(withOptions, "User-Agent"));
     Check("loadURL userAgent: navigator.userAgent", pageAgent == "OrielTest/1.0", pageAgent);
     Check("loadURL userAgent: getUserAgent", window!.WebContents.GetUserAgent() == "OrielTest/1.0", window.WebContents.GetUserAgent());
@@ -206,3 +214,9 @@ app.Ready += (_, _) =>
 app.Run();
 Console.WriteLine(failures < 0 ? "RESULT: no report" : $"RESULT: {failures} failure(s)");
 return failures;
+
+static async Task<Exception?> Assert(Func<Task> act)
+{
+    try { await act(); return null; }
+    catch (Exception e) { return e; }
+}

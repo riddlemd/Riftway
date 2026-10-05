@@ -539,14 +539,21 @@ public sealed unsafe class WebContents
     /// Electron's <c>webContents.loadURL()</c>.</summary>
     /// <param name="url">The URL, with its scheme.</param>
     /// <param name="options">Referrer, user agent, extra headers and body for this navigation.</param>
-    /// <exception cref="NotSupportedException"><see cref="LoadUrlOptions.BaseUrlForDataUrl"/>, or an
-    /// <see cref="UploadFile"/> with an offset or length.</exception>
+    /// <exception cref="NotSupportedException"><see cref="LoadUrlOptions.BaseUrlForDataUrl"/>.</exception>
+    /// <exception cref="ArgumentOutOfRangeException">An <see cref="UploadFile"/> with a negative offset or length.</exception>
     public Task LoadUrl(string url, LoadUrlOptions? options = null)
     {
         ArgumentNullException.ThrowIfNull(url);
         var load = PendingLoad.Create(url, options);
         var userAgent = options?.UserAgent;
         var done = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        // Chromium fails the upload when a file changed since its modificationTime.
+        if (options?.PostData?.OfType<UploadFile>().Any(f => f.HasChanged()) == true)
+        {
+            CefThread.RunOnUi(() => DidFailLoad?.Invoke(this, new LoadFailedEventArgs(UploadFileChangedError, "ERR_UPLOAD_FILE_CHANGED", url, true)));
+            done.SetException(new LoadFailedException(UploadFileChangedError, "ERR_UPLOAD_FILE_CHANGED", url));
+            return done.Task;
+        }
         CefThread.RunOnUi(() =>
         {
             CompleteLoad(new LoadFailedException(AbortedError, "ERR_ABORTED", url));
@@ -559,6 +566,9 @@ public sealed unsafe class WebContents
 
     // net::ERR_ABORTED: a navigation stopped, typically because a newer one replaced it.
     private const int AbortedError = -3;
+
+    // net::ERR_UPLOAD_FILE_CHANGED.
+    private const int UploadFileChangedError = -14;
 
     // The task of the latest LoadUrl, until its page finishes or fails; UI thread only.
     private TaskCompletionSource? _loadDone;
