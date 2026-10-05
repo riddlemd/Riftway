@@ -1272,76 +1272,188 @@ static string PowerShell(string script)
     catch (FormatException) { return "error: " + error.Result.Trim(); }
 }
 
-// Read back with .NET Framework's ProtectedData under the same entropy: real DPAPI, both directions.
+// Read back independently: Windows PowerShell unwraps os_crypt's key from CEF's Local State file with ProtectedData,
+// and .NET's own AesGcm opens and seals the "v10" format.
 async Task SafeStorageAsync()
 {
     const string secret = "Oriel secret ✓ 日本";
-    const string unprotect = "Add-Type -AssemblyName System.Security; [Text.Encoding]::UTF8.GetString([Security.Cryptography.ProtectedData]::Unprotect([Convert]::FromBase64String('{0}'), [Text.Encoding]::UTF8.GetBytes('Oriel.SafeStorage'), 'CurrentUser'))";
+    const string unwrap = "Add-Type -AssemblyName System.Security; $k = [Convert]::FromBase64String((Get-Content -Raw -Encoding UTF8 -LiteralPath '{0}' | ConvertFrom-Json).os_crypt.encrypted_key); if ([Text.Encoding]::ASCII.GetString($k, 0, 5) -ne 'DPAPI') {{ 'no DPAPI header' }} else {{ [Convert]::ToBase64String([Security.Cryptography.ProtectedData]::Unprotect([byte[]]$k[5..($k.Length - 1)], $null, 'CurrentUser')) }}";
+    var localState = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "Oriel.WindowTest", "Local State");
+    static byte[]? FromBase64(string s) { try { return Convert.FromBase64String(s); } catch (FormatException) { return null; } }
+    static byte[] Seal(byte[] key, string text)
+    {
+        var plain = System.Text.Encoding.UTF8.GetBytes(text);
+        var nonce = System.Security.Cryptography.RandomNumberGenerator.GetBytes(12);
+        var sealedText = new byte[plain.Length];
+        var tag = new byte[16];
+        using (var aes = new System.Security.Cryptography.AesGcm(key, 16)) aes.Encrypt(nonce, plain, sealedText, tag);
+        return [.. "v10"u8, .. nonce, .. sealedText, .. tag];
+    }
+    static string Open(byte[] key, byte[] data)
+    {
+        if (data.Length < 31 || data[0] != 'v' || data[1] != '1' || data[2] != '0') return "not v10";
+        var plain = new byte[data.Length - 31];
+        try
+        {
+            using var aes = new System.Security.Cryptography.AesGcm(key, 16);
+            aes.Decrypt(data.AsSpan(3, 12), data.AsSpan(15, plain.Length), data.AsSpan(data.Length - 16), plain);
+        }
+        catch (System.Security.Cryptography.CryptographicException e) { return e.GetType().Name; }
+        return System.Text.Encoding.UTF8.GetString(plain);
+    }
+
+    // CEF creates the key at startup; read it before Oriel touches it, so a key Oriel replaced shows up below however
+    // late CEF writes the file.
+    var unwrapped = "";
+    byte[]? key = null;
+    Check("Local State holds os_crypt's DPAPI-wrapped 32-byte key (os_crypt.encrypted_key)",
+        Eventually(() => (key = FromBase64(unwrapped = PowerShell(string.Format(unwrap, localState)))) is { Length: 32 }, step), unwrapped);
+    key ??= new byte[32];
     Check("SafeStorage.IsEncryptionAvailable", SafeStorage.IsEncryptionAvailable());
-    var encrypted = SafeStorage.EncryptString(secret);
-    var read = PowerShell(string.Format(unprotect, Convert.ToBase64String(encrypted)));
-    Check("EncryptString is DPAPI for this user with Oriel's entropy (ProtectedData.Unprotect)", read == secret, read);
-    var foreign = PowerShell("Add-Type -AssemblyName System.Security; [Convert]::ToBase64String([Security.Cryptography.ProtectedData]::Protect([Text.Encoding]::UTF8.GetBytes('from powershell ✓'), [Text.Encoding]::UTF8.GetBytes('Oriel.SafeStorage'), 'CurrentUser'))");
+
+    byte[] encrypted;
+    try { encrypted = SafeStorage.EncryptString(secret); }
+    catch (InvalidOperationException) { encrypted = []; }
+    var opened = Open(key, encrypted);
+    Check("EncryptString is os_crypt's v10 + nonce + AES-256-GCM under the Local State key", opened == secret && encrypted.Length == 31 + System.Text.Encoding.UTF8.GetByteCount(secret), opened);
     string decrypted;
-    try { decrypted = SafeStorage.DecryptString(Convert.FromBase64String(foreign)); }
-    catch (Exception e) { decrypted = e.GetType().Name + " " + foreign; }
-    Check("DecryptString opens ProtectedData.Protect's output", decrypted == "from powershell ✓", decrypted);
-    var unentropied = PowerShell("Add-Type -AssemblyName System.Security; [Convert]::ToBase64String([Security.Cryptography.ProtectedData]::Protect([Text.Encoding]::UTF8.GetBytes('x'), $null, 'CurrentUser'))");
-    var refused = false;
-    try { SafeStorage.DecryptString(Convert.FromBase64String(unentropied)); }
-    catch (InvalidOperationException) { refused = true; }
-    catch (FormatException) { }
-    Check("DecryptString refuses DPAPI data without Oriel's entropy", refused, unentropied);
-    await Task.CompletedTask;
+    try { decrypted = SafeStorage.DecryptString(Seal(key, "from AesGcm ✓")); }
+    catch (Exception e) { decrypted = e.GetType().Name + ": " + e.Message; }
+    Check("DecryptString opens v10 data sealed with the Local State key", decrypted == "from AesGcm ✓", decrypted);
+
+    var raw = FromBase64(PowerShell("Add-Type -AssemblyName System.Security; [Convert]::ToBase64String([Security.Cryptography.ProtectedData]::Protect([Text.Encoding]::UTF8.GetBytes('x'), $null, 'CurrentUser'))")) ?? [1];
+    var refusal = "";
+    try { SafeStorage.DecryptString(raw); }
+    catch (InvalidOperationException e) { refusal = e.Message; }
+    Check("DecryptString refuses raw DPAPI data as Electron does", refusal == "Error while decrypting the ciphertext provided to safeStorage.decryptString. Ciphertext does not appear to be encrypted.", refusal);
+
+    string asyncOpened;
+    SafeStorageDecryptResult? asyncResult = null;
+    try
+    {
+        asyncOpened = Open(key, await SafeStorage.EncryptStringAsync("async ✓"));
+        asyncResult = await SafeStorage.DecryptStringAsync(Seal(key, "sealed ✓"));
+    }
+    catch (InvalidOperationException e) { asyncOpened = e.Message; }
+    Check("EncryptStringAsync and DecryptStringAsync use the same key and format", asyncOpened == "async ✓" && asyncResult == new SafeStorageDecryptResult(false, "sealed ✓"), $"{asyncOpened} | {asyncResult}");
 }
 
 #pragma warning disable CA1416 // Called only on Windows.
 // Toasts need the AppUserModelID registered; an AppUserModelId key with a DisplayName does what a Start-menu shortcut
-// does. Shown toasts are read back from the Action Center history through Windows PowerShell's WinRT projection.
+// does. Shown toasts are read back from the Action Center history through Windows PowerShell's WinRT projection, the
+// activator's shortcut through the shell's property system, and its registration from the registry.
 async Task NotificationAsync()
 {
+    var product = System.Diagnostics.FileVersionInfo.GetVersionInfo(Environment.ProcessPath!).ProductName ?? "";
+    var atStartup = WindowsShell.ProcessAppUserModelId();
+    var defaultId = app.AppUserModelId;
+    var afterUse = WindowsShell.ProcessAppUserModelId();
+    Check("the AppUserModelID is unset at startup; first use sets electron.app.{product name}",
+        atStartup is null && defaultId == "electron.app." + product && afterUse == defaultId, $"{atStartup} | {defaultId} | {afterUse}");
+
     var id = "Oriel.WindowTest.Toast." + Environment.ProcessId;
     var key = @"Software\Classes\AppUserModelId\" + id;
+    var lnk = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.Programs), product + ".lnk");
     using (var k = Microsoft.Win32.Registry.CurrentUser.CreateSubKey(key)) k.SetValue("DisplayName", "Oriel WindowTest");
-    const string history = "$null = [Windows.UI.Notifications.ToastNotificationManager,Windows.UI.Notifications,ContentType=WindowsRuntime]; ([Windows.UI.Notifications.ToastNotificationManager]::History.GetHistory('{0}') | ForEach-Object {{ $_.Content.GetXml() }}) -join '|'";
+    const string history = "$null = [Windows.UI.Notifications.ToastNotificationManager,Windows.UI.Notifications,ContentType=WindowsRuntime]; ([Windows.UI.Notifications.ToastNotificationManager]::History.GetHistory('{0}') | ForEach-Object {{ $_.Tag + '/' + $_.Group + ' ' + $_.Content.GetXml() }}) -join '|'";
+    const string shortcut = "$f = (New-Object -ComObject Shell.Application).NameSpace('{0}').ParseName('{1}'); $l = (New-Object -ComObject WScript.Shell).CreateShortcut('{2}'); if ($f) {{ $l.TargetPath + '|' + $l.Arguments + '|' + $l.Description + '|' + $l.WorkingDirectory + '|' + $f.ExtendedProperty('System.AppUserModel.ID') + '|' + $f.ExtendedProperty('System.AppUserModel.ToastActivatorCLSID') }} else {{ 'missing' }}";
+    var clsid = "";
     try
     {
         app.SetAppUserModelId(id);
-        Check("SetAppUserModelId sets the process's explicit AppUserModelID", WindowsToast.GetProcessAppUserModelId() == id && app.AppUserModelId == id, WindowsToast.GetProcessAppUserModelId());
+        Check("SetAppUserModelId sets the process's explicit AppUserModelID", WindowsShell.ProcessAppUserModelId() == id && app.AppUserModelId == id, WindowsShell.ProcessAppUserModelId());
         Check("Notification.IsSupported", Notification.IsSupported());
 
-        var tag = "Oriel toast " + Guid.NewGuid().ToString("N")[..8];
+        var props = "";
+        Check("the first notification writes Electron's Start-menu shortcut: the exe, its product name, the AppUserModelID and activator CLSID",
+            Eventually(() => (props = PowerShell(string.Format(shortcut, Path.GetDirectoryName(lnk), Path.GetFileName(lnk), lnk)))
+                == $"{Environment.ProcessPath}||{product}|{Path.GetDirectoryName(Environment.ProcessPath)}|{id}|{clsid = app.ToastActivatorClsid!}", step), props);
+        string? server = null, name = null;
+        object? custom = null;
+        Check("... and registers that CLSID's LocalServer32 under HKCU",
+            Eventually(() =>
+            {
+                using var c = Microsoft.Win32.Registry.CurrentUser.OpenSubKey(@"Software\Classes\CLSID\" + clsid);
+                using var s = c?.OpenSubKey("LocalServer32");
+                (name, custom, server) = (c?.GetValue(null) as string, c?.GetValue("CustomActivator"), s?.GetValue(null) as string);
+                return name == "Electron Notification Activator" && custom is 1 && server == Environment.ProcessPath;
+            }, step), $"{name} | {custom} | {server}");
+
+        var tag = "oriel-toast-" + Guid.NewGuid().ToString("N")[..8];
         var events = new System.Collections.Concurrent.ConcurrentQueue<string>();
-        var n = new Notification { Title = tag, Body = "Body text", Silent = true, Actions = [new("Open")] };
+        ActivationArguments? activation = null;
+        Notification.HandleActivation(a => activation = a);
+        var n = Oriel.Cef.CefThread.InvokeOnUi(() => new Notification
+        {
+            Id = tag, Title = "Oriel toast", Body = "Body text", Silent = true, TimeoutType = "never", Icon = OverlayPng(),
+            HasReply = true, ReplyPlaceholder = "Say", Actions = [new() { Text = "Open" }, new() { Type = "selection", Text = "Pick", Items = ["a", "b", "c"] }],
+        });
         n.Shown += (_, _) => events.Enqueue("shown");
         n.Closed += (_, r) => events.Enqueue("closed " + r);
         n.Failed += (_, e) => events.Enqueue("failed " + e);
-        Oriel.Cef.CefThread.InvokeOnUi(() => { n.Show(); return 0; });
-        Check("Show raises Shown", events.Contains("shown"), string.Join(",", events));
+        n.Action += (_, e) => events.Enqueue($"action {e.ActionIndex} {e.SelectionIndex}");
+        n.Reply += (_, r) => events.Enqueue("reply " + r);
+        var shownDuringShow = Oriel.Cef.CefThread.InvokeOnUi(() => { n.Show(); return events.Contains("shown"); });
+        Check("Show raises Shown after it returns, posted as Electron posts it", !shownDuringShow && Eventually(() => events.Contains("shown"), step), $"{shownDuringShow} {string.Join(",", events)}");
         var shown = "";
-        Check("the toast reaches the Action Center under the app's id, with its title, body and button",
-            Eventually(() => (shown = PowerShell(string.Format(history, id))).Contains(tag) && shown.Contains("Body text") && shown.Contains("content=\"Open\""), step), shown);
+        Check("the toast reaches the Action Center tagged with its Id in group Notifications, with Electron's reminder, reply and action XML",
+            Eventually(() => (shown = PowerShell(string.Format(history, id))).Contains($"{tag}/Notifications <toast scenario=\"reminder\">")
+                && shown.Contains("<text>Oriel toast</text><text>Body text</text>")
+                && shown.Contains("<actions><action activationType=\"system\" arguments=\"dismiss\" content=\"Close\"/><input id=\"reply\" type=\"text\" placeHolderContent=\"Say\"/>")
+                && shown.Contains($"<action activationType=\"foreground\" arguments=\"type=action&amp;action=0&amp;tag={tag}\" content=\"Open\"/>")
+                && shown.Contains($"<action activationType=\"foreground\" arguments=\"type=action&amp;action=1&amp;tag={tag}\" content=\"Pick\" hint-inputId=\"selection1\"/>")
+                && shown.Contains($"<action activationType=\"foreground\" arguments=\"type=reply&amp;tag={tag}\" content=\"Reply\" hint-inputId=\"reply\"/></actions>"), step), shown);
+        var icon = System.Text.RegularExpressions.Regex.Match(shown, "<image id=\"1\" placement=\"appLogoOverride\" hint-crop=\"none\" src=\"([^\"]+)\"/>").Groups[1].Value;
+        Check("the icon is a PNG copy in a scoped_dir temporary directory, by plain path",
+            icon.StartsWith(Path.GetTempPath(), StringComparison.OrdinalIgnoreCase) && Path.GetFileName(Path.GetDirectoryName(icon))!.StartsWith("scoped_dir", StringComparison.Ordinal) && File.Exists(icon) && File.ReadAllBytes(icon).AsSpan().StartsWith((byte[])[0x89, (byte)'P', (byte)'N', (byte)'G']), icon);
+
+        Check("the activator's class object is registered", Eventually(() => WindowsToastActivator.IsRegistered, step));
+        var hr = WindowsShell.ActivateToast(Guid.Parse(clsid), id, $"type=action&action=1&tag={tag}", ("selection1", "2"));
+        Check("Windows' activation of the CLSID (local server) with a selection raises Action (1, 2)",
+            hr == 0 && Eventually(() => events.Contains("action 1 2"), step), $"0x{hr:X8} {string.Join(",", events)}");
+        hr = WindowsShell.ActivateToast(Guid.Parse(clsid), id, $"type=reply&tag={tag}", ("reply", "typed ✓"));
+        Check("an activation with a reply raises Reply with its text", hr == 0 && Eventually(() => events.Contains("reply typed ✓"), step), $"0x{hr:X8} {string.Join(",", events)}");
+        Check("HandleActivation hears every activation with its details",
+            activation is { Type: "reply", Reply: "typed ✓" } && activation.UserInputs?.GetValueOrDefault("reply") == "typed ✓", activation?.ToString());
+
         Oriel.Cef.CefThread.InvokeOnUi(() => { n.Close(); return 0; });
-        Check("Close raises Closed (ApplicationHidden)", Eventually(() => events.Contains("closed ApplicationHidden"), step), string.Join(",", events));
         Check("Close removes it from the Action Center", Eventually(() => !(shown = PowerShell(string.Format(history, id))).Contains(tag), step), shown);
-        Check("a closed notification is no longer shown", !n.IsShown);
+        await Task.Delay(1000);
+        Check("Close raises no Closed, as Electron's close() on Windows", !events.Any(e => e.StartsWith("closed", StringComparison.Ordinal)) && !n.IsShown, string.Join(",", events));
 
         var bad = new Notification { ToastXml = "<toast><visual>" };
         var failed = "";
         bad.Failed += (_, e) => failed = e;
-        Oriel.Cef.CefThread.InvokeOnUi(() => { bad.Show(); return 0; });
-        Check("malformed ToastXml raises Failed and is not shown", failed.Length > 0 && !bad.IsShown, failed);
+        var failedDuringShow = Oriel.Cef.CefThread.InvokeOnUi(() => { bad.Show(); return failed; });
+        Check("malformed ToastXml raises Failed with Electron's text after Show returns, and is not shown",
+            failedDuringShow.Length == 0 && Eventually(() => failed.StartsWith("XML: Invalid XML, ERROR  (HRESULT: ", StringComparison.Ordinal), step) && !bad.IsShown, $"[{failedDuringShow}] {failed}");
 
-        var custom = new Notification { ToastXml = $"<toast><visual><binding template=\"ToastGeneric\"><text>{tag} custom</text></binding></visual><audio silent=\"true\"/></toast>" };
-        Oriel.Cef.CefThread.InvokeOnUi(() => { custom.Show(); return 0; });
+        var custom2 = new Notification { ToastXml = $"<toast><visual><binding template=\"ToastGeneric\"><text>{tag} custom</text></binding></visual><audio silent=\"true\"/></toast>" };
+        Oriel.Cef.CefThread.InvokeOnUi(() => { custom2.Show(); return 0; });
         Check("ToastXml is shown as given", Eventually(() => (shown = PowerShell(string.Format(history, id))).Contains(tag + " custom"), step), shown);
-        Oriel.Cef.CefThread.InvokeOnUi(() => { custom.Close(); return 0; });
+        Oriel.Cef.CefThread.InvokeOnUi(() => { custom2.Close(); return 0; });
+
+        var imaged = Oriel.Cef.CefThread.InvokeOnUi(() => new Notification { Id = tag + "-img", Title = "Oriel image", Silent = true, IconImage = NativeImage.CreateFromPath(OverlayPng()) });
+        Oriel.Cef.CefThread.InvokeOnUi(() => { imaged.Show(); return 0; });
+        var imageSrc = "";
+        Check("an IconImage (NativeImage) is shown as a PNG copy in the scoped_dir temporary directory",
+            Eventually(() =>
+            {
+                shown = PowerShell(string.Format(history, id));
+                imageSrc = System.Text.RegularExpressions.Regex.Match(shown, $"{tag}-img/Notifications <toast>.*?<image id=\"1\" placement=\"appLogoOverride\" hint-crop=\"none\" src=\"([^\"]+)\"/>").Groups[1].Value;
+                return imageSrc.Length > 0;
+            }, step)
+            && Path.GetFileName(Path.GetDirectoryName(imageSrc))!.StartsWith("scoped_dir", StringComparison.Ordinal) && File.Exists(imageSrc)
+            && File.ReadAllBytes(imageSrc).AsSpan().StartsWith((byte[])[0x89, (byte)'P', (byte)'N', (byte)'G']), imageSrc.Length > 0 ? imageSrc : shown);
+        Oriel.Cef.CefThread.InvokeOnUi(() => { imaged.Close(); return 0; });
         await Task.Delay(500);
     }
     finally
     {
         PowerShell($"$null = [Windows.UI.Notifications.ToastNotificationManager,Windows.UI.Notifications,ContentType=WindowsRuntime]; [Windows.UI.Notifications.ToastNotificationManager]::History.Clear('{id}')");
         Microsoft.Win32.Registry.CurrentUser.DeleteSubKeyTree(key, throwOnMissingSubKey: false);
+        File.Delete(lnk);
+        if (app.ToastActivatorClsid is { } registered) Microsoft.Win32.Registry.CurrentUser.DeleteSubKeyTree(@"Software\Classes\CLSID\" + registered, throwOnMissingSubKey: false);
     }
 }
 #pragma warning restore CA1416

@@ -7,8 +7,40 @@ using Oriel.Cef.Platform;
 
 namespace Oriel;
 
-/// <summary>A button on a <see cref="Notification"/>; Electron's <c>NotificationAction</c> (type "button").</summary>
-public sealed record NotificationAction(string Text);
+/// <summary>An action on a <see cref="Notification"/>; Electron's <c>NotificationAction</c>.</summary>
+public sealed record NotificationAction
+{
+    /// <summary>"button", or (Windows only) "selection" for a drop-down of <see cref="Items"/> with a submit button.
+    /// Other types are left out of the toast.</summary>
+    public string Type { get; init; } = "button";
+
+    /// <summary>The button's label; for a selection, the submit button's label ("Select" when empty).</summary>
+    public string Text { get; init; } = "";
+
+    /// <summary>Windows only: the choices of a "selection" action.</summary>
+    public IReadOnlyList<string> Items { get; init; } = [];
+}
+
+/// <summary>Which action was used; Electron's <c>action</c> event details.</summary>
+/// <param name="ActionIndex">The action's index in <see cref="Notification.Actions"/>.</param>
+/// <param name="SelectionIndex">Windows: the chosen item of a "selection" action, or -1 if none was chosen.</param>
+public sealed record NotificationActionEventArgs(int ActionIndex, int SelectionIndex);
+
+/// <summary>A toast activation as <see cref="Notification.HandleActivation"/> reports it; Electron's
+/// <c>ActivationArguments</c>.</summary>
+/// <param name="Type">"click", "action" or "reply".</param>
+/// <param name="Arguments">The raw activation arguments from Windows.</param>
+public sealed record ActivationArguments(string Type, string Arguments)
+{
+    /// <summary>For "action": the index of the action used.</summary>
+    public int? ActionIndex { get; init; }
+
+    /// <summary>For "reply": the text entered.</summary>
+    public string? Reply { get; init; }
+
+    /// <summary>Every input's value by id (the reply box, selections); null when there were none.</summary>
+    public IReadOnlyDictionary<string, string>? UserInputs { get; init; }
+}
 
 /// <summary>Why a <see cref="Notification"/> closed.</summary>
 public enum NotificationCloseReason
@@ -16,7 +48,7 @@ public enum NotificationCloseReason
     /// <summary>The user dismissed it.</summary>
     UserCanceled,
 
-    /// <summary><see cref="Notification.Close"/> took it away.</summary>
+    /// <summary>The app hid it.</summary>
     ApplicationHidden,
 
     /// <summary>It timed out (into the Action Center on Windows).</summary>
@@ -24,18 +56,63 @@ public enum NotificationCloseReason
 }
 
 /// <summary>A desktop notification; Electron's <c>Notification</c>. Windows shows it as a toast from
-/// <see cref="OrielApp.AppUserModelId"/>, which needs a Start-menu shortcut or an <c>AppUserModelId</c> registry entry
-/// carrying that id, as Electron does. Use it on the UI thread; its events arrive there.</summary>
-/// <remarks>A shown notification stays alive until it closes or fails, even with no reference to it.</remarks>
+/// <see cref="OrielApp.AppUserModelId"/>. As in Electron, the first notification (or <see cref="IsSupported"/>) of an
+/// unpackaged app writes a Start-menu shortcut named after the executable's product name and registers the toast
+/// activator CLSID under HKCU, so that Windows shows the app's toasts and delivers their buttons.
+/// Use it on the UI thread; its events arrive there.</summary>
+/// <remarks>A shown notification stays alive until it is clicked, closed or fails, even with no reference to it.</remarks>
 public sealed class Notification
 {
-    private static readonly HashSet<Notification> s_live = [];
+    private const int MaxWindowsIdLength = 64;
+    private const string DefaultGroup = "Notifications";
 
+    private static readonly List<Notification> s_live = [];
+    private static readonly Lock s_activationLock = new();
+    private static Action<ActivationArguments>? s_activationHandler;
+    private static ActivationArguments? s_pendingActivation;
+
+    private readonly string _id = Guid.NewGuid().ToString();
+    private readonly string _groupId = "";
     private object? _handle;
+    private Sink? _sink;
+    private int _showAttempt;
+    private bool _dismissed;
 
     internal static INotificationBackend Backend { get; set; } = OperatingSystem.IsWindows()
         ? new ToastNotificationBackend()
         : new UnsupportedNotificationBackend();
+
+    internal static Func<bool> IsAppReady { get; set; } = () => OrielApp.CurrentOrNull is { IsReady: true };
+
+    /// <summary>Creates a notification; as Electron's constructor does, readies the platform's notification service
+    /// (on Windows, the toast activator).</summary>
+    /// <exception cref="InvalidOperationException">The app is not ready yet, as in Electron.</exception>
+    public Notification()
+    {
+        if (!IsAppReady()) throw new InvalidOperationException("Cannot create Notification before app is ready");
+        if (OrielApp.CurrentOrNull is not null) Backend.Prepare();
+    }
+
+    /// <summary>The notification's identifier: the toast's <c>Tag</c> on Windows. A random lowercase UUID when not set or
+    /// set to "". Electron's <c>id</c>.</summary>
+    /// <exception cref="ArgumentException">On Windows, longer than 64 UTF-16 characters.</exception>
+    public string Id
+    {
+        get => _id;
+        init => _id = value is { Length: > 0 } ? CheckWindowsLength(value, "id") : Guid.NewGuid().ToString();
+    }
+
+    /// <summary>Groups notifications: the toast's <c>Group</c> on Windows ("Notifications" when empty). Electron's
+    /// <c>groupId</c>.</summary>
+    /// <exception cref="ArgumentException">On Windows, longer than 64 UTF-16 characters.</exception>
+    public string GroupId
+    {
+        get => _groupId;
+        init => _groupId = CheckWindowsLength(value ?? "", "groupId");
+    }
+
+    /// <summary>Windows: with <see cref="GroupId"/>, a header above the group's toasts. Electron's <c>groupTitle</c>.</summary>
+    public string GroupTitle { get; init; } = "";
 
     /// <summary>The heading.</summary>
     public string Title { get; set; } = "";
@@ -49,87 +126,237 @@ public sealed class Notification
     /// <summary>Plays no sound.</summary>
     public bool Silent { get; set; }
 
-    /// <summary>A path to an image file shown beside the text.</summary>
+    /// <summary>A path to a PNG or JPEG shown beside the text; Windows gets a PNG copy of it, as Electron gives it one.
+    /// Electron's <c>icon</c> given as a string.</summary>
     public string? Icon { get; set; }
 
-    /// <summary>"default", or "never" to stay until dismissed (a reminder toast on Windows).</summary>
+    /// <summary>The image shown beside the text, instead of <see cref="Icon"/>; Electron's <c>icon</c> given as a
+    /// <c>NativeImage</c>. An empty image shows none.</summary>
+    public NativeImage? IconImage { get; set; }
+
+    /// <summary>Adds a reply box and a "Reply" button; <see cref="Reply"/> reports the text. Electron's <c>hasReply</c>.</summary>
+    public bool HasReply { get; set; }
+
+    /// <summary>The reply box's placeholder. Electron's <c>replyPlaceholder</c>.</summary>
+    public string ReplyPlaceholder { get; set; } = "";
+
+    /// <summary>macOS only: the sound's name. Electron's <c>sound</c>.</summary>
+    public string Sound { get; set; } = "";
+
+    /// <summary>"normal", "critical" or "low"; on Windows "critical" raises the toast's priority. Electron's <c>urgency</c>.</summary>
+    public string Urgency { get; set; } = "";
+
+    /// <summary>"default", or "never" to stay until dismissed (a reminder toast with a Close button on Windows).</summary>
     public string TimeoutType { get; set; } = "default";
 
-    /// <summary>Buttons; <see cref="Action"/> reports which was pressed.</summary>
+    /// <summary>Buttons and selections; <see cref="Action"/> reports which was used.</summary>
     public IList<NotificationAction> Actions { get; set; } = [];
+
+    /// <summary>macOS only: the close button's label. Electron's <c>closeButtonText</c>.</summary>
+    public string CloseButtonText { get; set; } = "";
 
     /// <summary>Windows only: toast XML to show instead of the generated one; Electron's <c>toastXml</c>.</summary>
     public string? ToastXml { get; set; }
 
-    /// <summary>Whether the notification is on screen (shown and not yet closed or failed).</summary>
-    public bool IsShown => _handle is not null;
+    /// <summary>Whether the notification is on screen (shown and not yet dismissed, clicked, closed or failed).</summary>
+    public bool IsShown => _handle is not null && !_dismissed;
 
-    /// <summary>The notification was shown; Electron's <c>show</c>.</summary>
+    /// <summary>The notification was shown; Electron's <c>show</c>. Raised on the UI thread after <see cref="Show"/> returns,
+    /// as Electron posts it; not raised if <see cref="Close"/> came first.</summary>
     public event EventHandler? Shown;
 
     /// <summary>The user clicked the notification's body; Electron's <c>click</c>.</summary>
     public event EventHandler? Click;
 
-    /// <summary>The user pressed a button; the argument is its index in <see cref="Actions"/>. Electron's <c>action</c>.</summary>
-    public event EventHandler<int>? Action;
+    /// <summary>The user used an action; Electron's <c>action</c>.</summary>
+    public event EventHandler<NotificationActionEventArgs>? Action;
 
-    /// <summary>The notification went away; Electron's <c>close</c>.</summary>
+    /// <summary>The user sent a reply; the argument is its text. Electron's <c>reply</c>.</summary>
+    public event EventHandler<string>? Reply;
+
+    /// <summary>The notification was dismissed by the user, timed out, or was hidden by the system; Electron's
+    /// <c>close</c>. <see cref="Close"/> does not raise it, as on Electron for Windows.</summary>
     public event EventHandler<NotificationCloseReason>? Closed;
 
-    /// <summary>The OS could not show it; the argument is the error. Electron's <c>failed</c>.</summary>
+    /// <summary>The OS could not show it; the argument is Electron's error text. Electron's <c>failed</c>. A refused
+    /// <see cref="Show"/> raises it after returning, as Electron posts it.</summary>
     public event EventHandler<string>? Failed;
 
     /// <summary>Whether desktop notifications work here; Electron's <c>Notification.isSupported()</c>.</summary>
-    public static bool IsSupported() => Backend.IsSupported;
+    public static bool IsSupported()
+    {
+        if (OrielApp.CurrentOrNull is not null) Backend.Prepare();
+        return Backend.IsSupported;
+    }
 
-    /// <summary>Shows the notification, replacing it if it is already shown. Raises <see cref="Failed"/> rather than
+    /// <summary>Windows: calls <paramref name="callback"/> for every click, action and reply that reaches the app, whether
+    /// or not its <see cref="Notification"/> is still alive, and at once for one that arrived before any callback was set.
+    /// Replaces the previous callback. Electron's <c>Notification.handleActivation()</c>.</summary>
+    public static void HandleActivation(Action<ActivationArguments> callback)
+    {
+        ArgumentNullException.ThrowIfNull(callback);
+        ActivationArguments? pending;
+        lock (s_activationLock)
+        {
+            s_activationHandler = callback;
+            pending = s_pendingActivation;
+            s_pendingActivation = null;
+        }
+        if (pending is not null) callback(pending);
+    }
+
+    internal static void ResetActivationHandler()
+    {
+        lock (s_activationLock)
+        {
+            s_activationHandler = null;
+            s_pendingActivation = null;
+        }
+    }
+
+    /// <summary>Shows the notification, closing it first if it is already shown. Raises <see cref="Failed"/> rather than
     /// throwing when the OS refuses.</summary>
+    /// <exception cref="InvalidOperationException">On Windows, <see cref="GroupTitle"/> is set without <see cref="GroupId"/>.</exception>
     public void Show()
     {
-        if (_handle is not null) Forget();
+        if (OperatingSystem.IsWindows() && GroupTitle.Length > 0 && GroupId.Length == 0)
+            throw new InvalidOperationException("Notification groupTitle requires groupId to be set");
+        Close();
+        var attempt = ++_showAttempt;
+        var sink = new Sink(this);
         try
         {
-            _handle = Backend.Show(AppId(), ToastXml ?? BuildToastXml(this), new Sink(this));
+            string xml;
+            if (string.IsNullOrEmpty(ToastXml))
+                xml = BuildToastXml(this, IconImage is not null || Icon is { Length: > 0 } ? Backend.SaveIcon(Icon, IconImage) : null);
+            else
+                xml = ToastXml;
+            _handle = Backend.Show(xml, Id, GroupId.Length > 0 ? GroupId : DefaultGroup, Urgency == "critical", sink);
+            _sink = sink;
         }
         catch (Exception e) when (e is not PlatformNotSupportedException)
         {
-            Failed?.Invoke(this, e.Message);
+            // Electron reports the failure from a task posted to the UI thread, unless the notification moved on.
+            var error = e.Message;
+            Backend.Post(() =>
+            {
+                if (_showAttempt == attempt) Failed?.Invoke(this, error);
+            });
             return;
         }
+        _dismissed = false;
         s_live.Add(this);
-        Shown?.Invoke(this, EventArgs.Empty);
+        // Electron emits show from a posted task, and not at all once close() has run in between.
+        Backend.Post(() =>
+        {
+            if (_sink == sink) Shown?.Invoke(this, EventArgs.Empty);
+        });
     }
 
-    /// <summary>Takes the notification away; <see cref="Closed"/> follows with
-    /// <see cref="NotificationCloseReason.ApplicationHidden"/>.</summary>
+    /// <summary>Hides the notification, or once it has been dismissed into the Action Center removes it from there.
+    /// Raises nothing, and the notification's events stop.</summary>
     public void Close()
     {
-        if (_handle is not null) Backend.Hide(_handle);
+        _showAttempt++;
+        if (_handle is null) return;
+        if (_dismissed) Backend.Remove(_handle);
+        else Backend.Hide(_handle);
+        Forget();
     }
-
-    private static string AppId() => OrielApp.CurrentOrNull?.AppUserModelId ?? OrielApp.DefaultAppUserModelId(null);
 
     private void Forget()
     {
         Backend.Release(_handle!);
         _handle = null;
+        _sink = null;
+        _dismissed = false;
         s_live.Remove(this);
     }
 
-    /// <summary>A toast's activation arguments: "action=N" for button N, anything else for the body.</summary>
-    internal void OnActivated(string arguments)
+    private static string CheckWindowsLength(string value, string option)
+        => OperatingSystem.IsWindows() && value.Length > MaxWindowsIdLength
+            ? throw new ArgumentException($"Notification {option} exceeds Windows limit of 64 UTF-16 characters", option)
+            : value;
+
+    /// <summary>The toast's own Activated event: Electron sends action and reply arguments down the activator's path and
+    /// takes anything else as a click.</summary>
+    internal void OnActivated(string arguments, IReadOnlyList<KeyValuePair<string, string>> userInputs)
     {
-        if (arguments.StartsWith("action=", StringComparison.Ordinal)
-            && int.TryParse(arguments.AsSpan(7), NumberStyles.None, CultureInfo.InvariantCulture, out var index))
-            Action?.Invoke(this, index);
+        if (arguments.Contains("type=action", StringComparison.Ordinal) || arguments.Contains("type=reply", StringComparison.Ordinal))
+            HandleToastActivation(arguments, userInputs);
         else
-            Click?.Invoke(this, EventArgs.Empty);
+            OnClicked();
+    }
+
+    private void OnClicked()
+    {
+        if (_handle is null) return;
+        Click?.Invoke(this, EventArgs.Empty);
+        if (_handle is not null) Forget();
+    }
+
+    /// <summary>An activation from the toast or the COM activator: "type=…&amp;action=…&amp;tag=…" plus the inputs' values.
+    /// Reports it to <see cref="HandleActivation"/>'s callback, then to the live notification whose <see cref="Id"/> is the
+    /// tag. Electron's <c>HandleToastActivation()</c>. UI thread.</summary>
+    internal static void HandleToastActivation(string invokedArgs, IReadOnlyList<KeyValuePair<string, string>> userInputs)
+    {
+        string type = "", actionText = "", tag = "";
+        foreach (var token in invokedArgs.Split('&', StringSplitOptions.RemoveEmptyEntries))
+        {
+            var kv = token.Split('=', StringSplitOptions.RemoveEmptyEntries);
+            if (kv.Length != 2) continue;
+            if (kv[0] == "type") type = kv[1];
+            else if (kv[0] == "action") actionText = kv[1];
+            else if (kv[0] == "tag") tag = kv[1];
+        }
+        var actionIndex = -1;
+        if (actionText.Length > 0 && !int.TryParse(actionText, NumberStyles.AllowLeadingSign, CultureInfo.InvariantCulture, out actionIndex))
+            actionIndex = -1;
+        var replyText = "";
+        foreach (var (key, value) in userInputs)
+            if (key == "reply") replyText = value;
+
+        var inputs = new Dictionary<string, string>();
+        foreach (var (key, value) in userInputs) inputs[key] = value;
+        var activation = type == "action"
+            ? new ActivationArguments("action", invokedArgs) { ActionIndex = actionIndex }
+            : type == "reply" || replyText.Length > 0
+                ? new ActivationArguments("reply", invokedArgs) { Reply = replyText }
+                : new ActivationArguments("click", invokedArgs);
+        if (inputs.Count > 0) activation = activation with { UserInputs = inputs };
+
+        Action<ActivationArguments>? handler;
+        lock (s_activationLock)
+        {
+            handler = s_activationHandler;
+            s_pendingActivation = handler is null ? activation : null;
+        }
+        handler?.Invoke(activation);
+
+        var target = s_live.Find(n => n.Id == tag);
+        if (target is null) return;
+        if (type == "action")
+        {
+            var selectionIndex = -1;
+            foreach (var (key, value) in userInputs)
+            {
+                if (!key.StartsWith("selection", StringComparison.Ordinal)) continue;
+                if (int.TryParse(value, NumberStyles.AllowLeadingSign, CultureInfo.InvariantCulture, out var parsed) && parsed >= 0)
+                    selectionIndex = parsed;
+                break;
+            }
+            if (actionIndex >= 0) target.Action?.Invoke(target, new NotificationActionEventArgs(actionIndex, selectionIndex));
+        }
+        else if (type == "reply" || (replyText.Length > 0 && type.Length == 0))
+            target.Reply?.Invoke(target, replyText);
+        else if (type is "click" or "")
+            target.OnClicked();
     }
 
     internal void OnDismissed(NotificationCloseReason reason)
     {
         if (_handle is null) return;
-        Forget();
+        _dismissed = true;
         Closed?.Invoke(this, reason);
     }
 
@@ -140,42 +367,93 @@ public sealed class Notification
         Failed?.Invoke(this, error);
     }
 
-    /// <summary>The toast XML Oriel generates: Electron's ToastGeneric layout.</summary>
-    internal static string BuildToastXml(Notification n)
+    /// <summary>The toast XML Electron's <c>GetToastXml()</c> generates; <paramref name="iconPath"/> is the PNG copy of
+    /// the icon, or null for none.</summary>
+    internal static string BuildToastXml(Notification n, string? iconPath)
     {
         static string E(string s) => SecurityElement.Escape(s);
-        var x = new StringBuilder("<toast launch=\"click\"");
-        if (n.TimeoutType == "never") x.Append(" scenario=\"reminder\"");
-        x.Append("><visual><binding template=\"ToastGeneric\">");
-        x.Append("<text>").Append(E(n.Title)).Append("</text>");
-        if (n.Body.Length > 0) x.Append("<text>").Append(E(n.Body)).Append("</text>");
-        if (n.Icon is { Length: > 0 } icon)
-            x.Append("<image placement=\"appLogoOverride\" src=\"").Append(E(new Uri(Path.GetFullPath(icon)).AbsoluteUri)).Append("\"/>");
+        var tag = E(n.Id);
+        var reminder = n.TimeoutType == "never";
+        var x = new StringBuilder("<toast");
+        if (reminder) x.Append(" scenario=\"reminder\"");
+        x.Append('>');
+        if (n.GroupId.Length > 0 && n.GroupTitle.Length > 0)
+            x.Append("<header id=\"").Append(E(n.GroupId)).Append("\" title=\"").Append(E(n.GroupTitle)).Append("\" arguments=\"\"/>");
+        x.Append("<visual><binding template=\"ToastGeneric\">");
+        if (n.Title.Length == 0 || n.Body.Length == 0)
+        {
+            var line = n.Title.Length == 0 ? n.Body : n.Title;
+            x.Append("<text>").Append(E(line.Length == 0 ? "[no message]" : line)).Append("</text>");
+        }
+        else
+            x.Append("<text>").Append(E(n.Title)).Append("</text><text>").Append(E(n.Body)).Append("</text>");
+        if (iconPath is { Length: > 0 })
+            x.Append("<image id=\"1\" placement=\"appLogoOverride\" hint-crop=\"none\" src=\"").Append(E(iconPath)).Append("\"/>");
         x.Append("</binding></visual>");
-        if (n.Actions.Count > 0)
+        if (reminder || n.HasReply || n.Actions.Count > 0)
         {
             x.Append("<actions>");
+            if (reminder) x.Append("<action activationType=\"system\" arguments=\"dismiss\" content=\"Close\"/>");
+            if (n.HasReply)
+            {
+                x.Append("<input id=\"reply\" type=\"text\"");
+                if (n.ReplyPlaceholder.Length > 0) x.Append(" placeHolderContent=\"").Append(E(n.ReplyPlaceholder)).Append('"');
+                x.Append("/>");
+            }
             for (var i = 0; i < n.Actions.Count; i++)
-                x.Append("<action content=\"").Append(E(n.Actions[i].Text)).Append("\" arguments=\"action=")
-                    .Append(i.ToString(CultureInfo.InvariantCulture)).Append("\" activationType=\"foreground\"/>");
+            {
+                var action = n.Actions[i];
+                var index = i.ToString(CultureInfo.InvariantCulture);
+                var arguments = "type=action&amp;action=" + index + "&amp;tag=" + tag;
+                if (action.Type is "button" or "")
+                    x.Append("<action activationType=\"foreground\" arguments=\"").Append(arguments).Append("\" content=\"").Append(E(action.Text)).Append("\"/>");
+                else if (action.Type == "selection")
+                {
+                    x.Append("<input id=\"selection").Append(index).Append("\" type=\"selection\"");
+                    if (action.Items.Count == 0) x.Append("/>");
+                    else
+                    {
+                        x.Append('>');
+                        for (var j = 0; j < action.Items.Count; j++)
+                            x.Append("<selection id=\"").Append(j.ToString(CultureInfo.InvariantCulture)).Append("\" content=\"").Append(E(action.Items[j])).Append("\"/>");
+                        x.Append("</input>");
+                    }
+                    x.Append("<action activationType=\"foreground\" arguments=\"").Append(arguments).Append("\" content=\"")
+                        .Append(E(action.Text.Length == 0 ? "Select" : action.Text)).Append("\" hint-inputId=\"selection").Append(index).Append("\"/>");
+                }
+            }
+            if (n.HasReply)
+                x.Append("<action activationType=\"foreground\" arguments=\"type=reply&amp;tag=").Append(tag)
+                    .Append("\" content=\"Reply\" hint-inputId=\"reply\"/>");
             x.Append("</actions>");
         }
         if (n.Silent) x.Append("<audio silent=\"true\"/>");
         return x.Append("</toast>").ToString();
     }
 
+    // One per Show: a toast replaced by a later Show must not speak for the new one.
     private sealed class Sink(Notification owner) : INotificationSink
     {
-        public void Activated(string arguments) => owner.OnActivated(arguments);
-        public void Dismissed(NotificationCloseReason reason) => owner.OnDismissed(reason);
-        public void Failed(string error) => owner.OnFailed(error);
+        private bool Current => owner._sink == this;
+        public void Activated(string arguments, IReadOnlyList<KeyValuePair<string, string>> userInputs)
+        {
+            if (Current) owner.OnActivated(arguments, userInputs);
+        }
+        public void Dismissed(NotificationCloseReason reason)
+        {
+            if (Current) owner.OnDismissed(reason);
+        }
+        public void Failed(string error)
+        {
+            if (Current) owner.OnFailed(error);
+        }
     }
 }
 
 /// <summary>Where a backend reports what happened to a shown notification; called on the UI thread.</summary>
 internal interface INotificationSink
 {
-    void Activated(string arguments);
+    void Activated(string arguments, IReadOnlyList<KeyValuePair<string, string>> userInputs);
     void Dismissed(NotificationCloseReason reason);
     void Failed(string error);
 }
@@ -185,11 +463,25 @@ internal interface INotificationBackend
 {
     bool IsSupported { get; }
 
-    /// <summary>Shows <paramref name="xml"/> from app <paramref name="appId"/>; returns a handle, or throws if refused.</summary>
-    object Show(string appId, string xml, INotificationSink sink);
+    /// <summary>Readies the service once per process: Electron's notification presenter creation.</summary>
+    void Prepare();
 
-    /// <summary>Takes a shown notification away; the sink then hears <see cref="NotificationCloseReason.ApplicationHidden"/>.</summary>
+    /// <summary>A PNG copy of <paramref name="image"/>, else of the image at <paramref name="path"/>, for the generated
+    /// XML; null if it is empty or cannot be read.</summary>
+    string? SaveIcon(string? path, NativeImage? image);
+
+    /// <summary>Runs <paramref name="action"/> later on the UI thread.</summary>
+    void Post(Action action);
+
+    /// <summary>Shows <paramref name="xml"/> tagged <paramref name="tag"/> in <paramref name="group"/>; returns a handle, or
+    /// throws with Electron's failure text if refused.</summary>
+    object Show(string xml, string tag, string group, bool highPriority, INotificationSink sink);
+
+    /// <summary>Takes a shown notification off the screen.</summary>
     void Hide(object handle);
+
+    /// <summary>Removes a dismissed notification from the notification center.</summary>
+    void Remove(object handle);
 
     /// <summary>Lets go of a handle; the sink hears nothing more.</summary>
     void Release(object handle);
@@ -199,16 +491,56 @@ internal interface INotificationBackend
 [SupportedOSPlatform("windows")]
 internal sealed class ToastNotificationBackend : INotificationBackend
 {
+    private static readonly Lock s_iconLock = new();
+    private static string? s_iconDirectory;
+
     public bool IsSupported => WindowsToast.IsSupported();
 
-    public object Show(string appId, string xml, INotificationSink sink)
+    public void Prepare() => WindowsToastActivator.Register((arguments, inputs) => OnUi(() => Notification.HandleToastActivation(arguments, inputs)));
+
+    /// <summary>Electron re-encodes the icon as a PNG named for the current microsecond in a temporary directory that
+    /// lives as long as the process.</summary>
+    public string? SaveIcon(string? path, NativeImage? image)
     {
-        var events = new Events(sink);
-        events.Handle = WindowsToast.Show(appId, xml, events);
+        var png = (image ?? NativeImage.CreateFromPath(path ?? "")).ToPng();
+        if (png.Length == 0) return null;
+        lock (s_iconLock)
+        {
+            if (s_iconDirectory is null)
+            {
+                var directory = Path.Combine(Path.GetTempPath(), $"scoped_dir{Environment.ProcessId}_{Random.Shared.Next():D9}");
+                Directory.CreateDirectory(directory);
+                AppDomain.CurrentDomain.ProcessExit += (_, _) =>
+                {
+                    try { Directory.Delete(directory, recursive: true); }
+                    catch (IOException) { }
+                    catch (UnauthorizedAccessException) { }
+                };
+                s_iconDirectory = directory;
+            }
+            // Microseconds since 1601, base::Time's origin on Windows.
+            var file = Path.Combine(s_iconDirectory, (DateTime.UtcNow.ToFileTimeUtc() / 10).ToString(CultureInfo.InvariantCulture) + ".png");
+            File.WriteAllBytes(file, png);
+            return file;
+        }
+    }
+
+    public void Post(Action action) => CefThread.PostUi(action);
+
+    public object Show(string xml, string tag, string group, bool highPriority, INotificationSink sink)
+    {
+        var events = new Events(sink) { AppId = WindowsAppIdentity.AppUserModelId, Tag = tag, Group = group };
+        events.Handle = WindowsToast.Show(events.AppId, xml, tag, group, highPriority, events);
         return events;
     }
 
     public void Hide(object handle) => WindowsToast.Hide(((Events)handle).Handle);
+
+    public void Remove(object handle)
+    {
+        var events = (Events)handle;
+        WindowsToast.RemoveFromHistory(events.AppId, events.Tag, events.Group);
+    }
 
     public void Release(object handle)
     {
@@ -217,13 +549,21 @@ internal sealed class ToastNotificationBackend : INotificationBackend
         WindowsToast.Release(events.Handle);
     }
 
+    // Activations can arrive before CEF runs (a toast pressed while the app starts); then there is no UI thread to post to.
+    private static void OnUi(Action action)
+    {
+        if (OrielApp.CurrentOrNull is { IsReady: true }) CefThread.PostUi(action);
+        else action();
+    }
+
     /// <summary>Moves WinRT's callbacks onto the UI thread, and drops them once released.</summary>
     private sealed class Events(INotificationSink sink) : IToastEvents
     {
         public nint Handle;
         public volatile bool Released;
+        public required string AppId, Tag, Group;
 
-        public void Activated(string arguments) => Post(() => sink.Activated(arguments));
+        public void Activated(string arguments, IReadOnlyList<KeyValuePair<string, string>> userInputs) => Post(() => sink.Activated(arguments, userInputs));
 
         public void Dismissed(ToastDismissal reason) => Post(() => sink.Dismissed(reason switch
         {
@@ -232,7 +572,7 @@ internal sealed class ToastNotificationBackend : INotificationBackend
             _ => NotificationCloseReason.UserCanceled,
         }));
 
-        public void Failed(int errorCode) => Post(() => sink.Failed($"Toast failed (0x{errorCode:X8})."));
+        public void Failed(int errorCode) => Post(() => sink.Failed(WindowsToast.FailureResultToString(errorCode)));
 
         private void Post(Action a) => CefThread.PostUi(() =>
         {
@@ -246,10 +586,18 @@ internal sealed class UnsupportedNotificationBackend : INotificationBackend
 {
     public bool IsSupported => false;
 
-    public object Show(string appId, string xml, INotificationSink sink)
+    public void Prepare() { }
+
+    public string? SaveIcon(string? path, NativeImage? image) => null;
+
+    public void Post(Action action) => action();
+
+    public object Show(string xml, string tag, string group, bool highPriority, INotificationSink sink)
         => throw new PlatformNotSupportedException("Notification is not implemented on this platform.");
 
     public void Hide(object handle) { }
+
+    public void Remove(object handle) { }
 
     public void Release(object handle) { }
 }

@@ -35,7 +35,7 @@ Where an implemented module differs from Electron, the difference and its reason
 
 | Electron | Oriel | Source | Wave | Status |
 |---|---|---|---|---|
-| `app` | `OrielApp` | CEF + OS | M2 | partial: `ready`, `window-all-closed`, `second-instance`, `before-quit`, `will-quit`, `quit()`, `exit()`, `enableSandbox`, `isReady`, `name`, `setAppUserModelId`; no `quit` event (see DRIFT.md) |
+| `app` | `OrielApp` | CEF + OS | M2 | partial: `ready`, `window-all-closed`, `second-instance`, `before-quit`, `will-quit`, `quit()`, `exit()`, `enableSandbox`, `isReady`, `name`, `setAppUserModelId`, `setToastActivatorCLSID`/`toastActivatorCLSID`; no `quit` event (see DRIFT.md) |
 | `process` | `OrielProcess` | .NET + CEF | M2 | — |
 | `CommandLine` (`app.commandLine`) | `OrielApp.CommandLine` | CEF | M2 | — |
 | Command-line switches | same switches | CEF | M2 | — |
@@ -113,7 +113,7 @@ Detailed item-by-item status, including `navigationHistory` and `WebFrameMain`: 
 | `dialog` (message boxes, error box, certificate trust) | `Dialog` | OS | M5 | — |
 | `Menu` / `MenuItem` (app menu, context menus) | `Menu` / `MenuItem` | OS + CEF | M5 | partial: application and window menus, popups and context menus, roles, accelerators; no icons, sublabels or tooltips |
 | `Tray` | `Tray` | OS | M5 | — |
-| `Notification` | `Notification` | OS | M5 | partial: Windows toasts through WinRT (title, body, icon, silent, buttons, `toastXml`, `timeoutType: never`; `show`, `click`, `action`, `close`, `failed`), `OrielApp.SetAppUserModelId`; no macOS or Linux (DRIFT Q1-Q4) |
+| `Notification` | `Notification` | OS | M5 | partial: Windows toasts through WinRT with Electron's toast XML (`id`, `groupId`/`groupTitle`, title, body, icon (path or `NativeImage`), silent, `hasReply`/`replyPlaceholder`, button and selection actions, `urgency`, `timeoutType`, `toastXml`; `show`, `click`, `action`, `reply`, `close`, `failed`), `Notification.handleActivation`, the toast activator (Start-menu shortcut, HKCU CLSID, COM server), `OrielApp.SetAppUserModelId`/`SetToastActivatorClsid`; no macOS or Linux (DRIFT Q2-Q4) |
 | `globalShortcut` | `GlobalShortcut` | OS | M5 | — |
 | `Dock` (`app.dock`, macOS) | `OrielApp.Dock` | OS | M5 | — |
 | `clipboard` / `ClipboardItem` | `Clipboard` / `ClipboardItem` | OS | M5 | — |
@@ -122,7 +122,7 @@ Detailed item-by-item status, including `navigationHistory` and `WebFrameMain`: 
 | `nativeTheme` | `NativeTheme` | OS + CEF | M5 | — |
 | `powerMonitor` | `PowerMonitor` | OS | M5 | — |
 | `powerSaveBlocker` | `PowerSaveBlocker` | OS | M5 | — |
-| `safeStorage` | `SafeStorage` | OS | M5 | partial: Windows DPAPI (`isEncryptionAvailable`, `encryptString`, `decryptString`); no macOS or Linux (DRIFT D1-D2) |
+| `safeStorage` | `SafeStorage` | OS | M5 | partial: Windows os_crypt (`v10` AES-256-GCM under CEF's `Local State` key; `isEncryptionAvailable`, `encryptString`, `decryptString`, `isAsyncEncryptionAvailable`, `encryptStringAsync`, `decryptStringAsync`, `setUsePlainTextEncryption`); no macOS or Linux (DRIFT D1-D2) |
 | `systemPreferences` | `SystemPreferences` | OS | M5 | — |
 | `desktopCapturer` | `DesktopCapturer` | CEF + Patch (verify) | M5 | — |
 

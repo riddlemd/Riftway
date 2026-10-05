@@ -18,10 +18,11 @@ public enum ToastDismissal
     TimedOut = 2,
 }
 
-/// <summary>What happened to a shown toast: activated (with its launch or action arguments), dismissed, or failed.</summary>
+/// <summary>What happened to a shown toast: activated (with its launch or action arguments and the values of its inputs),
+/// dismissed, or failed.</summary>
 public interface IToastEvents
 {
-    void Activated(string arguments);
+    void Activated(string arguments, IReadOnlyList<KeyValuePair<string, string>> userInputs);
     void Dismissed(ToastDismissal reason);
     void Failed(int errorCode);
 }
@@ -65,30 +66,49 @@ public static unsafe class WindowsToast
     private static readonly Guid s_iidXmlDocumentIO = new("6CD0E74E-EE65-4489-9EBF-CA43E87BA637");
     private static readonly Guid s_iidXmlDocument = new("F7F3A506-1E87-42D6-BCFB-B8C809FA5494");
     private static readonly Guid s_iidActivatedArgs = new("E3BF92F3-C197-436F-8265-0625824F8DAC");
+    private static readonly Guid s_iidActivatedArgs2 = new("AB7DA512-CC61-568E-81BE-304AC31038FA");
     private static readonly Guid s_iidDismissedArgs = new("3F89D935-D9CB-4538-A0F0-FFE7659938F8");
     private static readonly Guid s_iidFailedArgs = new("35176862-CFD4-44F8-AD64-F500FD896C3B");
+    private static readonly Guid s_iidNotification2 = new("9DFB9FD1-143A-490E-90BF-B9FBA7132DE7");
+    private static readonly Guid s_iidNotification4 = new("15154935-28EA-4727-88E9-C58680E2D118");
+    private static readonly Guid s_iidManagerStatics2 = new("7AB93C52-0E48-4750-BA9D-1A4113981847");
+    private static readonly Guid s_iidIterableStringObject = new("FE2F3D47-5D47-5499-8374-430C7CDA0204");
+    private static readonly Guid s_iidPropertyValue = new("4BD682DD-7554-40E9-9A9B-82654EDE7E62");
     private static readonly Guid s_iidUnknown = new("00000000-0000-0000-C000-000000000046");
     private static readonly Guid s_iidAgile = new("94EA2B94-E9CC-49E0-C0FF-EE64CA8F5B90");
 
-    /// <summary>Shows <paramref name="xml"/> as a toast from app <paramref name="appUserModelId"/> and returns a handle for
-    /// <see cref="Hide"/> and <see cref="Release"/>. Throws <see cref="COMException"/> if WinRT refused (bad XML, no notifier).</summary>
-    public static nint Show(string appUserModelId, string xml, IToastEvents events)
+    /// <summary>Shows <paramref name="xml"/> as a toast from app <paramref name="appUserModelId"/>, with WinRT's
+    /// <c>Tag</c>, <c>Group</c> and (when <paramref name="highPriority"/>) <c>Priority</c> set as Electron sets them, and
+    /// returns a handle for <see cref="Hide"/> and <see cref="Release"/>. Throws <see cref="COMException"/> whose message
+    /// is Electron's <c>failed</c> text for the step that WinRT refused.</summary>
+    public static nint Show(string appUserModelId, string xml, string tag, string group, bool highPriority, IToastEvents events)
     {
         RoInitialize(1 /* RO_INIT_MULTITHREADED */);
-        void* doc = null, docIO = null, xmlDoc = null, factory = null, toast = null, notifier = null;
+        void* doc = null, docIO = null, xmlDoc = null, factory = null, toast = null, toast2 = null, toast4 = null, notifier = null;
         try
         {
-            doc = Activate("Windows.Data.Xml.Dom.XmlDocument");
-            docIO = Query(doc, s_iidXmlDocumentIO);
-            using (var h = new HString(xml)) Check(((delegate* unmanaged<void*, nint, int>)Slot(docIO, 6))(docIO, h.Handle));
-            xmlDoc = Query(doc, s_iidXmlDocument);
-            factory = Factory("Windows.UI.Notifications.ToastNotification", s_iidNotificationFactory);
-            Check(((delegate* unmanaged<void*, void*, void**, int>)Slot(factory, 6))(factory, xmlDoc, &toast));
+            const string InvalidXml = "XML: Invalid XML";
+            using (var name = new HString("Windows.Data.Xml.Dom.XmlDocument")) Check(RoActivateInstance(name.Handle, &doc), InvalidXml);
+            Check(QueryHr(doc, s_iidXmlDocumentIO, &docIO), InvalidXml);
+            using (var h = new HString(xml)) Check(((delegate* unmanaged<void*, nint, int>)Slot(docIO, 6))(docIO, h.Handle), InvalidXml);
+            Check(QueryHr(doc, s_iidXmlDocument, &xmlDoc), InvalidXml);
+
+            var iid = s_iidNotificationFactory;
+            using (var name = new HString("Windows.UI.Notifications.ToastNotification"))
+                Check(RoGetActivationFactory(name.Handle, &iid, &factory), "WinAPI: GetActivationFactory failed");
+            Check(((delegate* unmanaged<void*, void*, void**, int>)Slot(factory, 6))(factory, xmlDoc, &toast), "WinAPI: CreateToastNotification failed");
+            Check(QueryHr(toast, s_iidNotification2, &toast2), "WinAPI: Getting Notification interface failed");
+            using (var h = new HString(group)) Check(((delegate* unmanaged<void*, nint, int>)Slot(toast2, 8))(toast2, h.Handle), "WinAPI: Setting group failed");
+            using (var h = new HString(tag)) Check(((delegate* unmanaged<void*, nint, int>)Slot(toast2, 6))(toast2, h.Handle), "WinAPI: Setting tag failed");
+            // IToastNotification4 is missing before Windows 10 1703; Electron then leaves the priority alone.
+            if (QueryHr(toast, s_iidNotification4, &toast4) >= 0)
+                Check(((delegate* unmanaged<void*, int, int>)Slot(toast4, 9))(toast4, highPriority ? 1 : 0), "WinAPI: Setting priority failed");
+
             Advise(toast, 11, Handler.Create(WinRtIid.ActivatedHandler, events, Handler.Kind.Activated));
             Advise(toast, 9, Handler.Create(WinRtIid.DismissedHandler, events, Handler.Kind.Dismissed));
             Advise(toast, 13, Handler.Create(WinRtIid.FailedHandler, events, Handler.Kind.Failed));
             notifier = Notifier(appUserModelId);
-            Check(((delegate* unmanaged<void*, void*, int>)Slot(notifier, 6))(notifier, toast));
+            Check(((delegate* unmanaged<void*, void*, int>)Slot(notifier, 6))(notifier, toast), "WinAPI: Show failed");
             var handle = new Toast { Notifier = (nint)notifier, Notification = (nint)toast };
             notifier = null;
             toast = null;
@@ -97,12 +117,63 @@ public static unsafe class WindowsToast
         finally
         {
             Release(notifier);
+            Release(toast4);
+            Release(toast2);
             Release(toast);
             Release(factory);
             Release(xmlDoc);
             Release(docIO);
             Release(doc);
         }
+    }
+
+    /// <summary>Removes the app's toast with <paramref name="tag"/> in <paramref name="group"/> from the Action Center;
+    /// Electron's <c>WindowsToastNotification::Remove()</c>. Failures are ignored, as there.</summary>
+    public static void RemoveFromHistory(string appUserModelId, string tag, string group)
+    {
+        RoInitialize(1);
+        void* factory = null, statics = null, history = null;
+        try
+        {
+            var iid = s_iidManagerStatics2;
+            using (var name = new HString("Windows.UI.Notifications.ToastNotificationManager"))
+                if (RoGetActivationFactory(name.Handle, &iid, &factory) < 0) return;
+            statics = factory;
+            factory = null;
+            if (((delegate* unmanaged<void*, void**, int>)Slot(statics, 6))(statics, &history) < 0 || history is null) return;
+            using HString t = new(tag), g = new(group), a = new(appUserModelId);
+            ((delegate* unmanaged<void*, nint, nint, nint, int>)Slot(history, 8))(history, t.Handle, g.Handle, a.Handle);
+        }
+        finally
+        {
+            Release(history);
+            Release(statics);
+            Release(factory);
+        }
+    }
+
+    /// <summary>Electron's text for a failed toast's HRESULT: "Notification failed - {reason} (HRESULT: {n})" for the
+    /// notification platform's known errors, else just " (HRESULT: {n})".</summary>
+    public static string FailureResultToString(int hr)
+    {
+        var reason = hr switch
+        {
+            -2143420143 => "Settings prevent the notification from being delivered.",
+            -2143420142 => "Application capabilities prevent the notification from being delivered.",
+            -2143420140 => "Settings prevent the notification type from being delivered.",
+            -2143420139 => "The size of the notification content is too large.",
+            -2143420138 => "The size of the notification tag is too large.",
+            -2143420155 => "The notification platform is unavailable.",
+            -2143420154 => "The notification has already been posted.",
+            -2143420153 => "The notification has already been hidden.",
+            -2143420128 => "The size of the developer id for scheduled notification is too large.",
+            -2143420118 => "The notification tag is not alphanumeric.",
+            -2143419897 => "Toast Notification was dropped without being displayed to the user.",
+            -2143419896 => "The notification platform does not have the proper privileges to complete the request.",
+            _ => null,
+        };
+        var code = $" (HRESULT: {hr.ToString(System.Globalization.CultureInfo.InvariantCulture)})";
+        return reason is null ? code : "Notification failed - " + reason + code;
     }
 
     /// <summary>Takes a shown toast away (Dismissed with <see cref="ToastDismissal.ApplicationHidden"/>).</summary>
@@ -136,10 +207,11 @@ public static unsafe class WindowsToast
         catch (COMException) { return false; }
     }
 
-    /// <summary>Sets the process's explicit AppUserModelID: taskbar grouping, jump lists and toasts go by it.</summary>
-    public static void SetProcessAppUserModelId(string id)
+    /// <summary>Sets the process's explicit AppUserModelID: taskbar grouping, jump lists and toasts go by it. False if
+    /// the shell refused it (longer than 128 characters, or with spaces).</summary>
+    public static bool SetProcessAppUserModelId(string id)
     {
-        fixed (char* p = id) Check(SetCurrentProcessExplicitAppUserModelID(p));
+        fixed (char* p = id) return SetCurrentProcessExplicitAppUserModelID(p) >= 0;
     }
 
     /// <summary>The process's explicit AppUserModelID, or null when none was set.</summary>
@@ -179,14 +251,6 @@ public static unsafe class WindowsToast
         finally { Release(handler); }
     }
 
-    private static void* Activate(string runtimeClass)
-    {
-        void* instance;
-        using var h = new HString(runtimeClass);
-        Check(RoActivateInstance(h.Handle, &instance));
-        return instance;
-    }
-
     private static void* Factory(string runtimeClass, Guid iid)
     {
         void* factory;
@@ -195,16 +259,17 @@ public static unsafe class WindowsToast
         return factory;
     }
 
-    private static void* Query(void* com, Guid iid)
-    {
-        void* result;
-        Check(((delegate* unmanaged<void*, Guid*, void**, int>)Slot(com, 0))(com, &iid, &result));
-        return result;
-    }
+    private static int QueryHr(void* com, Guid iid, void** result)
+        => ((delegate* unmanaged<void*, Guid*, void**, int>)Slot(com, 0))(com, &iid, result);
 
     private static void Check(int hr)
     {
         if (hr < 0) throw new COMException($"WinRT call failed (0x{hr:X8}).", hr);
+    }
+
+    private static void Check(int hr, string step)
+    {
+        if (hr < 0) throw new COMException(step + ", ERROR " + FailureResultToString(hr), hr);
     }
 
     private static void* Slot(void* com, int index) => (*(void***)com)[index];
@@ -323,7 +388,7 @@ public static unsafe class WindowsToast
                             if (((delegate* unmanaged<void*, nint*, int>)Slot(a, 6))(a, &h) >= 0) arguments = ReadHString(h) ?? "";
                             Release(a);
                         }
-                        events.Activated(arguments);
+                        events.Activated(arguments, UserInputs(args));
                         break;
                     case Kind.Dismissed:
                         var reason = ToastDismissal.UserCanceled;
@@ -359,6 +424,52 @@ public static unsafe class WindowsToast
             if (com is null) return null;
             void* result;
             return ((delegate* unmanaged<void*, Guid*, void**, int>)Slot(com, 0))(com, &iid, &result) < 0 ? null : result;
+        }
+
+        /// <summary>The string values of the toast's inputs (the reply box, selections) from
+        /// <c>IToastActivatedEventArgs2.UserInput</c>, as Electron's <c>ExtractUserInputs()</c> reads them.</summary>
+        private static List<KeyValuePair<string, string>> UserInputs(void* args)
+        {
+            var inputs = new List<KeyValuePair<string, string>>();
+            void* args2 = TryQuery(args, s_iidActivatedArgs2), set = null, iterable = null, iterator = null;
+            try
+            {
+                if (args2 is null || ((delegate* unmanaged<void*, void**, int>)Slot(args2, 6))(args2, &set) < 0 || set is null) return inputs;
+                iterable = TryQuery(set, s_iidIterableStringObject);
+                if (iterable is null || ((delegate* unmanaged<void*, void**, int>)Slot(iterable, 6))(iterable, &iterator) < 0 || iterator is null) return inputs;
+                byte hasCurrent;
+                if (((delegate* unmanaged<void*, byte*, int>)Slot(iterator, 7))(iterator, &hasCurrent) < 0) return inputs;
+                while (hasCurrent != 0)
+                {
+                    void* pair = null;
+                    if (((delegate* unmanaged<void*, void**, int>)Slot(iterator, 6))(iterator, &pair) < 0 || pair is null) break;
+                    nint key;
+                    void* value = null;
+                    if (((delegate* unmanaged<void*, nint*, int>)Slot(pair, 6))(pair, &key) >= 0)
+                    {
+                        var name = ReadHString(key) ?? "";
+                        if (((delegate* unmanaged<void*, void**, int>)Slot(pair, 7))(pair, &value) >= 0 && value is not null)
+                        {
+                            var property = TryQuery(value, s_iidPropertyValue);
+                            nint text;
+                            if (property is not null && ((delegate* unmanaged<void*, nint*, int>)Slot(property, 19))(property, &text) >= 0)
+                                inputs.Add(new(name, ReadHString(text) ?? ""));
+                            Release(property);
+                            Release(value);
+                        }
+                    }
+                    Release(pair);
+                    if (((delegate* unmanaged<void*, byte*, int>)Slot(iterator, 8))(iterator, &hasCurrent) < 0) break;
+                }
+                return inputs;
+            }
+            finally
+            {
+                Release(iterator);
+                Release(iterable);
+                Release(set);
+                Release(args2);
+            }
         }
     }
 

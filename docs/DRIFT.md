@@ -37,7 +37,6 @@ Entries marked _(branch `x`)_ are on that branch and not yet in `main`.
 | A1 | `app.enableSandbox()` on every OS | Linux only; `Run()` throws `PlatformNotSupportedException` on macOS and Windows | OS/packaging: CEF forces `--no-sandbox` whenever `browser_subprocess_path` is set (Windows), and the macOS helper does not link the sandbox library | Windows: the `bootstrap.exe` layout (probe passed, see windows-todo.md). macOS: native helper + `cef_sandbox` |
 | A2 | Several instances may run; `requestSingleInstanceLock()` opts in to one | Always single instance per data directory: a second launch exits and the first gets `SecondInstance` | CEF: Chrome-style profiles lock their data directory | Per-instance cache paths when the lock is not requested; `RequestSingleInstanceLock` |
 | A3 | `quit` event with the exit code | Missing; `BeforeQuit`, `WillQuit` and the window-closing quit flow are done | Todo | Raise it after the message loop ends |
-| A4 _(branch `notify-storage`)_ | Windows: the process AppUserModelID is set at startup, by default `electron.app.{name}` | Unset until `SetAppUserModelId`; `AppUserModelId` falls back to the process id, else `oriel.app.{Name}`, without setting it | Design: setting it at startup moves existing apps' taskbar buttons and jump lists to a new group | Set it in `Run()` once packaging writes the shortcut |
 
 ## BrowserWindow
 
@@ -182,17 +181,16 @@ Entries marked _(branch `x`)_ are on that branch and not yet in `main`.
 
 | ID | Electron | Oriel | Why | Possible resolution |
 |---|---|---|---|---|
-| Q1 _(branch `notify-storage`)_ | Clicking a toast or its button after the app has exited relaunches it (a COM activator, `toastActivatorClsid`) | Clicks and buttons reach `Click`/`Action` only while the app runs and the `Notification` is shown; Windows drops them after exit | OS: needs a registered COM server and the shortcut's `ToastActivatorCLSID` | `INotificationActivationCallback` server plus packaging |
-| Q2 _(branch `notify-storage`)_ | `hasReply`/`replyPlaceholder` and the `reply` event, `sound`, `urgency`, `closeButtonText`, `id`/`groupId`; button and click details | Missing; `Subtitle` is kept but only macOS shows it in Electron too; `Action` carries the button index only | Todo | Toast `<input>` and `<audio src>`; tag/group on the toast |
-| Q3 _(branch `notify-storage`)_ | Notifications on macOS (`UNUserNotificationCenter`) and Linux (libnotify / D-Bus) | Windows only: `IsSupported()` is false and `Show()` throws `PlatformNotSupportedException` elsewhere | OS | Per-OS `INotificationBackend` |
-| Q4 _(branch `notify-storage`)_ | `click` and `action` are covered by Electron's tests | Oriel's WindowTest checks show, the Action Center contents, close and failure, but cannot press a toast: the toast popup is not exposed to UI Automation on the test machine | Todo: test infrastructure | Drive the popup another way, or call the activation path directly |
+| Q2 _(branch `notify-storage`)_ | `new Notification()` throws "Notification groupTitle requires groupId to be set" for a `groupTitle` without `groupId` | `Show()` throws it | Design: C# object initialisers run after the constructor, so the constructor cannot see `GroupTitle`/`GroupId` | A constructor that takes the options |
+| Q3 _(branch `notify-storage`)_ | Notifications on macOS (`UNUserNotificationCenter`, with `Notification.getHistory()`, `remove()`, `removeAll()`, `removeGroup()`) and Linux (libnotify / D-Bus) | Windows only: `IsSupported()` is false and `Show()` throws `PlatformNotSupportedException` elsewhere; the macOS-only statics are missing | OS | Per-OS `INotificationBackend` |
+| Q4 _(branch `notify-storage`)_ | `click` and `action` from pressing the toast popup are covered by Electron's tests | Oriel's WindowTest drives the activator COM server directly (as Windows does) and the toast's XML, but cannot press the popup itself: it is not exposed to UI Automation on the test machine | Todo: test infrastructure | Drive the popup another way |
 
 ## safeStorage
 
 | ID | Electron | Oriel | Why | Possible resolution |
 |---|---|---|---|---|
-| D1 _(branch `notify-storage`)_ | Windows: Chromium's os_crypt (`v10` plus AES-256-GCM, the key wrapped by DPAPI in `Local State`) | DPAPI directly on each string, entropy `Oriel.SafeStorage`; not interchangeable with Electron's ciphertext | Design: no `Local State` key to share; DPAPI alone gives the same per-user protection | Adopt os_crypt's format if interchange matters |
-| D2 _(branch `notify-storage`)_ | macOS Keychain and Linux secret service | `IsEncryptionAvailable()` is false and encrypt/decrypt throw `PlatformNotSupportedException`; `SetUsePlainTextEncryption` and `GetSelectedStorageBackend` ("unknown") are no-ops | OS | Per-OS `ISafeStorageBackend` |
+| D1 _(branch `notify-storage`)_ | When os_crypt has to create the `Local State` key, DPAPI stores Electron's `version_info` product name (plus " (Developer Build)" for unofficial builds) as the blob's description | CEF normally creates the key; when Oriel has to, the description is the executable's VERSIONINFO product name | Unverified: Electron's `version_info::GetProductName()` value was not checked; the description has no effect on decryption | Match it once known |
+| D2 _(branch `notify-storage`)_ | macOS Keychain and Linux secret service; `getSelectedStorageBackend()` on Linux | `IsEncryptionAvailable()` is false and encrypt/decrypt throw Electron's "not available" errors; `GetSelectedStorageBackend()` (Linux-only, as in Electron) returns "unknown" | OS | Per-OS `ISafeStorageBackend` |
 ## Platform and runtime
 
 | ID | Electron | Oriel | Why | Possible resolution |
