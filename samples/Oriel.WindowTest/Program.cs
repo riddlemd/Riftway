@@ -255,6 +255,7 @@ async Task RunAsync(BrowserWindow win, BrowserWindow simple)
     await TaskbarAsync(win);
     await WindowsApisAsync();
     await NativeImageAsync();
+    await WebContentsLifecycleAsync(win);
 
     // Closing cancelled once: the window must survive the first close.
     var closingCount = 0;
@@ -1712,6 +1713,107 @@ async Task FramesAsync()
     Directory.Delete(dir, recursive: true);
 }
 
+async Task WebContentsLifecycleAsync(BrowserWindow win)
+{
+    // webContents.id and its lookups.
+    var other = new BrowserWindow(new BrowserWindowOptions { Show = false });
+    var otherId = other.WebContents.Id;
+    Check("webContents ids are unique and start at 1", win.WebContents.Id >= 1 && otherId >= 1 && otherId != win.WebContents.Id, $"{win.WebContents.Id} {otherId}");
+    Check("WebContents.FromId", WebContents.FromId(otherId) == other.WebContents && WebContents.FromId(-1) is null);
+    Check("GetAllWebContents lists live pages", WebContents.GetAllWebContents().Contains(win.WebContents) && WebContents.GetAllWebContents().Contains(other.WebContents));
+    win.Focus();
+    Check("GetFocusedWebContents is the focused window's page", Eventually(() => WebContents.GetFocusedWebContents() == win.WebContents, step), WebContents.GetFocusedWebContents()?.Id);
+    other.Destroy();
+    Check("a destroyed page leaves FromId and GetAllWebContents",
+        Eventually(() => WebContents.FromId(otherId) is null && !WebContents.GetAllWebContents().Any(w => w.Id == otherId), step));
+    var next = new BrowserWindow(new BrowserWindowOptions { Show = false });
+    Check("webContents ids are never reused", next.WebContents.Id > otherId, $"{next.WebContents.Id} > {otherId}");
+    next.Destroy();
+
+    // page-favicon-updated.
+    var icon = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==";
+    var iconPage = Path.Combine(Path.GetTempPath(), "oriel-window-test-icon.html");
+    File.WriteAllText(iconPage, $"<!doctype html><title>icon</title><link rel=icon href=\"{icon}\">");
+    IReadOnlyList<string>? favicons = null;
+    EventHandler<PageFaviconUpdatedEventArgs> onFavicon = (_, e) => favicons = e.Favicons;
+    win.WebContents.PageFaviconUpdated += onFavicon;
+    _ = win.WebContents.LoadFile(iconPage);
+    Check("PageFaviconUpdated carries the page's icon URLs", Eventually(() => favicons is { Count: 1 } && favicons[0] == icon, step), favicons is null ? "none" : string.Join(",", favicons)[..Math.Min(40, string.Join(",", favicons).Length)]);
+    win.WebContents.PageFaviconUpdated -= onFavicon;
+
+    // before-input-event: key fields, cancel, and Char events not reported.
+    await Js(win, "document.body.innerHTML = '<input id=k>'; window.keys = []; document.getElementById('k').focus(); addEventListener('keydown', e => keys.push(e.key))");
+    win.Focus();
+    var inputs = new System.Collections.Concurrent.ConcurrentQueue<KeyInput>();
+    EventHandler<BeforeInputEventArgs> onInput = (_, e) =>
+    {
+        inputs.Enqueue(e.Input);
+        if (e.Input.Key is "q" or "F12") e.Cancel = true;
+    };
+    win.WebContents.BeforeInputEvent += onInput;
+    var sent = win.WebContents;
+    sent.SendInputEvent(new KeyboardInputEvent(KeyboardInputEventType.KeyDown, "A") { Modifiers = InputModifiers.Shift | InputModifiers.Control });
+    sent.SendInputEvent(new KeyboardInputEvent(KeyboardInputEventType.KeyUp, "A") { Modifiers = InputModifiers.Shift | InputModifiers.Control });
+    sent.SendInputEvent(new KeyboardInputEvent(KeyboardInputEventType.KeyDown, "Left"));
+    sent.SendInputEvent(new KeyboardInputEvent(KeyboardInputEventType.Char, "x"));
+    Check("BeforeInputEvent reports keyDown and keyUp, not Char", Eventually(() => inputs.Count >= 3, step) && inputs.Count == 3, inputs.Count);
+    var down = inputs.ElementAtOrDefault(0);
+    var up = inputs.ElementAtOrDefault(1);
+    var left = inputs.ElementAtOrDefault(2);
+    Check("BeforeInputEvent: type, key, code and modifiers of a keyDown",
+        down is { Type: KeyboardInputEventType.KeyDown, Key: "A", Code: "KeyA", Shift: true, Control: true, Alt: false, Meta: false, IsAutoRepeat: false, IsComposing: false, Location: 0 }, down);
+    Check("BeforeInputEvent: a keyUp", up is { Type: KeyboardInputEventType.KeyUp, Key: "A", Code: "KeyA" }, up);
+    Check("BeforeInputEvent: a named key", left is { Key: "ArrowLeft", Code: "ArrowLeft", Shift: false, Control: false }, left);
+    Check("an uncancelled key reaches the page", Eventually(() => Js(win, "keys.join()").Result is "\"A,ArrowLeft\"", step), Js(win, "keys.join()").Result);
+    sent.SendInputEvent(new KeyboardInputEvent(KeyboardInputEventType.KeyDown, "Q"));
+    sent.SendInputEvent(new KeyboardInputEvent(KeyboardInputEventType.KeyDown, "Right"));
+    Check("a cancelled key never reaches the page, the next one does", Eventually(() => Js(win, "keys.join()").Result is "\"A,ArrowLeft,ArrowRight\"", step), Js(win, "keys.join()").Result);
+    Check("BeforeInputEvent still saw the cancelled key", inputs.Any(i => i.Key == "q"));
+    PressF12(win);
+    await Task.Delay(1500);
+    Check("a cancelled F12 does not open DevTools", !win.WebContents.IsDevToolsOpened());
+    win.WebContents.BeforeInputEvent -= onInput;
+    PressF12(win);
+    Check("F12 opens DevTools again once nothing cancels it", Eventually(() => win.WebContents.IsDevToolsOpened(), step));
+    win.WebContents.CloseDevTools();
+    Eventually(() => !win.WebContents.IsDevToolsOpened(), step);
+
+    // render-process-gone: chrome://kill and chrome://crash, as a browser-initiated navigation.
+    foreach (var url in new[] { "chrome://kill", "chrome://crash" })
+    {
+        var victim = new BrowserWindow(new BrowserWindowOptions { Show = false });
+        _ = victim.LoadUrl("data:text/html,<p>victim</p>");
+        await Task.Delay(1000);
+        RenderProcessGoneEventArgs? gone = null;
+        victim.WebContents.RenderProcessGone += (_, e) => gone = e;
+        _ = victim.WebContents.LoadUrl(url).ContinueWith(t => _ = t.Exception, TaskScheduler.Default);
+        Check($"RenderProcessGone is raised by {url}", Eventually(() => gone is not null, TimeSpan.FromSeconds(15)), gone);
+        Check($"RenderProcessGone reason for {url}", gone is { Reason: "killed" or "crashed", ExitCode: not 0 }, gone);
+        victim.Destroy();
+    }
+
+    // unresponsive / responsive: Chromium's hang monitor never fires here (the page is under DevTools, which
+    // suspends it, and DevTools-injected input is not tracked), so drive CEF's callbacks by hand.
+    var probe = new BrowserWindow(new BrowserWindowOptions { Show = false });
+    var unresponsive = 0;
+    var responsive = 0;
+    probe.WebContents.Unresponsive += (_, _) => unresponsive++;
+    probe.WebContents.Responsive += (_, _) => responsive++;
+    var (handled, waited) = HangProbe.Unresponsive(probe.WebContents);
+    Check("the unresponsive callback is claimed and told to wait", handled == 1 && waited == 1, $"handled={handled} waited={waited}");
+    Check("Unresponsive is raised", unresponsive == 1, unresponsive);
+    HangProbe.Unresponsive(probe.WebContents);
+    Check("a repeated report during one hang raises Unresponsive once", unresponsive == 1, unresponsive);
+    HangProbe.Responsive(probe.WebContents);
+    Check("Responsive is raised once the page answers", responsive == 1, responsive);
+    HangProbe.Responsive(probe.WebContents);
+    Check("Responsive without a hang is not raised", responsive == 1, responsive);
+    HangProbe.Unresponsive(probe.WebContents);
+    Check("a later hang raises Unresponsive again", unresponsive == 2, unresponsive);
+    probe.Destroy();
+}
+
+
 app.Ready += (_, _) =>
 {
     var win = new BrowserWindow(new BrowserWindowOptions
@@ -1745,6 +1847,37 @@ if (failures >= 0)
 }
 Console.WriteLine(failures < 0 ? "RESULT: did not finish" : $"RESULT: {failures} failure(s)");
 return failures;
+
+static unsafe class HangProbe
+{
+    private static int s_waits;
+
+    [System.Runtime.InteropServices.UnmanagedCallersOnly(CallConvs = [typeof(System.Runtime.CompilerServices.CallConvCdecl)])]
+    private static void Wait(Oriel.Cef.Interop.cef_unresponsive_process_callback_t* self) => s_waits++;
+
+    [System.Runtime.InteropServices.UnmanagedCallersOnly(CallConvs = [typeof(System.Runtime.CompilerServices.CallConvCdecl)])]
+    private static int Release(Oriel.Cef.Interop.cef_base_ref_counted_t* self) => 0;
+
+    internal static (int Handled, int Waited) Unresponsive(WebContents page)
+    {
+        var callback = (Oriel.Cef.Interop.cef_unresponsive_process_callback_t*)System.Runtime.InteropServices.NativeMemory.AllocZeroed((nuint)sizeof(Oriel.Cef.Interop.cef_unresponsive_process_callback_t));
+        callback->@base.release = &Release;
+        callback->wait = &Wait;
+        var fake = (nint)callback;
+        s_waits = 0;
+        var handler = page.Request.Native;
+        // The page's handlers run on the UI thread, as CEF calls them.
+        var handled = Oriel.Cef.CefThread.InvokeOnUi(() => handler->on_render_process_unresponsive(handler, null, (Oriel.Cef.Interop.cef_unresponsive_process_callback_t*)fake));
+        System.Runtime.InteropServices.NativeMemory.Free(callback);
+        return (handled, s_waits);
+    }
+
+    internal static void Responsive(WebContents page)
+    {
+        var handler = page.Request.Native;
+        Oriel.Cef.CefThread.InvokeOnUi(() => { handler->on_render_process_responsive(handler, null); return 0; });
+    }
+}
 
 static class MacInterop
 {

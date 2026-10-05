@@ -10,15 +10,15 @@ Percentages are over the non-n/a items; the second counts a partial item as half
 
 | Area | Items | Done | Partial | Missing | n/a | % done | % done + partial/2 |
 |---|---|---|---|---|---|---|---|
-| Static methods | 5 | 0 | 0 | 5 | 0 | 0.0% | 0.0% |
-| Instance events | 59 | 15 | 3 | 39 | 2 | 26.3% | 28.9% |
+| Static methods | 5 | 1 | 2 | 2 | 0 | 20.0% | 40.0% |
+| Instance events | 59 | 16 | 7 | 34 | 2 | 28.1% | 34.2% |
 | Instance methods | 118 | 25 | 5 | 80 | 8 | 22.7% | 25.0% |
-| Instance properties | 18 | 6 | 1 | 10 | 1 | 35.3% | 38.2% |
+| Instance properties | 18 | 7 | 1 | 9 | 1 | 41.2% | 44.1% |
 | navigationHistory | 14 | 12 | 0 | 2 | 0 | 85.7% | 85.7% |
 | WebFrameMain events and statics | 3 | 1 | 0 | 2 | 0 | 33.3% | 33.3% |
 | WebFrameMain methods | 9 | 1 | 3 | 5 | 0 | 11.1% | 27.8% |
 | WebFrameMain properties | 15 | 9 | 0 | 6 | 0 | 60.0% | 60.0% |
-| **Total** | 241 | 69 | 12 | 149 | 11 | 30.0% | 32.6% |
+| **Total** | 241 | 72 | 18 | 140 | 11 | 31.3% | 35.2% |
 
 ## Checklist
 
@@ -26,9 +26,9 @@ Percentages are over the non-n/a items; the second counts a partial item as half
 
 | Electron | Oriel | Status | Note |
 |---|---|---|---|
-| `getAllWebContents()` | — | missing |  |
-| `getFocusedWebContents()` | — | missing |  |
-| `fromId(id)` | — | missing | WebContents has no `id`. |
+| `getAllWebContents()` | `GetAllWebContents` | partial | Window pages only (C17). |
+| `getFocusedWebContents()` | `GetFocusedWebContents` | partial | Never a DevTools page (C17). |
+| `fromId(id)` | `FromId` | done |  |
 | `fromFrame(frame)` | — | missing |  |
 | `fromDevToolsTargetId(targetId)` | — | missing |  |
 
@@ -48,7 +48,7 @@ Percentages are over the non-n/a items; the second counts a partial item as half
 | `did-attach-webview` | — | n/a | <webview> |
 | `did-fail-provisional-load` | — | missing |  |
 | `did-frame-finish-load` | — | missing |  |
-| `page-favicon-updated` | — | missing |  |
+| `page-favicon-updated` | `PageFaviconUpdated` | done |  |
 | `content-bounds-updated` | — | missing |  |
 | `will-navigate` | `WillNavigate` | done | `Initiator` is null (C12). |
 | `will-frame-navigate` | `WillFrameNavigate` | done | C12. |
@@ -59,12 +59,12 @@ Percentages are over the non-n/a items; the second counts a partial item as half
 | `did-frame-navigate` | `DidFrameNavigate` | partial | `Frame` in place of process and routing ids (C12, F2). |
 | `did-navigate-in-page` | `DidNavigateInPage` | partial | `Frame` in place of process and routing ids (C12, F2). |
 | `will-prevent-unload` | — | missing |  |
-| `render-process-gone` | — | missing |  |
-| `unresponsive` | — | missing |  |
-| `responsive` | — | missing |  |
+| `render-process-gone` | `RenderProcessGone` | partial | No `clean-exit` (C13). |
+| `unresponsive` | `Unresponsive` | partial | Real hang not reproduced in the harness (C14). |
+| `responsive` | `Responsive` | partial | Real hang not reproduced in the harness (C14). |
 | `destroyed` | — | missing |  |
 | `input-event` | — | missing |  |
-| `before-input-event` | — | missing |  |
+| `before-input-event` | `BeforeInputEvent` | partial | `modifiers` shape (C15); `code`, `isComposing`, `location` derived (C16). |
 | `before-mouse-event` | — | missing |  |
 | `enter-html-full-screen` | — | missing |  |
 | `leave-html-full-screen` | — | missing |  |
@@ -234,7 +234,7 @@ Percentages are over the non-n/a items; the second counts a partial item as half
 | `ipc` | — | missing |  |
 | `caretBrowsingEnabled` | — | missing |  |
 | `frameRate` | — | missing |  |
-| `id` | — | missing |  |
+| `id` | `Id` | done |  |
 | `session` | `Session` | done | See DRIFT E1-E11 for the session gaps. |
 | `devToolsWebContents` | — | missing |  |
 | `debugger` | — | missing |  |

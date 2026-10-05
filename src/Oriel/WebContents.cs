@@ -50,6 +50,7 @@ public sealed unsafe partial class WebContents
         _defaultUserAgent = session.UserAgentOrNull ?? OrielApp.CurrentOrNull?.UserAgentFallback;
         _acceptLanguages = session.AcceptLanguages;
         session.Track(this);
+        RegisterLifecycle();
         _preferences = preferences;
         Session = session;
         JsDialog = new JsDialogHandler { SuppressAll = preferences.DisableDialogs };
@@ -60,7 +61,7 @@ public sealed unsafe partial class WebContents
         _appPreload = appPreload;
         _devTools.EventReceived += OnDevToolsEvent;
 
-        Display = new DisplayHandler { TitleChanged = OnTitleChanged };
+        Display = new DisplayHandler { TitleChanged = OnTitleChanged, FaviconUrlsChanged = OnFaviconUrlsChanged };
         ContextMenuRequests = new ContextMenuHandler(OnContextMenu);
         Load = new LoadHandler
         {
@@ -106,6 +107,9 @@ public sealed unsafe partial class WebContents
             CertificateError = OnCertificateError,
             BeforeBrowse = OnBeforeBrowse,
             Login = OnLogin,
+            RenderProcessTerminated = OnRenderProcessTerminated,
+            RenderProcessUnresponsive = OnRenderProcessUnresponsive,
+            RenderProcessResponsive = OnRenderProcessResponsive,
         };
     }
 
@@ -875,6 +879,7 @@ public sealed unsafe partial class WebContents
     internal void OnBrowserDestroyed()
     {
         _destroyed.Cancel();
+        UnregisterLifecycle();
         _devTools.Detach();
         NativeObject.Release(_browser);
         _browser = null;

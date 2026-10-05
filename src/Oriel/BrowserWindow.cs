@@ -289,7 +289,7 @@ public sealed unsafe class BrowserWindow
             ReadyToShow?.Invoke(this, EventArgs.Empty);
         };
         _client = new ClientHandler(WebContents.Display, WebContents.Load, WebContents.JsDialog, WebContents.Request, WebContents.Command,
-            WebContents.ContextMenuRequests, new KeyboardHandler(keyEvent => _menuBar?.OnKeyEvent(keyEvent) ?? false),
+            WebContents.ContextMenuRequests, new KeyboardHandler(keyEvent => WebContents.OnPreKeyEvent(keyEvent) || (_menuBar?.OnKeyEvent(keyEvent) ?? false)),
             new LifeSpanHandler { BeforePopup = OnBeforePopup, PopupAborted = OnPopupAborted })
         {
             Permission = WebContents.Permissions,
