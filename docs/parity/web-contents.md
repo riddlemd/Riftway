@@ -12,13 +12,13 @@ Percentages are over the non-n/a items; the second counts a partial item as half
 |---|---|---|---|---|---|---|---|
 | Static methods | 5 | 1 | 2 | 2 | 0 | 20.0% | 40.0% |
 | Instance events | 59 | 21 | 8 | 28 | 2 | 36.8% | 43.9% |
-| Instance methods | 118 | 25 | 8 | 77 | 8 | 22.7% | 26.4% |
-| Instance properties | 18 | 7 | 1 | 9 | 1 | 41.2% | 44.1% |
+| Instance methods | 118 | 33 | 21 | 56 | 8 | 30.0% | 39.5% |
+| Instance properties | 18 | 8 | 1 | 8 | 1 | 47.1% | 50.0% |
 | navigationHistory | 14 | 12 | 0 | 2 | 0 | 85.7% | 85.7% |
 | WebFrameMain events and statics | 3 | 1 | 0 | 2 | 0 | 33.3% | 33.3% |
 | WebFrameMain methods | 9 | 1 | 4 | 4 | 0 | 11.1% | 33.3% |
 | WebFrameMain properties | 15 | 9 | 0 | 6 | 0 | 60.0% | 60.0% |
-| **Total** | 241 | 77 | 23 | 130 | 11 | 33.5% | 38.5% |
+| **Total** | 241 | 86 | 36 | 108 | 11 | 37.4% | 45.2% |
 
 ## Checklist
 
@@ -82,7 +82,7 @@ Percentages are over the non-n/a items; the second counts a partial item as half
 | `found-in-page` | `FoundInPage` | done |  |
 | `media-started-playing` | — | missing |  |
 | `media-paused` | — | missing |  |
-| `audio-state-changed` | — | missing |  |
+| `audio-state-changed` | — | missing | CEF never reports audio for Chrome-style browsers (C23). |
 | `did-change-theme-color` | — | missing |  |
 | `update-target-url` | — | missing |  |
 | `cursor-changed` | — | missing |  |
@@ -133,38 +133,38 @@ Percentages are over the non-n/a items; the second counts a partial item as half
 | `close()` | — | missing |  |
 | `focus()` | — | missing |  |
 | `isFocused()` | — | missing |  |
-| `isLoading()` | — | missing |  |
-| `isLoadingMainFrame()` | — | missing |  |
-| `isWaitingForResponse()` | — | missing |  |
-| `stop()` | — | missing |  |
-| `isCrashed()` | — | missing |  |
-| `forcefullyCrashRenderer()` | — | missing |  |
-| `insertCSS()` | — | missing |  |
-| `removeInsertedCSS()` | — | missing |  |
-| `executeJavaScriptInIsolatedWorld()` | — | missing |  |
+| `isLoading()` | `IsLoading` | done |  |
+| `isLoadingMainFrame()` | `IsLoadingMainFrame` | partial | Derived from DevTools frame events (C19). |
+| `isWaitingForResponse()` | `IsWaitingForResponse` | partial | Ends at commit, from DevTools frame events (C19). |
+| `stop()` | `Stop` | done |  |
+| `isCrashed()` | `IsCrashed` | done | Until a reload's new renderer is alive. |
+| `forcefullyCrashRenderer()` | `ForcefullyCrashRenderer` | partial | Crashes (Electron's Linux route) on every OS (C27). |
+| `insertCSS()` | `InsertCssAsync` | partial | Inspector sheet; `user` origin applied as author (C25). |
+| `removeInsertedCSS()` | `RemoveInsertedCssAsync` | done |  |
+| `executeJavaScriptInIsolatedWorld()` | `ExecuteJavaScriptInIsolatedWorldAsync` | partial | DevTools-named worlds, JSON results (C26). |
 | `setIgnoreMenuShortcuts()` | — | missing |  |
-| `setAudioMuted()` | — | missing |  |
-| `isAudioMuted()` | — | missing |  |
-| `isCurrentlyAudible()` | — | missing |  |
+| `setAudioMuted()` | `SetAudioMuted` | done |  |
+| `isAudioMuted()` | `IsAudioMuted` | done |  |
+| `isCurrentlyAudible()` | — | missing | CEF never reports audio for Chrome-style browsers (C23). |
 | `setCaretBrowsingEnabled()` | — | missing |  |
 | `isCaretBrowsingEnabled()` | — | missing |  |
 | `setZoomMode()` | — | missing |  |
 | `getZoomMode()` | — | missing |  |
 | `setVisualZoomLevelLimits()` | — | missing |  |
-| `centerSelection()` | — | missing |  |
+| `centerSelection()` | `CenterSelection` | partial | Script; does nothing off macOS, as Electron (C20). |
 | `copyImageAt()` | — | missing |  |
 | `copyVideoFrameAt()` | — | missing |  |
 | `saveVideoFrameAs()` | — | missing |  |
-| `unselect()` | — | missing |  |
-| `scrollToTop()` | — | missing |  |
-| `scrollToBottom()` | — | missing |  |
-| `adjustSelection()` | — | missing |  |
-| `replace()` | — | missing |  |
+| `unselect()` | `Unselect` | partial | Script in the focused frame (C20). |
+| `scrollToTop()` | `ScrollToTop` | partial | Script in the focused frame (C20). |
+| `scrollToBottom()` | `ScrollToBottom` | partial | Script in the focused frame (C20). |
+| `adjustSelection()` | `AdjustSelection` | partial | Script; `end` honoured, unlike v44 (C20, C21). |
+| `replace()` | `Replace` | partial | Script and `execCommand` (C20). |
 | `replaceMisspelling(text)` | `ReplaceMisspelling` | done |  |
-| `insertText()` | — | missing |  |
+| `insertText()` | `InsertTextAsync` | done | DevTools `Input.insertText`, an input-method commit as Electron's. |
 | `findInPage(text, options)` | `FindInPage` | partial | A new session only when the text or case changes (C18). |
 | `stopFindInPage(action)` | `StopFindInPage` | partial | `activateSelection` keeps the selection (C18). |
-| `capturePage()` | — | missing |  |
+| `capturePage()` | `CapturePageAsync` | partial | `stayHidden`/`stayAwake` have no effect (C22). |
 | `isBeingCaptured()` | — | missing |  |
 | `getPrintersAsync()` | — | missing |  |
 | `print()` | — | missing |  |
@@ -182,8 +182,8 @@ Percentages are over the non-n/a items; the second counts a partial item as half
 | `inspectServiceWorker()` | — | missing |  |
 | `sendToFrame()` | — | missing |  |
 | `postMessage(channel, message, transfer)` | `PostMessage` | partial | JSON messages (I1). |
-| `enableDeviceEmulation()` | — | missing |  |
-| `disableDeviceEmulation()` | — | missing |  |
+| `enableDeviceEmulation()` | `EnableDeviceEmulation` | partial | DevTools metrics override; `mobile` forces more (C24). |
+| `disableDeviceEmulation()` | `DisableDeviceEmulation` | done |  |
 | `beginFrameSubscription()` | — | missing |  |
 | `endFrameSubscription()` | — | missing |  |
 | `startDrag()` | — | missing |  |
@@ -223,7 +223,7 @@ Percentages are over the non-n/a items; the second counts a partial item as half
 
 | Electron | Oriel | Status | Note |
 |---|---|---|---|
-| `audioMuted` | — | missing |  |
+| `audioMuted` | `SetAudioMuted / IsAudioMuted` | done |  |
 | `userAgent` | `SetUserAgent / GetUserAgent` | done |  |
 | `zoomLevel` | `SetZoomLevel / GetZoomLevel` | done |  |
 | `zoomFactor` | `SetZoomFactor / GetZoomFactor` | done |  |

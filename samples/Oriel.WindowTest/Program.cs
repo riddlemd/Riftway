@@ -259,6 +259,7 @@ async Task RunAsync(BrowserWindow win, BrowserWindow simple)
     await PageEventsAsync();
     await MessagePortsAsync();
     await MacWindowApisAsync();
+    await WebContentsMethodsAsync();
 
     // Closing cancelled once: the window must survive the first close.
     var closingCount = 0;
@@ -1030,6 +1031,282 @@ async Task MacWindowApisAsync()
     w.Destroy();
     File.Delete(file);
     await Task.CompletedTask;
+}
+
+async Task WebContentsMethodsAsync()
+{
+    // A local server whose responses wait on named gates: a navigation can be held before or after its response.
+    var gates = new System.Collections.Concurrent.ConcurrentDictionary<string, TaskCompletionSource>();
+    TaskCompletionSource Gate(string name) => gates.GetOrAdd(name, _ => new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously));
+    var listener = new System.Net.Sockets.TcpListener(System.Net.IPAddress.Loopback, 0);
+    listener.Start();
+    var origin = $"http://127.0.0.1:{((System.Net.IPEndPoint)listener.LocalEndpoint).Port}";
+    _ = Task.Run(async () =>
+    {
+        while (true)
+        {
+            System.Net.Sockets.TcpClient client;
+            try { client = await listener.AcceptTcpClientAsync(); }
+            catch (Exception) { return; }
+            _ = Task.Run(async () =>
+            {
+                using var _ = client;
+                try
+                {
+                    var stream = client.GetStream();
+                    var reader = new StreamReader(stream);
+                    var path = (await reader.ReadLineAsync() ?? "").Split(' ').ElementAtOrDefault(1) ?? "/";
+                    while (!string.IsNullOrEmpty(await reader.ReadLineAsync())) { }
+                    async Task Write(string text) { await stream.WriteAsync(System.Text.Encoding.UTF8.GetBytes(text)); await stream.FlushAsync(); }
+                    const string head = "HTTP/1.1 200 OK\r\nContent-Type: text/html\r\nCache-Control: no-store\r\nConnection: close\r\n\r\n";
+                    if (path.StartsWith("/slow", StringComparison.Ordinal)) { await Gate(path).Task; await Write(head + "<!doctype html><title>slow</title><p>slow"); }
+                    else if (path.StartsWith("/redirect", StringComparison.Ordinal)) await Write("HTTP/1.1 302 Found\r\nLocation: /slow?redirected\r\nConnection: close\r\n\r\n");
+                    else if (path.StartsWith("/nocontent", StringComparison.Ordinal)) await Write("HTTP/1.1 204 No Content\r\nConnection: close\r\n\r\n");
+                    else if (path.StartsWith("/body", StringComparison.Ordinal)) { await Write(head + "<!doctype html><title>body</title><p>start" + new string(' ', 4096)); await Gate(path).Task; await Write("<p>end"); }
+                    else await Write(head + "<!doctype html><title>root</title><p>root");
+                }
+                catch (Exception) { }
+            });
+        }
+    });
+
+    var w = new BrowserWindow(new BrowserWindowOptions { Title = "Oriel window test: webContents methods", Width = 500, Height = 400 });
+    var wc = w.WebContents;
+    await wc.LoadUrl(origin + "/");
+    (bool Loading, bool Main, bool Waiting) State() => (wc.IsLoading(), wc.IsLoadingMainFrame(), wc.IsWaitingForResponse());
+    Check("a loaded page is not loading, nor waiting", State() == (false, false, false), State());
+
+    // isLoading / isLoadingMainFrame / isWaitingForResponse through a navigation's phases, and stop().
+    _ = wc.LoadUrl(origin + "/slow?stop").ContinueWith(t => _ = t.Exception, TaskScheduler.Default);
+    var atOnce = State();
+    Check("while the main frame waits for its response: loading, loading the main frame, waiting, as soon as LoadUrl returns",
+        atOnce == (true, true, true) && Eventually(() => State() == (true, true, true), step), $"{atOnce} {State()}");
+    wc.Stop();
+    Check("Stop ends the navigation: nothing loads or waits, and the page stays", Eventually(() => State() == (false, false, false), step)
+        && wc.GetUrl() == origin + "/", $"{State()} {wc.GetUrl()}");
+    Gate("/slow?stop").TrySetResult();
+    _ = wc.LoadUrl(origin + "/redirect").ContinueWith(t => _ = t.Exception, TaskScheduler.Default);
+    Eventually(() => wc.IsWaitingForResponse(), step);
+    await Task.Delay(500);
+    wc.Stop();
+    Check("Stop after a redirect ends the navigation too", Eventually(() => State() == (false, false, false), step), State());
+    Gate("/slow?redirected").TrySetResult();
+
+    _ = wc.ExecuteJavaScriptAsync($"location.href = '{origin}/slow?page'; 1");
+    Check("a navigation the page starts also waits for its response", Eventually(() => State() == (true, true, true), step), State());
+    Gate("/slow?page").TrySetResult();
+    Eventually(() => State() == (false, false, false) && wc.GetUrl().EndsWith("?page", StringComparison.Ordinal), step);
+
+    _ = wc.LoadUrl(origin + "/body?1").ContinueWith(t => _ = t.Exception, TaskScheduler.Default);
+    Check("once the response is in and the document loads: loading the main frame, no longer waiting",
+        Eventually(() => State() == (true, true, false), step), State());
+    Gate("/body?1").TrySetResult();
+    Check("the loaded document ends all three", Eventually(() => State() == (false, false, false), step), State());
+
+    await wc.LoadUrl(wc.GetUrl() + "#in-page");
+    await wc.ExecuteJavaScriptAsync($"const f = document.createElement('iframe'); f.src = '{origin}/slow?frame'; document.body.append(f); 1");
+    Check("after an in-page navigation, an iframe loading alone: loading, but not the main frame and not waiting", Eventually(() => State() == (true, false, false), step), State());
+    _ = wc.LoadUrl(origin + "/nocontent").ContinueWith(t => _ = t.Exception, TaskScheduler.Default);
+    await Task.Delay(1000);
+    Check("a main-frame navigation that ends without a document (204) no longer waits, while the iframe still loads", State() == (true, false, false), State());
+    Gate("/slow?frame").TrySetResult();
+    Eventually(() => !wc.IsLoading(), step);
+
+    // executeJavaScriptInIsolatedWorld waits for the main frame's document, as Electron's.
+    _ = wc.LoadUrl(origin + "/slow?js").ContinueWith(t => _ = t.Exception, TaskScheduler.Default);
+    Eventually(() => wc.IsWaitingForResponse(), step);
+    var waited = wc.ExecuteJavaScriptInIsolatedWorldAsync(0, [new WebSource("location.search")]);
+    await Task.Delay(500);
+    Gate("/slow?js").TrySetResult();
+    Check("ExecuteJavaScriptInIsolatedWorld waits for the loading main frame and runs in the new document",
+        await Task.WhenAny(waited, Task.Delay(step)) == waited && waited.IsCompletedSuccessfully && waited.Result?.ToString() == "?js", waited.IsCompletedSuccessfully ? waited.Result : waited.Exception?.GetBaseException().Message);
+
+    var fresh = new BrowserWindow(new BrowserWindowOptions { Show = false });
+    var early = fresh.WebContents.ExecuteJavaScriptInIsolatedWorldAsync(0, [new WebSource("location.href")]);
+    await Task.Delay(500);
+    _ = fresh.WebContents.LoadUrl(origin + "/");
+    Check("ExecuteJavaScriptInIsolatedWorld before the first page waits for it",
+        await Task.WhenAny(early, Task.Delay(step)) == early && early.IsCompletedSuccessfully && early.Result?.ToString() == origin + "/",
+        early.IsCompletedSuccessfully ? early.Result : early.Exception?.GetBaseException().Message);
+    fresh.Destroy();
+
+    // Worlds: 0 is the page's, 999 the preload's, any other id a world of its own that keeps its globals.
+    await wc.ExecuteJavaScriptAsync("window.pageVar = 42; 1");
+    async Task<string?> World(int id, params string[] code)
+    {
+        try { return (await wc.ExecuteJavaScriptInIsolatedWorldAsync(id, [.. code.Select(c => new WebSource(c))]))?.ToJsonString(); }
+        catch (Exception e) { return $"{e.GetType().Name}: {e.Message}"; }
+    }
+    Check("world 0 is the page's main world", await World(0, "pageVar") == "42", await World(0, "pageVar"));
+    Check("world 999 is the preload's world", await World(999, "typeof __orielDeliver + ' ' + typeof pageVar") == "\"function undefined\"",
+        await World(999, "typeof __orielDeliver + ' ' + typeof pageVar"));
+    Check("another world sees neither the page's globals nor the preload's", await World(5, "typeof pageVar + ' ' + typeof __orielDeliver") == "\"undefined undefined\"",
+        await World(5, "typeof pageVar + ' ' + typeof __orielDeliver"));
+    await World(5, "var kept = 'five'");
+    Check("a world keeps its globals between calls, apart from other worlds", await World(5, "kept") == "\"five\"" && await World(6, "typeof kept") == "\"undefined\"",
+        $"{await World(5, "kept")} {await World(6, "typeof kept")}");
+    Check("several scripts run in order and the first one's value is returned", await World(7, "var b = 1; 'first'", "b = 2") == "\"first\"" && await World(7, "b") == "2",
+        $"{await World(7, "var b = 1; 'first'", "b = 2")} {await World(7, "b")}");
+    Check("a promise is awaited, an object returned by value", await World(5, "Promise.resolve(9)") == "9" && await World(5, "({ x: [1] })") == "{\"x\":[1]}",
+        $"{await World(5, "Promise.resolve(9)")} {await World(5, "({ x: [1] })")}");
+    Check("a throwing script fails with Electron's message", await World(5, "throw new Error('boom')") == "JavaScriptException: Script failed to execute, this normally means an error was thrown. Check the renderer console for the error.",
+        await World(5, "throw new Error('boom')"));
+    Check("a rejected promise fails with its reason", (await World(5, "Promise.reject(new Error('nope'))"))?.StartsWith("JavaScriptException: Error: nope", StringComparison.Ordinal) == true,
+        await World(5, "Promise.reject(new Error('nope'))"));
+    var traced = (await wc.ExecuteJavaScriptInIsolatedWorldAsync(5, [new WebSource("new Error().stack", "oriel://named-script.js")]))?.ToString();
+    Check("a script's url names it in stack traces", traced?.Contains("oriel://named-script.js", StringComparison.Ordinal) == true, traced);
+    var noGesture = await wc.ExecuteJavaScriptInIsolatedWorldAsync(9, [new WebSource("navigator.userActivation.isActive")]);
+    var gesture = await wc.ExecuteJavaScriptInIsolatedWorldAsync(8, [new WebSource("navigator.userActivation.isActive")], userGesture: true);
+    Check("userGesture activates the page", gesture?.GetValue<bool>() == true && noGesture?.GetValue<bool>() == false, $"{gesture} {noGesture}");
+    Check("no scripts fail; a negative world id throws", await World(5) == "InvalidOperationException: WebFrame was removed before script could run. This normally means the underlying frame was destroyed"
+        && Throws<ArgumentOutOfRangeException>(() => _ = wc.ExecuteJavaScriptInIsolatedWorldAsync(-1, [new WebSource("1")])), await World(5));
+
+    // Editing commands, read back from the DOM.
+    var dir = Directory.CreateTempSubdirectory("oriel-methods-").FullName;
+    var page = Path.Combine(dir, "edit.html");
+    File.WriteAllText(page, "<!doctype html><style>body{margin:0}</style><input id=i value='hello world'><textarea id=t>one two three</textarea>" +
+        "<p id=p>alpha beta gamma</p><div id=box style='height:100px;overflow:auto'><div style='height:1000px'><button id=inner>in</button></div></div>" +
+        "<div style='height:5000px'></div><p id=far>far away text</p><script>window.inputs = []; i.addEventListener('input', e => inputs.push(e.inputType));</script>");
+    await wc.LoadFile(page);
+    w.Focus();
+    await wc.ExecuteJavaScriptAsync("i.value = ''; i.focus(); 1");
+    await wc.InsertTextAsync("héllo");
+    Check("InsertText types into the focused field, as an input method", await Js(w, "i.value === 'h\\u00e9llo' && inputs.join()") is "\"insertText\"", await Js(w, "[i.value, inputs.join()]"));
+
+    await wc.ExecuteJavaScriptAsync("t.focus(); t.setSelectionRange(5, 5); 1");
+    wc.Replace("2");
+    Check("Replace with a caret replaces the word around it", Eventually(() => Js(w, "t.value").Result is "\"one 2 three\"", step), Js(w, "t.value").Result);
+    await wc.ExecuteJavaScriptAsync("t.setSelectionRange(6, 11); 1");
+    wc.Replace("3");
+    Check("Replace replaces the selection", Eventually(() => Js(w, "t.value").Result is "\"one 2 3\"", step), Js(w, "t.value").Result);
+
+    await wc.ExecuteJavaScriptAsync("i.value = 'hello world'; i.focus(); i.setSelectionRange(1, 4); 1");
+    wc.Unselect();
+    Check("Unselect collapses a field's selection to its end", Eventually(() => Js(w, "[i.selectionStart, i.selectionEnd]").Result is "[4,4]", step), Js(w, "[i.selectionStart, i.selectionEnd]").Result);
+    await wc.ExecuteJavaScriptAsync("i.blur(); getSelection().setBaseAndExtent(p.firstChild, 6, p.firstChild, 10); 1");
+    wc.Unselect();
+    Check("Unselect collapses the document's selection to its end", Eventually(() => Js(w, "[getSelection().isCollapsed, getSelection().focusOffset]").Result is "[true,10]", step),
+        Js(w, "[getSelection().isCollapsed, getSelection().focusOffset]").Result);
+
+    await wc.ExecuteJavaScriptAsync("i.focus(); i.setSelectionRange(6, 11); 1");
+    wc.AdjustSelection(new AdjustSelectionOptions { Start = -6, End = -6 });
+    Check("AdjustSelection moves both ends of a field's selection", Eventually(() => Js(w, "[i.selectionStart, i.selectionEnd]").Result is "[0,5]", step), Js(w, "[i.selectionStart, i.selectionEnd]").Result);
+    wc.AdjustSelection(new AdjustSelectionOptions { Start = 7 });
+    wc.AdjustSelection(new AdjustSelectionOptions { Start = -1 });
+    Check("AdjustSelection refuses an empty or negative result", Eventually(() => Js(w, "[i.selectionStart, i.selectionEnd]").Result is "[0,5]", step), Js(w, "[i.selectionStart, i.selectionEnd]").Result);
+    await wc.ExecuteJavaScriptAsync("i.blur(); getSelection().setBaseAndExtent(p.firstChild, 6, p.firstChild, 10); 1");
+    wc.AdjustSelection(new AdjustSelectionOptions { Start = -1, End = 1 });
+    Check("AdjustSelection moves the document's selection by characters", Eventually(() => Js(w, "getSelection().toString()").Result is "\" beta \"", step), Js(w, "getSelection().toString()").Result);
+
+    var bottom = (await wc.ExecuteJavaScriptAsync("document.scrollingElement.scrollHeight - innerHeight"))!.GetValue<int>();
+    await wc.ExecuteJavaScriptAsync("document.activeElement.blur(); 1");
+    wc.ScrollToBottom();
+    Check("ScrollToBottom scrolls the document to its end", Eventually(() => Js(w, "scrollY").Result as string == bottom.ToString(), step), $"{Js(w, "scrollY").Result} of {bottom}");
+    wc.ScrollToTop();
+    Check("ScrollToTop scrolls the document back", Eventually(() => Js(w, "scrollY").Result is "0", step), Js(w, "scrollY").Result);
+    await wc.ExecuteJavaScriptAsync("inner.focus(); 1");
+    wc.ScrollToBottom();
+    Check("ScrollToBottom scrolls the focused element's scroller, not the document", Eventually(() => Js(w, "[box.scrollTop, scrollY]").Result is "[900,0]", step), Js(w, "[box.scrollTop, scrollY]").Result);
+    wc.ScrollToTop();
+    Check("ScrollToTop scrolls the focused element's scroller back", Eventually(() => Js(w, "box.scrollTop").Result is "0", step), Js(w, "box.scrollTop").Result);
+
+    await wc.ExecuteJavaScriptAsync("inner.blur(); getSelection().selectAllChildren(far); 1");
+    wc.CenterSelection();
+    await Task.Delay(500);
+    var centered = (await wc.ExecuteJavaScriptAsync("const r = getSelection().getRangeAt(0).getBoundingClientRect(); [scrollY, Math.abs(r.top + r.height / 2 - innerHeight / 2) < 30]"))?.ToJsonString();
+    Check(OperatingSystem.IsMacOS() ? "CenterSelection puts the selection in the middle of the view" : "CenterSelection does nothing off macOS, as Electron's",
+        OperatingSystem.IsMacOS() ? centered?.EndsWith("true]", StringComparison.Ordinal) == true : centered == "[0,false]", centered);
+
+    // insertCSS: applied, invisible to the page's sheet list, removable, and gone with the document.
+    File.WriteAllText(page, "<!doctype html><p id=t>x</p>");
+    await wc.LoadFile(page);
+    var key = await wc.InsertCssAsync("#t { color: rgb(1, 2, 3) }");
+    const string cssState = "[getComputedStyle(t).color, document.styleSheets.length, document.querySelectorAll('style, link').length]";
+    Check("InsertCss applies the CSS where the page cannot see a sheet", Eventually(() => Js(w, cssState).Result is "[\"rgb(1, 2, 3)\",0,0]", step), Js(w, cssState).Result);
+    var userKey = await wc.InsertCssAsync("#t { font-size: 31px }", new InsertCssOptions { CssOrigin = CssOrigin.User });
+    Check("a user-origin sheet applies too", Eventually(() => Js(w, "getComputedStyle(t).fontSize").Result is "\"31px\"", step), Js(w, "getComputedStyle(t).fontSize").Result);
+    await wc.RemoveInsertedCssAsync(key);
+    Check("RemoveInsertedCss removes that sheet only", Eventually(() => Js(w, "[getComputedStyle(t).color, getComputedStyle(t).fontSize]").Result is "[\"rgb(0, 0, 0)\",\"31px\"]", step),
+        Js(w, "[getComputedStyle(t).color, getComputedStyle(t).fontSize]").Result);
+    await wc.RemoveInsertedCssAsync("no-such-key");
+    await wc.InsertCssAsync("#t { color: rgb(4, 5, 6) }");
+    await wc.LoadFile(page);
+    Check("inserted CSS goes with its document", await Js(w, "[getComputedStyle(t).color, getComputedStyle(t).fontSize]") is "[\"rgb(0, 0, 0)\",\"16px\"]",
+        await Js(w, "[getComputedStyle(t).color, getComputedStyle(t).fontSize]"));
+    _ = userKey;
+
+    // capturePage: the view's device pixels, a rect of it in DIPs, at the page's zoom.
+    File.WriteAllText(page, "<!doctype html><style>html,body{margin:0;background:#f00;overflow:hidden}</style><div style='position:absolute;left:10px;top:10px;width:40px;height:30px;background:#00f'></div>");
+    await wc.LoadFile(page);
+    await Task.Delay(300);
+    var ratio = (await wc.ExecuteJavaScriptAsync("devicePixelRatio"))!.GetValue<double>();
+    var view = (await wc.ExecuteJavaScriptAsync("[innerWidth, innerHeight]"))!.AsArray().Select(n => n!.GetValue<int>()).ToArray();
+    (byte B, byte G, byte R) Pixel(NativeImage image, int x, int y)
+    {
+        var bytes = image.ToBitmap();
+        var at = (y * image.GetSize().Width + x) * 4;
+        return (bytes[at], bytes[at + 1], bytes[at + 2]);
+    }
+    var whole = await wc.CapturePageAsync();
+    Check("CapturePage without a rect captures the visible page in device pixels, at scale 1",
+        whole.GetSize() == ((int)Math.Ceiling(view[0] * ratio), (int)Math.Ceiling(view[1] * ratio)) && whole.GetScaleFactors().SequenceEqual([1.0])
+        && Pixel(whole, 2, 2) == (0, 0, 255) && Pixel(whole, (int)(30 * ratio), (int)(25 * ratio)) == (255, 0, 0), $"{whole.GetSize()} view {view[0]}x{view[1]}@{ratio}");
+    var part = await wc.CapturePageAsync(new Rectangle(10, 10, 40, 30));
+    Check("CapturePage with a rect captures that part", part.GetSize() == ((int)Math.Ceiling(40 * ratio), (int)Math.Ceiling(30 * ratio))
+        && Pixel(part, 0, 0) == (255, 0, 0) && Pixel(part, part.GetSize().Width - 1, part.GetSize().Height - 1) == (255, 0, 0), part.GetSize());
+    var empty = await wc.CapturePageAsync(new Rectangle(10, 10, 0, 30));
+    Check("an empty rect captures the whole page, as Electron's", empty.GetSize() == whole.GetSize(), empty.GetSize());
+    wc.SetZoomFactor(2);
+    await Task.Delay(500);
+    var zoomed = await wc.CapturePageAsync(new Rectangle(20, 20, 80, 60));
+    Check("CapturePage's rect is in DIPs of the view, whatever the zoom", zoomed.GetSize() == ((int)Math.Ceiling(80 * ratio), (int)Math.Ceiling(60 * ratio))
+        && Pixel(zoomed, 1, 1) == (255, 0, 0) && Pixel(zoomed, zoomed.GetSize().Width - 2, zoomed.GetSize().Height - 2) == (255, 0, 0), zoomed.GetSize());
+    wc.SetZoomFactor(1);
+
+    // Device emulation: Electron's parameters reach the page.
+    var before = await Js(w, "[innerWidth, devicePixelRatio, screen.width]");
+    wc.EnableDeviceEmulation(new DeviceEmulationParameters
+    {
+        ScreenSize = (400, 800),
+        ViewPosition = new Point(10, 20),
+        ViewSize = (300, 200),
+        DeviceScaleFactor = 2,
+    });
+    const string emulated = "[innerWidth, innerHeight, devicePixelRatio, screen.width, screen.height, screenX, screenY]";
+    Check("EnableDeviceEmulation emulates the view size, scale factor, screen and view position",
+        Eventually(() => Js(w, emulated).Result is "[300,200,2,400,800,10,20]", step), Js(w, emulated).Result);
+    wc.EnableDeviceEmulation(new DeviceEmulationParameters { ScreenPosition = EmulatedScreenPosition.Mobile, ViewSize = (300, 200) });
+    Check("a mobile screen lays a page without a viewport out at the mobile default width", Eventually(() => Js(w, "innerWidth").Result is "980", step), Js(w, "innerWidth").Result);
+    wc.DisableDeviceEmulation();
+    Check("DisableDeviceEmulation restores the real metrics", Eventually(() => Js(w, "[innerWidth, devicePixelRatio, screen.width]").Result as string == before as string, step),
+        $"{Js(w, "[innerWidth, devicePixelRatio, screen.width]").Result} vs {before}");
+
+    // Audio: mute state.
+    Check("a page starts unmuted", !wc.IsAudioMuted());
+    wc.SetAudioMuted(true);
+    Check("SetAudioMuted(true) mutes", Eventually(() => wc.IsAudioMuted(), step));
+    wc.SetAudioMuted(false);
+    Check("SetAudioMuted(false) unmutes", Eventually(() => !wc.IsAudioMuted(), step));
+
+    // forcefullyCrashRenderer: the renderer goes, the page is crashed until a reload brings a new one.
+    var crash = new BrowserWindow(new BrowserWindowOptions { Show = false });
+    await crash.WebContents.LoadUrl(origin + "/");
+    RenderProcessGoneEventArgs? gone = null;
+    crash.WebContents.RenderProcessGone += (_, e) => gone = e;
+    Check("a live page is not crashed", !crash.WebContents.IsCrashed());
+    crash.WebContents.ForcefullyCrashRenderer();
+    Check("ForcefullyCrashRenderer ends the renderer: RenderProcessGone (crashed or killed), IsCrashed",
+        Eventually(() => gone is { Reason: "crashed" or "killed" } && crash.WebContents.IsCrashed(), TimeSpan.FromSeconds(15)), gone);
+    crash.WebContents.Reload();
+    Check("a reload after the crash runs a new renderer and the page is no longer crashed",
+        Eventually(() => !crash.WebContents.IsCrashed(), step) && Eventually(() => crash.WebContents.ExecuteJavaScriptAsync("document.title").Wait(1000), step),
+        crash.WebContents.IsCrashed());
+    crash.Destroy();
+
+    w.Destroy();
+    listener.Stop();
+    foreach (var gate in gates.Values) gate.TrySetResult();
+    Directory.Delete(dir, recursive: true);
 }
 
 async Task MouseEventsAsync()

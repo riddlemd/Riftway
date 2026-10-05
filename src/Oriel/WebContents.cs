@@ -60,6 +60,7 @@ public sealed unsafe partial class WebContents
                 "IDC_DEV_TOOLS_TOGGLE", "IDC_CONTENT_CONTEXT_INSPECTELEMENT", "IDC_CONTENT_CONTEXT_INSPECTBACKGROUNDPAGE"]);
         _appPreload = appPreload;
         _devTools.EventReceived += OnDevToolsEvent;
+        RegisterMethods();
 
         Display = new DisplayHandler
         {
