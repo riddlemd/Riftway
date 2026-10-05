@@ -35,7 +35,7 @@ Where an implemented module differs from Electron, the difference and its reason
 
 | Electron | Oriel | Source | Wave | Status |
 |---|---|---|---|---|
-| `app` | `OrielApp` | CEF + OS | M2 | partial: `ready`, `window-all-closed`, `second-instance`, `before-quit`, `will-quit`, `quit()`, `exit()`, `enableSandbox`, `isReady`, `name`, `quit` (as `Exited`), `userAgentFallback`, `browser-window-created`, `web-contents-created`, `session-created`, `browser-window-focus`, `browser-window-blur`, `certificate-error`, `login`, `select-client-certificate` (see DRIFT.md) |
+| `app` | `OrielApp` | CEF + OS | M2 | partial: `ready`, `window-all-closed`, `second-instance`, `before-quit`, `will-quit`, `quit()`, `exit()`, `enableSandbox`, `isReady`, `name`, `quit` (as `Exited`), `userAgentFallback`, `browser-window-created`, `web-contents-created`, `session-created`, `browser-window-focus`, `browser-window-blur`, `getPath`, `setPath`, `certificate-error`, `login`, `select-client-certificate` (see DRIFT.md) |
 | `process` | `OrielProcess` | .NET + CEF | M2 | — |
 | `CommandLine` (`app.commandLine`) | `OrielApp.CommandLine` | CEF | M2 | — |
 | Command-line switches | same switches | CEF | M2 | — |

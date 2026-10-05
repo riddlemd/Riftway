@@ -869,6 +869,32 @@ async Task RunAsync()
     focusA.Destroy();
     focusB.Destroy();
 
+    // app.getPath / setPath, as Electron's.
+    Check("GetPath(userData) is where the default session keeps its data", app.GetPath("userData") == defaultSession.GetStoragePath() && app.GetPath("sessionData") == app.GetPath("userData"),
+        $"{app.GetPath("userData")} vs {defaultSession.GetStoragePath()}");
+    Check("GetPath(home), (temp) and (exe) are the OS's", app.GetPath("home") == Environment.GetFolderPath(Environment.SpecialFolder.UserProfile)
+        && app.GetPath("temp") == Path.TrimEndingDirectorySeparator(Path.GetTempPath()) && app.GetPath("exe") == Environment.ProcessPath, app.GetPath("temp"));
+    if (OperatingSystem.IsLinux())
+    {
+        var userDirs = Path.Combine(app.GetPath("appData"), "user-dirs.dirs");
+        File.WriteAllText(userDirs, "XDG_DOWNLOAD_DIR=\"$HOME/Fetched\"\n");
+        var downloadsDir = app.GetPath("downloads");
+        File.Delete(userDirs);
+        Check("GetPath(downloads) follows the XDG user directories on Linux", downloadsDir == Path.Combine(app.GetPath("home"), "Fetched")
+            && app.GetPath("downloads") == Path.Combine(app.GetPath("home"), "Downloads"), downloadsDir);
+    }
+    var unknownPath = await Throws(() => Task.FromResult(app.GetPath("nope")));
+    var missingDir = await Throws(() => { app.SetPath("logs", Path.Combine(Path.GetTempPath(), "oriel-no-such-dir-" + Guid.NewGuid())); return Task.CompletedTask; });
+    var relativeDir = await Throws(() => { app.SetPath("logs", "relative"); return Task.CompletedTask; });
+    Check("GetPath and SetPath refuse what Electron refuses", unknownPath?.Message.StartsWith("Failed to get 'nope' path") == true
+        && missingDir is ArgumentException && relativeDir is ArgumentException, $"{unknownPath?.Message} | {missingDir?.Message} | {relativeDir?.Message}");
+    var movedTo = Directory.CreateTempSubdirectory("oriel-userdata-").FullName;
+    var originalUserData = app.GetPath("userData");
+    app.SetPath("userData", movedTo);
+    Check("SetPath overrides GetPath, and sessionData follows a moved userData", app.GetPath("userData") == movedTo && app.GetPath("sessionData") == movedTo);
+    app.SetPath("userData", originalUserData);
+    Directory.Delete(movedTo);
+
     // Proxy: requests go to a local listener posing as the proxy.
     var proxied = Session.FromPartition("proxied");
     using var listener = new TcpListener(IPAddress.Loopback, 0);

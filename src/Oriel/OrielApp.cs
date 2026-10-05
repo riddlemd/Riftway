@@ -158,9 +158,8 @@ public sealed unsafe partial class OrielApp
         var exitCode = CefNative.cef_execute_process((cef_main_args_t*)&args, app.Native, null);
         if (exitCode >= 0) return exitCode;
 
-        // Without Create, Linux answers "" when ~/.config does not exist yet, and CEF rejects the relative path.
-        var dataDirectory = DataDirectory = Path.Combine(
-            Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData, Environment.SpecialFolderOption.Create), Name);
+        // userData or sessionData set before Run moves the profile, as Electron's before ready.
+        var dataDirectory = DataDirectory = GetPath("sessionData");
         var settings = new cef_settings_t
         {
             size = (nuint)sizeof(cef_settings_t),

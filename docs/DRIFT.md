@@ -36,6 +36,7 @@ Entries marked _(branch `x`)_ are on that branch and not yet in `main`.
 |---|---|---|---|---|
 | A1 | `app.enableSandbox()` on every OS | Linux only; `Run()` throws `PlatformNotSupportedException` on macOS and Windows | OS/packaging: CEF forces `--no-sandbox` whenever `browser_subprocess_path` is set (Windows), and the macOS helper does not link the sandbox library | Windows: the `bootstrap.exe` layout (probe passed, see windows-todo.md). macOS: native helper + `cef_sandbox` |
 | A2 | Several instances may run; `requestSingleInstanceLock()` opts in to one | Always single instance per data directory: a second launch exits and the first gets `SecondInstance` | CEF: Chrome-style profiles lock their data directory | Per-instance cache paths when the lock is not requested; `RequestSingleInstanceLock` |
+| A14 | `app.getPath('assets')` | Missing; the other names follow Chromium's PathService (checked on macOS and Linux, Windows untested) | Todo: CEF's resources directory per OS | Todo |
 
 ## BrowserWindow
 
