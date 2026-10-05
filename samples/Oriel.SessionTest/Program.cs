@@ -134,9 +134,15 @@ async Task RunAsync()
     var seen = (await win.WebContents.ExecuteJavaScriptAsync("document.cookie"))?.ToString();
     Check("the page sees its session's cookies only", seen == "inMemory=2", seen);
     await win.WebContents.ExecuteJavaScriptAsync("document.cookie = 'fromPage=4; path=/'; 1");
+    // The page writes the cookie to the store asynchronously.
+    var fromPage = 0;
+    for (var i = 0; i < 50 && fromPage == 0; i++)
+    {
+        fromPage = (await memory.Cookies.GetAsync(new CookieFilter { Name = "fromPage" })).Count;
+        if (fromPage == 0) await Task.Delay(100);
+    }
     Check("a cookie the page sets lands in its session",
-        (await memory.Cookies.GetAsync(new CookieFilter { Name = "fromPage" })).Count == 1
-        && (await defaultSession.Cookies.GetAsync(new CookieFilter { Name = "fromPage" })).Count == 0);
+        fromPage == 1 && (await defaultSession.Cookies.GetAsync(new CookieFilter { Name = "fromPage" })).Count == 0, fromPage);
 
     // A popup can't change session: CEF gives it the opener's.
     var created = 0;
