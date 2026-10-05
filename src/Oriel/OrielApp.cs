@@ -47,7 +47,18 @@ public sealed unsafe partial class OrielApp
             $"Chrome/{chromeVersion} Oriel/{orielVersion} Safari/537.36";
     }
 
-    private static string AppVersion() => ThreePart(Assembly.GetEntryAssembly()?.GetName().Version);
+    /// <summary>The app's version: its project's <c>Version</c>, as Electron reads package.json's. Electron's <c>app.getVersion()</c>.</summary>
+    public string Version => AppVersion();
+
+    private static string AppVersion() => VersionOf(Assembly.GetEntryAssembly());
+
+    // The informational version keeps a prerelease tag; the build adds "+commit" metadata that package.json would not have.
+    internal static string VersionOf(Assembly? assembly)
+    {
+        var informational = assembly?.GetCustomAttribute<AssemblyInformationalVersionAttribute>()?.InformationalVersion;
+        if (!string.IsNullOrEmpty(informational)) return informational.Split('+')[0];
+        return ThreePart(assembly?.GetName().Version);
+    }
 
     private static string OrielVersion() => ThreePart(typeof(OrielApp).Assembly.GetName().Version);
 

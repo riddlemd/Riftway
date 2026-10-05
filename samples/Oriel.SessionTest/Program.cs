@@ -895,6 +895,9 @@ async Task RunAsync()
     app.SetPath("userData", originalUserData);
     Directory.Delete(movedTo);
 
+    Check("Version is the project's, prerelease kept and build metadata dropped, and names the app in its user agent", app.Version == "1.4.2-beta.3"
+        && app.UserAgentFallback.Contains($" {app.Name.Replace(" ", "")}/1.4.2-beta.3 ", StringComparison.Ordinal), $"{app.Version} | {app.UserAgentFallback}");
+
     // app.getPreferredSystemLanguages / getSystemLocale / getLocaleCountryCode, read back from another process.
     static string Output(string tool, params string[] arguments)
     {
