@@ -658,6 +658,80 @@ async Task RunAsync()
     Check("callback() with no credentials cancels", wrong.Body == "denied", wrong.Body);
     authListener.Stop();
 
+    // Navigation events, as Electron's: who started it decides will-navigate; commits report their status.
+    var navSession = Session.FromPartition("nav");
+    navSession.Protocol.Handle("https", request => new Uri(request.Url).AbsolutePath switch
+    {
+        "/" or "/start" => ProtocolResponse.Text("<!doctype html><a id=go href='/next'>go</a><iframe name=f src='/frameNav'></iframe>", "text/html"),
+        "/missing" => ProtocolResponse.Text("<!doctype html>missing", "text/html", 404),
+        "/redirect" => new ProtocolResponse { StatusCode = 302, Headers = new Dictionary<string, string> { ["Location"] = Site + "next" } },
+        _ => ProtocolResponse.Text("<!doctype html>" + new Uri(request.Url).AbsolutePath, "text/html"),
+    });
+    var navWin = new BrowserWindow(new BrowserWindowOptions { Show = false, WebPreferences = new WebPreferences { Session = navSession } });
+    var navLog = new List<string>();
+    var cancelNext = "";
+    void Log(string name, string url, bool isMain) => navLog.Add($"{name} {new Uri(url).PathAndQuery}{new Uri(url).Fragment}{(isMain ? "" : " sub")}");
+    navWin.WebContents.DidStartNavigation += (_, e) => Log("start" + (e.IsSameDocument ? "-same" : ""), e.Url, e.IsMainFrame);
+    navWin.WebContents.WillFrameNavigate += (_, e) => { Log("will-frame", e.Url, e.IsMainFrame); if (cancelNext == "will-frame") e.Cancel = true; };
+    navWin.WebContents.WillNavigate += (_, e) => { Log("will", e.Url, e.IsMainFrame); if (cancelNext == "will") e.Cancel = true; };
+    navWin.WebContents.WillRedirect += (_, e) => { Log("will-redirect", e.Url, e.IsMainFrame); if (cancelNext == "will-redirect") e.Cancel = true; };
+    navWin.WebContents.DidRedirectNavigation += (_, e) => Log("did-redirect", e.Url, e.IsMainFrame);
+    navWin.WebContents.DidFrameNavigate += (_, e) => Log($"did-frame {e.HttpResponseCode} {e.HttpStatusText}", e.Url, e.IsMainFrame);
+    navWin.WebContents.DidNavigate += (_, e) => Log($"did {e.HttpResponseCode} {e.HttpStatusText}", e.Url, e.IsMainFrame);
+    navWin.WebContents.DidNavigateInPage += (_, e) => Log("in-page", e.Url, e.IsMainFrame);
+    // Runs act, then waits for the log to show until (if given) and a little more for stragglers.
+    async Task<string> Steps(Func<Task> act, string cancel = "", string until = "")
+    {
+        navLog.Clear();
+        cancelNext = cancel;
+        await act();
+        for (var i = 0; i < 100 && until.Length > 0 && !string.Join(" | ", navLog).Contains(until); i++) await Task.Delay(50);
+        await Task.Delay(700);
+        cancelNext = "";
+        return string.Join(" | ", navLog);
+    }
+    Task Js(string code) => navWin.WebContents.ExecuteJavaScriptAsync(code + "; 1", userGesture: true);
+    var loaded = await Steps(() => navWin.LoadUrl(Site + "start"));
+    Check("LoadUrl starts a navigation but raises no will-navigate, as Electron's", loaded.StartsWith("start /start | did-frame 200 OK /start | did 200 OK /start") && !loaded.Contains("will /") && !loaded.Contains("will-frame /start"), loaded);
+    var clicked = await Steps(() => Js("go.click()"));
+    Check("a link click: did-start-navigation, will-frame-navigate, will-navigate, then the commit with its status",
+        clicked.StartsWith("start /next | will-frame /next | will /next | did-frame 200 OK /next | did 200 OK /next"), clicked);
+    await navWin.LoadUrl(Site + "start");
+    var stopped = await Steps(() => Js("go.click()"), "will");
+    Check("preventDefault in will-navigate keeps the page", stopped == "start /next | will-frame /next | will /next" && navWin.WebContents.GetUrl() == Site + "start", $"{stopped} @ {navWin.WebContents.GetUrl()}");
+    var reloaded = await Steps(() => { navWin.WebContents.Reload(); return Task.CompletedTask; }, until: "did 200 OK /start");
+    Check("Reload raises no will-navigate", reloaded.Contains("did 200 OK /start") && !reloaded.Contains("will /") && !reloaded.Contains("will-frame /start"), reloaded);
+    var pageReload = await Steps(() => Js("location.reload()"), until: "did 200 OK /start");
+    Check("the page's own location.reload() is the page's navigation: will-navigate", pageReload.StartsWith("start /start | will-frame /start | will /start"), pageReload);
+    var hashed = await Steps(() => Js("location.hash = 'part'"));
+    Check("a fragment change: did-start-navigation (same document) and did-navigate-in-page, no will-navigate",
+        hashed == "start-same /start#part | in-page /start#part", hashed);
+    var pushed = await Steps(() => Js("history.pushState({}, '', '/pushed')"));
+    Check("history.pushState raises did-navigate-in-page", pushed.Contains("in-page /pushed") && !pushed.Contains("will"), pushed);
+    await navWin.LoadUrl(Site + "start");
+    var frameNav = await Steps(() => Js("frames.f.location = '/elsewhere'"));
+    var frameArgs = navWin.WebContents.MainFrame?.Frames.FirstOrDefault();
+    Check("an iframe's navigation: will-frame-navigate and did-frame-navigate for that frame, no will-navigate or did-navigate",
+        frameNav.StartsWith("start /elsewhere sub | will-frame /elsewhere sub | did-frame 200 OK /elsewhere sub") && !frameNav.Contains("will /") && !frameNav.Contains("did 200"), frameNav);
+    WebFrameMain? frameSeen = null;
+    EventHandler<NavigationEventArgs> onFrame = (_, e) => frameSeen = e.Frame;
+    navWin.WebContents.WillFrameNavigate += onFrame;
+    var frameStopped = await Steps(() => Js("frames.f.location = '/blocked-frame'"), "will-frame");
+    navWin.WebContents.WillFrameNavigate -= onFrame;
+    Check("will-frame-navigate names the frame, and preventDefault stops it", frameSeen is { Name: "f" } && frameSeen == frameArgs && frameStopped == "start /blocked-frame sub | will-frame /blocked-frame sub"
+        && (await frameSeen.ExecuteJavaScriptAsync("location.pathname"))?.ToString() == "/elsewhere", $"{frameSeen?.Name} {frameStopped} at={(frameSeen is null ? "" : await frameSeen.ExecuteJavaScriptAsync("location.pathname"))}");
+    Check("after the main frame loads a new document, Frames lists only that document's iframes", navWin.WebContents.MainFrame?.Frames.Count == 1,
+        navWin.WebContents.MainFrame?.Frames.Count);
+    var redirected = await Steps(() => navWin.LoadUrl(Site + "redirect"));
+    Check("a server redirect: will-redirect and did-redirect-navigation, then the commit", redirected == "start /redirect | will-redirect /next | did-redirect /next | did-frame 200 OK /next | did 200 OK /next", redirected);
+    var redirectStopped = await Steps(() => Throws(() => navWin.LoadUrl(Site + "redirect").WaitAsync(TimeSpan.FromSeconds(10))), "will-redirect");
+    Check("preventDefault in will-redirect stops the navigation", redirectStopped == "start /redirect | will-redirect /next" && navWin.WebContents.GetUrl() == Site + "next", $"{redirectStopped} @ {navWin.WebContents.GetUrl()}");
+    var notFound = await Steps(() => navWin.LoadUrl(Site + "missing"));
+    Check("did-navigate reports an error status", notFound.EndsWith("did 404 Not Found /missing"), notFound);
+    var unreachable = await Steps(() => Throws(() => navWin.LoadUrl("http://oriel-nowhere.invalid/").WaitAsync(TimeSpan.FromSeconds(15))), until: "start /");
+    Check("a navigation that fails commits no did-navigate, as Electron's", unreachable.StartsWith("start /") && !unreachable.Contains("did "), unreachable);
+    navWin.Destroy();
+
     // Proxy: requests go to a local listener posing as the proxy.
     var proxied = Session.FromPartition("proxied");
     using var listener = new TcpListener(IPAddress.Loopback, 0);

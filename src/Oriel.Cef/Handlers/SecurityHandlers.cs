@@ -5,6 +5,10 @@ namespace Oriel.Cef.Handlers;
 /// <summary>A navigation's invalid certificate: the error, the URL, and the certificate's DER bytes then its issuers'.</summary>
 public sealed record CertificateErrorInfo(cef_errorcode_t Error, string Url, IReadOnlyList<byte[]> CertificateChain);
 
+/// <summary>A frame about to navigate: the target, whether a server redirected there, CEF's transition type, and the frame's
+/// name and current URL then its ancestors', the main frame last.</summary>
+public sealed record BrowseRequest(string Url, bool IsRedirect, bool UserGesture, uint Transition, IReadOnlyList<(string Name, string Url)> FramePath);
+
 /// <summary>A server or proxy asking for credentials.</summary>
 public sealed record AuthChallenge(string OriginUrl, bool IsProxy, string Host, int Port, string Realm, string Scheme);
 

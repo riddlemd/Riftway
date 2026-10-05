@@ -101,6 +101,7 @@ Entries marked _(branch `x`)_ are on that branch and not yet in `main`.
 | C5 | A reload repeats the `loadURL` options | Likely a plain request (untested) | Todo | Keep the options with the navigation entry |
 | C6 | `executeJavaScript` resolves a structured clone | JSON only (`JsonNode?`); undefined is null | Design: DevTools `Runtime.evaluate` returns JSON | Typed overloads |
 | C8 | `context-menu` params `frame`, `linkText`, `altText`, `selectionRect`, `menuSourceType`, `formControlType`, `referrerPolicy`, `suggestedFilename`, `selectionStartOffset` | Missing | CEF: `cef_context_menu_params_t` lacks them; `frame`: CEF names the frame by its own identifier, which no DevTools frame id matches (WebFrameMain is built on DevTools) | Patch; or read the element under the point with JS for text/alt; Module for `frame` |
+| C12 | Navigation event `details.initiator` names the frame that started it; `frame` is always exact; `did-frame-navigate`/`did-navigate-in-page` carry `frameProcessId`/`frameRoutingId` | `Initiator` is always null; a subframe's `Frame` is found by name and URL, so two iframes with the same name and URL under one parent can be confused; `Frame` is given instead of the ids (F2) | CEF: `on_before_browse` gives no initiator, and its frame ids are not DevTools'; the ids follow F2 | Patch for the initiator |
 
 ## Menu / MenuItem
 

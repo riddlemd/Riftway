@@ -310,7 +310,44 @@ public sealed unsafe class RequestHandler
         Native = NativeObject.Create<cef_request_handler_t>(this);
         Native->get_resource_request_handler = &GetResourceRequestHandler;
         Native->on_certificate_error = &OnCertificateError;
+        Native->on_before_browse = &OnBeforeBrowse;
         Native->get_auth_credentials = &GetAuthCredentials;
+    }
+
+    /// <summary>A frame is about to navigate or follow a redirect; true cancels it. UI thread.</summary>
+    public Func<BrowseRequest, bool>? BeforeBrowse { get; init; }
+
+    [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])]
+    private static int OnBeforeBrowse(cef_request_handler_t* self, cef_browser_t* browser, cef_frame_t* frame, cef_request_t* request,
+        int userGesture, int isRedirect)
+    {
+        var owner = NativeObject.Owner<RequestHandler>(self);
+        var cancel = false;
+        if (owner.BeforeBrowse is { } decide)
+        {
+            var browse = new BrowseRequest(CefString.ReadUserFree(request->get_url(request)), isRedirect != 0, userGesture != 0,
+                (uint)request->get_transition_type(request), FramePath(frame));
+            cancel = Guard.Run(() => decide(browse), false);
+        }
+        NativeObject.Release(request);
+        NativeObject.Release(frame);
+        NativeObject.Release(browser);
+        return cancel ? 1 : 0;
+    }
+
+    // The frame's name and current URL, then its parent's, up to the main frame.
+    private static IReadOnlyList<(string Name, string Url)> FramePath(cef_frame_t* frame)
+    {
+        var path = new List<(string, string)>();
+        NativeObject.AddRef(frame);
+        for (var current = frame; current is not null;)
+        {
+            path.Add((CefString.ReadUserFree(current->get_name(current)), CefString.ReadUserFree(current->get_url(current))));
+            var parent = current->get_parent(current);
+            NativeObject.Release(current);
+            current = parent;
+        }
+        return path;
     }
 
     /// <summary>A navigation hit an invalid certificate; the task's result trusts it. Null cancels. UI thread.</summary>

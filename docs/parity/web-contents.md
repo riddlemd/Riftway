@@ -11,14 +11,14 @@ Percentages are over the non-n/a items; the second counts a partial item as half
 | Area | Items | Done | Partial | Missing | n/a | % done | % done + partial/2 |
 |---|---|---|---|---|---|---|---|
 | Static methods | 5 | 0 | 0 | 5 | 0 | 0.0% | 0.0% |
-| Instance events | 59 | 9 | 1 | 47 | 2 | 15.8% | 16.7% |
+| Instance events | 59 | 15 | 3 | 39 | 2 | 26.3% | 28.9% |
 | Instance methods | 118 | 25 | 5 | 80 | 8 | 22.7% | 25.0% |
 | Instance properties | 18 | 6 | 1 | 10 | 1 | 35.3% | 38.2% |
 | navigationHistory | 14 | 12 | 0 | 2 | 0 | 85.7% | 85.7% |
 | WebFrameMain events and statics | 3 | 1 | 0 | 2 | 0 | 33.3% | 33.3% |
 | WebFrameMain methods | 9 | 1 | 3 | 5 | 0 | 11.1% | 27.8% |
 | WebFrameMain properties | 15 | 9 | 0 | 6 | 0 | 60.0% | 60.0% |
-| **Total** | 241 | 63 | 10 | 157 | 11 | 27.4% | 29.6% |
+| **Total** | 241 | 69 | 12 | 149 | 11 | 30.0% | 32.6% |
 
 ## Checklist
 
@@ -50,14 +50,14 @@ Percentages are over the non-n/a items; the second counts a partial item as half
 | `did-frame-finish-load` | — | missing |  |
 | `page-favicon-updated` | — | missing |  |
 | `content-bounds-updated` | — | missing |  |
-| `will-navigate` | — | missing |  |
-| `will-frame-navigate` | — | missing |  |
-| `did-start-navigation` | — | missing |  |
-| `will-redirect` | — | missing |  |
-| `did-redirect-navigation` | — | missing |  |
-| `did-navigate` | — | missing |  |
-| `did-frame-navigate` | — | missing |  |
-| `did-navigate-in-page` | — | missing |  |
+| `will-navigate` | `WillNavigate` | done | `Initiator` is null (C12). |
+| `will-frame-navigate` | `WillFrameNavigate` | done | C12. |
+| `did-start-navigation` | `DidStartNavigation` | done | C12. |
+| `will-redirect` | `WillRedirect` | done |  |
+| `did-redirect-navigation` | `DidRedirectNavigation` | done |  |
+| `did-navigate` | `DidNavigate` | done |  |
+| `did-frame-navigate` | `DidFrameNavigate` | partial | `Frame` in place of process and routing ids (C12, F2). |
+| `did-navigate-in-page` | `DidNavigateInPage` | partial | `Frame` in place of process and routing ids (C12, F2). |
 | `will-prevent-unload` | — | missing |  |
 | `render-process-gone` | — | missing |  |
 | `unresponsive` | — | missing |  |

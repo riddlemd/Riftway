@@ -94,12 +94,17 @@ public sealed unsafe partial class WebContents
             Decide = request => WatchBlocked(request, webRequest.Decide(this, request)),
             Sent = request => webRequest.Sent(this, request),
             Redirected = (request, response, url) => webRequest.Redirected(this, request, response, url),
-            ResponseStarted = (request, response) => webRequest.ResponseStarted(this, request, response),
+            ResponseStarted = (request, response) =>
+            {
+                RecordNavigationResponse(request, response);
+                webRequest.ResponseStarted(this, request, response);
+            },
             Completed = (request, response, status) => webRequest.Completed(this, request, response, status),
         })
         {
             Wants = WantsRequest,
             CertificateError = OnCertificateError,
+            BeforeBrowse = OnBeforeBrowse,
             Login = OnLogin,
         };
     }
@@ -523,13 +528,17 @@ public sealed unsafe partial class WebContents
     /// <summary>Reloads the page. Electron's <c>webContents.reload()</c>.</summary>
     public void Reload() => CefThread.RunOnUi(() =>
     {
-        if (_browser is not null && _navigated) _browser->reload(_browser);
+        if (_browser is null || !_navigated) return;
+        _reloadRequested = true;
+        _browser->reload(_browser);
     });
 
     /// <summary>Reloads the page, bypassing the cache. Electron's <c>webContents.reloadIgnoringCache()</c>.</summary>
     public void ReloadIgnoringCache() => CefThread.RunOnUi(() =>
     {
-        if (_browser is not null && _navigated) _browser->reload_ignore_cache(_browser);
+        if (_browser is null || !_navigated) return;
+        _reloadRequested = true;
+        _browser->reload_ignore_cache(_browser);
     });
 
     /// <summary>Undoes the last edit in the focused frame. Electron's <c>webContents.undo()</c>.</summary>
@@ -767,11 +776,8 @@ public sealed unsafe partial class WebContents
 
     // IO thread: only the main-frame navigation a LoadUrl with options started needs the hop.
     private bool WantsRequest(cef_frame_t* frame, cef_request_t* request, bool isNavigation)
-    {
-        if (Session.WebRequest.HasListeners) return true;
-        if (!isNavigation || frame is null || frame->is_main(frame) == 0) return false;
-        lock (_pendingLoadGate) return _pendingLoad is not null;
-    }
+        // Navigations always come here, for loadURL options and the status did-navigate reports.
+        => isNavigation || Session.WebRequest.HasListeners;
 
     private void OnBeforeResourceLoad(cef_frame_t* frame, cef_request_t* request)
     {
@@ -900,7 +906,13 @@ public sealed unsafe partial class WebContents
                 break;
 
             case "Page.frameNavigated":
+                DetachDescendants(parameters.GetProperty("frame").GetProperty("id").GetString()!);
                 UpdateFrame(parameters.GetProperty("frame"));
+                OnFrameCommitted(parameters.GetProperty("frame"));
+                break;
+
+            case "Page.navigatedWithinDocument":
+                OnNavigatedWithinDocument(parameters);
                 break;
 
             // A swap moves the frame to another process, where it still exists; only a removal ends it.
@@ -1013,6 +1025,17 @@ public sealed unsafe partial class WebContents
 
     private WebFrameMain? FrameForContext(int context)
         => _contextFrames.TryGetValue(context, out var id) && _frames.TryGetValue(id, out var frame) ? WrapperOf(frame) : null;
+
+    // A frame's new document starts without the old one's iframes; DevTools reports no detach for them.
+    private void DetachDescendants(string frameId)
+    {
+        foreach (var child in _frames.Values.Where(f => f.ParentId == frameId).ToList())
+        {
+            DetachDescendants(child.Id);
+            child.Detached = true;
+            _frames.Remove(child.Id);
+        }
+    }
 
     private void AddFrameTree(JsonElement node)
     {
