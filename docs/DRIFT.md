@@ -144,9 +144,13 @@ Entries marked _(branch `x`)_ are on that branch and not yet in `main`.
 | E6 | `ses.flushStorageData()` writes all DOM storage | `FlushStorageDataAsync` flushes cookies | CEF: only the cookie store has a flush | Patch |
 | E7 | `overrideBrowserWindowOptions` may give a popup another session | Blocked, with a console message | CEF: a popup always gets its opener's request context | Patch |
 | E8 | `clearStorageData`, `clearData`, `getCacheSize`, `clearHostResolverCache`, `resolveProxy` | Missing | CEF: no API on the request context | DevTools `Storage.clearDataForOrigin` through an open page for `clearStorageData` by origin; Patch for the rest |
-| E10 | `webRequest`, `setDevicePermissionHandler`, downloads (`will-download`), spellchecker, `preconnect`, certificate verify proc, extensions, `getPreloads`/`registerPreloadScript` | Missing | Todo: CEF has handlers for most (resource request, download, certificate) | Later Session work (M6) |
+| E10 | `webRequest`, `setDevicePermissionHandler`, spellchecker, `preconnect`, certificate verify proc, extensions, `getPreloads`/`registerPreloadScript` | Missing | Todo: CEF has handlers for most (resource request, certificate) | Later Session work (M6) |
 | E12 | Permissions: no `setPermissionCheckHandler`; for non-media prompts `setPermissionRequestHandler` gets the requesting origin as `requestingUrl`, `isMainFrame` is always true, and there is no `requestingFrame` | Partial | Limit: CEF has no permission-check hook, and its permission prompt carries only the requesting origin (media requests carry the frame) | — |
-| E11 | Session events (`will-download`, `select-*-device`, ...) | None | Todo: with E10 | With E10 |
+| E13 | `DownloadItem` `hasUserGesture`, `getLastModifiedTime`, `getETag` | `false`, `""`, `""` | CEF: its download item has no gesture, Last-Modified or ETag | Patch |
+| E14 | An interruption the download can resume from raises `updated` with `interrupted` and `canResume()` is true | Every interruption raises `done` with `interrupted`; `canResume()` is true only while paused | CEF: no resume mode for an interrupted item | Patch, or port Chromium's resume-mode table over the interrupt reason |
+| E15 | `getURLChain` lists every redirect | The original and final URLs only | CEF: the item gives only those two | Patch |
+| E16 | `session.downloadURL`, `ses.createInterruptedDownload`, `downloadURL` `headers` option | Missing; `WebContents.DownloadUrl(url)` only | CEF: `start_download` takes a URL and needs a browser | A hidden page for the session one; Patch for headers |
+| E11 | Session events (`select-*-device`, ...) | None | Todo: with E10 | With E10 |
 
 ## IPC, contextBridge, protocol
 

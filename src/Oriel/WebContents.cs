@@ -40,6 +40,11 @@ public sealed unsafe partial class WebContents
     internal WebContents(string? appPreload, WebPreferences preferences, Session session)
     {
         Permissions = new PermissionHandler { Prompt = DecidePromptAsync, MediaAccess = DecideMediaAsync };
+        Downloads = new DownloadHandler
+        {
+            Before = (snapshot, before) => session.OnBeforeDownload(this, snapshot, before),
+            Updated = session.OnDownloadUpdated,
+        };
         _defaultUserAgent = session.UserAgentOrNull ?? OrielApp.CurrentOrNull?.UserAgentFallback;
         _acceptLanguages = session.AcceptLanguages;
         session.Track(this);
@@ -168,6 +173,9 @@ public sealed unsafe partial class WebContents
 
     /// <summary>The page's permission prompts and media requests, decided by its session.</summary>
     internal PermissionHandler Permissions { get; }
+
+    /// <summary>The page's downloads, reported to its session.</summary>
+    internal DownloadHandler Downloads { get; }
 
     /// <summary>The settings this page was created with; a page it opens inherits them.</summary>
     internal WebPreferences Preferences => _preferences;
@@ -459,6 +467,20 @@ public sealed unsafe partial class WebContents
         NativeObject.Release(frame);
         return url;
     });
+
+    /// <summary>Downloads <paramref name="url"/> without navigating; the session's <see cref="Session.WillDownload"/> is
+    /// raised for it. Electron's <c>webContents.downloadURL()</c>.</summary>
+    public void DownloadUrl(string url)
+    {
+        ArgumentNullException.ThrowIfNull(url);
+        WithHost(host =>
+        {
+            cef_string_utf16_t native = default;
+            CefString.Set(&native, url);
+            host->start_download(host, &native);
+            CefString.Clear(&native);
+        });
+    }
 
     /// <summary>Reloads the page. Electron's <c>webContents.reload()</c>.</summary>
     public void Reload() => CefThread.RunOnUi(() =>

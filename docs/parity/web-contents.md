@@ -12,13 +12,13 @@ Percentages are over the non-n/a items; the second counts a partial item as half
 |---|---|---|---|---|---|---|---|
 | Static methods | 5 | 0 | 0 | 5 | 0 | 0.0% | 0.0% |
 | Instance events | 59 | 7 | 1 | 49 | 2 | 12.3% | 13.2% |
-| Instance methods | 118 | 24 | 4 | 82 | 8 | 21.8% | 23.6% |
+| Instance methods | 118 | 24 | 5 | 81 | 8 | 21.8% | 24.1% |
 | Instance properties | 18 | 5 | 1 | 11 | 1 | 29.4% | 32.4% |
 | navigationHistory | 14 | 12 | 0 | 2 | 0 | 85.7% | 85.7% |
 | WebFrameMain events and statics | 3 | 1 | 0 | 2 | 0 | 33.3% | 33.3% |
 | WebFrameMain methods | 9 | 1 | 3 | 5 | 0 | 11.1% | 27.8% |
 | WebFrameMain properties | 15 | 9 | 0 | 6 | 0 | 60.0% | 60.0% |
-| **Total** | 241 | 59 | 9 | 162 | 11 | 25.7% | 27.6% |
+| **Total** | 241 | 59 | 10 | 161 | 11 | 25.7% | 27.8% |
 
 ## Checklist
 
@@ -128,7 +128,7 @@ Percentages are over the non-n/a items; the second counts a partial item as half
 | `toggleDevTools()` | `ToggleDevTools` | done |  |
 | `send(channel, ...args)` | `Send` | done | Args are JSON (I1). |
 | `sendInputEvent(inputEvent)` | `SendInputEvent` | done | Keyboard; mouse down/up/move/enter/leave, contextMenu and wheel |
-| `downloadURL()` | — | missing |  |
+| `downloadURL(url, options)` | `DownloadUrl` | partial | No `headers` option (E16); the session raises `WillDownload`. |
 | `isDestroyed()` | — | missing |  |
 | `close()` | — | missing |  |
 | `focus()` | — | missing |  |

@@ -224,6 +224,121 @@ async Task RunAsync()
     var granted = await AskLocation("perm-grant", (_, _, _) => Task.FromResult(true));
     Check("a permission handler that grants allows it", granted is "granted" or "ok", granted);
 
+    // Downloads: Session.WillDownload and DownloadItem, as Electron.
+    var downloads = Session.FromPartition("downloads");
+    var report = Encoding.UTF8.GetBytes("report body " + new string('x', 4000));
+    const int SlowChunks = 40, SlowChunk = 64 * 1024;
+    downloads.Protocol.Handle("https", request =>
+    {
+        var attachment = new Dictionary<string, string> { ["Content-Disposition"] = "attachment; filename=\"report.txt\"" };
+        if (request.Url.EndsWith("/report.txt", StringComparison.Ordinal))
+            return new ProtocolResponse { ContentType = "text/plain", Headers = attachment, Body = new MemoryStream(report) };
+        if (request.Url.EndsWith("/slow.bin", StringComparison.Ordinal))
+            return new ProtocolResponse { ContentType = "application/octet-stream", Headers = attachment, Body = new SlowStream(SlowChunks, SlowChunk), Length = (long)SlowChunks * SlowChunk };
+        return ProtocolResponse.Text(Page, "text/html");
+    });
+    var downloadWin = new BrowserWindow(new BrowserWindowOptions { Show = false, WebPreferences = new WebPreferences { Session = downloads } });
+    await downloadWin.LoadUrl(Site);
+    var downloadDir = Path.Combine(Path.GetTempPath(), $"oriel-download-{Environment.ProcessId}");
+    if (Directory.Exists(downloadDir)) Directory.Delete(downloadDir, recursive: true);
+
+    // Starts a download and waits for its done state; decide runs inside WillDownload.
+    async Task<(DownloadItem? Item, WebContents? Page, string? Filename, DownloadState? State, int DoneCount)> Download(Action trigger, Action<WillDownloadEventArgs> decide)
+    {
+        var done = new TaskCompletionSource<DownloadState>(TaskCreationOptions.RunContinuationsAsynchronously);
+        DownloadItem? item = null;
+        WebContents? page = null;
+        string? filename = null;
+        var doneCount = 0;
+        void OnWillDownload(object? _, WillDownloadEventArgs e)
+        {
+            item = e.Item;
+            page = e.WebContents;
+            filename = e.Item.GetFilename();
+            e.Item.Done += (_, d) =>
+            {
+                Interlocked.Increment(ref doneCount);
+                done.TrySetResult(d.State);
+            };
+            decide(e);
+        }
+        downloads.WillDownload += OnWillDownload;
+        trigger();
+        var state = await done.Task.WaitAsync(TimeSpan.FromSeconds(20)).ContinueWith(t => t.IsCompletedSuccessfully ? t.Result : (DownloadState?)null);
+        await Task.Delay(500);
+        downloads.WillDownload -= OnWillDownload;
+        return (item, page, filename, state, doneCount);
+    }
+
+    var savePath = Path.Combine(downloadDir, "new", "report.txt");
+    var saved = await Download(() => downloadWin.WebContents.DownloadUrl(Site + "report.txt"), e => e.Item.SetSavePath(savePath));
+    Check("DownloadUrl raises WillDownload with the page", saved.Item is not null && ReferenceEquals(saved.Page, downloadWin.WebContents));
+    Check("SetSavePath saves there, creating the directory, and Done says completed",
+        saved.State == DownloadState.Completed && File.Exists(savePath) && File.ReadAllBytes(savePath).SequenceEqual(report), $"{saved.State} {File.Exists(savePath)}");
+    var item = saved.Item;
+    Check("the item reports its file name, URL, MIME type and save path",
+        saved.Filename == "report.txt" && item?.GetUrl() == Site + "report.txt" && item.GetMimeType() == "text/plain" && item.GetSavePath() == savePath && item.GetFilename() == "report.txt"
+        && item.GetUrlChain().SequenceEqual([Site + "report.txt"]),
+        $"{saved.Filename} {item?.GetUrl()} {item?.GetMimeType()} {item?.GetSavePath()}");
+    Check("the item reports its bytes, progress and state", item?.GetReceivedBytes() == report.Length && item.GetTotalBytes() == report.Length
+        && item.GetPercentComplete() == 100 && item.GetState() == DownloadState.Completed, $"{item?.GetReceivedBytes()}/{item?.GetTotalBytes()} {item?.GetPercentComplete()}% {item?.GetState()}");
+    var now = DateTimeOffset.UtcNow.ToUnixTimeSeconds();
+    Check("the item's start and end times are Unix seconds", item is not null && Math.Abs(item.GetStartTime() - now) < 60 && item.GetEndTime() >= item.GetStartTime(),
+        $"{item?.GetStartTime()} {item?.GetEndTime()} now {now}");
+    Check("Done is raised once", saved.DoneCount == 1, saved.DoneCount);
+
+    var linked = await Download(() => _ = downloadWin.WebContents.ExecuteJavaScriptAsync(
+        "const a = document.createElement('a'); a.href = '/report.txt'; a.download = ''; document.body.append(a); a.click(); 1", userGesture: true),
+        e => e.Item.SetSavePath(Path.Combine(downloadDir, "linked.txt")));
+    Check("a download link raises WillDownload", linked.Item?.GetUrl() == Site + "report.txt" && linked.State == DownloadState.Completed, $"{linked.Item?.GetUrl()} {linked.State}");
+    var prevented = await Download(() => _ = downloadWin.WebContents.ExecuteJavaScriptAsync("location.href = '/report.txt'; 1", userGesture: true), e => e.Cancel = true);
+    Check("a navigation to an attachment raises WillDownload", prevented.Item?.GetUrl() == Site + "report.txt", prevented.Item?.GetUrl());
+    Check("cancelling WillDownload cancels the download, once", prevented.State == DownloadState.Cancelled && prevented.DoneCount == 1
+        && prevented.Item?.GetState() == DownloadState.Cancelled, $"{prevented.State} {prevented.DoneCount}");
+
+    var cancelled = await Download(() => downloadWin.WebContents.DownloadUrl(Site + "report.txt"), e =>
+    {
+        e.Item.SetSavePath(Path.Combine(downloadDir, "cancelled.txt"));
+        e.Item.Cancel();
+    });
+    Check("item.Cancel() during WillDownload cancels it", cancelled.State == DownloadState.Cancelled && !File.Exists(Path.Combine(downloadDir, "cancelled.txt")), cancelled.State);
+
+    var slowPath = Path.Combine(downloadDir, "slow.bin");
+    var progressed = 0;
+    string? pauseResult = null;
+    var slow = await Download(() => downloadWin.WebContents.DownloadUrl(Site + "slow.bin"), e =>
+    {
+        e.Item.SetSavePath(slowPath);
+        e.Item.Updated += (_, u) =>
+        {
+            if (u.State == DownloadState.Progressing && Interlocked.Increment(ref progressed) == 1)
+                _ = Task.Run(async () =>
+                {
+                    e.Item.Pause();
+                    for (var i = 0; i < 60 && !e.Item.IsPaused(); i++) await Task.Delay(50);
+                    var paused = e.Item.IsPaused() && e.Item.CanResume();
+                    var before = e.Item.GetReceivedBytes();
+                    await Task.Delay(800);
+                    var held = e.Item.GetReceivedBytes() == before && e.Item.GetState() == DownloadState.Progressing;
+                    pauseResult = $"{paused} {held}";
+                    e.Item.Resume();
+                });
+        };
+    });
+    Check("Updated reports progress", progressed > 0, progressed);
+    Check("Pause pauses the download: IsPaused, CanResume, no bytes while paused", pauseResult == "True True", pauseResult);
+    Check("Resume finishes it", slow.State == DownloadState.Completed && new FileInfo(slowPath).Length == (long)SlowChunks * SlowChunk && slow.Item?.IsPaused() == false && !slow.Item.CanResume(),
+        $"{slow.State} {(File.Exists(slowPath) ? new FileInfo(slowPath).Length : -1)}");
+
+    var midway = await Download(() => downloadWin.WebContents.DownloadUrl(Site + "slow.bin"), e =>
+    {
+        e.Item.SetSavePath(Path.Combine(downloadDir, "midway.bin"));
+        e.Item.Updated += (_, _) => e.Item.Cancel();
+    });
+    Check("Cancel during the download: Done says cancelled", midway.State == DownloadState.Cancelled && midway.DoneCount == 1, $"{midway.State} {midway.DoneCount}");
+    downloadWin.Destroy();
+    Directory.Delete(downloadDir, recursive: true);
+
     // Proxy: requests go to a local listener posing as the proxy.
     var proxied = Session.FromPartition("proxied");
     using var listener = new TcpListener(IPAddress.Loopback, 0);
@@ -290,3 +405,30 @@ _ = Task.Delay(TimeSpan.FromSeconds(int.Parse(Environment.GetEnvironmentVariable
 app.Run();
 Console.WriteLine(failures < 0 ? "RESULT: no result" : $"RESULT: {failures} failure(s)");
 return failures;
+
+// A body that arrives in chunks over time, so a download can be paused midway.
+sealed class SlowStream(int chunks, int chunkSize) : Stream
+{
+    private long _remaining = (long)chunks * chunkSize;
+
+    // About 50 ms per chunk, however the reader sizes its buffer.
+    public override int Read(byte[] buffer, int offset, int count)
+    {
+        var n = (int)Math.Min(Math.Min(count, chunkSize), _remaining);
+        if (n == 0) return 0;
+        Thread.Sleep(Math.Max(1, 50 * n / chunkSize));
+        Array.Fill(buffer, (byte)'s', offset, n);
+        _remaining -= n;
+        return n;
+    }
+
+    public override bool CanRead => true;
+    public override bool CanSeek => false;
+    public override bool CanWrite => false;
+    public override long Length => throw new NotSupportedException();
+    public override long Position { get => throw new NotSupportedException(); set => throw new NotSupportedException(); }
+    public override void Flush() { }
+    public override long Seek(long offset, SeekOrigin origin) => throw new NotSupportedException();
+    public override void SetLength(long value) => throw new NotSupportedException();
+    public override void Write(byte[] buffer, int offset, int count) => throw new NotSupportedException();
+}

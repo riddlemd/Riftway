@@ -628,6 +628,34 @@ async Task DialogsAsync(BrowserWindow win)
     Check("OpenDirectory returns the directory it started in", chosen is { Canceled: false, FilePaths: [var only] } && Real(only) == Real(dir),
         chosen is null ? "none" : string.Join(",", chosen.FilePaths));
 
+    // A download with no save path asks where to save it, with the item's dialog options, as Electron.
+    var source = Path.Combine(dir, "source.txt");
+    File.WriteAllText(source, "download me");
+    async Task<(DownloadState? State, string SavePath)> DownloadThroughDialog(string title, string defaultPath, bool accept)
+    {
+        var done = new TaskCompletionSource<DownloadState>(TaskCreationOptions.RunContinuationsAsynchronously);
+        DownloadItem? item = null;
+        void OnWillDownload(object? _, WillDownloadEventArgs e)
+        {
+            item = e.Item;
+            e.Item.SetSaveDialogOptions(new SaveDialogOptions { Title = title, DefaultPath = defaultPath });
+            e.Item.Done += (_, d) => done.TrySetResult(d.State);
+        }
+        win.WebContents.Session.WillDownload += OnWillDownload;
+        win.WebContents.DownloadUrl(new Uri(source).AbsoluteUri);
+        var answered = Answer(title, accept);
+        var state = answered && await Task.WhenAny(done.Task, Task.Delay(step)) == done.Task ? done.Task.Result : (DownloadState?)null;
+        win.WebContents.Session.WillDownload -= OnWillDownload;
+        return (state, item?.GetSavePath() ?? "");
+    }
+    var downloadTarget = Path.Combine(dir, "downloaded.txt");
+    var accepted = await DownloadThroughDialog("Oriel download test", downloadTarget, accept: true);
+    Check("a download with no save path shows the save dialog and saves where it was accepted",
+        accepted.State == DownloadState.Completed && SamePath(accepted.SavePath, downloadTarget) && File.Exists(downloadTarget) && File.ReadAllText(downloadTarget) == "download me",
+        $"{accepted.State} {accepted.SavePath}");
+    var refused = await DownloadThroughDialog("Oriel download cancel test", Path.Combine(dir, "refused.txt"), accept: false);
+    Check("cancelling the download's save dialog cancels the download", refused.State == DownloadState.Cancelled && !File.Exists(Path.Combine(dir, "refused.txt")), refused.State);
+
     Check("Sync dialogs refuse the UI thread",
         Oriel.Cef.CefThread.InvokeOnUi(() => Throws<InvalidOperationException>(() => Dialog.ShowSaveDialogSync(win, new SaveDialogOptions()))));
     Directory.Delete(dir, recursive: true);

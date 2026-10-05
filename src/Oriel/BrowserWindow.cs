@@ -293,6 +293,7 @@ public sealed unsafe class BrowserWindow
             new LifeSpanHandler { BeforePopup = OnBeforePopup, PopupAborted = OnPopupAborted })
         {
             Permission = WebContents.Permissions,
+            Download = WebContents.Downloads,
         };
         if (!OperatingSystem.IsMacOS())
         {

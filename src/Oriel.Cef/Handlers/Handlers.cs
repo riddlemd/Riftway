@@ -205,6 +205,27 @@ public sealed unsafe class ClientHandler
 
     private readonly PermissionHandler? _permission;
 
+    /// <summary>Reports downloads; null leaves them to CEF.</summary>
+    public DownloadHandler? Download
+    {
+        get => _download;
+        init
+        {
+            _download = value;
+            if (value is not null) Native->get_download_handler = &GetDownloadHandler;
+        }
+    }
+
+    private readonly DownloadHandler? _download;
+
+    [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])]
+    private static cef_download_handler_t* GetDownloadHandler(cef_client_t* self)
+    {
+        var handler = NativeObject.Owner<ClientHandler>(self)._download!.Native;
+        NativeObject.AddRef(handler);
+        return handler;
+    }
+
     [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])]
     private static cef_permission_handler_t* GetPermissionHandler(cef_client_t* self)
     {
