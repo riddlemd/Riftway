@@ -188,6 +188,7 @@ Entries marked _(branch `x`)_ are on that branch and not yet in `main`.
 | I5 | `protocol.handle` takes and returns Fetch `Request`/`Response` | `ProtocolRequest` → `Task<ProtocolResponse>`; Oriel answers `Range` itself | Design | None |
 | I6 | Privileges `allowServiceWorkers`, `codeCache` | Throw `NotSupportedException` | CEF: no service workers or V8 code cache for custom schemes | Patch |
 | I7 | `MessagePortMain` raises `close` when the page closes its end | Raised when the page navigates away or the main side closes; not when the page calls `close()` on its end | CEF: Chromium 154 gives the bridged end no `close` event, and a close marker would leak into the page's own channels | Patch |
+| I8 | Renderer `webFrame`: `setSpellCheckProvider`, `setIsolatedWorldInfo`, `getResourceUsage`, `clearCache`, the frame tree (`getFrameForSelector`, `findFrameByName`, `findFrameByToken`, `top`, `opener`, `parent`, `firstChild`, `nextSibling`), `routingId`; `getZoomFactor` follows every zoom change | Missing; `getZoomFactor`/`getZoomLevel` follow zoom set through Oriel (`webFrame` or `WebContents`), not keyboard or wheel zoom; `insertCSS` keeps the `user` origin as author (C25) | Design: `oriel.webFrame` runs in the preload world and works through the main process over DevTools, which reports no zoom changes and has no renderer frame objects | Patch |
 
 ## Platform and runtime
 

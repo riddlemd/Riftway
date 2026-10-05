@@ -333,6 +333,10 @@ public sealed unsafe partial class WebContents
     /// <exception cref="InvalidOperationException">No scripts, or the frame has no script context.</exception>
     /// <exception cref="ArgumentOutOfRangeException"><paramref name="worldId"/> is negative or beyond Blink's limit.</exception>
     public Task<JsonNode?> ExecuteJavaScriptInIsolatedWorldAsync(int worldId, IReadOnlyList<WebSource> scripts, bool userGesture = false)
+        => ExecuteJavaScriptInIsolatedWorldInFrameAsync(worldId, scripts, userGesture, null);
+
+    // A frame's (webFrame's) or, with none, the main frame's.
+    internal Task<JsonNode?> ExecuteJavaScriptInIsolatedWorldInFrameAsync(int worldId, IReadOnlyList<WebSource> scripts, bool userGesture, FrameState? frame)
     {
         ArgumentNullException.ThrowIfNull(scripts);
         ArgumentOutOfRangeException.ThrowIfNegative(worldId);
@@ -348,7 +352,7 @@ public sealed unsafe partial class WebContents
                 done.TrySetException(new InvalidOperationException(FrameRemovedMessage));
                 return;
             }
-            WithWorldContext(worldId, (context, error) =>
+            WithWorldContext(worldId, frame, (context, error) =>
             {
                 if (error is not null) done.TrySetException(new InvalidOperationException(error));
                 else RunInContext(context, sources, userGesture, done);
@@ -386,13 +390,13 @@ public sealed unsafe partial class WebContents
     });
 
     // UI thread.
-    private void WithWorldContext(int worldId, Action<int?, string?> use)
+    private void WithWorldContext(int worldId, FrameState? frame, Action<int?, string?> use)
     {
         // DevTools may not have reported a new document's contexts yet; without a context id it uses the main world.
         var (isMain, name) = WorldOf(worldId);
-        if (isMain || _mainFrameId is not { } frameId)
+        if (isMain || (frame?.Id ?? _mainFrameId) is not { } frameId)
         {
-            use(null, isMain ? null : "The page has no main frame yet.");
+            use(isMain ? frame?.DefaultContext : null, isMain ? null : "The page has no main frame yet.");
             return;
         }
         // Worlds are kept per frame by name, so the preload's world answers to its own name.
@@ -506,13 +510,16 @@ public sealed unsafe partial class WebContents
     /// <c>document.styleSheets</c>; it goes with the document (drift C25). Returns the key for <see cref="RemoveInsertedCssAsync"/>.
     /// Electron's <c>webContents.insertCSS()</c>.</summary>
     /// <exception cref="InvalidOperationException">The page has closed or has no document.</exception>
-    public Task<string> InsertCssAsync(string css, InsertCssOptions? options = null)
+    public Task<string> InsertCssAsync(string css, InsertCssOptions? options = null) => InsertCssInFrameAsync(css, null);
+
+    // A frame's (webFrame's) or, with none, the main frame's.
+    internal Task<string> InsertCssInFrameAsync(string css, FrameState? frame)
     {
         ArgumentNullException.ThrowIfNull(css);
         var done = new TaskCompletionSource<string>(TaskCreationOptions.RunContinuationsAsynchronously);
         CefThread.RunOnUi(() =>
         {
-            if (_browser is null || _mainFrameId is not { } frameId)
+            if (_browser is null || (frame?.Id ?? _mainFrameId) is not { } frameId)
             {
                 done.TrySetException(new InvalidOperationException("The page has closed."));
                 return;

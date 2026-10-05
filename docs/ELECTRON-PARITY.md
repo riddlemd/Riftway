@@ -76,7 +76,7 @@ Detailed item-by-item status, including `navigationHistory` and `WebFrameMain`: 
 | `webFrameMain` | `WebFrameMain` | CEF | M2 | partial: frame tree, url/origin/name, `executeJavaScript`, `reload`, `send`, IPC `senderFrame`; in-process frames only (see DRIFT.md) |
 | `NavigationHistory` | `NavigationHistory` | CEF | M2 | partial: back/forward, index/offset moves, entries, clear; no `removeEntryAtIndex` or `restore` (see DRIFT.md) |
 | `Debugger` (`webContents.debugger`) | `Debugger` (DevTools protocol) | CEF | M2 | — |
-| `webFrame` (renderer) | `oriel.webFrame` in the page | CEF (DevTools protocol) | M6 | — |
+| `webFrame` (renderer) | `oriel.webFrame` in the preload | CEF (DevTools protocol) | M6 | partial: zoom (factor and level), `insertCSS`/`removeInsertedCSS`, `insertText`, `executeJavaScript`, `executeJavaScriptInIsolatedWorld`, `frameToken`, for the frame that calls (I8) |
 | `webUtils` (renderer) | `oriel.webUtils` | CEF | M6 | — |
 | `sharedTexture` | `SharedTexture` | Patch | M7 | — |
 

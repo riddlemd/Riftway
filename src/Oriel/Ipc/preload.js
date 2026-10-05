@@ -34,6 +34,10 @@
     return channel.port1;
   };
 
+  // What webFrame answers at once: the main process reports both, and Oriel's own zoom changes.
+  let frameToken = '';
+  let zoomLevel = 0;
+
   let nextInvokeId = 1;
   const pendingInvokes = new Map();
   const channelListeners = new Map();
@@ -47,6 +51,11 @@
         pendingInvokes.delete(message.id);
         if (message.ok) pending.resolve(message.value);
         else pending.reject(new Error(message.error));
+      } else if (message.t === 'frame') {
+        frameToken = message.token;
+        zoomLevel = message.zoomLevel;
+      } else if (message.t === 'zoom') {
+        zoomLevel = message.level;
       } else if (message.t === 'port-msg') {
         bridged.get(message.id)?.postMessage(message.data, (message.ports ?? []).map(bridge));
       } else if (message.t === 'port-close') {
@@ -145,5 +154,56 @@
     },
   });
 
-  Object.defineProperty(globalThis, 'oriel', { value: Object.freeze({ ipcRenderer, contextBridge }) });
+  const webFrameCall = (op, data) => new Promise((resolve, reject) => {
+    const id = nextInvokeId++;
+    pendingInvokes.set(id, { resolve, reject });
+    post(JSON.stringify({ t: 'wf', id, op, ch: '', args: [], ...data }));
+  });
+  let nextCssKey = 0;
+  const cssKeys = new Map();
+  // Electron's renderer webFrame, for this frame; the work happens in the main process over DevTools.
+  const webFrame = Object.freeze({
+    setZoomFactor(factor) {
+      if (!(factor > 0)) throw new Error('factor must be greater than 0.0');
+      webFrame.setZoomLevel(Math.log(factor) / Math.log(1.2));
+    },
+    getZoomFactor: () => Math.pow(1.2, zoomLevel),
+    setZoomLevel(level) {
+      zoomLevel = Number(level);
+      webFrameCall('zoomLevel', { value: zoomLevel });
+    },
+    getZoomLevel: () => zoomLevel,
+    insertCSS(css, options = {}) {
+      const key = String(++nextCssKey);
+      const created = webFrameCall('insertCSS', { css: String(css), origin: options.cssOrigin ?? 'author' });
+      created.catch(() => {});
+      cssKeys.set(key, created);
+      return key;
+    },
+    removeInsertedCSS(key) {
+      const created = cssKeys.get(key);
+      if (!created) return;
+      cssKeys.delete(key);
+      created.then((sheet) => webFrameCall('removeCSS', { key: sheet }), () => {});
+    },
+    insertText(text) {
+      webFrameCall('insertText', { text: String(text) });
+    },
+    executeJavaScript(code, userGesture = false, callback) {
+      const result = webFrameCall('exec', { code: String(code), userGesture: !!userGesture });
+      if (typeof callback === 'function') result.then((value) => callback(value, null), (error) => callback(null, error));
+      return result;
+    },
+    executeJavaScriptInIsolatedWorld(worldId, scripts, userGesture = false, callback) {
+      const result = webFrameCall('execIsolated', {
+        worldId: Number(worldId), userGesture: !!userGesture,
+        scripts: scripts.map((s) => ({ code: String(s.code), url: s.url === undefined ? undefined : String(s.url) })),
+      });
+      if (typeof callback === 'function') result.then((value) => callback(value, null), (error) => callback(null, error));
+      return result;
+    },
+    get frameToken() { return frameToken; },
+  });
+
+  Object.defineProperty(globalThis, 'oriel', { value: Object.freeze({ ipcRenderer, contextBridge, webFrame }) });
 })();

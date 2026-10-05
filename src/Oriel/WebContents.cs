@@ -358,6 +358,7 @@ public sealed unsafe partial class WebContents
         // Chromium keeps zoom per host; one the app set, to 0 included, keeps it.
         if (Uri.TryCreate(GetUrl(), UriKind.Absolute, out var url)) lock (_zoomedHosts) _zoomedHosts.Add(url.Host);
         host->set_zoom_level(host, level);
+        TellFramesZoom(level);
     });
 
     private readonly HashSet<string> _zoomedHosts = new(StringComparer.OrdinalIgnoreCase);
@@ -941,6 +942,8 @@ public sealed unsafe partial class WebContents
             case "Runtime.executionContextCreated":
                 var context = parameters.GetProperty("context");
                 TrackContext(context);
+                if (context.GetProperty("name").GetString() == IsolatedWorld && context.GetProperty("auxData").TryGetProperty("frameId", out var isolatedFrame))
+                    TellFrameItself(context.GetProperty("id").GetInt32(), isolatedFrame.GetString()!);
                 if (context.GetProperty("name").GetString() == IsolatedWorld &&
                     context.GetProperty("auxData").GetProperty("frameId").GetString() == _mainFrameId)
                 {
@@ -992,6 +995,10 @@ public sealed unsafe partial class WebContents
                 var portId = root.GetProperty("id").GetString()!;
                 if (link.RemoteEnd(portId) is { } origin)
                     link.FromPageEnd(portId, root.GetProperty("data"), [.. PortIds(root).Select(id => (id, context))], origin);
+                break;
+
+            case "wf":
+                OnWebFrameRequest(context, root);
                 break;
 
             case "port-close" when PortLink.ForRemote(root.GetProperty("id").GetString()!) is { } closing:

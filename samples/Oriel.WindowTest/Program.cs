@@ -259,6 +259,7 @@ async Task RunAsync(BrowserWindow win, BrowserWindow simple)
     await PageEventsAsync();
     await MessagePortsAsync();
     await MacWindowApisAsync();
+    await WebFrameAsync();
     await WebContentsMethodsAsync();
 
     // Closing cancelled once: the window must survive the first close.
@@ -1306,6 +1307,62 @@ async Task WebContentsMethodsAsync()
     w.Destroy();
     listener.Stop();
     foreach (var gate in gates.Values) gate.TrySetResult();
+    Directory.Delete(dir, recursive: true);
+}
+
+async Task WebFrameAsync()
+{
+    var dir = Directory.CreateTempSubdirectory("oriel-webframe-").FullName;
+    var preload = Path.Combine(dir, "preload.js");
+    File.WriteAllText(preload, string.Join("\n",
+        "const { webFrame, contextBridge } = oriel;",
+        "contextBridge.exposeInMainWorld('wf', {",
+        "  zoom: (f) => { webFrame.setZoomFactor(f); return webFrame.getZoomFactor(); },",
+        "  getZoom: () => webFrame.getZoomFactor(),",
+        "  css: (c) => webFrame.insertCSS(c),",
+        "  uncss: (k) => webFrame.removeInsertedCSS(k),",
+        "  exec: (code) => webFrame.executeJavaScript(code),",
+        "  iso: (code) => webFrame.executeJavaScriptInIsolatedWorld(5, [{ code }]),",
+        "  token: () => webFrame.frameToken,",
+        "  text: (t) => webFrame.insertText(t),",
+        "});"));
+    var page = Path.Combine(dir, "webframe.html");
+    File.WriteAllText(page, "<!doctype html><script>window.pageVar = 'from-page';</script><input id=i><iframe srcdoc='<p>child'></iframe>");
+    var w = new BrowserWindow(new BrowserWindowOptions { Title = "Oriel window test: webFrame", Width = 400, Height = 300, WebPreferences = new WebPreferences { Preload = preload } });
+    Fires(h => w.WebContents.DidFinishLoad += h, h => w.WebContents.DidFinishLoad -= h, () => w.WebContents.LoadFile(page), step);
+    async Task<string?> Page(string code) => (await w.WebContents.ExecuteJavaScriptAsync(code))?.ToString();
+
+    var zoomed = await Page("wf.zoom(1.5)");
+    Check("webFrame.setZoomFactor zooms the page; getZoomFactor answers at once", zoomed == "1.5" && Eventually(() => Math.Abs(w.WebContents.GetZoomFactor() - 1.5) < 0.01, step), $"{zoomed} {w.WebContents.GetZoomFactor()}");
+    w.WebContents.SetZoomFactor(2);
+    Check("a zoom set from the main process reaches webFrame.getZoomFactor", Eventually(() => Page("wf.getZoom()").Result == "2", step), Page("wf.getZoom()").Result);
+    w.WebContents.SetZoomFactor(1);
+
+    var sheets = await Page("document.styleSheets.length");
+    var key = await Page("wf.css('body { background: rgb(1, 2, 3) }')");
+    var styled = Eventually(() => Page("getComputedStyle(document.body).backgroundColor").Result == "rgb(1, 2, 3)", step);
+    Check("webFrame.insertCSS styles the frame, out of document.styleSheets, and returns a key", styled && key is { Length: > 0 } && await Page("document.styleSheets.length") == sheets, $"{key} {sheets}");
+    var child = Eventually(() => w.WebContents.MainFrame?.Frames.Count == 1, step) ? w.WebContents.MainFrame!.Frames[0] : null;
+    Check("insertCSS styles only its own frame", child is not null && (await child.ExecuteJavaScriptAsync("getComputedStyle(document.body).backgroundColor"))?.ToString() != "rgb(1, 2, 3)");
+    await child!.ExecuteJavaScriptAsync("wf.css('body { color: rgb(4, 5, 6) }')");
+    Check("insertCSS from an iframe styles that iframe, not the page", Eventually(() => child.ExecuteJavaScriptAsync("getComputedStyle(document.body).color").Result?.ToString() == "rgb(4, 5, 6)", step)
+        && await Page("getComputedStyle(document.body).color") != "rgb(4, 5, 6)");
+    await Page($"wf.uncss('{key}')");
+    Check("webFrame.removeInsertedCSS removes it", Eventually(() => Page("getComputedStyle(document.body).backgroundColor").Result != "rgb(1, 2, 3)", step), Page("getComputedStyle(document.body).backgroundColor").Result);
+
+    Check("webFrame.executeJavaScript runs in the page's world", await Page("wf.exec('window.pageVar')") == "from-page");
+    var isolated = await Page("wf.iso('typeof window.pageVar')");
+    await Page("wf.iso('window.kept = 7')");
+    Check("webFrame.executeJavaScriptInIsolatedWorld runs apart from the page, in a world that persists", isolated == "undefined" && await Page("wf.iso('window.kept')") == "7", isolated);
+    Check("webFrame's scripts run in the frame that asks", (await child.ExecuteJavaScriptAsync("wf.iso('document.body.textContent')"))?.ToString() == "child"
+        && (await child.ExecuteJavaScriptAsync("wf.exec('document.body.textContent')"))?.ToString() == "child");
+    Check("webFrame.frameToken is the frame's", await Page("wf.token()") == w.WebContents.MainFrame?.FrameToken
+        && child is not null && (await child.ExecuteJavaScriptAsync("wf.token()"))?.ToString() == child.FrameToken, await Page("wf.token()"));
+    w.Focus();
+    await w.WebContents.ExecuteJavaScriptAsync("i.focus(); 1", userGesture: true);
+    await Page("wf.text('typed')");
+    Check("webFrame.insertText types into the focused field", Eventually(() => Page("i.value").Result == "typed", step), Page("i.value").Result);
+    w.Destroy();
     Directory.Delete(dir, recursive: true);
 }
 
