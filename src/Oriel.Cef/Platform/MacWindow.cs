@@ -180,6 +180,20 @@ public static unsafe class MacWindow
         => NSWindowOf(contentView) is var window && window != 0 ? ReadNSString(Send(window, Sel("representedFilename"u8))) : "";
 
     /// <summary>The close button's unsaved-changes dot. Electron's <c>setDocumentEdited</c>.</summary>
+    /// <summary>[NSWindow setCanHide:], which Electron clears before hiding the Dock icon.</summary>
+    public static void SetCanHide(nint contentView, bool canHide)
+    {
+        var window = NSWindowOf(contentView);
+        if (window != 0) SendBool(window, Sel("setCanHide:"u8), canHide ? (byte)1 : (byte)0);
+    }
+
+    /// <summary>[NSWindow canHide].</summary>
+    public static bool CanHide(nint contentView)
+    {
+        var window = NSWindowOf(contentView);
+        return window != 0 && (byte)Send(window, Sel("canHide"u8)) != 0;
+    }
+
     public static void SetDocumentEdited(nint contentView, bool edited)
     {
         var window = NSWindowOf(contentView);

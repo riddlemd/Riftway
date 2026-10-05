@@ -712,7 +712,8 @@ async Task RunAsync()
         hashed == "start-same /start#part | in-page /start#part", hashed);
     var pushed = await Steps(() => Js("history.pushState({}, '', '/pushed')"));
     Check("history.pushState raises did-navigate-in-page", pushed.Contains("in-page /pushed") && !pushed.Contains("will"), pushed);
-    await navWin.LoadUrl(Site + "start");
+    // The iframe's commit comes through DevTools and can trail the load, so wait for it before the next step clears the log.
+    await Steps(() => navWin.LoadUrl(Site + "start"), until: "did-frame 200 OK /frameNav sub");
     var frameNav = await Steps(() => Js("frames.f.location = '/elsewhere'"));
     var frameArgs = navWin.WebContents.MainFrame?.Frames.FirstOrDefault();
     Check("an iframe's navigation: will-frame-navigate and did-frame-navigate for that frame, no will-navigate or did-navigate",
@@ -958,6 +959,61 @@ async Task RunAsync()
             "7:7:\"StatusLabel\"={ \"label\"=\"7\" }", "150:99+:\"StatusLabel\"={ \"label\"=\"99+\" }",
             "0:\u2022:\"StatusLabel\"={ \"label\"=\"\u2022\" }", "0::\"StatusLabel\"={ \"label\"=\"\" }"]) && label == "new:\"StatusLabel\"={ \"label\"=\"new\" }",
             string.Join(" / ", badges) + " / " + label);
+
+#pragma warning disable CA1416 // AppKit calls in lambdas, inside the IsMacOS() block the analyzer cannot see into.
+        // app.dock: the icon's presence as LaunchServices reports it, the menu as the Dock asks for it, the icon's size.
+        string AppType() => Output("/usr/bin/lsappinfo", "info", "-only", "ApplicationType", pid.ToString(CultureInfo.InvariantCulture));
+        var stateHandle = stateWin.GetNativeWindowHandle();
+        await Task.Delay(1100);
+        app.Dock.Hide();
+        var dockHidden = Until(() => !app.Dock.IsVisible() && AppType().Contains("UIElement", StringComparison.Ordinal), TimeSpan.FromSeconds(5));
+        var cannotHide = !Oriel.Cef.CefThread.InvokeOnUi(() => Oriel.Cef.Platform.MacWindow.CanHide(stateHandle));
+        await app.Dock.ShowAsync();
+        var dockShown = app.Dock.IsVisible() && Until(() => AppType().Contains("Foreground", StringComparison.Ordinal), TimeSpan.FromSeconds(5));
+        app.Dock.Hide();
+        await Task.Delay(500);
+        var hideIgnored = app.Dock.IsVisible() && AppType().Contains("Foreground", StringComparison.Ordinal);
+        Check("Dock.Hide drops the Dock icon and keeps windows from hiding; ShowAsync brings it back", dockHidden && cannotHide && dockShown, AppType());
+        Check("Dock.Hide right after ShowAsync is ignored, as Electron's", hideIgnored, AppType());
+        // Again while active, which takes Electron's other path: the Dock is activated first, then the app again.
+        await Task.Delay(1100);
+        app.Dock.Hide();
+        var hiddenAgain = Until(() => AppType().Contains("UIElement", StringComparison.Ordinal), TimeSpan.FromSeconds(5));
+        app.Focus(new AppFocusOptions { Steal = true });
+        var activeHidden = Until(() => AppState().EndsWith("|true", StringComparison.Ordinal), TimeSpan.FromSeconds(5));
+        await app.Dock.ShowAsync();
+        var shownActive = app.Dock.IsVisible() && AppType().Contains("Foreground", StringComparison.Ordinal) && AppState().EndsWith("|true", StringComparison.Ordinal);
+        Check("Dock.ShowAsync on an active app shows the icon and leaves the app active", hiddenAgain && activeHidden && shownActive, $"{AppType()} {AppState()}");
+
+        var dockClicks = new List<string>();
+        var dockMenu = new Menu();
+        dockMenu.Append(new MenuItem { Label = "Alpha", Click = (_, _, _) => dockClicks.Add("Alpha") });
+        var more = new Menu();
+        more.Append(new MenuItem { Label = "Beta" });
+        dockMenu.Append(new MenuItem { Label = "More", Submenu = more });
+        app.Dock.SetMenu(dockMenu);
+        var dockAsked = Oriel.Cef.CefThread.InvokeOnUi(() =>
+        {
+            var native = Oriel.Cef.Platform.MacActivation.AskDockMenu();
+            var titles = Enumerable.Range(0, Oriel.Cef.Platform.MacMenu.ItemCount(native)).Select(i => Oriel.Cef.Platform.MacMenu.Title(Oriel.Cef.Platform.MacMenu.ItemAt(native, i))).ToList();
+            Oriel.Cef.Platform.MacMenu.PerformAction(native, 0);
+            return string.Join(",", titles);
+        });
+        var dockClicked = Until(() => dockClicks.Count == 1, TimeSpan.FromSeconds(3));
+        Check("Dock.SetMenu is what the Dock gets from the app delegate, and its items click", dockAsked == "Alpha,More" && dockClicked && ReferenceEquals(app.Dock.GetMenu(), dockMenu),
+            $"{dockAsked} delegate={Oriel.Cef.CefThread.InvokeOnUi(Oriel.Cef.Platform.MacActivation.DelegateClass)} clicks={string.Join(",", dockClicks)}");
+
+        var icon = NativeImage.CreateFromBitmap(new byte[20 * 10 * 4], new NativeImageBitmapOptions { Width = 20, Height = 10 });
+        icon.AddRepresentation(new AddRepresentationOptions { ScaleFactor = 2, Width = 40, Height = 20, Buffer = new byte[40 * 20 * 4] });
+        app.Dock.SetIcon(icon);
+        var both = Oriel.Cef.CefThread.InvokeOnUi(Oriel.Cef.Platform.MacActivation.IconSize);
+        app.Dock.SetIcon(NativeImage.CreateFromBitmap(new byte[64 * 32 * 4], new NativeImageBitmapOptions { Width = 64, Height = 32, ScaleFactor = 2 }));
+        var retinaOnly = Oriel.Cef.CefThread.InvokeOnUi(Oriel.Cef.Platform.MacActivation.IconSize);
+        app.Dock.SetIcon(NativeImage.CreateEmpty());
+        var restored = Oriel.Cef.CefThread.InvokeOnUi(Oriel.Cef.Platform.MacActivation.IconSize);
+        Check("Dock.SetIcon sizes the icon in points from every representation; an empty image restores the app's", both == (20, 10) && retinaOnly == (32, 16) && restored != (32, 16),
+            $"{both} {retinaOnly} {restored}");
+#pragma warning restore CA1416
         stateWin.Destroy();
     }
 

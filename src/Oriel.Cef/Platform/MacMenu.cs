@@ -87,6 +87,9 @@ public static unsafe class MacMenu
 
     public static void SetHelpMenu(nint menu) => Send(App(), Sel("setHelpMenu:"u8), menu);
 
+    /// <summary>[obj autorelease]; returns obj.</summary>
+    public static nint Autorelease(nint obj) => Send(obj, Sel("autorelease"u8));
+
     public static void Release(nint obj)
     {
         if (obj != 0) Send(obj, Sel("release"u8));

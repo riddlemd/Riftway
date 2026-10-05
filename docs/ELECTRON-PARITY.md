@@ -5,12 +5,12 @@ electron/electron). When Electron adds or changes a module, this table changes w
 
 ## Progress
 
-Recounted 2026-10-04 against `src/Oriel`. Update these figures when a row or checklist item changes.
+Recounted 2026-10-05 against `src/Oriel`. Update these figures when a row or checklist item changes.
 
 | Measure | Done | Partial | Not started | Total |
 |---|---|---|---|---|
-| Module rows below | 1 | 16 | 50 | 67 |
-| M2 rows | 1 | 13 | 8 | 22 |
+| Module rows below | 2 | 19 | 46 | 67 |
+| M2 rows | 1 | 12 | 8 | 21 |
 
 The 67 rows include `BrowserView` (deprecated, never implemented; counted as not started).
 
@@ -55,7 +55,7 @@ Detailed item-by-item status: [parity/browser-window.md](parity/browser-window.m
 | Electron | Oriel | Source | Wave | Status |
 |---|---|---|---|---|
 | `BaseWindow` | `BaseWindow` | CEF (Views) | M2 | — |
-| `BrowserWindow` | `BrowserWindow` | CEF (Views) | M2 | partial: 126 of 294 applicable items done (42.9%), see parity/browser-window.md |
+| `BrowserWindow` | `BrowserWindow` | CEF (Views) | M2 | partial: 138 of 294 applicable items done (46.9%), see parity/browser-window.md |
 | `View` | `View` | CEF (Views panel) | M2 | — |
 | `WebContentsView` | `WebContentsView` | CEF (Views browser view) | M2 | — |
 | `ImageView` | `ImageView` | CEF + .NET | M5 | — |
@@ -72,7 +72,7 @@ Detailed item-by-item status, including `navigationHistory` and `WebFrameMain`: 
 
 | Electron | Oriel | Source | Wave | Status |
 |---|---|---|---|---|
-| `webContents` | `WebContents` | CEF | M2 | partial: 59 of 230 applicable items done (25.7%) across `webContents`, `navigationHistory` and `WebFrameMain`, see parity/web-contents.md; `loadURL`/`loadFile`/`reload`, `send`, IPC, window-open handler, context menu, input events, zoom, user agent, DevTools |
+| `webContents` | `WebContents` | CEF | M2 | partial: 86 of 230 applicable items done (37.4%) across `webContents`, `navigationHistory` and `WebFrameMain`, see parity/web-contents.md; `loadURL`/`loadFile`/`reload`, `send`, IPC, window-open handler, context menu, input events, zoom, user agent, DevTools |
 | `webFrameMain` | `WebFrameMain` | CEF | M2 | partial: frame tree, url/origin/name, `executeJavaScript`, `reload`, `send`, IPC `senderFrame`; in-process frames only (see DRIFT.md) |
 | `NavigationHistory` | `NavigationHistory` | CEF | M2 | partial: back/forward, index/offset moves, entries, clear; no `removeEntryAtIndex` or `restore` (see DRIFT.md) |
 | `Debugger` (`webContents.debugger`) | `Debugger` (DevTools protocol) | CEF | M2 | — |
@@ -115,7 +115,7 @@ Detailed item-by-item status, including `navigationHistory` and `WebFrameMain`: 
 | `Tray` | `Tray` | OS | M5 | — |
 | `Notification` | `Notification` | OS | M5 | — |
 | `globalShortcut` | `GlobalShortcut` | OS | M5 | — |
-| `Dock` (`app.dock`, macOS) | `OrielApp.Dock` | OS | M5 | partial: `setBadge`, `getBadge`, `bounce`, `cancelBounce`, `downloadFinished`; no `hide`, `show`, `isVisible`, `setMenu`, `setIcon` |
+| `Dock` (`app.dock`, macOS) | `OrielApp.Dock` | OS | M5 | done: `setBadge`, `getBadge`, `bounce`, `cancelBounce`, `downloadFinished`, `hide`, `show` (as `ShowAsync`), `isVisible`, `setMenu`, `getMenu`, `setIcon` |
 | `clipboard` / `ClipboardItem` | `Clipboard` / `ClipboardItem` | OS | M5 | — |
 | `shell` | `Shell` | OS | M5 | — |
 | `nativeImage` | `NativeImage` | CEF + .NET | M5 | partial: PNG/JPEG through CEF, raw bitmaps, data URLs, `@Nx` files, crop, resize, representations; window icon, overlay and thumbar buttons take it; gaps in DRIFT B1-B5 (no `createThumbnailFromPath`, one resize filter, template images unused, no ICO) |

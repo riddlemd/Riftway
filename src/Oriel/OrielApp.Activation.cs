@@ -27,7 +27,85 @@ public enum DockBounceType
 /// defaults, on other OSes, where Electron has no <c>app.dock</c>.</summary>
 public sealed class AppDock
 {
+    // UI thread only.
+    private long? _lastShow;
+    private Menu? _menu;
+
     internal AppDock() { }
+
+    /// <summary>Hides the Dock icon. Ignored within a second of <see cref="ShowAsync"/>, as Electron does, since
+    /// macOS can leave a second icon behind. Electron's <c>dock.hide()</c>.</summary>
+    public void Hide()
+    {
+        if (!OperatingSystem.IsMacOS()) return;
+        CefThread.RunOnUi(() =>
+        {
+            if (Environment.TickCount64 - _lastShow < 1000) return;
+            // Electron's: windows of an app without a Dock icon cannot be hidden with it.
+            foreach (var window in BrowserWindow.GetAllWindows())
+                if (window.GetNativeWindowHandle() is var handle and not 0) MacWindow.SetCanHide(handle, false);
+            MacActivation.TransformProcess(foreground: false);
+        });
+    }
+
+    /// <summary>Shows the Dock icon; completes once it is shown. Electron's <c>dock.show()</c>.</summary>
+    public Task ShowAsync()
+    {
+        if (!OperatingSystem.IsMacOS()) return Task.CompletedTask;
+        var done = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        CefThread.RunOnUi(() =>
+        {
+            _lastShow = Environment.TickCount64;
+            if (!MacActivation.IsRunningActive())
+            {
+                MacActivation.TransformProcess(foreground: true);
+                done.SetResult();
+                return;
+            }
+            // Electron's workaround: an active app transforms reliably only after the Dock is activated, a second apart.
+            MacActivation.ActivateDockApp();
+            CefThread.PostUiDelayed(() =>
+            {
+                MacActivation.TransformProcess(foreground: true);
+                CefThread.PostUiDelayed(() =>
+                {
+                    MacActivation.ActivateSelf();
+                    done.SetResult();
+                }, TimeSpan.FromSeconds(1));
+            }, TimeSpan.FromSeconds(1));
+        });
+        return done.Task;
+    }
+
+    /// <summary>Whether the Dock icon shows; it may lag <see cref="ShowAsync"/> briefly. Electron's <c>dock.isVisible()</c>.</summary>
+    public bool IsVisible() => OperatingSystem.IsMacOS() && CefThread.InvokeOnUi(MacActivation.DockVisible);
+
+    /// <summary>The menu the Dock icon shows. Electron's <c>dock.setMenu()</c>.</summary>
+    public void SetMenu(Menu menu)
+    {
+        ArgumentNullException.ThrowIfNull(menu);
+        if (!OperatingSystem.IsMacOS()) return;
+        CefThread.RunOnUi(() =>
+        {
+            _menu = menu;
+            MacApplicationMenu.SetDockMenu(menu);
+        });
+    }
+
+    /// <summary>The menu <see cref="SetMenu"/> set, or null. Electron's <c>dock.getMenu()</c>.</summary>
+    public Menu? GetMenu() => CefThread.InvokeOnUi(() => _menu);
+
+    /// <summary>The Dock icon's image; an empty image restores the app's own. Electron's <c>dock.setIcon()</c>.</summary>
+    public void SetIcon(NativeImage image)
+    {
+        ArgumentNullException.ThrowIfNull(image);
+        if (!OperatingSystem.IsMacOS()) return;
+        var representations = image.GetScaleFactors().Select(scale => (image.ToPng(scale), scale)).ToList();
+        CefThread.RunOnUi(() => MacActivation.SetIcon(representations));
+    }
+
+    /// <summary>Electron's <c>dock.setIcon()</c> with a path.</summary>
+    public void SetIcon(string path) => SetIcon(NativeImage.CreateFromPath(path));
 
     /// <summary>Bounces the Dock icon; returns the request's id, or 0 when the app is already active. Electron's
     /// <c>dock.bounce()</c>.</summary>
