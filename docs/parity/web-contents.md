@@ -11,14 +11,14 @@ Percentages are over the non-n/a items; the second counts a partial item as half
 | Area | Items | Done | Partial | Missing | n/a | % done | % done + partial/2 |
 |---|---|---|---|---|---|---|---|
 | Static methods | 5 | 0 | 0 | 5 | 0 | 0.0% | 0.0% |
-| Instance events | 59 | 8 | 1 | 48 | 2 | 14.0% | 14.9% |
+| Instance events | 59 | 9 | 1 | 47 | 2 | 15.8% | 16.7% |
 | Instance methods | 118 | 25 | 5 | 80 | 8 | 22.7% | 25.0% |
 | Instance properties | 18 | 5 | 1 | 11 | 1 | 29.4% | 32.4% |
 | navigationHistory | 14 | 12 | 0 | 2 | 0 | 85.7% | 85.7% |
 | WebFrameMain events and statics | 3 | 1 | 0 | 2 | 0 | 33.3% | 33.3% |
 | WebFrameMain methods | 9 | 1 | 3 | 5 | 0 | 11.1% | 27.8% |
 | WebFrameMain properties | 15 | 9 | 0 | 6 | 0 | 60.0% | 60.0% |
-| **Total** | 241 | 61 | 10 | 159 | 11 | 26.5% | 28.7% |
+| **Total** | 241 | 62 | 10 | 158 | 11 | 27.0% | 29.1% |
 
 ## Checklist
 
@@ -78,7 +78,7 @@ Percentages are over the non-n/a items; the second counts a partial item as half
 | `devtools-focused` | — | missing |  |
 | `certificate-error` | `CertificateError` | done | The app's `CertificateError` follows, with the same arguments. |
 | `select-client-certificate` | — | missing |  |
-| `login` | — | missing |  |
+| `login` | `Login` | done | The app's `Login` follows, with the same arguments. |
 | `found-in-page` | — | missing |  |
 | `media-started-playing` | — | missing |  |
 | `media-paused` | — | missing |  |

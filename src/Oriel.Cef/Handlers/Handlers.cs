@@ -310,15 +310,24 @@ public sealed unsafe class RequestHandler
         Native = NativeObject.Create<cef_request_handler_t>(this);
         Native->get_resource_request_handler = &GetResourceRequestHandler;
         Native->on_certificate_error = &OnCertificateError;
+        Native->get_auth_credentials = &GetAuthCredentials;
     }
 
     /// <summary>A navigation hit an invalid certificate; the task's result trusts it. Null cancels. UI thread.</summary>
     public Func<CertificateErrorInfo, Task<bool>>? CertificateError { get; init; }
 
+    /// <summary>A server or proxy asks for credentials; the task's result answers, null cancels. IO thread.</summary>
+    public Func<AuthChallenge, Task<(string User, string Password)?>>? Login { get; init; }
+
     [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])]
     private static int OnCertificateError(cef_request_handler_t* self, cef_browser_t* browser, cef_errorcode_t error,
         cef_string_utf16_t* url, cef_sslinfo_t* ssl, cef_callback_t* callback)
         => SecurityHandlers.OnCertificateError(NativeObject.Owner<RequestHandler>(self).CertificateError, browser, error, url, ssl, callback);
+
+    [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])]
+    private static int GetAuthCredentials(cef_request_handler_t* self, cef_browser_t* browser, cef_string_utf16_t* originUrl, int isProxy,
+        cef_string_utf16_t* host, int port, cef_string_utf16_t* realm, cef_string_utf16_t* scheme, cef_auth_callback_t* callback)
+        => SecurityHandlers.GetAuthCredentials(NativeObject.Owner<RequestHandler>(self).Login, browser, originUrl, isProxy, host, port, realm, scheme, callback);
 
     public cef_request_handler_t* Native { get; }
 

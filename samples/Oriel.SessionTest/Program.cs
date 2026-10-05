@@ -624,6 +624,40 @@ async Task RunAsync()
     framed.Destroy();
     tlsListener.Stop();
 
+    // login: an HTTP server asking for Basic credentials; the page's handler runs, then the app's.
+    using var authListener = new TcpListener(IPAddress.Loopback, 0);
+    authListener.Start();
+    var authPort = ((IPEndPoint)authListener.LocalEndpoint).Port;
+    _ = ServeBasicAuth(authListener);
+    async Task<(string? Body, List<string> Order, LoginEventArgs? Args)> VisitAuth(Action<LoginEventArgs>? decide)
+    {
+        var order = new List<string>();
+        LoginEventArgs? seenArgs = null;
+        var w = new BrowserWindow(new BrowserWindowOptions { Show = false, WebPreferences = new WebPreferences { Partition = "auth-" + Guid.NewGuid() } });
+        w.WebContents.Login += (_, e) =>
+        {
+            order.Add("page");
+            seenArgs = e;
+            decide?.Invoke(e);
+        };
+        EventHandler<LoginEventArgs> onApp = (sender, e) => order.Add(ReferenceEquals(sender, app) && ReferenceEquals(e, seenArgs) ? "app" : "app?");
+        app.Login += onApp;
+        await Throws(() => w.LoadUrl($"http://127.0.0.1:{authPort}/private").WaitAsync(TimeSpan.FromSeconds(15)));
+        var body = (await w.WebContents.ExecuteJavaScriptAsync("document.body?.innerText ?? ''"))?.ToString();
+        app.Login -= onApp;
+        w.Destroy();
+        return (body, order, seenArgs);
+    }
+    var noLogin = await VisitAuth(null);
+    Check("login is cancelled by default, as Electron's", noLogin.Body == "denied" && noLogin.Order.SequenceEqual(["page", "app"]), $"{noLogin.Body} [{string.Join(",", noLogin.Order)}]");
+    Check("login carries the URL and the challenge", noLogin.Args is { AuthInfo: { IsProxy: false, Scheme: "basic", Host: "127.0.0.1", Realm: "oriel" } info } && info.Port == authPort
+        && noLogin.Args.Url.StartsWith($"http://127.0.0.1:{authPort}"), $"{noLogin.Args?.Url} {noLogin.Args?.AuthInfo}");
+    var loggedIn = await VisitAuth(e => { e.Cancel = true; e.Callback("oriel", "secret"); });
+    Check("preventDefault and callback(user, password) log in", loggedIn.Body == "logged in", loggedIn.Body);
+    var wrong = await VisitAuth(e => { e.Cancel = true; e.Callback(); });
+    Check("callback() with no credentials cancels", wrong.Body == "denied", wrong.Body);
+    authListener.Stop();
+
     // Proxy: requests go to a local listener posing as the proxy.
     var proxied = Session.FromPartition("proxied");
     using var listener = new TcpListener(IPAddress.Loopback, 0);
@@ -671,6 +705,36 @@ static async Task ServeTls(TcpListener listener, System.Security.Cryptography.X5
                     using var tls = new System.Net.Security.SslStream(client.GetStream());
                     await tls.AuthenticateAsServerAsync(certificate);
                     await Respond(tls, 200, "OK", "", "tls ok");
+                }
+                catch (Exception) { }
+            }
+        });
+    }
+}
+
+// Answers "logged in" to Basic oriel:secret, else a 401 asking for it.
+static async Task ServeBasicAuth(TcpListener listener)
+{
+    var expected = "Basic " + Convert.ToBase64String(Encoding.ASCII.GetBytes("oriel:secret"));
+    while (true)
+    {
+        TcpClient client;
+        try { client = await listener.AcceptTcpClientAsync(); }
+        catch (Exception) { return; }
+        _ = Task.Run(async () =>
+        {
+            using (client)
+            {
+                try
+                {
+                    var stream = client.GetStream();
+                    var reader = new StreamReader(stream, Encoding.ASCII);
+                    var authorized = false;
+                    var requestLine = await reader.ReadLineAsync() ?? "";
+                    for (var line = await reader.ReadLineAsync(); !string.IsNullOrEmpty(line); line = await reader.ReadLineAsync())
+                        if (line.Equals("Authorization: " + expected, StringComparison.OrdinalIgnoreCase)) authorized = true;
+                    if (authorized) await Respond(stream, 200, "OK", "", "logged in");
+                    else await Respond(stream, 401, "Unauthorized", "WWW-Authenticate: Basic realm=\"oriel\"\r\n", "denied");
                 }
                 catch (Exception) { }
             }

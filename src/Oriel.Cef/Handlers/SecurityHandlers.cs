@@ -5,7 +5,10 @@ namespace Oriel.Cef.Handlers;
 /// <summary>A navigation's invalid certificate: the error, the URL, and the certificate's DER bytes then its issuers'.</summary>
 public sealed record CertificateErrorInfo(cef_errorcode_t Error, string Url, IReadOnlyList<byte[]> CertificateChain);
 
-/// <summary>The part of <c>cef_request_handler_t</c> that asks the app about invalid certificates.</summary>
+/// <summary>A server or proxy asking for credentials.</summary>
+public sealed record AuthChallenge(string OriginUrl, bool IsProxy, string Host, int Port, string Realm, string Scheme);
+
+/// <summary>The parts of <c>cef_request_handler_t</c> that ask the app about security: invalid certificates and logins.</summary>
 public static unsafe class SecurityHandlers
 {
     /// <summary>UI thread: CEF's <c>on_certificate_error</c>. The task's result trusts the certificate.</summary>
@@ -28,6 +31,37 @@ public static unsafe class SecurityHandlers
             else callback->cancel(callback);
             NativeObject.Release(callback);
         }), TaskScheduler.Default);
+        return 1;
+    }
+
+    /// <summary>IO thread: CEF's <c>get_auth_credentials</c>. The task's result is the user name and password, or null
+    /// to cancel.</summary>
+    public static int GetAuthCredentials(Func<AuthChallenge, Task<(string User, string Password)?>>? decide, cef_browser_t* browser,
+        cef_string_utf16_t* originUrl, int isProxy, cef_string_utf16_t* host, int port, cef_string_utf16_t* realm, cef_string_utf16_t* scheme,
+        cef_auth_callback_t* callback)
+    {
+        var challenge = new AuthChallenge(CefString.Read(originUrl), isProxy != 0, CefString.Read(host), port, CefString.Read(realm), CefString.Read(scheme));
+        NativeObject.Release(browser);
+        if (decide is null)
+        {
+            NativeObject.Release(callback);
+            return 0;
+        }
+        var answer = Guard.Run(() => decide(challenge), Task.FromResult<(string User, string Password)?>(null));
+        answer.ContinueWith(t =>
+        {
+            if (t.IsCompletedSuccessfully && t.Result is { } credentials)
+            {
+                cef_string_utf16_t user = default, password = default;
+                CefString.Set(&user, credentials.User);
+                CefString.Set(&password, credentials.Password);
+                callback->cont(callback, &user, &password);
+                CefString.Clear(&user);
+                CefString.Clear(&password);
+            }
+            else callback->cancel(callback);
+            NativeObject.Release(callback);
+        }, TaskScheduler.Default);
         return 1;
     }
 

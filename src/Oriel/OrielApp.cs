@@ -93,7 +93,13 @@ public sealed unsafe class OrielApp
     /// <see cref="WebContents.CertificateError"/>. Electron's <c>app</c> <c>certificate-error</c>.</summary>
     public event EventHandler<CertificateErrorEventArgs>? CertificateError;
 
+    /// <summary>A server or proxy asks a page for credentials, after the page's own <see cref="WebContents.Login"/>.
+    /// Electron's <c>app</c> <c>login</c>.</summary>
+    public event EventHandler<LoginEventArgs>? Login;
+
     internal void RaiseCertificateError(object? sender, CertificateErrorEventArgs args) => CertificateError?.Invoke(this, args);
+
+    internal void RaiseLogin(object? sender, LoginEventArgs args) => Login?.Invoke(this, args);
 
     /// <summary>Creates the process's application.</summary>
     /// <param name="name">Defaults to the entry assembly's name.</param>
@@ -239,6 +245,9 @@ public sealed unsafe class OrielApp
         // signature; ad-hoc dev builds change it every build and macOS prompts for a password.
         // TODO(M4): use the real Keychain for signed builds, as Electron's safeStorage does.
         if (OperatingSystem.IsMacOS() && processType.Length == 0) AppendSwitch(commandLine, "use-mock-keychain");
+        // Chrome style otherwise hands page auth challenges to Chrome's own login prompt and never calls
+        // get_auth_credentials, so the login event would not fire.
+        if (processType.Length == 0) AppendSwitch(commandLine, "disable-chrome-login-prompt");
     }
 
     private static void AppendSwitch(cef_command_line_t* commandLine, string name)
