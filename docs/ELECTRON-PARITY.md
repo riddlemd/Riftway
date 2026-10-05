@@ -114,14 +114,14 @@ Detailed item-by-item status, including `navigationHistory` and `WebFrameMain`: 
 | `Menu` / `MenuItem` (app menu, context menus) | `Menu` / `MenuItem` | OS + CEF | M5 | partial: application and window menus, popups and context menus, roles, accelerators; no icons, sublabels or tooltips |
 | `Tray` | `Tray` | OS | M5 | — |
 | `Notification` | `Notification` | OS | M5 | — |
-| `globalShortcut` | `GlobalShortcut` | OS | M5 | — |
+| `globalShortcut` | `GlobalShortcut` | OS | M5 | partial: Windows (`RegisterHotKey`); macOS and Linux throw (branch `power-shortcuts`) |
 | `Dock` (`app.dock`, macOS) | `OrielApp.Dock` | OS | M5 | — |
 | `clipboard` / `ClipboardItem` | `Clipboard` / `ClipboardItem` | OS | M5 | — |
 | `shell` | `Shell` | OS | M5 | — |
 | `nativeImage` | `NativeImage` | CEF + .NET | M5 | partial: PNG/JPEG through CEF, raw bitmaps, data URLs, `@Nx` files, crop, resize, representations; window icon, overlay and thumbar buttons take it; gaps in DRIFT B1-B5 (no `createThumbnailFromPath`, one resize filter, template images unused, no ICO) |
 | `nativeTheme` | `NativeTheme` | OS + CEF | M5 | — |
-| `powerMonitor` | `PowerMonitor` | OS | M5 | — |
-| `powerSaveBlocker` | `PowerSaveBlocker` | OS | M5 | — |
+| `powerMonitor` | `PowerMonitor` | OS | M5 | partial: Windows (suspend, resume, on-ac, on-battery, lock and unlock, idle time and state, battery); macOS and Linux throw (branch `power-shortcuts`) |
+| `powerSaveBlocker` | `PowerSaveBlocker` | OS | M5 | partial: Windows (power requests); macOS and Linux throw (branch `power-shortcuts`) |
 | `safeStorage` | `SafeStorage` | OS | M5 | — |
 | `systemPreferences` | `SystemPreferences` | OS | M5 | — |
 | `desktopCapturer` | `DesktopCapturer` | CEF + Patch (verify) | M5 | — |

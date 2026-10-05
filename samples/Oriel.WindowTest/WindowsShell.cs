@@ -184,6 +184,53 @@ static unsafe class WindowsShell
     [DllImport("gdi32.dll")] private static extern int GetDIBits(nint dc, nint bitmap, uint start, uint lines, void* bits, BitmapInfoHeader* info, uint usage);
     [DllImport("gdi32.dll")] private static extern int DeleteObject(nint obj);
 
+    /// <summary>Oriel's hidden system host window, or 0.</summary>
+    internal static nint SystemHost() => FindWindowW("OrielSystemHost", null);
+
+    /// <summary>Sends a message and waits for it.</summary>
+    internal static void Send(nint hwnd, uint message, nint wParam)
+    {
+        nint result;
+        _ = SendMessageTimeoutW(hwnd, message, wParam, 0, 2, 2000, &result);
+    }
+
+    /// <summary>The system execution state (<c>ES_</c> flags), which active power requests set.</summary>
+    internal static uint ExecutionState()
+    {
+        uint state;
+        return CallNtPowerInformation(16 /* SystemExecutionState */, null, 0, &state, 4) == 0 ? state : uint.MaxValue;
+    }
+
+    /// <summary>Whether this test can register the hotkey itself; if it can, it lets it go again.</summary>
+    internal static bool HotKeyFree(uint modifiers, uint virtualKey)
+    {
+        if (RegisterHotKey(0, 0xBEEF, modifiers, virtualKey) == 0) return false;
+        _ = UnregisterHotKey(0, 0xBEEF);
+        return true;
+    }
+
+    /// <summary>Presses the keys in order with the real keyboard input, then releases them in reverse.</summary>
+    internal static void Chord(params byte[] keys)
+    {
+        foreach (var key in keys) keybd_event(key, 0, 0, 0);
+        Thread.Sleep(50);
+        foreach (var key in keys.Reverse()) keybd_event(key, 0, 0x2 /* KEYEVENTF_KEYUP */, 0);
+        Thread.Sleep(100);
+    }
+
+    /// <summary>A real mouse move, which counts as user input.</summary>
+    internal static void Nudge()
+    {
+        mouse_event(0x0001 /* MOUSEEVENTF_MOVE */, 1, 0, 0, 0);
+        mouse_event(0x0001, -1, 0, 0, 0);
+    }
+
+    [DllImport("powrprof.dll")] private static extern uint CallNtPowerInformation(int level, void* input, uint inputLength, uint* output, uint outputLength);
+    [DllImport("user32.dll")] private static extern int RegisterHotKey(nint hwnd, int id, uint modifiers, uint vk);
+    [DllImport("user32.dll")] private static extern int UnregisterHotKey(nint hwnd, int id);
+    [DllImport("user32.dll")] private static extern void keybd_event(byte vk, byte scan, uint flags, nint extra);
+    [DllImport("user32.dll")] private static extern void mouse_event(uint flags, int dx, int dy, int data, nint extra);
+
     private static void* Slot(void* com, int index) => (*(void***)com)[index];
 
     private static void Release(void* com)

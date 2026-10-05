@@ -200,6 +200,7 @@ async Task RunAsync(BrowserWindow win, BrowserWindow simple)
     await TaskbarAsync(win);
     await WindowsApisAsync();
     await NativeImageAsync();
+    await PowerAndShortcutsAsync();
 
     // Closing cancelled once: the window must survive the first close.
     var closingCount = 0;
@@ -1150,6 +1151,72 @@ async Task WindowsApisAsync()
     Check("the shell takes the thumbnail clip and tooltip (weak: no read-back)", refusals.ToString().Length == 0, refusals.ToString().Trim());
     w.Destroy();
     await Task.Delay(300);
+}
+
+async Task PowerAndShortcutsAsync()
+{
+    if (!OperatingSystem.IsWindows())
+    {
+        Check("globalShortcut, powerMonitor and powerSaveBlocker throw off Windows", Throws<PlatformNotSupportedException>(() => GlobalShortcut.IsRegistered("Ctrl+A"))
+            && Throws<PlatformNotSupportedException>(() => PowerMonitor.GetSystemIdleTime()) && Throws<PlatformNotSupportedException>(() => PowerSaveBlocker.Start(PowerSaveBlockerType.PreventAppSuspension)));
+        return;
+    }
+
+    // Global shortcuts: Windows refuses a combination another app holds, so this test can see Oriel holding it.
+    const uint Mods = 0x1 | 0x2 | 0x4; // MOD_ALT | MOD_CONTROL | MOD_SHIFT
+    const uint F9 = 0x78;
+    var fired = 0;
+    Check("Register takes a free shortcut", GlobalShortcut.Register("Ctrl+Alt+Shift+F9", () => fired++) && GlobalShortcut.IsRegistered("Ctrl+Alt+Shift+F9"));
+    Check("the shortcut is held system-wide", !WindowsShell.HotKeyFree(Mods, F9));
+    Check("the same combination written differently is the same shortcut", GlobalShortcut.IsRegistered("Shift+Control+Alt+F9") && !GlobalShortcut.Register("Alt+Shift+CmdOrCtrl+F9", () => { }));
+    WindowsShell.Chord(0x11 /* VK_CONTROL */, 0x12 /* VK_MENU */, 0x10 /* VK_SHIFT */, (byte)F9);
+    Check("pressing it runs the callback, whatever has focus", Eventually(() => fired == 1, step), fired);
+    GlobalShortcut.Unregister("Ctrl+Alt+Shift+F9");
+    Check("Unregister lets it go", !GlobalShortcut.IsRegistered("Ctrl+Alt+Shift+F9") && WindowsShell.HotKeyFree(Mods, F9));
+    WindowsShell.Chord(0x11, 0x12, 0x10, (byte)F9);
+    await Task.Delay(300);
+    Check("a released shortcut no longer runs the callback", fired == 1, fired);
+    GlobalShortcut.RegisterAll(["Ctrl+Alt+Shift+F10", "Ctrl+Alt+Shift+F11"], () => { });
+    Check("RegisterAll takes each", GlobalShortcut.IsRegistered("Ctrl+Alt+Shift+F10") && GlobalShortcut.IsRegistered("Ctrl+Alt+Shift+F11") && !WindowsShell.HotKeyFree(Mods, 0x79));
+    GlobalShortcut.UnregisterAll();
+    Check("UnregisterAll lets them all go", !GlobalShortcut.IsRegistered("Ctrl+Alt+Shift+F10") && WindowsShell.HotKeyFree(Mods, 0x79) && WindowsShell.HotKeyFree(Mods, 0x7A));
+    Check("an invalid accelerator throws", Throws<ArgumentException>(() => GlobalShortcut.Register("Ctrl+Nope", () => { })));
+
+    // Idle time and power source, read independently.
+    WindowsShell.Nudge();
+    await Task.Delay(2500);
+    var quiet = PowerMonitor.GetSystemIdleTime();
+    WindowsShell.Nudge();
+    Check("GetSystemIdleTime counts seconds without input, and input resets it", quiet is 2 or 3 && PowerMonitor.GetSystemIdleTime() <= 1, $"{quiet} -> {PowerMonitor.GetSystemIdleTime()}");
+    Check("GetSystemIdleState: active under the threshold, idle at zero", PowerMonitor.GetSystemIdleState(60) == SystemIdleState.Active && PowerMonitor.GetSystemIdleState(0) == SystemIdleState.Idle,
+        $"{PowerMonitor.GetSystemIdleState(60)} {PowerMonitor.GetSystemIdleState(0)}");
+    var psi = new System.Diagnostics.ProcessStartInfo("powershell.exe") { UseShellExecute = false, CreateNoWindow = true, RedirectStandardOutput = true };
+    foreach (var arg in new[] { "-NoProfile", "-Command", "Add-Type -AssemblyName System.Windows.Forms; [Windows.Forms.SystemInformation]::PowerStatus.PowerLineStatus" }) psi.ArgumentList.Add(arg);
+    var line = System.Diagnostics.Process.Start(psi)!.StandardOutput.ReadToEnd().Trim();
+    Check("IsOnBatteryPower agrees with Windows' power line status", PowerMonitor.IsOnBatteryPower() == (line == "Offline") && PowerMonitor.OnBatteryPower == PowerMonitor.IsOnBatteryPower(), $"{line} {PowerMonitor.IsOnBatteryPower()}");
+
+    // Power and session notifications reach the host window; the machine is neither suspended nor locked here.
+    var power = new List<string>();
+    PowerMonitor.Suspended += (_, _) => power.Add("suspend");
+    PowerMonitor.Resumed += (_, _) => power.Add("resume");
+    PowerMonitor.OnAc += (_, _) => power.Add("on-ac");
+    PowerMonitor.OnBattery += (_, _) => power.Add("on-battery");
+    PowerMonitor.ScreenLocked += (_, _) => power.Add("lock");
+    PowerMonitor.ScreenUnlocked += (_, _) => power.Add("unlock");
+    var host = WindowsShell.SystemHost();
+    foreach (var pbt in new nint[] { 0x4, 0x7, 0x12, 0xA }) WindowsShell.Send(host, 0x0218 /* WM_POWERBROADCAST */, pbt);
+    foreach (var wts in new nint[] { 0x7, 0x8, 0x5 }) WindowsShell.Send(host, 0x02B1 /* WM_WTSSESSION_CHANGE */, wts);
+    Check("power and session notifications raise Electron's events (a status change without a new source raises none)",
+        host != 0 && power.SequenceEqual(["suspend", "resume", "lock", "unlock"]), string.Join(",", power));
+
+    // Power save blockers show in the system's execution state: ES_SYSTEM_REQUIRED 1, ES_DISPLAY_REQUIRED 2.
+    var baseline = WindowsShell.ExecutionState();
+    var display = PowerSaveBlocker.Start(PowerSaveBlockerType.PreventDisplaySleep);
+    Check("PreventDisplaySleep keeps the display required", PowerSaveBlocker.IsStarted(display) && (WindowsShell.ExecutionState() & 0x2) != 0, $"0x{baseline:X} -> 0x{WindowsShell.ExecutionState():X}");
+    var app = PowerSaveBlocker.Start(PowerSaveBlockerType.PreventAppSuspension);
+    Check("PreventAppSuspension keeps the system required", app != display && (WindowsShell.ExecutionState() & 0x1) != 0, $"0x{WindowsShell.ExecutionState():X}");
+    Check("Stop ends each, and a stopped blocker cannot be stopped again", PowerSaveBlocker.Stop(display) && PowerSaveBlocker.Stop(app) && !PowerSaveBlocker.Stop(app) && !PowerSaveBlocker.IsStarted(display)
+        && WindowsShell.ExecutionState() == baseline, $"0x{baseline:X} -> 0x{WindowsShell.ExecutionState():X}");
 }
 
 async Task NativeImageAsync()

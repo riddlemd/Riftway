@@ -57,5 +57,6 @@ Cross-platform work. Platform-specific items: [linux-todo.md](linux-todo.md), [w
 
 ## Later milestones
 
+- [x] `GlobalShortcut`, `PowerMonitor`, `PowerSaveBlocker` on Windows (branch `power-shortcuts`); macOS and Linux to come (DRIFT J1, U1)
 - [ ] M3 Blazor Hybrid · M4 ship it · M5 desktop integration · M6 session/network/processes · M7 own CEF builds
       (see [PLAN.md](PLAN.md#milestones))
