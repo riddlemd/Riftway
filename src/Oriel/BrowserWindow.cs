@@ -252,7 +252,7 @@ public sealed unsafe class BrowserWindow
     /// <summary>Creates the window, shown unless <see cref="BrowserWindowOptions.Show"/> is false.</summary>
     /// <exception cref="InvalidOperationException">The application is not ready yet, or the parent is closed.</exception>
     /// <exception cref="ArgumentException"><see cref="BrowserWindowOptions.Modal"/> without a parent.</exception>
-    /// <exception cref="NotSupportedException">An option CEF cannot honour, such as <see cref="DefaultFontFamily.Math"/>.</exception>
+    /// <exception cref="NotSupportedException">An option CEF cannot honour, such as <see cref="WebPreferences.MinimumFontSize"/>.</exception>
     public BrowserWindow(BrowserWindowOptions? options = null) : this(options, opener: null)
     {
     }
@@ -264,7 +264,6 @@ public sealed unsafe class BrowserWindow
 
         _options = options ?? new BrowserWindowOptions();
         if (_options.Modal && _options.Parent is null) throw new ArgumentException("A modal window needs a Parent.", nameof(options));
-        if (_options.WebPreferences.DefaultFontFamily?.Math is not null) throw new NotSupportedException("CEF has no setting for the math font family.");
         // Chrome-style browsers take these from the profile's preferences, over the browser settings.
         if (_options.WebPreferences.MinimumFontSize is not null) throw new NotSupportedException("MinimumFontSize is not supported: CEF applies the profile's value to every window.");
         if (_options.WebPreferences.DefaultEncoding is not null) throw new NotSupportedException("DefaultEncoding is not supported: CEF applies the profile's value to every window.");

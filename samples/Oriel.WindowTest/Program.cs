@@ -335,9 +335,10 @@ async Task WebPreferencesAsync(BrowserWindow win)
         <!doctype html><title>prefs</title>
         <p id=p>text</p><code id=c>code</code>
         <img id=img src="dot.png"><textarea id=t></textarea>
-        <div><span id=narrow>iiiiiiiiii</span></div><div><span id=wide>MMMMMMMMMM</span></div>
+        <div><span id=narrow>iiiiiiiiii</span></div><div><span id=wide>MMMMMMMMMM</span></div><div><span id=math style='font-family:math'>iiiiiiiiii</span></div>
         """);
     var monospace = OperatingSystem.IsMacOS() ? "Menlo" : OperatingSystem.IsWindows() ? "Consolas" : "Liberation Mono";
+    var serif = OperatingSystem.IsLinux() ? "Liberation Serif" : "Times New Roman";
     var prefs = new BrowserWindow(new BrowserWindowOptions
     {
         Title = "Oriel window test: preferences",
@@ -353,7 +354,7 @@ async Task WebPreferencesAsync(BrowserWindow win)
             DefaultFontSize = 20,
             DefaultMonospaceFontSize = 17,
             DisableDialogs = true,
-            DefaultFontFamily = new DefaultFontFamily { Standard = monospace },
+            DefaultFontFamily = new DefaultFontFamily { Standard = monospace, Math = serif },
         },
     });
     var prefsLoaded = Fires(h => prefs.WebContents.DidFinishLoad += h, h => prefs.WebContents.DidFinishLoad -= h,
@@ -361,6 +362,11 @@ async Task WebPreferencesAsync(BrowserWindow win)
     Check("preferences window loads", prefsLoaded);
     Check("ZoomFactor preference", Eventually(() => Math.Abs(prefs.WebContents.GetZoomFactor() - 1.5) < 0.01, step), prefs.WebContents.GetZoomFactor());
     Check("ZoomFactor preference reaches the page", Js(prefs, "devicePixelRatio").Result is string pr && Math.Abs(double.Parse(pr, System.Globalization.CultureInfo.InvariantCulture) / dpr - 1.5) < 0.01, Js(prefs, "devicePixelRatio").Result);
+    // As Electron, a zoom the app set, back to 100% included, stays for that origin.
+    prefs.WebContents.SetZoomLevel(0);
+    Fires(h => prefs.WebContents.DidFinishLoad += h, h => prefs.WebContents.DidFinishLoad -= h, prefs.WebContents.Reload, step);
+    await Task.Delay(300);
+    Check("a zoom reset to 100% stays after a reload", Math.Abs(prefs.WebContents.GetZoomFactor() - 1.0) < 0.01, prefs.WebContents.GetZoomFactor());
     Check("Images = false", await Js(prefs, "document.getElementById('img').naturalWidth") is "0", await Js(prefs, "document.getElementById('img').naturalWidth"));
     Check("WebGL = false", await Js(prefs, "document.createElement('canvas').getContext('webgl') === null") is "true");
     Check("TextAreasAreResizable = false", await Js(prefs, "getComputedStyle(document.getElementById('t')).resize") is "\"none\"", await Js(prefs, "getComputedStyle(document.getElementById('t')).resize"));
@@ -368,6 +374,9 @@ async Task WebPreferencesAsync(BrowserWindow win)
     Check("DefaultMonospaceFontSize", await Js(prefs, "getComputedStyle(document.getElementById('c')).fontSize") is "\"17px\"", await Js(prefs, "getComputedStyle(document.getElementById('c')).fontSize"));
     Check("DefaultFontFamily.Standard", await Js(prefs, "document.getElementById('narrow').offsetWidth === document.getElementById('wide').offsetWidth") is "true",
         await Js(prefs, "[document.getElementById('narrow').offsetWidth, document.getElementById('wide').offsetWidth].join()"));
+    // A proportional math font makes the row of i narrower than the standard (monospace) one.
+    Check("DefaultFontFamily.Math", await Js(prefs, "document.getElementById('math').offsetWidth < document.getElementById('narrow').offsetWidth") is "true",
+        await Js(prefs, "[document.getElementById('math').offsetWidth, document.getElementById('narrow').offsetWidth].join()"));
     Check("DisableDialogs", await Js(prefs, "[confirm('a'), prompt('b'), alert('c') === undefined].join()") is "\"false,,true\"", await Js(prefs, "[confirm('a'), prompt('b'), alert('c') === undefined].join()"));
     prefs.WebContents.OpenDevTools();
     await Task.Delay(1000);

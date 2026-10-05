@@ -301,7 +301,14 @@ public sealed unsafe class WebContents
 
     /// <summary>Zooms the page by level: 0 is 100%, each step is 20% larger or smaller; remembered per origin.
     /// Electron's <c>webContents.setZoomLevel()</c>.</summary>
-    public void SetZoomLevel(double level) => WithHost(host => host->set_zoom_level(host, level));
+    public void SetZoomLevel(double level) => WithHost(host =>
+    {
+        // Chromium keeps zoom per host; one the app set, to 0 included, keeps it.
+        if (Uri.TryCreate(GetUrl(), UriKind.Absolute, out var url)) lock (_zoomedHosts) _zoomedHosts.Add(url.Host);
+        host->set_zoom_level(host, level);
+    });
+
+    private readonly HashSet<string> _zoomedHosts = new(StringComparer.OrdinalIgnoreCase);
 
     /// <summary>The page's zoom level. Electron's <c>webContents.getZoomLevel()</c>.</summary>
     public double GetZoomLevel() => QueryHost(host => host->get_zoom_level(host), 0);
@@ -317,6 +324,7 @@ public sealed unsafe class WebContents
         if (!_navigated || _preferences.ZoomFactor == 1.0) return;
         WithHost(host =>
         {
+            if (Uri.TryCreate(GetUrl(), UriKind.Absolute, out var url)) lock (_zoomedHosts) if (_zoomedHosts.Contains(url.Host)) return;
             if (host->get_zoom_level(host) == 0) host->set_zoom_level(host, ZoomLevelOf(_preferences.ZoomFactor));
         });
     }
@@ -671,6 +679,14 @@ public sealed unsafe class WebContents
                 w.WriteEndObject();
             });
         }
+        // The browser settings have no math family; DevTools sets it for this page.
+        if (_preferences.DefaultFontFamily?.Math is { } math)
+            _devTools.Send("Page.setFontFamilies", w =>
+            {
+                w.WriteStartObject("fontFamilies");
+                w.WriteString("math", math);
+                w.WriteEndObject();
+            });
         // Scoped to the isolated world: the page's own scripts never see the binding.
         _devTools.Send("Runtime.addBinding", w =>
         {
