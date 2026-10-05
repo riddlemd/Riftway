@@ -1349,6 +1349,16 @@ async Task ThemeAsync(BrowserWindow win)
     var systemDark = SystemIsDark();
     Check("NativeTheme: System follows the operating system", NativeTheme.ShouldUseDarkColors == systemDark
         && await PageBecomes(win, systemDark), $"system={systemDark}");
+    if (OperatingSystem.IsMacOS())
+    {
+        var idleChecks = NativeTheme.Checks;
+        await Task.Delay(2500);
+        Check("NativeTheme: macOS waits for the system's notification instead of polling", NativeTheme.Checks == idleChecks,
+            $"{idleChecks} -> {NativeTheme.Checks}");
+        Oriel.Cef.CefThread.RunOnUi(Oriel.Cef.Platform.MacAppearance.PostThemeChanged);
+        Check("NativeTheme: a system appearance change is checked at once", Eventually(() => NativeTheme.Checks > idleChecks, TimeSpan.FromSeconds(1)),
+            $"{idleChecks} -> {NativeTheme.Checks}");
+    }
     NativeTheme.Updated -= counter;
 }
 

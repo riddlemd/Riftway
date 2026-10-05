@@ -35,6 +35,37 @@ public static unsafe class MacAppearance
     /// <summary>The system's "Reduce transparency" setting.</summary>
     public static bool ReduceTransparency => Flag("accessibilityDisplayShouldReduceTransparency");
 
+    private static Action? s_changed;
+    private static nint s_observer;
+
+    /// <summary>Calls <paramref name="changed"/> on the main thread when the system's appearance or display accessibility
+    /// settings change; once per process.</summary>
+    public static void ObserveChanges(Action changed)
+    {
+        if (s_observer != 0) return;
+        s_changed = changed;
+        var name = System.Text.Encoding.UTF8.GetBytes("OrielAppearanceObserver\0");
+        var types = System.Text.Encoding.UTF8.GetBytes("v@:@\0");
+        nint cls;
+        fixed (byte* n = name) cls = objc_allocateClassPair(Class("NSObject"), n, 0);
+        fixed (byte* t = types) class_addMethod(cls, Selector("changed:"), (delegate* unmanaged<nint, nint, nint, void>)&OnChanged, t);
+        objc_registerClassPair(cls);
+        s_observer = Send(Send(cls, "alloc"), "init");
+        Observe(Send(Class("NSDistributedNotificationCenter"), "defaultCenter"), "AppleInterfaceThemeChangedNotification");
+        Observe(Send(Send(Class("NSWorkspace"), "sharedWorkspace"), "notificationCenter"), "NSWorkspaceAccessibilityDisplayOptionsDidChangeNotification");
+    }
+
+    /// <summary>Posts the system's appearance-changed notification, as the system does; for tests.</summary>
+    public static void PostThemeChanged()
+        => Send4(Send(Class("NSDistributedNotificationCenter"), "defaultCenter"), "postNotificationName:object:userInfo:deliverImmediately:",
+            NSString("AppleInterfaceThemeChangedNotification"), 0, 0, 1);
+
+    private static void Observe(nint center, string notification)
+        => Send4(center, "addObserver:selector:name:object:", s_observer, Selector("changed:"), NSString(notification), 0);
+
+    [UnmanagedCallersOnly]
+    private static void OnChanged(nint self, nint cmd, nint notification) => s_changed?.Invoke();
+
     private static bool Flag(string selector) => (byte)Send(Send(Class("NSWorkspace"), "sharedWorkspace"), selector) != 0;
 
     private static nint App() => Send(Class("NSApplication"), "sharedApplication");
@@ -60,9 +91,15 @@ public static unsafe class MacAppearance
     private static nint Send(nint receiver, string selector)
         => ((delegate* unmanaged<nint, nint, nint>)s_msgSend)(receiver, Selector(selector));
 
+    private static void Send4(nint receiver, string selector, nint a, nint b, nint c, nint d)
+        => ((delegate* unmanaged<nint, nint, nint, nint, nint, nint, void>)s_msgSend)(receiver, Selector(selector), a, b, c, d);
+
     private static nint Send(nint receiver, string selector, nint argument)
         => ((delegate* unmanaged<nint, nint, nint, nint>)s_msgSend)(receiver, Selector(selector), argument);
 
     [DllImport(ObjC)] private static extern nint objc_getClass(byte* name);
     [DllImport(ObjC)] private static extern nint sel_registerName(byte* name);
+    [DllImport(ObjC)] private static extern nint objc_allocateClassPair(nint superclass, byte* name, nuint extraBytes);
+    [DllImport(ObjC)] private static extern void objc_registerClassPair(nint cls);
+    [DllImport(ObjC)] private static extern byte class_addMethod(nint cls, nint name, void* imp, byte* types);
 }

@@ -181,7 +181,7 @@ Entries marked _(branch `x`)_ are on that branch and not yet in `main`.
 
 | ID | Electron | Oriel | Why | Possible resolution |
 |---|---|---|---|---|
-| Y1 | `updated` fires as soon as the system's theme or contrast changes | Checked once a second while there are handlers | Todo: no OS notification wired | `AppleInterfaceThemeChangedNotification`, `WM_SETTINGCHANGE`, the XDG portal's `SettingChanged` |
+| Y1 | `updated` fires as soon as the system's theme or contrast changes | At once on macOS (the system's notifications); checked once a second on Windows and Linux while there are handlers | Todo: Windows and Linux notifications not wired | `WM_SETTINGCHANGE`; the XDG portal's `SettingChanged` |
 | Y2 | Linux: Chromium's reading of the desktop's dark preference | `org.gnome.desktop.interface color-scheme` through `gsettings`, or a `GTK_THEME` ending in `:dark`; no high contrast on Linux | Todo: Chromium reads the XDG desktop portal | Read the portal over D-Bus |
 | Y3 | Native window frames and menus follow `themeSource` on every OS | macOS: yes (the app's appearance); Windows and Linux: not checked | Unknown | Check on Windows (DWM's immersive dark mode) and Linux |
 

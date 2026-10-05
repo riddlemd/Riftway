@@ -76,8 +76,8 @@ public static unsafe class NativeTheme
     /// <summary>Whether macOS asks for less transparency. Electron's <c>nativeTheme.prefersReducedTransparency</c>.</summary>
     public static bool PrefersReducedTransparency => OperatingSystem.IsMacOS() && MacFlag(MacSetting.ReduceTransparency);
 
-    /// <summary>Something above changed: <see cref="ThemeSource"/> was set, or the system's settings changed (checked
-    /// once a second while there are handlers). Electron's <c>updated</c> event.</summary>
+    /// <summary>Something above changed: <see cref="ThemeSource"/> was set, or the system's settings changed (at once on
+    /// macOS; elsewhere checked once a second while there are handlers, DRIFT Y1). Electron's <c>updated</c> event.</summary>
     public static event EventHandler? Updated
     {
         add
@@ -88,8 +88,7 @@ public static unsafe class NativeTheme
                 if (s_polling || OrielApp.CurrentOrNull is not { IsReady: true }) return;
                 s_polling = true;
             }
-            s_last = Take();
-            CefThread.PostUiDelayed(Poll, s_poll);
+            StartWatching();
         }
         remove
         {
@@ -111,9 +110,30 @@ public static unsafe class NativeTheme
             start = s_updated is not null && !s_polling;
             if (start) s_polling = true;
         }
-        if (!start) return;
+        if (start) StartWatching();
+    }
+
+    /// <summary>System checks made so far; for tests.</summary>
+    internal static int Checks { get; private set; }
+
+    private static void StartWatching()
+    {
         s_last = Take();
-        CefThread.PostUiDelayed(Poll, s_poll);
+        if (OperatingSystem.IsMacOS()) CefThread.RunOnUi(ObserveMac);
+        else CefThread.PostUiDelayed(Poll, s_poll);
+    }
+
+    [System.Runtime.Versioning.SupportedOSPlatform("macos")]
+    private static void ObserveMac() => MacAppearance.ObserveChanges(Check);
+
+    // UI thread.
+    private static void Check()
+    {
+        Checks++;
+        var now = Take();
+        if (now == s_last) return;
+        s_last = now;
+        Raise();
     }
 
     internal static cef_color_variant_t Variant(ThemeSource source) => source switch
@@ -148,12 +168,7 @@ public static unsafe class NativeTheme
                 return;
             }
         }
-        var now = Take();
-        if (now != s_last)
-        {
-            s_last = now;
-            Raise();
-        }
+        Check();
         CefThread.PostUiDelayed(Poll, s_poll);
     }
 
