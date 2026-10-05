@@ -166,6 +166,15 @@ Entries marked _(branch `x`)_ are on that branch and not yet in `main`.
 | E10 | `webRequest`, permission handlers, downloads (`will-download`), spellchecker, `preconnect`, certificate verify proc, extensions, `getPreloads`/`registerPreloadScript` | Missing | Todo: CEF has handlers for most (resource request, permission, download, certificate) | Later Session work (M6) |
 | E11 | Session events (`will-download`, `select-*-device`, ...) | None | Todo: with E10 | With E10 |
 
+## systemPreferences
+
+| ID | Electron | Oriel | Why | Possible resolution |
+|---|---|---|---|---|
+| SP1 | `getAccentColor`, `getColor`, `getMediaAccessStatus`, `getAnimationSettings` and `accent-color-changed` on macOS and Linux | Throw `PlatformNotSupportedException`; the events are never raised | OS: only the Windows sources are ported | Port the macOS (`NSColor`, `AVCaptureDevice`) and Linux (`NativeTheme::user_color`) sources |
+| SP2 | `getMediaAccessStatus('camera')` returns `'granted'`; a bad media type or colour name throws an `Error` | Enums `MediaAccessType` and `MediaAccessStatus`; a bad value throws `ArgumentOutOfRangeException` ("Invalid media type"), a bad colour name `ArgumentException` ("Unknown color: …"). `GetColor` still takes Electron's names | Design | None |
+| SP3 | `getAnimationSettings()` reads values Chromium caches and refreshes when `WM_SETTINGCHANGE` arrives | Reads `SPI_GETCLIENTAREAANIMATION` on every call | Design: same value once Chromium has refreshed; only the moment between the setting change and the refresh differs | None |
+| SP4 | `systemPreferences` takes its accent baseline and starts watching when the module loads | On first use (`GetAccentColor` or subscribing to an event); a change before that is not reported. Before `Ready`, accent changes are compared on the watcher's thread instead of a UI task | Design: a static class has no load moment | None |
+
 ## IPC, contextBridge, protocol
 
 | ID | Electron | Oriel | Why | Possible resolution |

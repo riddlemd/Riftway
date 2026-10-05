@@ -9,7 +9,7 @@ Recounted 2026-10-04 against `src/Oriel`. Update these figures when a row or che
 
 | Measure | Done | Partial | Not started | Total |
 |---|---|---|---|---|
-| Module rows below | 1 | 16 | 50 | 67 |
+| Module rows below | 1 | 17 | 49 | 67 |
 | M2 rows | 1 | 13 | 8 | 22 |
 
 The 67 rows include `BrowserView` (deprecated, never implemented; counted as not started).
@@ -123,7 +123,7 @@ Detailed item-by-item status, including `navigationHistory` and `WebFrameMain`: 
 | `powerMonitor` | `PowerMonitor` | OS | M5 | — |
 | `powerSaveBlocker` | `PowerSaveBlocker` | OS | M5 | — |
 | `safeStorage` | `SafeStorage` | OS | M5 | — |
-| `systemPreferences` | `SystemPreferences` | OS | M5 | — |
+| `systemPreferences` | `SystemPreferences` | OS | M5 | partial: Windows `getAccentColor`, `getColor` (all 30 Windows names), `getMediaAccessStatus`, `getAnimationSettings`, `accent-color-changed`, `color-changed`; macOS and Linux not yet (DRIFT SP1); macOS-only members not ported: notifications (`post*`/`subscribe*`/`unsubscribe*`), user defaults, `isSwipeTrackingFromScrollEventsEnabled`, `getEffectiveAppearance`/`effectiveAppearance`, `getSystemColor`, `canPromptTouchID`/`promptTouchID`, `isTrustedAccessibilityClient`, `askForMediaAccess`, `accessibilityDisplayShouldReduceTransparency` |
 | `desktopCapturer` | `DesktopCapturer` | CEF + Patch (verify) | M5 | — |
 
 ## macOS-only

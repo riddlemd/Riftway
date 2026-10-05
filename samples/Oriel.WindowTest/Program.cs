@@ -200,6 +200,7 @@ async Task RunAsync(BrowserWindow win, BrowserWindow simple)
     await TaskbarAsync(win);
     await WindowsApisAsync();
     await NativeImageAsync();
+    await SystemPreferencesChecks.RunAsync(Check, step);
 
     // Closing cancelled once: the window must survive the first close.
     var closingCount = 0;
