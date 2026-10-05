@@ -82,7 +82,7 @@ Entries marked _(branch `x`)_ are on that branch and not yet in `main`.
 |---|---|---|---|---|
 | F1 | Every frame runs script and receives messages, cross-site iframes included | A frame in another process (a cross-site iframe, with site isolation) is listed but cannot run script, `send` or `reload` | CEF/DevTools: out-of-process frames are separate DevTools targets, which Oriel does not attach to | DevTools `Target.setAutoAttach` with flattened sessions |
 | F2 | `frameTreeNodeId`, `processId`, `routingId`, `osProcessId`, `visibilityState`, `postMessage`, `collectJavaScriptCallStack`; `webFrameMain.fromId` / `fromFrameToken` | Missing; `frameToken` is Chromium's DevTools frame token | Todo, or CEF: the numeric ids are not exposed | Add what DevTools gives (frame lookup by token) |
-| F3 | `webContents.focusedFrame` | Missing | CEF: the focused frame comes as a CEF frame, which cannot be matched to a DevTools frame id | Track focus in the page (`focusin`) |
+| F3 | `webContents.focusedFrame` includes a cross-site iframe in another process | Such a frame taking focus is not seen; same-process frames are | Follows F1: Oriel's runtime does not run in out-of-process frames | With F1 |
 | F4 | `webContents.mainFrame` always exists | Null until the page's frame tree has been read, just after the window is created | Design: frames come from DevTools | None |
 
 ## navigationHistory

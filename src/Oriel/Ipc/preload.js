@@ -8,6 +8,9 @@
   // A click into the page puts an Alt-shown menu bar away (Electron's). Captured, so the page cannot stop it.
   globalThis.addEventListener('mousedown', () => post(JSON.stringify({ t: 'mousedown', ch: '', args: [] })), true);
 
+  // The frame that last took focus is webContents.focusedFrame. Captured: an element's focus does not bubble.
+  globalThis.addEventListener('focus', () => post(JSON.stringify({ t: 'focus', ch: '', args: [] })), true);
+
   let nextInvokeId = 1;
   const pendingInvokes = new Map();
   const channelListeners = new Map();

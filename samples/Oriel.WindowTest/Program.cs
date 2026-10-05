@@ -1526,6 +1526,27 @@ async Task FramesAsync()
     var ran = await a.ExecuteJavaScriptAsync("window.name");
     Check("ExecuteJavaScriptAsync runs in that frame", ran?.ToString() == "a", ran);
 
+    // focusedFrame: the frame that last took focus, at any depth.
+    host.Focus();
+    const string FocusInput = "document.body.insertAdjacentHTML('beforeend', '<input id=f>'); document.getElementById('f').focus(); 1";
+    await a.ExecuteJavaScriptAsync(FocusInput);
+    Check("FocusedFrame is the iframe that took focus", Eventually(() => host.WebContents.FocusedFrame == a, step), host.WebContents.FocusedFrame?.Name);
+    var nested = a.Frames[0];
+    await nested.ExecuteJavaScriptAsync(FocusInput);
+    Check("FocusedFrame follows focus into a nested iframe", Eventually(() => host.WebContents.FocusedFrame == nested, step), host.WebContents.FocusedFrame?.Name);
+    await main.ExecuteJavaScriptAsync(FocusInput);
+    Check("FocusedFrame returns to the main frame", Eventually(() => host.WebContents.FocusedFrame == main, step), host.WebContents.FocusedFrame?.Name);
+    var reloaded = new BrowserWindow(new BrowserWindowOptions { Title = "Oriel window test: focus reload", Width = 300, Height = 200 });
+    Fires(h => reloaded.WebContents.DidFinishLoad += h, h => reloaded.WebContents.DidFinishLoad -= h, () => reloaded.WebContents.LoadFile(page), step);
+    reloaded.Focus();
+    Eventually(() => reloaded.WebContents.MainFrame?.Frames.Count == 1, step);
+    await reloaded.WebContents.MainFrame!.Frames[0].ExecuteJavaScriptAsync(FocusInput);
+    Eventually(() => reloaded.WebContents.FocusedFrame?.Name == "a", step);
+    Fires(h => reloaded.WebContents.DidFinishLoad += h, h => reloaded.WebContents.DidFinishLoad -= h, () => reloaded.WebContents.LoadFile(page), step);
+    Check("a page that loads into a focused window is the focused frame", Eventually(() => reloaded.WebContents.FocusedFrame == reloaded.WebContents.MainFrame, step),
+        reloaded.WebContents.FocusedFrame?.Name);
+    reloaded.Destroy();
+
     // IPC: the sender frame is the iframe; Send reaches only the frame it is called on.
     WebFrameMain? sender = null;
     using var heard = new ManualResetEventSlim();

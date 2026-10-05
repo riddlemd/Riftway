@@ -959,6 +959,10 @@ public sealed unsafe partial class WebContents
             case "mousedown":
                 PageMouseDown?.Invoke();
                 break;
+
+            case "focus":
+                if (_contextFrames.TryGetValue(context, out var frameId)) _focusedFrameId = frameId;
+                break;
         }
     }
 
@@ -977,6 +981,12 @@ public sealed unsafe partial class WebContents
     // execution contexts name; UI thread only.
     private readonly Dictionary<string, FrameState> _frames = [];
     private readonly Dictionary<int, string> _contextFrames = [];
+    private string? _focusedFrameId;
+
+    /// <summary>The frame that has focus in the page, or null. Electron's <c>webContents.focusedFrame</c>.</summary>
+    /// <remarks>A cross-site iframe in another process is not seen taking focus (drift F1).</remarks>
+    public WebFrameMain? FocusedFrame => CefThread.InvokeOnUi(()
+        => _focusedFrameId is { } id && _frames.TryGetValue(id, out var frame) ? WrapperOf(frame) : null);
 
     /// <summary>The main frame's document has been parsed: its DOM is ready, though images may still load.
     /// Electron's <c>dom-ready</c>.</summary>

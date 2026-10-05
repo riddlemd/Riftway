@@ -13,12 +13,12 @@ Percentages are over the non-n/a items; the second counts a partial item as half
 | Static methods | 5 | 0 | 0 | 5 | 0 | 0.0% | 0.0% |
 | Instance events | 59 | 9 | 1 | 47 | 2 | 15.8% | 16.7% |
 | Instance methods | 118 | 25 | 5 | 80 | 8 | 22.7% | 25.0% |
-| Instance properties | 18 | 5 | 1 | 11 | 1 | 29.4% | 32.4% |
+| Instance properties | 18 | 6 | 1 | 10 | 1 | 35.3% | 38.2% |
 | navigationHistory | 14 | 12 | 0 | 2 | 0 | 85.7% | 85.7% |
 | WebFrameMain events and statics | 3 | 1 | 0 | 2 | 0 | 33.3% | 33.3% |
 | WebFrameMain methods | 9 | 1 | 3 | 5 | 0 | 11.1% | 27.8% |
 | WebFrameMain properties | 15 | 9 | 0 | 6 | 0 | 60.0% | 60.0% |
-| **Total** | 241 | 62 | 10 | 158 | 11 | 27.0% | 29.1% |
+| **Total** | 241 | 63 | 10 | 157 | 11 | 27.4% | 29.6% |
 
 ## Checklist
 
@@ -230,7 +230,7 @@ Percentages are over the non-n/a items; the second counts a partial item as half
 | `navigationHistory` | `NavigationHistory` | done | Members in their own table below. |
 | `mainFrame` | `MainFrame` | partial | Null until the frame tree has been read, just after window creation (F4). |
 | `hostWebContents` | — | n/a | <webview> only. |
-| `focusedFrame` | — | missing | F3. |
+| `focusedFrame` | `FocusedFrame` | done | Not cross-site frames in another process (F3). |
 | `ipc` | — | missing |  |
 | `caretBrowsingEnabled` | — | missing |  |
 | `frameRate` | — | missing |  |
