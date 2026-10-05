@@ -48,11 +48,12 @@ static unsafe class WindowsShell
     private static readonly Guid s_iidAutomation = new("30CBE57D-D9D0-452A-AB13-7AC5AC4825EE");
 
     /// <summary>The names of every element under the taskbar (Shell_TrayWnd), as UI Automation reports them.</summary>
-    internal static List<string> TaskbarNames()
+    internal static List<string> TaskbarNames() => FindWindowW("Shell_TrayWnd", null) is var tray and not 0 ? ElementNames(tray) : [];
+
+    /// <summary>The names of every element under <paramref name="hwnd"/>, as UI Automation reports them.</summary>
+    internal static List<string> ElementNames(nint hwnd)
     {
         var names = new List<string>();
-        var tray = FindWindowW("Shell_TrayWnd", null);
-        if (tray == 0) return names;
         void* automation;
         var clsid = s_clsidAutomation;
         var iid = s_iidAutomation;
@@ -61,7 +62,7 @@ static unsafe class WindowsShell
         void* root = null, condition = null, all = null;
         try
         {
-            if (((delegate* unmanaged<void*, nint, void**, int>)Slot(automation, 6))(automation, tray, &root) < 0) return names; // ElementFromHandle
+            if (((delegate* unmanaged<void*, nint, void**, int>)Slot(automation, 6))(automation, hwnd, &root) < 0) return names; // ElementFromHandle
             if (((delegate* unmanaged<void*, void**, int>)Slot(automation, 21))(automation, &condition) < 0) return names; // CreateTrueCondition
             if (((delegate* unmanaged<void*, int, void*, void**, int>)Slot(root, 6))(root, 4 /* TreeScope_Descendants */, condition, &all) < 0) return names; // FindAll
             int length;
@@ -187,17 +188,43 @@ static unsafe class WindowsShell
     /// <summary>Oriel's hidden tray host window, or 0.</summary>
     internal static nint TrayHost() => FindWindowW("OrielTrayHost", null);
 
-    /// <summary>Sends (or posts, which does not wait for a menu to close) a version 4 tray callback to the host.</summary>
-    internal static void TrayCallback(nint host, uint id, uint code, int x, int y, bool post = false)
+    /// <summary>Sends a version 0 tray callback to the host, as the shell does without <c>NIM_SETVERSION</c>: the icon's id
+    /// in wParam, the mouse or <c>NIN_</c> message in lParam.</summary>
+    internal static void TrayCallback(nint host, uint id, uint message)
     {
-        var wParam = (nint)(((y & 0xFFFF) << 16) | (x & 0xFFFF));
-        var lParam = (nint)(((id & 0xFFFF) << 16) | (code & 0xFFFF));
-        if (post) _ = PostMessageW(host, 0x8001, wParam, lParam);
-        else
+        nint result;
+        _ = SendMessageTimeoutW(host, 0x8001, (nint)id, (nint)message, 2, 2000, &result);
+    }
+
+    /// <summary>The visible Chromium Views menu of this process: a <c>Chrome_WidgetWin_</c> popup whose owner is hidden
+    /// (a tray menu's), or 0.</summary>
+    internal static nint ViewsMenuWindow()
+    {
+        nint found = 0;
+        var name = stackalloc char[64];
+        for (var hwnd = FindWindowExW(0, 0, null, null); hwnd != 0; hwnd = FindWindowExW(0, hwnd, null, null))
         {
-            nint result;
-            _ = SendMessageTimeoutW(host, 0x8001, wParam, lParam, 2, 2000, &result);
+            uint pid;
+            _ = GetWindowThreadProcessId(hwnd, &pid);
+            if (pid != (uint)Environment.ProcessId || IsWindowVisible(hwnd) == 0) continue;
+            var owner = GetWindow(hwnd, 4 /* GW_OWNER */);
+            if (owner == 0 || IsWindowVisible(owner) != 0) continue;
+            if ((GetWindowLongW(hwnd, -16 /* GWL_STYLE */) & 0x80000000 /* WS_POPUP */) == 0) continue;
+            var length = GetClassNameW(hwnd, name, 64);
+            if (new string(name, 0, length).StartsWith("Chrome_WidgetWin_", StringComparison.Ordinal)) found = hwnd;
         }
+        return found;
+    }
+
+    /// <summary>Moves the pointer to a point in screen pixels.</summary>
+    internal static bool MoveCursor(int x, int y) => SetCursorPos(x, y) != 0;
+
+    /// <summary>The pointer's position in screen pixels.</summary>
+    internal static (int X, int Y) CursorPos()
+    {
+        var p = stackalloc int[2];
+        _ = GetCursorPos(p);
+        return (p[0], p[1]);
     }
 
     /// <summary>Sends the host a registered window message by name, such as <c>TaskbarCreated</c>.</summary>
@@ -209,10 +236,11 @@ static unsafe class WindowsShell
         _ = SendMessageTimeoutW(hwnd, message, 0, 0, 2, 2000, &result);
     }
 
-    /// <summary>Whether the shell holds an icon (host, id), asked by modifying its tooltip; or deletes it.</summary>
-    internal static bool NotifyIcon(nint host, uint id, bool delete)
+    /// <summary>Whether the shell holds an icon (host, id, or its GUID), asked by modifying its tooltip; or deletes it.</summary>
+    internal static bool NotifyIcon(nint host, uint id, bool delete, Guid? guid = null)
     {
         var data = new NotifyIconData { Size = (uint)sizeof(NotifyIconData), Hwnd = host, Id = id, Flags = delete ? 0u : 0x4u /* NIF_TIP */ };
+        if (guid is { } g) (data.Flags, data.Guid) = (data.Flags | 0x20 /* NIF_GUID */, g);
         return Shell_NotifyIconW(delete ? 2u : 1u, &data) != 0;
     }
 
@@ -269,6 +297,13 @@ static unsafe class WindowsShell
     [DllImport("shell32.dll")] private static extern int Shell_NotifyIconW(uint message, NotifyIconData* data);
     [DllImport("user32.dll")] private static extern int PostMessageW(nint hwnd, uint message, nint wParam, nint lParam);
     [DllImport("user32.dll")] private static extern int IsWindowVisible(nint hwnd);
+    [DllImport("user32.dll", CharSet = CharSet.Unicode)] private static extern nint FindWindowExW(nint parent, nint after, string? cls, string? name);
+    [DllImport("user32.dll")] private static extern uint GetWindowThreadProcessId(nint hwnd, uint* pid);
+    [DllImport("user32.dll")] private static extern nint GetWindow(nint hwnd, uint cmd);
+    [DllImport("user32.dll")] private static extern int GetWindowLongW(nint hwnd, int index);
+    [DllImport("user32.dll")] private static extern int GetClassNameW(nint hwnd, char* name, int length);
+    [DllImport("user32.dll")] private static extern int SetCursorPos(int x, int y);
+    [DllImport("user32.dll")] private static extern int GetCursorPos(int* point);
     [DllImport("user32.dll")] private static extern int GetMenuItemCount(nint menu);
     [DllImport("user32.dll")] private static extern int GetMenuStringW(nint menu, uint item, char* text, int max, uint flags);
     [DllImport("user32.dll")] private static extern uint GetMenuState(nint menu, uint item, uint flags);

@@ -112,7 +112,7 @@ Detailed item-by-item status, including `navigationHistory` and `WebFrameMain`: 
 | `dialog` (file dialogs) | `Dialog` | CEF | M2 | partial: open (files, several files, a directory) and save dialogs, async and sync (see DRIFT.md) |
 | `dialog` (message boxes, error box, certificate trust) | `Dialog` | OS | M5 | — |
 | `Menu` / `MenuItem` (app menu, context menus) | `Menu` / `MenuItem` | OS + CEF | M5 | partial: application and window menus, popups and context menus, roles, accelerators; no icons, sublabels or tooltips |
-| `Tray` | `Tray` | OS | M5 | partial: Windows (Shell_NotifyIcon v4: image, tooltip, balloons, click/double/middle/right/move and balloon events, native context menu, TaskbarCreated); macOS and Linux throw (branch `tray`) |
+| `Tray` | `Tray` | OS | M5 | partial: Windows (Shell_NotifyIcon as Electron drives it: image, tooltip, balloons, click/double/middle/right/move/enter/leave and balloon events, Views context menu, TaskbarCreated); macOS and Linux throw (branch `tray`) |
 | `Notification` | `Notification` | OS | M5 | — |
 | `globalShortcut` | `GlobalShortcut` | OS | M5 | — |
 | `Dock` (`app.dock`, macOS) | `OrielApp.Dock` | OS | M5 | — |

@@ -1,4 +1,6 @@
 using Oriel.Cef;
+using Oriel.Cef.Handlers;
+using Oriel.Cef.Interop;
 using Oriel.Cef.Platform;
 
 namespace Oriel;
@@ -6,10 +8,12 @@ namespace Oriel;
 /// <summary>A click or move on a tray icon. Electron's <c>event</c>, <c>bounds</c> and <c>position</c> arguments.</summary>
 public sealed class TrayEventArgs(Rectangle bounds, Point position, bool shift, bool ctrl, bool alt, bool meta) : EventArgs
 {
-    /// <summary>The icon's bounds on screen in DIPs; empty when the shell cannot place it. Electron's <c>bounds</c>.</summary>
+    /// <summary>The icon's bounds on screen in DIPs; empty when the shell cannot place it, and for the pointer events
+    /// (move, enter, leave), which Electron gives no bounds. Electron's <c>bounds</c>.</summary>
     public Rectangle Bounds { get; } = bounds;
 
-    /// <summary>Where the pointer was, in screen DIPs. Electron's <c>position</c>.</summary>
+    /// <summary>Where the pointer was, in screen DIPs; empty for the double, middle and right clicks, which Electron gives
+    /// no position. Electron's <c>position</c>.</summary>
     public Point Position { get; } = position;
 
     /// <summary>Electron's <c>event.shiftKey</c>.</summary>
@@ -75,6 +79,7 @@ public sealed record DisplayBalloonOptions
 public sealed class Tray
 {
     private readonly ITrayBackend _backend;
+    private readonly TrayMenu _menu = new();
     private Menu? _contextMenu;
     private string _title = "";
     private bool _ignoreDoubleClick;
@@ -111,20 +116,27 @@ public sealed class Tray
     /// <summary>The pointer moved over the icon. Electron's <c>'mouse-move'</c>.</summary>
     public event EventHandler<TrayEventArgs>? MouseMoved;
 
+    /// <summary>The pointer came onto the icon. Electron's <c>'mouse-enter'</c>.</summary>
+    public event EventHandler<TrayEventArgs>? MouseEntered;
+
+    /// <summary>The pointer left the icon; noticed within a quarter of a second. Electron's <c>'mouse-leave'</c>.</summary>
+    public event EventHandler<TrayEventArgs>? MouseLeft;
+
     /// <summary>A balloon appeared. Electron's <c>'balloon-show'</c>.</summary>
     public event EventHandler? BalloonShown;
 
     /// <summary>The user clicked a balloon. Electron's <c>'balloon-click'</c>.</summary>
     public event EventHandler? BalloonClicked;
 
-    /// <summary>A balloon timed out or the user closed it. Electron's <c>'balloon-closed'</c>.</summary>
+    /// <summary>A balloon timed out. Electron's <c>'balloon-closed'</c>.</summary>
     public event EventHandler? BalloonClosed;
 
-    /// <summary>Removes the icon. Electron's <c>tray.destroy()</c>.</summary>
+    /// <summary>Removes the icon and closes its menu. Electron's <c>tray.destroy()</c>.</summary>
     public void Destroy() => OnUi(() =>
     {
         if (_destroyed) return;
         _destroyed = true;
+        _menu.Close();
         _backend.Destroy();
     });
 
@@ -148,17 +160,18 @@ public sealed class Tray
         Live(() => _backend.SetToolTip(toolTip));
     }
 
-    /// <summary>macOS: text beside the icon. Stored only elsewhere. Electron's <c>tray.setTitle()</c>.</summary>
-    public void SetTitle(string title) => OnUi(() => _title = title ?? "");
+    /// <summary>macOS: text beside the icon; ignored elsewhere, as in Electron. Electron's <c>tray.setTitle()</c>.</summary>
+    public void SetTitle(string title) => Live(() => { if (OperatingSystem.IsMacOS()) _title = title ?? ""; });
 
-    /// <summary>The title as set. Electron's <c>tray.getTitle()</c>.</summary>
+    /// <summary>The title as set; always empty off macOS. Electron's <c>tray.getTitle()</c>.</summary>
     public string GetTitle() => CefThread.InvokeOnUi(() => _title);
 
-    /// <summary>macOS: report two clicks rather than a double click. Stored only elsewhere.
+    /// <summary>macOS: report two clicks rather than a double click; ignored elsewhere, as in Electron.
     /// Electron's <c>tray.setIgnoreDoubleClickEvents()</c>.</summary>
-    public void SetIgnoreDoubleClickEvents(bool ignore) => OnUi(() => _ignoreDoubleClick = ignore);
+    public void SetIgnoreDoubleClickEvents(bool ignore) => Live(() => { if (OperatingSystem.IsMacOS()) _ignoreDoubleClick = ignore; });
 
-    /// <summary>The value set by <see cref="SetIgnoreDoubleClickEvents"/>. Electron's <c>tray.getIgnoreDoubleClickEvents()</c>.</summary>
+    /// <summary>The value set by <see cref="SetIgnoreDoubleClickEvents"/>; always false off macOS.
+    /// Electron's <c>tray.getIgnoreDoubleClickEvents()</c>.</summary>
     public bool GetIgnoreDoubleClickEvents() => CefThread.InvokeOnUi(() => _ignoreDoubleClick);
 
     /// <summary>Shows a balloon notification (a toast on Windows 10 and 11). Electron's <c>tray.displayBalloon()</c>.</summary>
@@ -177,43 +190,51 @@ public sealed class Tray
     /// <summary>Sets the menu a right click opens, or none. Electron's <c>tray.setContextMenu()</c>.</summary>
     public void SetContextMenu(Menu? menu) => OnUi(() => _contextMenu = menu);
 
-    /// <summary>Opens <paramref name="menu"/>, or the context menu, at <paramref name="position"/> (screen DIPs) or the
-    /// pointer. Returns when it closes. Electron's <c>tray.popUpContextMenu()</c>.</summary>
+    /// <summary>Opens <paramref name="menu"/>, or the context menu, at <paramref name="position"/> (screen DIPs) or, when
+    /// it is null or (0, 0), the pointer. Returns at once; the menu stays open until chosen from or dismissed.
+    /// Electron's <c>tray.popUpContextMenu()</c>.</summary>
     public void PopUpContextMenu(Menu? menu = null, Point? position = null)
         => Live(() => { if ((menu ?? _contextMenu) is { } m) PopUp(m, position); });
 
     /// <summary>Closes the menu the icon opened, if any. Electron's <c>tray.closeContextMenu()</c>.</summary>
-    // Not through the UI thread: it is inside the menu's loop and would run the call only after the menu closed.
-    public void CloseContextMenu() => _backend.CloseContextMenu();
+    public void CloseContextMenu() => Live(_menu.Close);
 
     /// <summary>The icon's bounds on screen in DIPs; empty when the shell cannot place it (on Windows 11, while it sits in
     /// the overflow). Electron's <c>tray.getBounds()</c>.</summary>
     public Rectangle GetBounds() => CefThread.InvokeOnUi(() => _destroyed ? default : _backend.GetBounds());
 
+    // Electron's NotifyIcon::PopUpContextMenu: no menu without the foreground, and (0, 0) means the pointer.
     private void PopUp(Menu menu, Point? position)
     {
-        if (_backend.PopUpMenu(TrayRules.MenuEntries(menu), position) is { } commandId && menu.FindByCommandId(commandId) is { } item)
-            item.Activate(BrowserWindow.GetFocusedWindow());
+        if (!_backend.ActivateForMenu()) return;
+        _menu.Show(menu, position is { } p && p != default ? p : Screen.GetCursorScreenPoint());
     }
 
-    /// <summary>A shell event for this icon, on the UI thread.</summary>
-    internal void Raise(TrayEvent e, Point position, (bool Shift, bool Ctrl, bool Alt, bool Meta) keys)
+    /// <summary>A shell event for this icon, posted to the UI thread with the modifier keys held when it arrived.</summary>
+    internal void Raise(TrayEvent e, (bool Shift, bool Ctrl, bool Alt, bool Meta) keys)
     {
         if (_destroyed) return;
-        TrayEventArgs Args() => new(_backend.GetBounds(), position, keys.Shift, keys.Ctrl, keys.Alt, keys.Meta);
         switch (e)
         {
-            case TrayEvent.Click: Clicked?.Invoke(this, Args()); break;
-            case TrayEvent.DoubleClick: DoubleClicked?.Invoke(this, Args()); break;
-            case TrayEvent.MiddleClick: MiddleClicked?.Invoke(this, Args()); break;
-            case TrayEvent.MouseMove: MouseMoved?.Invoke(this, Args()); break;
+            case TrayEvent.BalloonShow: BalloonShown?.Invoke(this, EventArgs.Empty); return;
+            case TrayEvent.BalloonClick: BalloonClicked?.Invoke(this, EventArgs.Empty); return;
+            case TrayEvent.BalloonClosed: BalloonClosed?.Invoke(this, EventArgs.Empty); return;
             // Electron's rule: a context menu takes the right click; without one, the event does.
-            case TrayEvent.RightClick when _contextMenu is { } menu: PopUp(menu, position); break;
-            case TrayEvent.RightClick: RightClicked?.Invoke(this, Args()); break;
-            case TrayEvent.BalloonShow: BalloonShown?.Invoke(this, EventArgs.Empty); break;
-            case TrayEvent.BalloonClick: BalloonClicked?.Invoke(this, EventArgs.Empty); break;
-            case TrayEvent.BalloonClosed: BalloonClosed?.Invoke(this, EventArgs.Empty); break;
+            case TrayEvent.RightClick when _contextMenu is { } menu: PopUp(menu, null); return;
         }
+        if (TrayRules.ArgsOf(e, _backend.GetBounds(), Screen.GetCursorScreenPoint()) is not var (bounds, position)) return;
+        var handler = e switch
+        {
+            TrayEvent.Click => Clicked,
+            TrayEvent.DoubleClick => DoubleClicked,
+            TrayEvent.MiddleClick => MiddleClicked,
+            TrayEvent.RightClick => RightClicked,
+            TrayEvent.MouseMove => MouseMoved,
+            TrayEvent.MouseEnter => MouseEntered,
+            TrayEvent.MouseLeave => MouseLeft,
+            _ => null,
+        };
+        handler?.Invoke(this, new TrayEventArgs(bounds, position, keys.Shift, keys.Ctrl, keys.Alt, keys.Meta));
     }
 
     private void Live(Action action) => OnUi(() =>
@@ -237,6 +258,8 @@ internal enum TrayEvent
     MiddleClick,
     RightClick,
     MouseMove,
+    MouseEnter,
+    MouseLeave,
     BalloonShow,
     BalloonClick,
     BalloonClosed,
@@ -244,23 +267,39 @@ internal enum TrayEvent
 
 internal static class TrayRules
 {
-    /// <summary>A notification icon version 4 event: Electron takes the press for a click, the double click and the middle
-    /// press; version 4 sends <c>WM_CONTEXTMENU</c> for a right click or Shift+F10, and <c>NIN_KEYSELECT</c> for Enter
-    /// or Space on a focused icon.</summary>
-    internal static TrayEvent EventOf(uint code) => code switch
+    /// <summary>A notification icon callback, version 0, as Electron's <c>NotifyIconHost::WndProc</c> reads it: the button
+    /// press is the click, a right press or <c>WM_CONTEXTMENU</c> the right click, a right double click nothing;
+    /// <c>NIN_BALLOONHIDE</c> and <c>NIN_KEYSELECT</c> go unhandled.</summary>
+    internal static TrayEvent EventOf(uint message) => message switch
     {
         0x0201 => TrayEvent.Click,         // WM_LBUTTONDOWN
-        0x0401 => TrayEvent.Click,         // NIN_KEYSELECT
         0x0203 => TrayEvent.DoubleClick,   // WM_LBUTTONDBLCLK
         0x0207 => TrayEvent.MiddleClick,   // WM_MBUTTONDOWN
+        0x0209 => TrayEvent.MiddleClick,   // WM_MBUTTONDBLCLK
+        0x0204 => TrayEvent.RightClick,    // WM_RBUTTONDOWN
         0x007B => TrayEvent.RightClick,    // WM_CONTEXTMENU
         0x0200 => TrayEvent.MouseMove,     // WM_MOUSEMOVE
         0x0402 => TrayEvent.BalloonShow,   // NIN_BALLOONSHOW
         0x0405 => TrayEvent.BalloonClick,  // NIN_BALLOONUSERCLICK
-        0x0403 => TrayEvent.BalloonClosed, // NIN_BALLOONHIDE
         0x0404 => TrayEvent.BalloonClosed, // NIN_BALLOONTIMEOUT
         _ => TrayEvent.None,
     };
+
+    /// <summary>The bounds and position Electron gives a pointer event (the other one empty), or null when it raises none:
+    /// a move reported while the pointer is outside the icon's bounds.</summary>
+    internal static (Rectangle Bounds, Point Position)? ArgsOf(TrayEvent e, Rectangle bounds, Point cursor) => e switch
+    {
+        TrayEvent.Click => (bounds, cursor),
+        TrayEvent.DoubleClick or TrayEvent.MiddleClick or TrayEvent.RightClick => (bounds, default(Point)),
+        TrayEvent.MouseMove => Contains(bounds, cursor) ? (default(Rectangle), cursor) : null,
+        TrayEvent.MouseEnter or TrayEvent.MouseLeave => (default(Rectangle), cursor),
+        _ => null,
+    };
+
+    /// <summary>Whether <paramref name="point"/> is inside <paramref name="rect"/>, right and bottom edges excluded, as
+    /// <c>gfx::Rect::Contains</c>.</summary>
+    internal static bool Contains(Rectangle rect, Point point)
+        => point.X >= rect.X && point.X < rect.X + rect.Width && point.Y >= rect.Y && point.Y < rect.Y + rect.Height;
 
     /// <summary>The <c>NIIF_</c> flags for a balloon: the icon type (a given icon means custom), large icon, no sound,
     /// quiet time.</summary>
@@ -280,36 +319,109 @@ internal static class TrayRules
         if (o.RespectQuietTime) flags |= 0x80;
         return flags;
     }
+}
 
-    /// <summary>A native menu from <paramref name="menu"/>: hidden items left out, each label with its accelerator after a
-    /// tab, as Windows menus show shortcuts.</summary>
-    internal static List<WindowsMenuEntry> MenuEntries(Menu menu)
-        => [.. menu.Items.Where(i => i.Visible).Select(i => i.Type == MenuItemType.Separator
-            ? new WindowsMenuEntry(0, "", true, true, false, false, null)
-            : new WindowsMenuEntry(i.CommandId, AcceleratorText(i.Accelerator) is { } keys ? i.Label + "\t" + keys : i.Label, false, i.Enabled,
-                i.Checked && i.Type is MenuItemType.Checkbox or MenuItemType.Radio, i.Type == MenuItemType.Radio,
-                i.Type == MenuItemType.Submenu && i.Submenu is { } sub ? MenuEntries(sub) : null))];
+/// <summary>An icon the <see cref="TrayHoverDetector"/> watches.</summary>
+internal interface ITrayHoverTarget
+{
+    uint Id { get; }
 
-    /// <summary>An accelerator as Windows writes it, e.g. <c>CmdOrCtrl+Shift+S</c> as <c>Ctrl+Shift+S</c>; null for none, or
-    /// for a Command/Super shortcut, which Windows menus do not show.</summary>
-    internal static string? AcceleratorText(string? accelerator)
+    /// <summary>The icon's bounds in screen DIPs.</summary>
+    Rectangle GetBounds();
+
+    /// <summary>Raise <c>mouse-enter</c>.</summary>
+    void Entered();
+
+    /// <summary>Raise <c>mouse-leave</c>.</summary>
+    void Exited();
+}
+
+/// <summary>Electron's <c>MouseEnteredExitedDetector</c> (notify_icon_host.cc): the shell reports only moves over an icon,
+/// so the first move inside its bounds enters it, and leaving is found by checking the pointer every 250 ms.</summary>
+internal sealed class TrayHoverDetector(Func<Point> cursor, Action<Action> startTimer, Action stopTimer)
+{
+    /// <summary>Electron's <c>kMouseLeaveCheckFrequency</c>.</summary>
+    internal const uint CheckMilliseconds = 250;
+
+    private ITrayHoverTarget? _entered;
+    private bool _timerRunning;
+
+    /// <summary>The shell reported a move over <paramref name="icon"/>.</summary>
+    public void MouseMove(ITrayHoverTarget icon)
     {
-        if (string.IsNullOrEmpty(accelerator)) return null;
-        var parts = new List<string>();
-        foreach (var token in accelerator.Split('+'))
+        if (!IsOver(icon)) return;
+        if (_entered is { } current && current.Id != icon.Id) SendExited();
+        // A running timer means the pointer is already over the icon.
+        if (_timerRunning) return;
+        icon.Entered();
+        _entered = icon;
+        _timerRunning = true;
+        startTimer(Check);
+    }
+
+    /// <summary>The icon is going away.</summary>
+    public void IconRemoved(ITrayHoverTarget icon)
+    {
+        if (_entered is { } current && current.Id == icon.Id) SendExited();
+    }
+
+    private void Check()
+    {
+        if (_entered is null || IsOver(_entered)) return;
+        SendExited();
+    }
+
+    private void SendExited()
+    {
+        _timerRunning = false;
+        stopTimer();
+        var left = _entered;
+        _entered = null;
+        left?.Exited();
+    }
+
+    private bool IsOver(ITrayHoverTarget icon) => TrayRules.Contains(icon.GetBounds(), cursor());
+}
+
+/// <summary>A tray icon's context menu as Electron shows it, a Chromium Views menu: through CEF's <c>show_menu</c> on a
+/// hidden Views window made for each menu. UI thread only.</summary>
+internal sealed unsafe class TrayMenu
+{
+    private cef_window_t* _window;
+
+    /// <summary>Shows <paramref name="menu"/> at <paramref name="at"/> (screen DIPs), closing any menu shown before. Returns
+    /// at once: Views runs the menu in the normal message loop.</summary>
+    public void Show(Menu menu, Point at)
+    {
+        Close();
+        var windowDelegate = new WindowDelegate { Frameless = true, Resizable = false, Minimizable = false, Maximizable = false };
+        NativeObject.AddRef(windowDelegate.Native);
+        var window = CefNative.cef_window_create_top_level(windowDelegate.Native);
+        _window = window;
+        var handle = (nint)window;
+        var popupDelegate = new MenuModelDelegate
         {
-            var t = token.Trim();
-            switch (t.ToLowerInvariant())
-            {
-                case "cmdorctrl" or "commandorcontrol" or "control" or "ctrl": parts.Add("Ctrl"); break;
-                case "alt" or "option" or "altgr": parts.Add("Alt"); break;
-                case "shift": parts.Add("Shift"); break;
-                case "cmd" or "command" or "super" or "meta": return null;
-                case "plus": parts.Add("+"); break;
-                default: parts.Add(t.Length == 1 ? t.ToUpperInvariant() : t); break;
-            }
-        }
-        return string.Join("+", parts);
+            CommandExecuted = id => menu.FindByCommandId(id)?.Activate(BrowserWindow.GetFocusedWindow()),
+            // Posted: CEF is still inside the window's menu code when it reports the close.
+            Closed = () => CefThread.PostUi(() => { if ((nint)_window == handle) Close(); }),
+        };
+        NativeObject.AddRef(popupDelegate.Native);
+        var model = CefNative.cef_menu_model_create(popupDelegate.Native);
+        MenuModels.Fill(model, menu);
+        var point = new cef_point_t { x = at.X, y = at.Y };
+        // The model reference passes to CEF, which keeps it, and through it the delegate, until the menu closes.
+        window->show_menu(window, model, &point, cef_menu_anchor_position_t.CEF_MENU_ANCHOR_TOPLEFT);
+    }
+
+    /// <summary>Closes the menu, if one is open, and its window.</summary>
+    public void Close()
+    {
+        if (_window is null) return;
+        var window = _window;
+        _window = null;
+        window->cancel_menu(window);
+        window->close(window);
+        NativeObject.Release(window);
     }
 }
 
@@ -322,75 +434,95 @@ internal interface ITrayBackend
     void DisplayBalloon(DisplayBalloonOptions options);
     void RemoveBalloon();
     void Focus();
-    /// <summary>Shows the menu and returns the chosen command id, or null.</summary>
-    int? PopUpMenu(IReadOnlyList<WindowsMenuEntry> entries, Point? position);
-    void CloseContextMenu();
+    /// <summary>Readies the OS for the icon's menu; false if the menu must not open.</summary>
+    bool ActivateForMenu();
     Rectangle GetBounds();
     void Destroy();
 }
 
 [System.Runtime.Versioning.SupportedOSPlatform("windows")]
-internal sealed unsafe class WindowsTrayBackend(Tray owner) : ITrayBackend
+internal sealed unsafe class WindowsTrayBackend(Tray owner) : ITrayBackend, ITrayHoverTarget
 {
+    private static readonly TrayHoverDetector s_hover = new(Screen.GetCursorScreenPoint,
+        tick => WindowsTray.StartTimer(TrayHoverDetector.CheckMilliseconds, tick), WindowsTray.StopTimer);
     private static int s_exitHooked;
     private uint _id;
     private nint _icon;
+
+    public uint Id => _id;
 
     public void Create(NativeImage image, Guid? guid)
     {
         // Windows leaves an icon behind until the pointer passes over it if the process ends without removing it.
         if (Interlocked.Exchange(ref s_exitHooked, 1) == 0) AppDomain.CurrentDomain.ProcessExit += (_, _) => WindowsTray.DeleteAll();
-        _icon = Icon(image);
-        _id = WindowsTray.Add(_icon, "", guid, OnCallback);
-        if (_id == 0) throw new InvalidOperationException("The shell did not take the tray icon.");
+        _id = WindowsTray.Add(guid, OnCallback);
+        SetImage(image);
     }
 
+    // The shell's refusals are logged with Electron's messages, as Electron does, not thrown.
     public void SetImage(NativeImage image)
     {
         var old = _icon;
         _icon = Icon(image);
-        WindowsTray.SetIcon(_id, _icon);
+        if (!WindowsTray.SetIcon(_id, _icon)) Warn("Error setting status tray icon image");
         WindowsTaskbar.DestroyIconHandle(old);
     }
 
-    public void SetToolTip(string toolTip) => WindowsTray.SetToolTip(_id, toolTip);
+    public void SetToolTip(string toolTip)
+    {
+        if (!WindowsTray.SetToolTip(_id, toolTip)) Warn("Unable to set tooltip for status tray icon");
+    }
 
     public void DisplayBalloon(DisplayBalloonOptions options)
     {
         var balloonIcon = options.Icon is { } icon ? Icon(icon) : 0;
-        WindowsTray.ShowBalloon(_id, options.Title, options.Content, TrayRules.BalloonFlags(options), balloonIcon);
+        if (!WindowsTray.ShowBalloon(_id, options.Title, options.Content, TrayRules.BalloonFlags(options), balloonIcon)) Warn("Unable to create status tray balloon.");
         WindowsTaskbar.DestroyIconHandle(balloonIcon);
     }
 
-    public void RemoveBalloon() => WindowsTray.RemoveBalloon(_id);
-
-    public void Focus() => WindowsTray.Focus(_id);
-
-    public int? PopUpMenu(IReadOnlyList<WindowsMenuEntry> entries, Point? position)
+    public void RemoveBalloon()
     {
-        var at = position is { } p ? Screen.DipToScreenPoint(p) : Cursor();
-        return WindowsTray.TrackMenu(entries, at.X, at.Y);
+        if (!WindowsTray.RemoveBalloon(_id)) Warn("Unable to remove status tray balloon.");
     }
 
-    public void CloseContextMenu() => WindowsTray.CloseMenu();
+    public void Focus()
+    {
+        if (!WindowsTray.Focus(_id)) Warn("Unable to focus tray icon.");
+    }
+
+    private static void Warn(string message) => Console.Error.WriteLine($"[Oriel] {message}");
+
+    public bool ActivateForMenu() => WindowsTray.SetForeground();
 
     public Rectangle GetBounds()
         => WindowsTray.GetRect(_id) is var (x, y, w, h) ? Screen.ScreenToDipRect(null, new Rectangle(x, y, w, h)) : default;
 
     public void Destroy()
     {
+        s_hover.IconRemoved(this);
         WindowsTray.Delete(_id);
         WindowsTaskbar.DestroyIconHandle(_icon);
         _icon = 0;
     }
 
-    private void OnCallback(uint code, int x, int y)
+    void ITrayHoverTarget.Entered() => Post(TrayEvent.MouseEnter);
+
+    void ITrayHoverTarget.Exited() => Post(TrayEvent.MouseLeave);
+
+    private void OnCallback(uint message)
     {
-        var e = TrayRules.EventOf(code);
+        var e = TrayRules.EventOf(message);
         if (e == TrayEvent.None) return;
+        if (e == TrayEvent.MouseMove) s_hover.MouseMove(this);
+        Post(e);
+    }
+
+    // As Electron: the keys are read now, the pointer and bounds when the posted event runs.
+    private void Post(TrayEvent e)
+    {
         static bool Down(int key) => (GetKeyState(key) & 0x8000) != 0;
         var keys = (Down(0x10), Down(0x11), Down(0x12), Down(0x5B) || Down(0x5C));
-        owner.Raise(e, Screen.ScreenToDipPoint(new Point(x, y)), keys);
+        CefThread.PostUi(() => owner.Raise(e, keys));
     }
 
     // The system DPI picks the representation: the notification area draws at that scale.
@@ -401,16 +533,8 @@ internal sealed unsafe class WindowsTrayBackend(Tray owner) : ITrayBackend
         return WindowsTaskbar.CreateIconHandle(bitmap.Bgra, bitmap.Width, bitmap.Height);
     }
 
-    private static Point Cursor()
-    {
-        Point p;
-        _ = GetCursorPos(&p);
-        return p;
-    }
-
     [System.Runtime.InteropServices.DllImport("user32.dll")] private static extern short GetKeyState(int key);
     [System.Runtime.InteropServices.DllImport("user32.dll")] private static extern uint GetDpiForSystem();
-    [System.Runtime.InteropServices.DllImport("user32.dll")] private static extern int GetCursorPos(Point* point);
 }
 
 internal sealed class UnsupportedTrayBackend : ITrayBackend
@@ -423,8 +547,7 @@ internal sealed class UnsupportedTrayBackend : ITrayBackend
     public void DisplayBalloon(DisplayBalloonOptions options) => throw NotYet();
     public void RemoveBalloon() => throw NotYet();
     public void Focus() => throw NotYet();
-    public int? PopUpMenu(IReadOnlyList<WindowsMenuEntry> entries, Point? position) => throw NotYet();
-    public void CloseContextMenu() => throw NotYet();
+    public bool ActivateForMenu() => throw NotYet();
     public Rectangle GetBounds() => throw NotYet();
     public void Destroy() => throw NotYet();
 }

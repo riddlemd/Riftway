@@ -4,11 +4,8 @@ using System.Runtime.Versioning;
 
 namespace Oriel.Cef.Platform;
 
-/// <summary>A native popup menu entry: a separator, an item with a command id, or a submenu.</summary>
-public sealed record WindowsMenuEntry(int CommandId, string Text, bool Separator, bool Enabled, bool Checked, bool Radio, IReadOnlyList<WindowsMenuEntry>? Submenu);
-
-/// <summary>Notification area icons on Windows (<c>Shell_NotifyIconW</c>, version 4), with their callbacks, balloons and
-/// popup menus. UI thread only: the icons' callbacks arrive on a hidden window owned by that thread.</summary>
+/// <summary>Notification area icons on Windows (<c>Shell_NotifyIconW</c>, legacy version 0 as Electron leaves it), with
+/// their callbacks and balloons. UI thread only: the icons' callbacks arrive on a hidden window owned by that thread.</summary>
 /// <remarks>The hidden window is top-level, not message-only: <c>TaskbarCreated</c>, sent when Explorer restarts, is
 /// broadcast to top-level windows only, and every icon must then be added again.</remarks>
 [SupportedOSPlatform("windows")]
@@ -17,36 +14,42 @@ public static unsafe class WindowsTray
     /// <summary>The callback message the icons send their host.</summary>
     public const uint CallbackMessage = 0x8001; // WM_APP + 1
 
-    private const uint NimAdd = 0, NimModify = 1, NimDelete = 2, NimSetFocus = 3, NimSetVersion = 4;
-    private const uint NifMessage = 0x1, NifIcon = 0x2, NifTip = 0x4, NifInfo = 0x10, NifGuid = 0x20, NifShowTip = 0x80;
-    private const uint NotifyIconVersion4 = 4;
+    private const uint NimAdd = 0, NimModify = 1, NimDelete = 2, NimSetFocus = 3;
+    private const uint NifMessage = 0x1, NifIcon = 0x2, NifTip = 0x4, NifInfo = 0x10, NifGuid = 0x20;
+    private const uint WmTimer = 0x0113;
+    private const nuint HoverTimerId = 1;
 
     private static readonly ConcurrentDictionary<uint, Icon> s_icons = new();
     private static nint s_host;
     private static uint s_taskbarCreated;
-    private static uint s_nextId;
+    // Electron's kBaseIconId: the first icon is 2, clear of plugins that hard-code id 1.
+    private static uint s_nextId = 1;
+    private static Action? s_timerTick;
 
     private sealed class Icon
     {
         public required uint Id;
         public Guid? Guid;
         public nint Handle;
-        public string ToolTip = "";
-        public required Action<uint, int, int> Callback;
+        public required Action<uint> Callback;
     }
 
     /// <summary>The hidden window the icons call back; created on first use.</summary>
     public static nint Host => s_host != 0 ? s_host : s_host = CreateHost();
 
-    /// <summary>Adds an icon showing <paramref name="icon"/> (owned by the caller, copied by the shell) and returns its id;
-    /// <paramref name="callback"/> gets the version 4 event, then the anchor point in screen pixels. 0 if the shell refused.</summary>
-    /// <remarks>With a <paramref name="guid"/>, Windows ties the icon to this executable's path: the same GUID from
-    /// another path is refused.</remarks>
-    public static uint Add(nint icon, string toolTip, Guid? guid, Action<uint, int, int> callback)
+    /// <summary>Adds an icon, with no image or tooltip yet, and returns its id; <paramref name="callback"/> gets the mouse
+    /// or <c>NIN_</c> message of each callback.</summary>
+    /// <remarks>As Electron's <c>NotifyIcon</c>: a refusal by the shell (Explorer not running; a GUID held by another
+    /// icon, or by this executable at another path) is only logged, and the id stays usable.</remarks>
+    public static uint Add(Guid? guid, Action<uint> callback)
     {
-        var entry = new Icon { Id = Interlocked.Increment(ref s_nextId), Guid = guid, Handle = icon, ToolTip = toolTip, Callback = callback };
-        if (!Register(entry)) return 0;
+        if (guid is { } g && s_icons.Values.Any(i => i.Guid == g))
+            Console.Error.WriteLine("[Oriel] Guid already in use. Existing tray entry will be replaced.");
+        var entry = new Icon { Id = Interlocked.Increment(ref s_nextId), Guid = guid, Callback = callback };
         s_icons[entry.Id] = entry;
+        var data = Data(entry, NifMessage);
+        data.CallbackMessage = CallbackMessage;
+        if (Shell_NotifyIconW(NimAdd, &data) == 0) Console.Error.WriteLine("[Oriel] Unable to create status tray icon.");
         return entry.Id;
     }
 
@@ -64,8 +67,7 @@ public static unsafe class WindowsTray
     public static bool SetToolTip(uint id, string toolTip)
     {
         if (!s_icons.TryGetValue(id, out var entry)) return false;
-        entry.ToolTip = toolTip;
-        var data = Data(entry, NifTip | NifShowTip);
+        var data = Data(entry, NifTip);
         Copy(toolTip, data.Tip, 128);
         return Shell_NotifyIconW(NimModify, &data) != 0;
     }
@@ -117,74 +119,34 @@ public static unsafe class WindowsTray
         return Shell_NotifyIconGetRect(&identifier, &r) >= 0 ? (r.Left, r.Top, r.Right - r.Left, r.Bottom - r.Top) : null;
     }
 
-    /// <summary>Shows <paramref name="entries"/> as a popup menu at a screen point and returns the chosen command id, or
-    /// null if none was chosen. Blocks in the menu's loop.</summary>
-    /// <remarks>Windows' rule for notification icon menus: the owner must be the foreground window, or the menu does not
-    /// close when the user clicks elsewhere; and a message posted after it lets the next one open.</remarks>
-    public static int? TrackMenu(IReadOnlyList<WindowsMenuEntry> entries, int x, int y)
+    /// <summary>Makes the host the foreground window, so that a menu opened for an icon closes when the user clicks
+    /// elsewhere. False if Windows refused.</summary>
+    public static bool SetForeground() => SetForegroundWindow(Host) != 0;
+
+    /// <summary>Calls <paramref name="tick"/> every <paramref name="milliseconds"/> on the host's thread until
+    /// <see cref="StopTimer"/>; replaces any running timer.</summary>
+    public static void StartTimer(uint milliseconds, Action tick)
     {
-        var menu = Build(entries);
-        try
-        {
-            SetForegroundWindow(Host);
-            var chosen = TrackPopupMenuEx(menu, 0x0100 /* TPM_RETURNCMD */ | 0x0002 /* TPM_RIGHTBUTTON */ | 0x0080 /* TPM_NONOTIFY */, x, y, Host, null);
-            PostMessageW(Host, 0 /* WM_NULL */, 0, 0);
-            return chosen == 0 ? null : chosen;
-        }
-        finally { DestroyMenu(menu); }
+        s_timerTick = tick;
+        SetTimer(Host, HoverTimerId, milliseconds, null);
     }
 
-    /// <summary>Closes the popup menu the icons' host is showing, if any; any thread.</summary>
-    /// <remarks>The UI thread is inside the menu's loop, where CEF runs no posted tasks; a window message still gets
-    /// dispatched there, and the host ends the menu when it arrives.</remarks>
-    public static void CloseMenu()
+    /// <summary>Stops the timer <see cref="StartTimer"/> started.</summary>
+    public static void StopTimer()
     {
-        if (s_host != 0) PostMessageW(s_host, WmCancelMode, 0, 0);
+        s_timerTick = null;
+        if (s_host != 0) KillTimer(s_host, HoverTimerId);
     }
 
-    private const uint WmCancelMode = 0x001F;
-
-    private static nint Build(IReadOnlyList<WindowsMenuEntry> entries)
+    // Electron's NotifyIcon::ResetIcon: the image comes back, the tooltip does not.
+    private static void Reset(Icon entry)
     {
-        var menu = CreatePopupMenu();
-        foreach (var e in entries)
-        {
-            fixed (char* text = e.Text)
-            {
-                if (e.Separator) AppendMenuW(menu, 0x0800 /* MF_SEPARATOR */, 0, null);
-                else if (e.Submenu is { } sub) AppendMenuW(menu, 0x0010 /* MF_POPUP */ | (e.Enabled ? 0u : 0x0003u /* MF_GRAYED|MF_DISABLED */), (nuint)Build(sub), text);
-                else
-                {
-                    var flags = (e.Enabled ? 0u : 0x0003u) | (e.Checked ? 0x0008u /* MF_CHECKED */ : 0u);
-                    AppendMenuW(menu, flags, (nuint)e.CommandId, text);
-                    // A checked radio item shows a bullet, as Windows draws radio groups.
-                    if (e.Radio && e.Checked)
-                    {
-                        var info = new MenuItemInfo { Size = (uint)sizeof(MenuItemInfo), Mask = 0x0100 /* MIIM_FTYPE */, Type = 0x0200 /* MFT_RADIOCHECK */ };
-                        SetMenuItemInfoW(menu, (uint)e.CommandId, 0, &info);
-                    }
-                }
-            }
-        }
-        return menu;
-    }
-
-    private static bool Register(Icon entry)
-    {
-        var data = Data(entry, NifMessage | NifIcon | NifTip | NifShowTip);
+        var stale = Data(entry, 0);
+        Shell_NotifyIconW(NimDelete, &stale);
+        var data = Data(entry, NifMessage | (entry.Handle != 0 ? NifIcon : 0));
         data.CallbackMessage = CallbackMessage;
         data.Icon = entry.Handle;
-        Copy(entry.ToolTip, data.Tip, 128);
-        if (Shell_NotifyIconW(NimAdd, &data) == 0)
-        {
-            // A previous run of this process may have left its GUID icon behind.
-            if (entry.Guid is null) return false;
-            var stale = Data(entry, 0);
-            Shell_NotifyIconW(NimDelete, &stale);
-            if (Shell_NotifyIconW(NimAdd, &data) == 0) return false;
-        }
-        data.Version = NotifyIconVersion4;
-        return Shell_NotifyIconW(NimSetVersion, &data) != 0;
+        if (Shell_NotifyIconW(NimAdd, &data) == 0) Console.Error.WriteLine("[Oriel] Unable to re-create status tray icon.");
     }
 
     private static NotifyIconData Data(Icon entry, uint flags)
@@ -224,21 +186,21 @@ public static unsafe class WindowsTray
     {
         try
         {
+            // Version 0: wParam is the icon's id and lParam the mouse or NIN_ message itself.
             if (message == CallbackMessage)
             {
-                var id = (uint)((lParam >> 16) & 0xFFFF);
-                if (s_icons.TryGetValue(id, out var entry)) entry.Callback((uint)(lParam & 0xFFFF), (short)(wParam & 0xFFFF), (short)((wParam >> 16) & 0xFFFF));
-                return 0;
+                if (s_icons.TryGetValue((uint)wParam, out var entry)) entry.Callback((uint)lParam);
+                return 1;
             }
-            if (message == WmCancelMode)
+            if (message == WmTimer && (nuint)wParam == HoverTimerId)
             {
-                EndMenu();
+                s_timerTick?.Invoke();
                 return 0;
             }
             if (message == s_taskbarCreated && s_taskbarCreated != 0)
             {
-                foreach (var icon in s_icons.Values) Register(icon);
-                return 0;
+                foreach (var icon in s_icons.Values) Reset(icon);
+                return 1;
             }
         }
         // An exception must not cross into the window procedure.
@@ -282,23 +244,6 @@ public static unsafe class WindowsTray
     }
 
     [StructLayout(LayoutKind.Sequential)]
-    private struct MenuItemInfo
-    {
-        public uint Size;
-        public uint Mask;
-        public uint Type;
-        public uint State;
-        public uint Id;
-        public nint Submenu;
-        public nint CheckedBitmap;
-        public nint UncheckedBitmap;
-        public nint ItemData;
-        public char* TypeData;
-        public uint Cch;
-        public nint ItemBitmap;
-    }
-
-    [StructLayout(LayoutKind.Sequential)]
     private struct WndClass
     {
         public uint Style;
@@ -319,13 +264,8 @@ public static unsafe class WindowsTray
     [DllImport("user32.dll")] private static extern nint CreateWindowExW(uint exStyle, char* cls, char* name, uint style, int x, int y, int w, int h, nint parent, nint menu, nint instance, nint param);
     [DllImport("user32.dll")] private static extern uint RegisterWindowMessageW(char* name);
     [DllImport("user32.dll")] private static extern nint DefWindowProcW(nint hwnd, uint message, nint wParam, nint lParam);
-    [DllImport("user32.dll")] private static extern nint CreatePopupMenu();
-    [DllImport("user32.dll")] private static extern int AppendMenuW(nint menu, uint flags, nuint id, char* text);
-    [DllImport("user32.dll")] private static extern int SetMenuItemInfoW(nint menu, uint item, int byPosition, MenuItemInfo* info);
-    [DllImport("user32.dll")] private static extern int DestroyMenu(nint menu);
-    [DllImport("user32.dll")] private static extern int TrackPopupMenuEx(nint menu, uint flags, int x, int y, nint hwnd, void* tpm);
-    [DllImport("user32.dll")] private static extern int EndMenu();
     [DllImport("user32.dll")] private static extern int SetForegroundWindow(nint hwnd);
-    [DllImport("user32.dll")] private static extern int PostMessageW(nint hwnd, uint message, nint wParam, nint lParam);
+    [DllImport("user32.dll")] private static extern nuint SetTimer(nint hwnd, nuint id, uint elapse, void* timerProc);
+    [DllImport("user32.dll")] private static extern int KillTimer(nint hwnd, nuint id);
     [DllImport("kernel32.dll")] private static extern nint GetModuleHandleW(char* name);
 }

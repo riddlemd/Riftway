@@ -4,20 +4,133 @@ public sealed class TrayTests
 {
     [Theory]
     [InlineData(0x0201u, TrayEvent.Click)]
-    [InlineData(0x0401u, TrayEvent.Click)]
     [InlineData(0x0203u, TrayEvent.DoubleClick)]
     [InlineData(0x0207u, TrayEvent.MiddleClick)]
+    [InlineData(0x0209u, TrayEvent.MiddleClick)]
+    [InlineData(0x0204u, TrayEvent.RightClick)]
     [InlineData(0x007Bu, TrayEvent.RightClick)]
     [InlineData(0x0200u, TrayEvent.MouseMove)]
     [InlineData(0x0402u, TrayEvent.BalloonShow)]
     [InlineData(0x0405u, TrayEvent.BalloonClick)]
-    [InlineData(0x0403u, TrayEvent.BalloonClosed)]
     [InlineData(0x0404u, TrayEvent.BalloonClosed)]
-    [InlineData(0x0202u, TrayEvent.None)]
+    [InlineData(0x0206u, TrayEvent.None)]
+    [InlineData(0x0403u, TrayEvent.None)]
+    [InlineData(0x0401u, TrayEvent.None)]
     [InlineData(0x0400u, TrayEvent.None)]
-    [InlineData(0x0204u, TrayEvent.None)]
+    [InlineData(0x0202u, TrayEvent.None)]
+    [InlineData(0x0205u, TrayEvent.None)]
+    [InlineData(0x0208u, TrayEvent.None)]
     // TrayEvent is internal; a public test method takes it boxed.
-    public void EventOf_MapsVersion4Codes(uint code, object e) => Assert.Equal(e, TrayRules.EventOf(code));
+    public void EventOf_MapsVersion0Messages_AsElectron(uint message, object e) => Assert.Equal(e, TrayRules.EventOf(message));
+
+    private static readonly Rectangle Icon = new(100, 200, 32, 40);
+
+    [Fact]
+    public void ArgsOf_GivesEachEventElectronsArguments()
+    {
+        var cursor = new Point(110, 210);
+        Assert.Equal((Icon, cursor), TrayRules.ArgsOf(TrayEvent.Click, Icon, cursor));
+        Assert.Equal((Icon, default(Point)), TrayRules.ArgsOf(TrayEvent.DoubleClick, Icon, cursor));
+        Assert.Equal((Icon, default(Point)), TrayRules.ArgsOf(TrayEvent.MiddleClick, Icon, cursor));
+        Assert.Equal((Icon, default(Point)), TrayRules.ArgsOf(TrayEvent.RightClick, Icon, cursor));
+        Assert.Equal((default(Rectangle), cursor), TrayRules.ArgsOf(TrayEvent.MouseMove, Icon, cursor));
+        Assert.Equal((default(Rectangle), new Point(5, 5)), TrayRules.ArgsOf(TrayEvent.MouseEnter, Icon, new Point(5, 5)));
+        Assert.Equal((default(Rectangle), new Point(5, 5)), TrayRules.ArgsOf(TrayEvent.MouseLeave, Icon, new Point(5, 5)));
+        Assert.Null(TrayRules.ArgsOf(TrayEvent.BalloonShow, Icon, cursor));
+    }
+
+    [Fact]
+    public void ArgsOf_DropsAMoveOutsideTheBounds() => Assert.Null(TrayRules.ArgsOf(TrayEvent.MouseMove, Icon, new Point(5, 5)));
+
+    [Theory]
+    [InlineData(100, 200, true)]
+    [InlineData(131, 239, true)]
+    [InlineData(99, 210, false)]
+    [InlineData(132, 210, false)]
+    [InlineData(110, 199, false)]
+    [InlineData(110, 240, false)]
+    public void Contains_ExcludesTheRightAndBottomEdges(int x, int y, bool inside) => Assert.Equal(inside, TrayRules.Contains(Icon, new Point(x, y)));
+
+    [Fact]
+    public void Contains_AnEmptyRectangleHoldsNothing() => Assert.False(TrayRules.Contains(default, default));
+
+    private sealed class FakeIcon(uint id, Rectangle bounds, List<string> log) : ITrayHoverTarget
+    {
+        public uint Id => id;
+        public Rectangle GetBounds() => bounds;
+        public void Entered() => log.Add($"enter {id}");
+        public void Exited() => log.Add($"leave {id}");
+    }
+
+    private sealed class Rig
+    {
+        public readonly List<string> Log = [];
+        public Point Cursor;
+        public Action? Tick;
+        public readonly TrayHoverDetector Detector;
+
+        public Rig() => Detector = new TrayHoverDetector(() => Cursor, tick => { Tick = tick; Log.Add("start"); }, () => { Tick = null; Log.Add("stop"); });
+
+        public FakeIcon Icon(uint id, Rectangle bounds) => new(id, bounds, Log);
+    }
+
+    [Fact]
+    public void Hover_AMoveOutsideTheIcon_DoesNothing()
+    {
+        var rig = new Rig { Cursor = new Point(5, 5) };
+        rig.Detector.MouseMove(rig.Icon(2, Icon));
+        Assert.Empty(rig.Log);
+    }
+
+    [Fact]
+    public void Hover_TheFirstMoveInside_Enters_AndLaterMovesDoNot()
+    {
+        var rig = new Rig { Cursor = new Point(110, 210) };
+        var icon = rig.Icon(2, Icon);
+        rig.Detector.MouseMove(icon);
+        rig.Detector.MouseMove(icon);
+        Assert.Equal(["enter 2", "start"], rig.Log);
+    }
+
+    [Fact]
+    public void Hover_TheTimer_LeavesOnceThePointerIsOff_ThenAMoveEntersAgain()
+    {
+        var rig = new Rig { Cursor = new Point(110, 210) };
+        var icon = rig.Icon(2, Icon);
+        rig.Detector.MouseMove(icon);
+        rig.Tick!();
+        Assert.Equal(["enter 2", "start"], rig.Log);
+        rig.Cursor = new Point(5, 5);
+        rig.Tick!();
+        Assert.Equal(["enter 2", "start", "stop", "leave 2"], rig.Log);
+        rig.Detector.IconRemoved(icon);
+        Assert.Equal(["enter 2", "start", "stop", "leave 2"], rig.Log);
+        rig.Cursor = new Point(110, 210);
+        rig.Detector.MouseMove(icon);
+        Assert.Equal(["enter 2", "start", "stop", "leave 2", "enter 2", "start"], rig.Log);
+    }
+
+    [Fact]
+    public void Hover_MovingOntoAnotherIcon_LeavesTheFirst()
+    {
+        var rig = new Rig { Cursor = new Point(110, 210) };
+        rig.Detector.MouseMove(rig.Icon(2, Icon));
+        rig.Cursor = new Point(140, 210);
+        rig.Detector.MouseMove(rig.Icon(3, new Rectangle(132, 200, 32, 40)));
+        Assert.Equal(["enter 2", "start", "stop", "leave 2", "enter 3", "start"], rig.Log);
+    }
+
+    [Fact]
+    public void Hover_RemovingTheEnteredIcon_LeavesIt_AndOthersAreIgnored()
+    {
+        var rig = new Rig { Cursor = new Point(110, 210) };
+        var icon = rig.Icon(2, Icon);
+        rig.Detector.MouseMove(icon);
+        rig.Detector.IconRemoved(rig.Icon(3, Icon));
+        Assert.Equal(["enter 2", "start"], rig.Log);
+        rig.Detector.IconRemoved(icon);
+        Assert.Equal(["enter 2", "start", "stop", "leave 2"], rig.Log);
+    }
 
     [Theory]
     [InlineData(BalloonIconType.None, false, false, false, 0x00u)]
@@ -35,44 +148,6 @@ public sealed class TrayTests
         Assert.Equal(0x24u, TrayRules.BalloonFlags(new DisplayBalloonOptions { Icon = icon }));
         Assert.Equal(0x21u, TrayRules.BalloonFlags(new DisplayBalloonOptions { Icon = icon, IconType = BalloonIconType.Info }));
         Assert.Equal(0x20u, TrayRules.BalloonFlags(new DisplayBalloonOptions()));
-    }
-
-    [Theory]
-    [InlineData("CmdOrCtrl+Shift+S", "Ctrl+Shift+S")]
-    [InlineData("CommandOrControl+q", "Ctrl+Q")]
-    [InlineData("Control+Alt+Delete", "Ctrl+Alt+Delete")]
-    [InlineData("Option+F4", "Alt+F4")]
-    [InlineData("Ctrl+Plus", "Ctrl++")]
-    [InlineData("Cmd+Q", null)]
-    [InlineData("Super+L", null)]
-    [InlineData("", null)]
-    [InlineData(null, null)]
-    public void AcceleratorText_WritesItTheWindowsWay(string? accelerator, string? text) => Assert.Equal(text, TrayRules.AcceleratorText(accelerator));
-
-    [Fact]
-    public void MenuEntries_FollowTheMenu()
-    {
-        var menu = new Menu
-        {
-            new MenuItem { Label = "&Show", Accelerator = "CmdOrCtrl+S" },
-            new MenuItem { Type = MenuItemType.Separator },
-            new MenuItem { Label = "Pinned", Type = MenuItemType.Checkbox, Checked = true },
-            new MenuItem { Label = "Plain", Checked = true },
-            new MenuItem { Label = "A", Type = MenuItemType.Radio, Checked = true },
-            new MenuItem { Label = "Off", Enabled = false },
-            new MenuItem { Label = "Hidden", Visible = false },
-            new MenuItem { Label = "More", Submenu = new Menu { new MenuItem { Label = "Deep" } } },
-        };
-        var entries = TrayRules.MenuEntries(menu);
-        Assert.Equal(["&Show\tCtrl+S", "", "Pinned", "Plain", "A", "Off", "More"], entries.Select(e => e.Text));
-        Assert.Equal([false, true, false, false, false, false, false], entries.Select(e => e.Separator));
-        Assert.Equal([false, false, true, false, true, false, false], entries.Select(e => e.Checked));
-        Assert.Equal([false, false, false, false, true, false, false], entries.Select(e => e.Radio));
-        Assert.Equal([true, true, true, true, true, false, true], entries.Select(e => e.Enabled));
-        Assert.Equal(menu.Items[0].CommandId, entries[0].CommandId);
-        Assert.Equal(0, entries[1].CommandId);
-        Assert.Equal(["Deep"], entries[6].Submenu!.Select(e => e.Text));
-        Assert.All(entries.Take(6), e => Assert.Null(e.Submenu));
     }
 
     [Fact]
