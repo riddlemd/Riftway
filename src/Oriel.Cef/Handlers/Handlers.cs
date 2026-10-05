@@ -218,6 +218,27 @@ public sealed unsafe class ClientHandler
 
     private readonly FindHandler? _find;
 
+    /// <summary>Reports focus; null leaves it to CEF.</summary>
+    public FocusHandler? Focus
+    {
+        get => _focus;
+        init
+        {
+            _focus = value;
+            if (value is not null) Native->get_focus_handler = &GetFocusHandler;
+        }
+    }
+
+    private readonly FocusHandler? _focus;
+
+    [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])]
+    private static cef_focus_handler_t* GetFocusHandler(cef_client_t* self)
+    {
+        var handler = NativeObject.Owner<ClientHandler>(self)._focus!.Native;
+        NativeObject.AddRef(handler);
+        return handler;
+    }
+
     [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])]
     private static cef_find_handler_t* GetFindHandler(cef_client_t* self)
     {
@@ -647,6 +668,28 @@ public sealed unsafe class JsDialogHandler
     {
         Native = NativeObject.Create<cef_jsdialog_handler_t>(this);
         Native->on_jsdialog = &OnJsDialog;
+        Native->on_before_unload_dialog = &OnBeforeUnloadDialog;
+    }
+
+    /// <summary>A beforeunload handler objects to leaving the page: (isReload) → whether to leave anyway. Answered at
+    /// once, with no dialog; null leaves CEF's dialog.</summary>
+    public Func<bool, bool>? BeforeUnload { get; init; }
+
+    [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])]
+    private static int OnBeforeUnloadDialog(cef_jsdialog_handler_t* self, cef_browser_t* browser, cef_string_utf16_t* message, int isReload, cef_jsdialog_callback_t* callback)
+    {
+        var handled = 0;
+        if (NativeObject.Owner<JsDialogHandler>(self).BeforeUnload is { } decide)
+        {
+            var leave = false;
+            Guard.Run(() => leave = decide(isReload != 0));
+            cef_string_utf16_t none = default;
+            callback->cont(callback, leave ? 1 : 0, &none);
+            handled = 1;
+        }
+        NativeObject.Release(callback);
+        NativeObject.Release(browser);
+        return handled;
     }
 
     public cef_jsdialog_handler_t* Native { get; }
@@ -675,6 +718,51 @@ public sealed unsafe class DisplayHandler
         Native->on_title_change = &OnTitleChange;
         Native->on_favicon_urlchange = &OnFaviconUrlChange;
         Native->on_fullscreen_mode_change = &OnFullscreenModeChange;
+        Native->on_console_message = &OnConsoleMessage;
+        Native->on_status_message = &OnStatusMessage;
+        Native->on_cursor_change = &OnCursorChange;
+    }
+
+    /// <summary>A console message: (severity, message, source, line). CEF still logs it.</summary>
+    public Action<cef_log_severity_t, string, string, int>? ConsoleMessage { get; init; }
+
+    [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])]
+    private static int OnConsoleMessage(cef_display_handler_t* self, cef_browser_t* browser, cef_log_severity_t level, cef_string_utf16_t* message, cef_string_utf16_t* source, int line)
+    {
+        var text = CefString.Read(message);
+        var from = CefString.Read(source);
+        if (NativeObject.Owner<DisplayHandler>(self).ConsoleMessage is { } callback) Guard.Run(() => callback(level, text, from, line));
+        NativeObject.Release(browser);
+        return 0;
+    }
+
+    /// <summary>The URL under the pointer changed, or empty when none: CEF's status message is Chromium's target URL.</summary>
+    public Action<string>? StatusMessage { get; init; }
+
+    [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])]
+    private static void OnStatusMessage(cef_display_handler_t* self, cef_browser_t* browser, cef_string_utf16_t* value)
+    {
+        var text = CefString.Read(value);
+        if (NativeObject.Owner<DisplayHandler>(self).StatusMessage is { } callback) Guard.Run(() => callback(text));
+        NativeObject.Release(browser);
+    }
+
+    /// <summary>The page set its cursor; a custom one comes with its image. CEF still shows it.</summary>
+    public Action<CursorChange>? CursorChanged { get; init; }
+
+    [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])]
+    private static int OnCursorChange(cef_display_handler_t* self, cef_browser_t* browser, void* cursor, cef_cursor_type_t type, cef_cursor_info_t* info)
+    {
+        CursorChange change = new(type, null, 1, 0, 0, 0, 0);
+        if (type == cef_cursor_type_t.CT_CUSTOM && info is not null && info->buffer is not null)
+        {
+            var bytes = new byte[info->size.width * info->size.height * 4];
+            new ReadOnlySpan<byte>(info->buffer, bytes.Length).CopyTo(bytes);
+            change = new(type, bytes, info->image_scale_factor, info->size.width, info->size.height, info->hotspot.x, info->hotspot.y);
+        }
+        if (NativeObject.Owner<DisplayHandler>(self).CursorChanged is { } callback) Guard.Run(() => callback(change));
+        NativeObject.Release(browser);
+        return 0;
     }
 
     /// <summary>The page entered (true) or left HTML full screen; Chrome style resizes the window itself.</summary>
@@ -715,6 +803,31 @@ public sealed unsafe class DisplayHandler
         var owner = NativeObject.Owner<DisplayHandler>(self);
         var text = CefString.Read(title);
         if (owner.TitleChanged is { } callback) Guard.Run(() => callback(text));
+        NativeObject.Release(browser);
+    }
+}
+
+/// <summary>A cursor the page set: its type, and for a custom one its BGRA pixels, scale, size and hotspot.</summary>
+public sealed record CursorChange(cef_cursor_type_t Type, byte[]? Bgra, float Scale, int Width, int Height, int HotspotX, int HotspotY);
+
+/// <summary><c>cef_focus_handler_t</c>: the page's view took focus. Focus requests are left to CEF.</summary>
+public sealed unsafe class FocusHandler
+{
+    public FocusHandler()
+    {
+        Native = NativeObject.Create<cef_focus_handler_t>(this);
+        Native->on_got_focus = &OnGotFocus;
+    }
+
+    public cef_focus_handler_t* Native { get; }
+
+    /// <summary>The page's view took keyboard focus: Chromium's OnWebContentsFocused.</summary>
+    public Action? GotFocus { get; init; }
+
+    [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])]
+    private static void OnGotFocus(cef_focus_handler_t* self, cef_browser_t* browser)
+    {
+        if (NativeObject.Owner<FocusHandler>(self).GotFocus is { } callback) Guard.Run(callback);
         NativeObject.Release(browser);
     }
 }

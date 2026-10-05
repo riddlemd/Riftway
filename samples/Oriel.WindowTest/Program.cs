@@ -1390,6 +1390,117 @@ async Task WebContentsMethodsAsync()
         && IsBlue(Pixel(zoomed, 1, 1)) && IsBlue(Pixel(zoomed, zoomed.GetSize().Width - 2, zoomed.GetSize().Height - 2)), zoomed.GetSize());
     wc.SetZoomFactor(1);
 
+    // console-message, update-target-url, cursor-changed, frame-created, as Electron's.
+    var consoleLog = new List<string>();
+    EventHandler<ConsoleMessageEventArgs> onConsole = (_, e) => { lock (consoleLog) consoleLog.Add($"{e.Level}:{e.Message}:{e.LineNumber}:{Path.GetFileName(new Uri(e.SourceId).LocalPath)}:{e.Frame is null}"); };
+    wc.ConsoleMessage += onConsole;
+    File.WriteAllText(page, "<!doctype html><style>html,body{margin:0}</style>\n<a id=l href='https://target.test/x' style='position:absolute;left:0;top:0;width:100px;height:40px;display:block'>link</a>\n"
+        + "<div id=h style='position:absolute;left:0;top:100px;width:100px;height:40px;cursor:pointer'></div>\n"
+        + "<div id=c style='position:absolute;left:0;top:200px;width:100px;height:40px;cursor:url(data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAgAAAAIAQMAAAD+wSzIAAAABlBMVEX///+/v7+jQ3Y5AAAADklEQVQI12P4AQQKDDgAgfAKERn8L8kAAAAASUVORK5CYII=) 3 4, auto'></div>\n"
+        + "<script>console.warn('w1');\nconsole.log('l1');\nconsole.debug('d1');\nconsole.error('e1');</script>");
+    await wc.LoadFile(page);
+    var logged = Eventually(() => { lock (consoleLog) return consoleLog.Count >= 4; }, step);
+    wc.ConsoleMessage -= onConsole;
+    string LogText() { lock (consoleLog) return string.Join(" | ", consoleLog); }
+    Check("console-message carries the level, message, line and source, as Electron's", logged && LogText().StartsWith(
+        $"Warning:w1:5:{Path.GetFileName(page)}:True | Info:l1:6:{Path.GetFileName(page)}:True | Debug:d1:7:{Path.GetFileName(page)}:True | Error:e1:8:{Path.GetFileName(page)}:True", StringComparison.Ordinal), LogText());
+
+    var targets = new List<string>();
+    EventHandler<string> onTarget = (_, url) => { lock (targets) targets.Add(url); };
+    wc.UpdateTargetUrl += onTarget;
+    var cursors = new List<CursorChangedEventArgs>();
+    EventHandler<CursorChangedEventArgs> onCursor = (_, e) => { lock (cursors) cursors.Add(e); };
+    wc.CursorChanged += onCursor;
+    bool SawCursor(string type) { lock (cursors) return cursors.Any(c => c.Type == type); }
+    wc.SendInputEvent(new MouseInputEvent(MouseInputEventType.MouseMove, 20, 20));
+    var hovered = Eventually(() => { lock (targets) return targets.Contains("https://target.test/x"); }, step);
+    wc.SendInputEvent(new MouseInputEvent(MouseInputEventType.MouseMove, 20, 120));
+    var left = Eventually(() => { lock (targets) return targets.Count > 0 && targets[^1] == ""; }, step);
+    var hand = Eventually(() => SawCursor("hand"), step);
+    wc.SendInputEvent(new MouseInputEvent(MouseInputEventType.MouseMove, 20, 320));
+    var plain = Eventually(() => SawCursor("pointer"), step);
+    wc.SendInputEvent(new MouseInputEvent(MouseInputEventType.MouseMove, 20, 220));
+    var custom = Eventually(() => SawCursor("custom"), step);
+    wc.UpdateTargetUrl -= onTarget;
+    wc.CursorChanged -= onCursor;
+    Check("update-target-url reports the link under the pointer, then empty", hovered && left, string.Join(",", targets));
+    string CursorText() { lock (cursors) return string.Join(",", cursors.Select(c => c.Type)); }
+    Check("cursor-changed names the cursor as Electron does: hand for cursor:pointer, pointer for the arrow", hand && plain, CursorText());
+    CursorChangedEventArgs? customCursor;
+    lock (cursors) customCursor = cursors.LastOrDefault(c => c.Type == "custom");
+    Check("a custom cursor comes with its image, size and hotspot", custom && customCursor is { Image: not null, Hotspot: { X: 3, Y: 4 } } cc
+        && cc.Size.Width == (int)Math.Round(8 * cc.Scale) && cc.Image.GetSize(cc.Scale) is { Width: > 0 },
+        customCursor is null ? CursorText() : $"{customCursor.Size} {customCursor.Hotspot} {customCursor.Scale}");
+
+    var createdFrames = new List<WebFrameMain>();
+    EventHandler<WebFrameMain> onFrameCreated = (_, f) => { lock (createdFrames) createdFrames.Add(f); };
+    wc.FrameCreated += onFrameCreated;
+    await wc.ExecuteJavaScriptAsync("const fr = document.createElement('iframe'); fr.name = 'made'; document.body.append(fr); 1");
+    var frameMade = Eventually(() => { lock (createdFrames) return createdFrames.Count == 1; }, step);
+    wc.FrameCreated -= onFrameCreated;
+    Check("frame-created reports a new iframe with its frame", frameMade && createdFrames[0].Parent == wc.MainFrame, createdFrames.Count);
+
+    // focus and blur follow the page's view; focusing one of its own iframes is not a blur.
+    File.WriteAllText(page, "<!doctype html><input id=i><iframe name=inner srcdoc='<input id=j>'></iframe>");
+    var fa = new BrowserWindow(new BrowserWindowOptions { Width = 300, Height = 200, X = 40, Y = 40 });
+    var fb = new BrowserWindow(new BrowserWindowOptions { Width = 300, Height = 200, X = 380, Y = 40 });
+    await fa.WebContents.LoadFile(page);
+    await fb.WebContents.LoadFile(page);
+    var focusEvents = new List<string>();
+    fa.WebContents.Focused += (_, _) => { lock (focusEvents) focusEvents.Add("focus"); };
+    fa.WebContents.Blurred += (_, _) => { lock (focusEvents) focusEvents.Add("blur"); };
+    string FocusText() { lock (focusEvents) return string.Join(",", focusEvents); }
+    fa.WebContents.Focus();
+    var gained = Eventually(() => FocusText().EndsWith("focus", StringComparison.Ordinal) && fa.WebContents.IsFocused(), step);
+    lock (focusEvents) focusEvents.Clear();
+    await fa.WebContents.ExecuteJavaScriptAsync("frames.inner.document.getElementById('j').focus(); 1");
+    await Task.Delay(400);
+    var stayed = !FocusText().Contains("blur", StringComparison.Ordinal) && fa.WebContents.IsFocused();
+    fb.WebContents.Focus();
+    var lost = Eventually(() => FocusText().EndsWith("blur", StringComparison.Ordinal) && !fa.WebContents.IsFocused() && fb.WebContents.IsFocused(), step);
+    Check("Focus focuses the page and raises focus; IsFocused follows", gained, FocusText());
+    Check("focus moving into the page's own iframe is no blur", stayed, FocusText());
+    Check("another page taking focus raises blur, and IsFocused moves with it", lost, $"{FocusText()} a={fa.WebContents.IsFocused()} b={fb.WebContents.IsFocused()}");
+    fb.Destroy();
+
+    // close: the page goes, destroyed is raised, and its window closes with it.
+    var faContents = fa.WebContents;
+    var destroyedRaised = false;
+    var faClosed = false;
+    faContents.Destroyed += (_, _) => destroyedRaised = true;
+    fa.Closed += (_, _) => faClosed = true;
+    Check("IsDestroyed is false while the page lives", !faContents.IsDestroyed());
+    faContents.Close();
+    var closedDown = Eventually(() => destroyedRaised && faContents.IsDestroyed() && faClosed, step);
+    Check("WebContents.Close destroys the page, raises destroyed and closes its window", closedDown, $"destroyed={destroyedRaised} isDestroyed={faContents.IsDestroyed()} windowClosed={faClosed}");
+    var waiting = new BrowserWindow(new BrowserWindowOptions { Show = false });
+    await waiting.WebContents.LoadFile(page);
+    var waitingContents = waiting.WebContents;
+    waitingContents.Close(new WebContentsCloseOptions { WaitForBeforeUnload = true });
+    Check("Close waiting for beforeunload closes a page that does not object", Eventually(() => waitingContents.IsDestroyed(), step));
+    File.WriteAllText(page, "<!doctype html><script>addEventListener('beforeunload', e => { e.preventDefault(); e.returnValue = ''; });</script>");
+    var objecting = new BrowserWindow(new BrowserWindowOptions { Show = false });
+    await objecting.WebContents.LoadFile(page);
+    var objectingContents = objecting.WebContents;
+    var preventions = 0;
+    objectingContents.WillPreventUnload += (_, _) => preventions++;
+    objectingContents.Close(new WebContentsCloseOptions { WaitForBeforeUnload = true });
+    await Task.Delay(1500);
+    var kept = !objectingContents.IsDestroyed() && preventions == 1;
+    Check("a page whose beforeunload objects stays open when Close waits, with will-prevent-unload and no dialog", kept, $"destroyed={objectingContents.IsDestroyed()} preventions={preventions}");
+    objectingContents.WillPreventUnload += (_, e) => e.Cancel = true;
+    objectingContents.Close(new WebContentsCloseOptions { WaitForBeforeUnload = true });
+    Check("preventDefault in will-prevent-unload lets the page close", Eventually(() => objectingContents.IsDestroyed(), step) && preventions == 2, $"preventions={preventions}");
+    var forced = new BrowserWindow(new BrowserWindowOptions { Show = false });
+    await forced.WebContents.LoadFile(page);
+    var forcedContents = forced.WebContents;
+    var forcedPreventions = 0;
+    forcedContents.WillPreventUnload += (_, _) => forcedPreventions++;
+    // With user activation, so only the forced close keeps beforeunload from running.
+    await forcedContents.ExecuteJavaScriptAsync("0", userGesture: true);
+    forcedContents.Close();
+    Check("Close without waiting skips beforeunload, even after user activation", Eventually(() => forcedContents.IsDestroyed(), step) && forcedPreventions == 0, $"preventions={forcedPreventions}");
+
     // Device emulation: Electron's parameters reach the page.
     var before = await Js(w, "[innerWidth, devicePixelRatio, screen.width]");
     wc.EnableDeviceEmulation(new DeviceEmulationParameters

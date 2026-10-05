@@ -11,14 +11,14 @@ Percentages are over the non-n/a items; the second counts a partial item as half
 | Area | Items | Done | Partial | Missing | n/a | % done | % done + partial/2 |
 |---|---|---|---|---|---|---|---|
 | Static methods | 5 | 1 | 2 | 2 | 0 | 20.0% | 40.0% |
-| Instance events | 59 | 21 | 8 | 28 | 2 | 36.8% | 43.9% |
-| Instance methods | 118 | 33 | 21 | 56 | 8 | 30.0% | 39.5% |
+| Instance events | 59 | 26 | 11 | 20 | 2 | 45.6% | 55.3% |
+| Instance methods | 118 | 37 | 21 | 52 | 8 | 33.6% | 43.2% |
 | Instance properties | 18 | 8 | 1 | 8 | 1 | 47.1% | 50.0% |
 | navigationHistory | 14 | 12 | 0 | 2 | 0 | 85.7% | 85.7% |
 | WebFrameMain events and statics | 3 | 1 | 0 | 2 | 0 | 33.3% | 33.3% |
 | WebFrameMain methods | 9 | 1 | 4 | 4 | 0 | 11.1% | 33.3% |
 | WebFrameMain properties | 15 | 9 | 0 | 6 | 0 | 60.0% | 60.0% |
-| **Total** | 241 | 86 | 36 | 108 | 11 | 37.4% | 45.2% |
+| **Total** | 241 | 95 | 39 | 96 | 11 | 41.3% | 49.8% |
 
 ## Checklist
 
@@ -58,19 +58,19 @@ Percentages are over the non-n/a items; the second counts a partial item as half
 | `did-navigate` | `DidNavigate` | done |  |
 | `did-frame-navigate` | `DidFrameNavigate` | partial | `Frame` in place of process and routing ids (C12, F2). |
 | `did-navigate-in-page` | `DidNavigateInPage` | partial | `Frame` in place of process and routing ids (C12, F2). |
-| `will-prevent-unload` | — | missing |  |
+| `will-prevent-unload` | `WillPreventUnload` | done | No `did-fail-load` when it keeps a `loadURL` from leaving (C31). |
 | `render-process-gone` | `RenderProcessGone` | partial | No `clean-exit` (C13). |
 | `unresponsive` | `Unresponsive` | partial | Real hang not reproduced in the harness (C14). |
 | `responsive` | `Responsive` | partial | Real hang not reproduced in the harness (C14). |
-| `destroyed` | — | missing |  |
+| `destroyed` | `Destroyed` | done |  |
 | `input-event` | — | missing |  |
 | `before-input-event` | `BeforeInputEvent` | partial | `modifiers` shape (C15); `code`, `isComposing`, `location` derived (C16). |
 | `before-mouse-event` | — | missing |  |
 | `enter-html-full-screen` | `EnterHtmlFullScreen` | done |  |
 | `leave-html-full-screen` | `LeaveHtmlFullScreen` | done |  |
 | `zoom-changed` | — | missing |  |
-| `blur` | — | missing |  |
-| `focus` | — | missing |  |
+| `blur` | `Blurred` | partial | Raised when the window loses focus; another view in the window taking focus is not seen (C30). |
+| `focus` | `Focused` | done |  |
 | `devtools-open-url` | — | missing |  |
 | `devtools-search-query` | — | missing |  |
 | `devtools-opened` | — | missing |  |
@@ -84,17 +84,17 @@ Percentages are over the non-n/a items; the second counts a partial item as half
 | `media-paused` | — | missing |  |
 | `audio-state-changed` | — | missing | CEF never reports audio for Chrome-style browsers (C23). |
 | `did-change-theme-color` | — | missing |  |
-| `update-target-url` | — | missing |  |
-| `cursor-changed` | — | missing |  |
+| `update-target-url` | `UpdateTargetUrl` | done |  |
+| `cursor-changed` | `CursorChanged` | done |  |
 | `select-bluetooth-device` | — | missing |  |
 | `paint` | — | missing |  |
 | `devtools-reload-page` | — | missing |  |
-| `console-message` | — | missing |  |
+| `console-message` | `ConsoleMessage` | partial | No `frame` (C28). |
 | `preload-error` | — | missing |  |
 | `ipc-message` | — | missing | Only `IpcMain` listeners exist; no per-contents event. |
 | `ipc-message-sync` | — | missing | Sync IPC (I2). |
 | `preferred-size-changed` | — | missing |  |
-| `frame-created` | — | missing |  |
+| `frame-created` | `FrameCreated` | partial | Subframes only (C29). |
 
 ### Instance methods
 
@@ -129,10 +129,10 @@ Percentages are over the non-n/a items; the second counts a partial item as half
 | `send(channel, ...args)` | `Send` | done | Args are JSON (I1). |
 | `sendInputEvent(inputEvent)` | `SendInputEvent` | done | Keyboard; mouse down/up/move/enter/leave, contextMenu and wheel |
 | `downloadURL(url, options)` | `DownloadUrl` | partial | No `headers` option (E16); the session raises `WillDownload`. |
-| `isDestroyed()` | — | missing |  |
-| `close()` | — | missing |  |
-| `focus()` | — | missing |  |
-| `isFocused()` | — | missing |  |
+| `isDestroyed()` | `IsDestroyed` | done |  |
+| `close()` | `Close` | done |  |
+| `focus()` | `Focus` | done |  |
+| `isFocused()` | `IsFocused` | done |  |
 | `isLoading()` | `IsLoading` | done |  |
 | `isLoadingMainFrame()` | `IsLoadingMainFrame` | partial | Derived from DevTools frame events (C19). |
 | `isWaitingForResponse()` | `IsWaitingForResponse` | partial | Ends at commit, from DevTools frame events (C19). |

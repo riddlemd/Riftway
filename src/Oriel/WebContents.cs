@@ -53,7 +53,7 @@ public sealed unsafe partial class WebContents
         RegisterLifecycle();
         _preferences = preferences;
         Session = session;
-        JsDialog = new JsDialogHandler { SuppressAll = preferences.DisableDialogs };
+        JsDialog = new JsDialogHandler { SuppressAll = preferences.DisableDialogs, BeforeUnload = OnBeforeUnload };
         // Chrome's own shortcut (F12) and the context menu's Inspect open DevTools without OpenDevTools.
         if (!preferences.DevTools)
             Command = new CommandHandler(["IDC_DEV_TOOLS", "IDC_DEV_TOOLS_CONSOLE", "IDC_DEV_TOOLS_DEVICES", "IDC_DEV_TOOLS_INSPECT",
@@ -67,6 +67,9 @@ public sealed unsafe partial class WebContents
             TitleChanged = OnTitleChanged,
             FaviconUrlsChanged = OnFaviconUrlsChanged,
             FullscreenModeChanged = OnFullscreenModeChanged,
+            ConsoleMessage = OnConsoleMessage,
+            StatusMessage = OnStatusMessage,
+            CursorChanged = OnCursorChanged,
         };
         ContextMenuRequests = new ContextMenuHandler(OnContextMenu);
         Load = new LoadHandler
@@ -902,6 +905,7 @@ public sealed unsafe partial class WebContents
         foreach (var frame in _frames.Values) frame.Detached = true;
         _frames.Clear();
         _contextFrames.Clear();
+        Raise(Destroyed, EventArgs.Empty, "destroyed");
     }
 
     private void OnDevToolsEvent(string method, JsonElement parameters)
@@ -915,7 +919,11 @@ public sealed unsafe partial class WebContents
             case "Page.frameAttached":
                 var attached = parameters.GetProperty("frameId").GetString()!;
                 if (!_frames.ContainsKey(attached))
-                    _frames[attached] = new FrameState { Id = attached, ParentId = parameters.GetProperty("parentFrameId").GetString() };
+                {
+                    var created = new FrameState { Id = attached, ParentId = parameters.GetProperty("parentFrameId").GetString() };
+                    _frames[attached] = created;
+                    if (FrameCreated is not null) Raise(FrameCreated, WrapperOf(created), "frame-created");
+                }
                 break;
 
             case "Page.lifecycleEvent" when parameters.GetProperty("name").GetString() == "DOMContentLoaded":

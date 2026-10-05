@@ -300,6 +300,7 @@ public sealed unsafe partial class BrowserWindow
             Permission = WebContents.Permissions,
             Download = WebContents.Downloads,
             Find = WebContents.Finds,
+            Focus = WebContents.FocusEvents,
         };
         if (!OperatingSystem.IsMacOS())
         {
@@ -1325,6 +1326,8 @@ public sealed unsafe partial class BrowserWindow
     private void OnActivationChanged(bool active)
     {
         if (!active) _menuBar?.OnWindowBlurred();
+        // The page's view loses focus with its window, as a Chromium view does when its window resigns.
+        if (!active) WebContents.OnViewBlurred();
         (active ? Focused : Blurred)?.Invoke(this, EventArgs.Empty);
         OrielApp.CurrentOrNull?.RaiseBrowserWindowFocus(this, active);
     }
