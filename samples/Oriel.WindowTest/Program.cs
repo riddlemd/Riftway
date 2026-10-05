@@ -1168,7 +1168,7 @@ async Task WebContentsMethodsAsync()
     var page = Path.Combine(dir, "edit.html");
     File.WriteAllText(page, "<!doctype html><style>body{margin:0}</style><input id=i value='hello world'><textarea id=t>one two three</textarea>" +
         "<p id=p>alpha beta gamma</p><div id=box style='height:100px;overflow:auto'><div style='height:1000px'><button id=inner>in</button></div></div>" +
-        "<div style='height:5000px'></div><p id=far>far away text</p><script>window.inputs = []; i.addEventListener('input', e => inputs.push(e.inputType));</script>");
+        "<div style='height:5000px'></div><p id=far>far away text</p><div style='height:2000px'></div><script>window.inputs = []; i.addEventListener('input', e => inputs.push(e.inputType));</script>");
     await wc.LoadFile(page);
     w.Focus();
     await wc.ExecuteJavaScriptAsync("i.value = ''; i.focus(); 1");
@@ -1201,9 +1201,11 @@ async Task WebContentsMethodsAsync()
     Check("AdjustSelection moves the document's selection by characters", Eventually(() => Js(w, "getSelection().toString()").Result is "\" beta \"", step), Js(w, "getSelection().toString()").Result);
 
     var bottom = (await wc.ExecuteJavaScriptAsync("document.scrollingElement.scrollHeight - innerHeight"))!.GetValue<int>();
+    // On a 2x display the last scroll position can be half a pixel past the rounded scrollHeight.
+    const string atBottom = "Math.abs(scrollY - (document.scrollingElement.scrollHeight - innerHeight)) < 1";
     await wc.ExecuteJavaScriptAsync("document.activeElement.blur(); 1");
     wc.ScrollToBottom();
-    Check("ScrollToBottom scrolls the document to its end", Eventually(() => Js(w, "scrollY").Result as string == bottom.ToString(), step), $"{Js(w, "scrollY").Result} of {bottom}");
+    Check("ScrollToBottom scrolls the document to its end", Eventually(() => Js(w, atBottom).Result is "true", step), $"{Js(w, "scrollY").Result} of {bottom}");
     wc.ScrollToTop();
     Check("ScrollToTop scrolls the document back", Eventually(() => Js(w, "scrollY").Result is "0", step), Js(w, "scrollY").Result);
     await wc.ExecuteJavaScriptAsync("inner.focus(); 1");
@@ -1249,20 +1251,23 @@ async Task WebContentsMethodsAsync()
         var at = (y * image.GetSize().Width + x) * 4;
         return (bytes[at], bytes[at + 1], bytes[at + 2]);
     }
+    // The capture is in the display's colour space, as Chromium's is, so pure sRGB red or blue shifts on a wide-gamut Mac.
+    static bool IsRed((byte B, byte G, byte R) p) => p.R > 200 && p.G < 90 && p.B < 90;
+    static bool IsBlue((byte B, byte G, byte R) p) => p.B > 200 && p.R < 90 && p.G < 90;
     var whole = await wc.CapturePageAsync();
     Check("CapturePage without a rect captures the visible page in device pixels, at scale 1",
         whole.GetSize() == ((int)Math.Ceiling(view[0] * ratio), (int)Math.Ceiling(view[1] * ratio)) && whole.GetScaleFactors().SequenceEqual([1.0])
-        && Pixel(whole, 2, 2) == (0, 0, 255) && Pixel(whole, (int)(30 * ratio), (int)(25 * ratio)) == (255, 0, 0), $"{whole.GetSize()} view {view[0]}x{view[1]}@{ratio}");
+        && IsRed(Pixel(whole, 2, 2)) && IsBlue(Pixel(whole, (int)(30 * ratio), (int)(25 * ratio))), $"{whole.GetSize()} view {view[0]}x{view[1]}@{ratio} scales={string.Join(",", whole.GetScaleFactors())} bitmap={whole.ToBitmap().Length} p22={Pixel(whole, 2, 2)} pIn={Pixel(whole, (int)(30 * ratio), (int)(25 * ratio))}");
     var part = await wc.CapturePageAsync(new Rectangle(10, 10, 40, 30));
     Check("CapturePage with a rect captures that part", part.GetSize() == ((int)Math.Ceiling(40 * ratio), (int)Math.Ceiling(30 * ratio))
-        && Pixel(part, 0, 0) == (255, 0, 0) && Pixel(part, part.GetSize().Width - 1, part.GetSize().Height - 1) == (255, 0, 0), part.GetSize());
+        && IsBlue(Pixel(part, 0, 0)) && IsBlue(Pixel(part, part.GetSize().Width - 1, part.GetSize().Height - 1)), $"{part.GetSize()} {Pixel(part, 0, 0)} {Pixel(part, part.GetSize().Width - 1, part.GetSize().Height - 1)}");
     var empty = await wc.CapturePageAsync(new Rectangle(10, 10, 0, 30));
     Check("an empty rect captures the whole page, as Electron's", empty.GetSize() == whole.GetSize(), empty.GetSize());
     wc.SetZoomFactor(2);
     await Task.Delay(500);
     var zoomed = await wc.CapturePageAsync(new Rectangle(20, 20, 80, 60));
     Check("CapturePage's rect is in DIPs of the view, whatever the zoom", zoomed.GetSize() == ((int)Math.Ceiling(80 * ratio), (int)Math.Ceiling(60 * ratio))
-        && Pixel(zoomed, 1, 1) == (255, 0, 0) && Pixel(zoomed, zoomed.GetSize().Width - 2, zoomed.GetSize().Height - 2) == (255, 0, 0), zoomed.GetSize());
+        && IsBlue(Pixel(zoomed, 1, 1)) && IsBlue(Pixel(zoomed, zoomed.GetSize().Width - 2, zoomed.GetSize().Height - 2)), zoomed.GetSize());
     wc.SetZoomFactor(1);
 
     // Device emulation: Electron's parameters reach the page.
