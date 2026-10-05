@@ -29,6 +29,22 @@ public sealed unsafe partial class Session
         _handler = handler;
         Cookies = new Cookies(this);
         Protocol = new SessionProtocol(this);
+        s_justCreated.Add(this);
+    }
+
+    // Sessions made under s_gate, announced once it is released so a handler may ask for another.
+    private static readonly List<Session> s_justCreated = [];
+
+    private static T Announce<T>(T result)
+    {
+        Session[] created;
+        lock (s_gate)
+        {
+            created = [.. s_justCreated];
+            s_justCreated.Clear();
+        }
+        foreach (var session in created) OrielApp.CurrentOrNull?.RaiseSessionCreated(session);
+        return result;
     }
 
     /// <summary>The app's default session, used by windows that name no other. Electron's <c>session.defaultSession</c>.</summary>
@@ -38,10 +54,9 @@ public sealed unsafe partial class Session
         get
         {
             RequireReady();
-            lock (s_gate)
-            {
-                return s_default ??= new Session(CefNative.cef_request_context_get_global_context(), OrielApp.DataDirectory, null);
-            }
+            Session session;
+            lock (s_gate) session = s_default ??= new Session(CefNative.cef_request_context_get_global_context(), OrielApp.DataDirectory, null);
+            return Announce(session);
         }
     }
 
@@ -54,15 +69,16 @@ public sealed unsafe partial class Session
         ArgumentNullException.ThrowIfNull(partition);
         if (partition.Length == 0) return DefaultSession;
         RequireReady();
+        Session session;
         lock (s_gate)
         {
             if (s_byPartition.TryGetValue(partition, out var existing)) return existing;
-            var session = partition.StartsWith(PersistPrefix, StringComparison.Ordinal)
+            session = partition.StartsWith(PersistPrefix, StringComparison.Ordinal)
                 ? FromPathLocked(Path.Combine(OrielApp.DataDirectory!, PartitionDirectory(partition[PersistPrefix.Length..])))
                 : Create(null);
             s_byPartition[partition] = session;
-            return session;
         }
+        return Announce(session);
     }
 
     /// <summary>The session stored at <paramref name="path"/>. Electron's <c>session.fromPath()</c>.</summary>
@@ -80,7 +96,9 @@ public sealed unsafe partial class Session
         if (string.Equals(full, root, PathComparison)) return DefaultSession;
         if (!string.Equals(Path.GetDirectoryName(full), root, PathComparison))
             throw new ArgumentException($"CEF only creates sessions directly inside the app's data directory ({root}).", nameof(path));
-        lock (s_gate) return FromPathLocked(full);
+        Session session;
+        lock (s_gate) session = FromPathLocked(full);
+        return Announce(session);
     }
 
     /// <summary>The session's cookies. Electron's <c>ses.cookies</c>.</summary>

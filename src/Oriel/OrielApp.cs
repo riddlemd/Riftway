@@ -8,7 +8,7 @@ using Oriel.Cef.Platform;
 namespace Oriel;
 
 /// <summary>The application: Electron's <c>app</c>. One per process.</summary>
-public sealed unsafe class OrielApp
+public sealed unsafe partial class OrielApp
 {
     private static OrielApp? s_current;
 

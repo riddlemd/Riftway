@@ -122,6 +122,7 @@ public sealed unsafe partial class WebContents
             RenderProcessUnresponsive = OnRenderProcessUnresponsive,
             RenderProcessResponsive = OnRenderProcessResponsive,
         };
+        OrielApp.CurrentOrNull?.RaiseWebContentsCreated(this);
     }
 
     /// <summary>The page's title changed; cancel to keep the window's title. Electron's <c>page-title-updated</c>.</summary>

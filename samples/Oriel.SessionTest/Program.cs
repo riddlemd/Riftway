@@ -811,6 +811,64 @@ async Task RunAsync()
         mutualListener.Stop();
     }
 
+    // app events, as Electron's: creations in order, sessions once each, window focus.
+    static bool Until(Func<bool> condition, TimeSpan timeout)
+    {
+        var end = DateTime.UtcNow + timeout;
+        while (!condition() && DateTime.UtcNow < end) Thread.Sleep(50);
+        return condition();
+    }
+    var appCreated = new System.Collections.Concurrent.ConcurrentQueue<string>();
+    EventHandler<WebContents> onPage = (sender, page) => appCreated.Enqueue(ReferenceEquals(sender, app) ? "web-contents" : "web-contents?");
+    EventHandler<BrowserWindow> onWindow = (_, window) => appCreated.Enqueue("browser-window:" + window.Id);
+    app.WebContentsCreated += onPage;
+    app.BrowserWindowCreated += onWindow;
+    var made = new BrowserWindow(new BrowserWindowOptions { Show = false, WebPreferences = new WebPreferences { Partition = "app-events" } });
+    Check("a new window raises WebContentsCreated, then BrowserWindowCreated with the window", appCreated.SequenceEqual(["web-contents", "browser-window:" + made.Id]), string.Join(",", appCreated));
+    Session.FromPartition("app-events").Protocol.Handle("https", _ => ProtocolResponse.Text(Page, "text/html"));
+    await made.LoadUrl(Site);
+    appCreated.Clear();
+    await made.WebContents.ExecuteJavaScriptAsync("window.open('https://oriel.test/popup'); 1", userGesture: true);
+    Check("a window the page opens raises them too", Until(() => appCreated.Count >= 2, TimeSpan.FromSeconds(10)) && appCreated.First() == "web-contents" && appCreated.Any(c => c.StartsWith("browser-window:")),
+        string.Join(",", appCreated));
+    app.WebContentsCreated -= onPage;
+    app.BrowserWindowCreated -= onWindow;
+    foreach (var w in BrowserWindow.GetAllWindows().Where(w => w != made && w.WebContents.Session == Session.FromPartition("app-events"))) w.Destroy();
+    made.Destroy();
+
+    var sessions = new List<string>();
+    EventHandler<Session> onSession = (_, s) =>
+    {
+        sessions.Add(s.IsPersistent() ? "disk" : "memory");
+        // A handler may ask for another session.
+        if (sessions.Count == 1) Session.FromPartition("app-events-nested");
+    };
+    app.SessionCreated += onSession;
+    var fresh = Session.FromPartition("app-events-fresh");
+    Session.FromPartition("app-events-fresh");
+    Session.FromPartition("app-events");
+    app.SessionCreated -= onSession;
+    Check("SessionCreated is raised once for each new session, and a handler may ask for another", sessions.SequenceEqual(["memory", "memory"]) && fresh is not null,
+        string.Join(",", sessions));
+
+    var focusLog = new System.Collections.Concurrent.ConcurrentQueue<string>();
+    var focusA = new BrowserWindow(new BrowserWindowOptions { Title = "app focus 1", Width = 300, Height = 200 });
+    var focusB = new BrowserWindow(new BrowserWindowOptions { Title = "app focus 2", Width = 300, Height = 200, X = 400, Y = 100 });
+    await Task.Delay(500);
+    EventHandler<BrowserWindow> onFocus = (_, w) => focusLog.Enqueue("focus:" + (w == focusA ? 1 : w == focusB ? 2 : 0));
+    EventHandler<BrowserWindow> onBlur = (_, w) => focusLog.Enqueue("blur:" + (w == focusA ? 1 : w == focusB ? 2 : 0));
+    app.BrowserWindowFocus += onFocus;
+    app.BrowserWindowBlur += onBlur;
+    focusA.Focus();
+    var focusGot = Until(() => focusLog.Contains("focus:1"), TimeSpan.FromSeconds(5));
+    focusB.Focus();
+    var focusMoved = Until(() => focusLog.Contains("blur:1") && focusLog.Contains("focus:2"), TimeSpan.FromSeconds(5));
+    app.BrowserWindowFocus -= onFocus;
+    app.BrowserWindowBlur -= onBlur;
+    Check("BrowserWindowFocus and BrowserWindowBlur follow focus between windows", focusGot && focusMoved, string.Join(",", focusLog));
+    focusA.Destroy();
+    focusB.Destroy();
+
     // Proxy: requests go to a local listener posing as the proxy.
     var proxied = Session.FromPartition("proxied");
     using var listener = new TcpListener(IPAddress.Loopback, 0);

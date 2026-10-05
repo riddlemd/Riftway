@@ -337,6 +337,7 @@ public sealed unsafe partial class BrowserWindow
             KeyEvent = keyEvent => _menuBar?.OnKeyEvent(keyEvent) ?? false,
         };
 
+        OrielApp.CurrentOrNull?.RaiseBrowserWindowCreated(this);
         if (opener is not null)
         {
             _opener = opener;
@@ -1323,6 +1324,7 @@ public sealed unsafe partial class BrowserWindow
     {
         if (!active) _menuBar?.OnWindowBlurred();
         (active ? Focused : Blurred)?.Invoke(this, EventArgs.Empty);
+        OrielApp.CurrentOrNull?.RaiseBrowserWindowFocus(this, active);
     }
 
     // CEF reports no minimize/restore of its own, and on macOS minimizing changes no bounds, so the
