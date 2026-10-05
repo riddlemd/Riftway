@@ -1,10 +1,10 @@
-using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
 using System.Runtime.Versioning;
+using System.Text;
 
 namespace Oriel.Cef.Platform;
 
-/// <summary>A shortcut's fields as Windows stores them; null leaves a field alone on update and reads as unset.</summary>
+/// <summary>A shortcut's fields as Windows stores them; null leaves a field unset on write.</summary>
 public sealed record WindowsShortcut
 {
     public string? Target { get; init; }
@@ -17,10 +17,25 @@ public sealed record WindowsShortcut
     public Guid? ToastActivatorClsid { get; init; }
 }
 
-/// <summary>Electron's Windows shell operations, as Chromium and Electron do them. Call on <see cref="WindowsSta"/>.</summary>
+/// <summary>How <see cref="WindowsShellOps.WriteShortcut"/> treats the file; Chromium's <c>base::win::ShortcutOperation</c>.</summary>
+public enum WindowsShortcutOperation
+{
+    /// <summary><c>kCreateAlways</c>: a new shortcut, overwriting any file there.</summary>
+    CreateAlways,
+
+    /// <summary><c>kUpdateExisting</c>: the existing shortcut with the given fields changed.</summary>
+    UpdateExisting,
+
+    /// <summary><c>kReplaceExisting</c>: a new shortcut over an existing one, keeping its arguments unless given.</summary>
+    ReplaceExisting,
+}
+
+/// <summary>Electron's Windows shell operations, as Electron's <c>platform_util_win.cc</c> and Chromium's
+/// <c>base/win/shortcut.cc</c> do them. Call on <see cref="WindowsSta"/>.</summary>
 [SupportedOSPlatform("windows")]
 public static unsafe class WindowsShellOps
 {
+    private const int MaxPath = 260;
     private static readonly Guid s_clsidShellLink = new("00021401-0000-0000-C000-000000000046");
     private static readonly Guid s_iidShellLinkW = new("000214F9-0000-0000-C000-000000000046");
     private static readonly Guid s_iidPersistFile = new("0000010B-0000-0000-C000-000000000046");
@@ -32,67 +47,81 @@ public static unsafe class WindowsShellOps
     private static readonly Guid s_iidUnknown = new("00000000-0000-0000-C000-000000000046");
     private static readonly Guid s_appUserModel = new("9F4C2855-9F79-4B39-A8D0-E1D42DE1D5F3");
 
-    /// <summary>Opens <paramref name="url"/> with the scheme's registered handler; null on success, else the reason.
-    /// Chromium refuses schemes with no handler under <c>HKEY_CLASSES_ROOT</c>.</summary>
-    public static string? OpenExternal(string url, string? workingDirectory)
+    /// <summary>Electron's <c>OpenExternalOnWorkerThread</c>: shell-executes <paramref name="file"/> (the quoted, escaped
+    /// URL) with the "open" verb; null on success, else <c>Failed to open: </c> and the system's message.</summary>
+    public static string? OpenExternal(string file, string? workingDirectory, bool logUsage)
     {
-        if (!Uri.TryCreate(url, UriKind.Absolute, out var uri)) return "Invalid URL";
-        if (!SchemeRegistered(uri.Scheme)) return "Invalid URL scheme";
-        return Execute(url, workingDirectory) is { } error ? "Failed to open: " + error : null;
+        var mask = 0x00000100u /* SEE_MASK_NOASYNC */ | 0x00000400u /* SEE_MASK_FLAG_NO_UI */;
+        if (logUsage) mask |= 0x04000000u; // SEE_MASK_FLAG_LOG_USAGE
+        fixed (char* verb = "open", f = file, d = string.IsNullOrEmpty(workingDirectory) ? null : workingDirectory)
+        {
+            var info = new ShellExecuteInfo { Size = (uint)sizeof(ShellExecuteInfo), Mask = mask, Verb = verb, File = f, Directory = d, Show = 1 /* SW_SHOWNORMAL */ };
+            return ShellExecuteExW(&info) != 0 ? null : "Failed to open: " + SystemErrorCodeToString((uint)Marshal.GetLastSystemError());
+        }
     }
 
-    /// <summary>Opens a file or folder with its default handler; the reason it failed, or empty.</summary>
+    /// <summary>Electron's <c>OpenPathOnThread</c>: a folder opens with the "explore" verb and the folder class, anything
+    /// else with its default verb, both through an id list so Windows does not guess extensions; "" on success, else
+    /// <c>Failed to open path</c>.</summary>
     public static string OpenPath(string path)
-        => File.Exists(path) || Directory.Exists(path) ? Execute(path, null) ?? "" : "Failed to open path";
+    {
+        var full = WindowsPaths.NormalizeSeparators(path);
+        var opened = Directory.Exists(full)
+            ? ExecuteIdList(full, full, "explore", "folder")
+            : ExecuteIdList(full, WindowsPaths.DirName(full), null, null);
+        return opened ? "" : "Failed to open path";
+    }
 
-    /// <summary>Opens the folder holding <paramref name="path"/> with the item selected; just the folder when the item
-    /// cannot be selected.</summary>
+    /// <summary>Electron's <c>ShowItemInFolderOnWorkerThread</c>: the item's folder opened with the item selected;
+    /// nothing if either cannot be parsed or Explorer refuses.</summary>
     public static void ShowItemInFolder(string path)
     {
-        var full = Path.GetFullPath(path);
-        var folder = Path.GetDirectoryName(full);
-        if (folder is null) return;
-        void* folderList = null, itemList = null;
+        var full = WindowsPaths.NormalizeSeparators(path);
+        var dir = WindowsPaths.AsEndingWithSeparator(WindowsPaths.DirName(full));
+        if (dir.Length == 0) return;
+        void* desktop = null, dirItem = null, fileItem = null;
         try
         {
-            fixed (char* f = folder, i = full)
+            if (SHGetDesktopFolder(&desktop) < 0) return;
+            fixed (char* d = dir, f = full)
             {
-                if (SHParseDisplayName(f, null, &folderList, 0, null) < 0) return;
-                if (SHParseDisplayName(i, null, &itemList, 0, null) < 0 || SHOpenFolderAndSelectItems(folderList, 1, &itemList, 0) < 0)
-                    _ = Execute(folder, null);
+                if (ParseDisplayName(desktop, d, &dirItem) < 0 || ParseDisplayName(desktop, f, &fileItem) < 0) return;
             }
+            // Chromium falls back to opening the folder only when the HRESULT equals ERROR_FILE_NOT_FOUND, which a
+            // failed HRESULT never does, so a refusal opens nothing.
+            _ = SHOpenFolderAndSelectItems(dirItem, 1, &fileItem, 0);
         }
         finally
         {
-            CoTaskMemFree(folderList);
-            CoTaskMemFree(itemList);
+            CoTaskMemFree(dirItem);
+            CoTaskMemFree(fileItem);
+            Release(desktop);
         }
     }
 
-    /// <summary>Moves a file or folder to the Recycle Bin; null on success, else the reason. Refuses an item Windows would
-    /// delete for good instead (too big, or a volume without a bin), as Electron does.</summary>
+    /// <summary>Electron's <c>MoveItemToTrashWithError</c>: <c>IFileOperation</c> with its flags and a progress sink that
+    /// aborts any delete Windows would not send to the Recycle Bin; null on success, else Electron's message.</summary>
     public static string? Trash(string path)
     {
-        if (!File.Exists(path) && !Directory.Exists(path)) return "Path does not exist";
         void* operation = null, item = null;
         try
         {
             var clsid = s_clsidFileOperation;
             var iid = s_iidFileOperation;
-            if (CoCreateInstance(&clsid, null, 1, &iid, &operation) < 0) return "Failed to create the file operation";
-            // FOF_NO_UI | FOF_ALLOWUNDO | FOFX_RECYCLEONDELETE.
-            if (Call(operation, 5, 0x0614u | 0x40u | 0x00080000u) < 0) return "Failed to set the file operation flags";
+            if (CoCreateInstance(&clsid, null, 0x17 /* CLSCTX_ALL */, &iid, &operation) < 0) return "Failed to create FileOperation instance";
+            // FOF_NO_UI | FOFX_ADDUNDORECORD | FOF_NOERRORUI | FOF_SILENT | FOFX_SHOWELEVATIONPROMPT | FOFX_RECYCLEONDELETE.
+            if (Call(operation, 5, 0x0614u | 0x20000000u | 0x0400u | 0x0004u | 0x00040000u | 0x00080000u) < 0) return "Failed to set operation flags";
             var itemIid = s_iidShellItem;
-            fixed (char* p = Path.GetFullPath(path))
-                if (SHCreateItemFromParsingName(p, null, &itemIid, &item) < 0) return "Failed to find the item";
+            fixed (char* p = path)
+                if (SHCreateItemFromParsingName(p, null, &itemIid, &item) < 0) return "Failed to parse path";
             var sink = RecycleOnlySink.Create();
             try
             {
-                if (((delegate* unmanaged<void*, void*, void*, int>)Slot(operation, 18))(operation, item, sink) < 0) return "Failed to queue the item";
-                var performed = ((delegate* unmanaged<void*, int>)Slot(operation, 21))(operation);
+                if (((delegate* unmanaged<void*, void*, void*, int>)Slot(operation, 18))(operation, item, sink) < 0) return "Failed to enqueue DeleteItem command";
+                if (((delegate* unmanaged<void*, int>)Slot(operation, 21))(operation) < 0) return "Failed to perform delete operation";
                 int aborted;
-                ((delegate* unmanaged<void*, int*, int>)Slot(operation, 22))(operation, &aborted);
-                return performed < 0 || aborted != 0 ? "Failed to move the item to the Recycle Bin" : null;
+                if (((delegate* unmanaged<void*, int*, int>)Slot(operation, 22))(operation, &aborted) < 0) return "Failed to check operation status";
+                return aborted != 0 ? "Operation was aborted" : null;
             }
             finally { Release(sink); }
         }
@@ -106,86 +135,165 @@ public static unsafe class WindowsShellOps
     /// <summary>The default system sound; Electron's <c>shell.beep()</c>.</summary>
     public static bool Beep() => MessageBeep(0 /* MB_OK */) != 0;
 
-    /// <summary>Writes a .lnk file: <paramref name="load"/> starts from the existing one (update), else a new one. False if
-    /// Windows refused.</summary>
-    public static bool WriteShortcut(string path, WindowsShortcut fields, bool load)
+    /// <summary>Chromium's <c>CreateOrUpdateShortcutLink</c>; false where it returns false. Create makes the parent
+    /// folder; update and replace need a file the shell link object loads read-write.</summary>
+    public static bool WriteShortcut(string path, WindowsShortcut fields, WindowsShortcutOperation operation)
     {
-        void* link = null, file = null;
+        if (operation == WindowsShortcutOperation.CreateAlways)
+        {
+            try { Directory.CreateDirectory(WindowsPaths.DirName(path)); }
+            catch (Exception e) when (e is IOException or UnauthorizedAccessException or ArgumentException or NotSupportedException) { return false; }
+        }
+        var existed = File.Exists(path) || Directory.Exists(path);
+        void* link = null, file = null, oldLink = null, oldFile = null;
         try
         {
-            if ((link = CreateLink()) is null || (file = Query(link, s_iidPersistFile)) is null) return false;
             fixed (char* p = path)
-                if (load && Call(file, 5, p, 2u /* STGM_READWRITE */) < 0) return false;
-            if (fields.Target is { } target && !SetString(link, 20, target)) return false;
-            if (fields.WorkingDirectory is { } cwd && !SetString(link, 9, cwd)) return false;
-            if (fields.Arguments is { } args && !SetString(link, 11, args)) return false;
-            if (fields.Description is { } description && !SetString(link, 7, description)) return false;
-            if (fields.Icon is not null || fields.IconIndex is not null)
             {
-                var (icon, index) = (fields.Icon, fields.IconIndex ?? 0);
-                if (icon is null) icon = ReadIcon(link).Icon ?? "";
-                fixed (char* i = icon)
-                    if (((delegate* unmanaged<void*, char*, int, int>)Slot(link, 17))(link, i, index) < 0) return false;
+                switch (operation)
+                {
+                    case WindowsShortcutOperation.CreateAlways:
+                        Initialize(null, &link, &file);
+                        break;
+                    case WindowsShortcutOperation.UpdateExisting:
+                        Initialize(p, &link, &file);
+                        break;
+                    case WindowsShortcutOperation.ReplaceExisting:
+                        Initialize(p, &oldLink, &oldFile);
+                        if (oldFile is not null) Initialize(null, &link, &file);
+                        break;
+                }
+                if (file is null) return false;
+                if (fields.Target is { } target && !SetString(link, 20, target)) return false;
+                if (fields.WorkingDirectory is { } cwd && !SetString(link, 9, cwd)) return false;
+                if (fields.Arguments is { } args)
+                {
+                    if (!SetString(link, 11, args)) return false;
+                }
+                else if (oldFile is not null)
+                {
+                    var current = stackalloc char[MaxPath];
+                    current[0] = '\0';
+                    if (((delegate* unmanaged<void*, char*, int, int>)Slot(oldLink, 10))(oldLink, current, MaxPath) >= 0)
+                        ((delegate* unmanaged<void*, char*, int>)Slot(link, 11))(link, current);
+                }
+                if (fields.Description is { } description && !SetString(link, 7, description)) return false;
+                if (fields is { Icon: { } icon, IconIndex: { } index })
+                {
+                    fixed (char* i = icon)
+                        if (((delegate* unmanaged<void*, char*, int, int>)Slot(link, 17))(link, i, index) < 0) return false;
+                }
+                if ((fields.AppUserModelId is not null || fields.ToastActivatorClsid is not null) && !SetAppUserModel(link, fields)) return false;
+
+                // The old shortcut is released first so it cannot block overwriting the file.
+                Release(oldFile);
+                Release(oldLink);
+                oldFile = oldLink = null;
+                var saved = Call(file, 6, p, 1u /* fRemember = TRUE */);
+                Release(file);
+                Release(link);
+                file = link = null;
+                if (saved < 0) return false;
+                SHChangeNotify(existed ? 0x00002000 /* SHCNE_UPDATEITEM */ : 0x00000002 /* SHCNE_CREATE */, 0x0005 /* SHCNF_PATHW */ | 0x1000 /* SHCNF_FLUSH */, p, null);
+                return true;
             }
-            if ((fields.AppUserModelId is not null || fields.ToastActivatorClsid is not null) && !SetAppUserModel(link, fields)) return false;
-            fixed (char* p = path)
-                return Call(file, 6, p, 1u) >= 0;
         }
         finally
         {
+            Release(oldFile);
+            Release(oldLink);
             Release(file);
             Release(link);
         }
     }
 
-    /// <summary>Reads a .lnk file. Throws <see cref="IOException"/> if it cannot be loaded.</summary>
+    /// <summary>Chromium's <c>ResolveShortcutProperties</c> with every property: unset text fields read as "", an unset
+    /// toast CLSID as <see cref="Guid.Empty"/>, and a CLSID of another variant type as null.</summary>
+    /// <exception cref="IOException">The file cannot be loaded or a field cannot be read: Electron's
+    /// <c>Failed to read shortcut link</c>.</exception>
     public static WindowsShortcut ReadShortcut(string path)
     {
-        void* link = null, file = null;
+        void* link = null, file = null, store = null;
         try
         {
-            if ((link = CreateLink()) is null || (file = Query(link, s_iidPersistFile)) is null) throw new IOException("Failed to create a shell link.");
+            if ((link = CreateLink()) is null || (file = Query(link, s_iidPersistFile)) is null) throw ReadFailed();
             fixed (char* p = path)
-                if (Call(file, 5, p, 0u /* STGM_READ */) < 0) throw new IOException($"Failed to read the shortcut link '{path}'.");
-            var buffer = stackalloc char[1024];
-            string? Get(int slot, bool withFindData)
+                if (Call(file, 5, p, 0u /* STGM_READ */) < 0) throw ReadFailed();
+            var buffer = stackalloc char[MaxPath];
+            string Get(int slot)
             {
                 buffer[0] = '\0';
-                var hr = withFindData
-                    ? ((delegate* unmanaged<void*, char*, int, void*, uint, int>)Slot(link, slot))(link, buffer, 1024, null, 0)
-                    : ((delegate* unmanaged<void*, char*, int, int>)Slot(link, slot))(link, buffer, 1024);
-                return hr >= 0 && buffer[0] != '\0' ? new string(buffer) : null;
+                var hr = slot == 3
+                    ? ((delegate* unmanaged<void*, char*, int, void*, uint, int>)Slot(link, slot))(link, buffer, MaxPath, null, 2 /* SLGP_UNCPRIORITY */)
+                    : ((delegate* unmanaged<void*, char*, int, int>)Slot(link, slot))(link, buffer, MaxPath);
+                return hr >= 0 ? new string(buffer) : throw ReadFailed();
             }
-            var (icon, index) = ReadIcon(link);
-            var (aumid, toast) = ReadAppUserModel(link);
+            var target = Get(3);
+            var cwd = Get(8);
+            var args = Get(10);
+            var description = Get(6);
+            buffer[0] = '\0';
+            int index;
+            if (((delegate* unmanaged<void*, char*, int, int*, int>)Slot(link, 16))(link, buffer, MaxPath, &index) < 0) throw ReadFailed();
+            var icon = new string(buffer);
+            if ((store = Query(link, s_iidPropertyStore)) is null) throw ReadFailed();
+            var (appId, toast) = ReadAppUserModel(store);
             return new WindowsShortcut
             {
-                Target = Get(3, withFindData: true),
-                WorkingDirectory = Get(8, false),
-                Arguments = Get(10, false),
-                Description = Get(6, false),
-                Icon = icon,
-                IconIndex = index,
-                AppUserModelId = aumid,
-                ToastActivatorClsid = toast,
+                Target = target, WorkingDirectory = cwd, Arguments = args, Description = description, Icon = icon, IconIndex = index,
+                AppUserModelId = appId, ToastActivatorClsid = toast,
             };
         }
         finally
         {
+            Release(store);
             Release(file);
             Release(link);
         }
     }
 
-    private static (string? Icon, int Index) ReadIcon(void* link)
+    /// <summary>Chromium's <c>logging::SystemErrorCodeToString</c>: the system message with its whitespace collapsed and
+    /// line breaks dropped, then the code in hex.</summary>
+    public static string SystemErrorCodeToString(uint code)
     {
-        var buffer = stackalloc char[1024];
-        buffer[0] = '\0';
-        int index;
-        var hr = ((delegate* unmanaged<void*, char*, int, int*, int>)Slot(link, 16))(link, buffer, 1024, &index);
-        return hr >= 0 ? (buffer[0] != '\0' ? new string(buffer) : null, index) : (null, 0);
+        char* message = null;
+        var length = FormatMessageW(0x100 /* ALLOCATE_BUFFER */ | 0x1000 /* FROM_SYSTEM */ | 0x200 /* IGNORE_INSERTS */, null, code, 0, &message, 0, null);
+        if (length == 0) return $"Error (0x{(uint)Marshal.GetLastSystemError():X}) while retrieving error. (0x{code:X})";
+        var text = new string(message);
+        LocalFree(message);
+        return WindowsPaths.CollapseWhitespace(text) + $" (0x{code:X})";
     }
 
+    private static IOException ReadFailed() => new("Failed to read shortcut link");
+
+    private static (string AppId, Guid? Toast) ReadAppUserModel(void* store)
+    {
+        var key = new PropertyKey { Format = s_appUserModel, Id = 5 };
+        var value = default(PropVariant);
+        try
+        {
+            if (GetValue(store, &key, &value) != 0) throw ReadFailed();
+            var appId = value.Vt switch
+            {
+                31 /* VT_LPWSTR */ => new string((char*)value.Pointer),
+                8 /* VT_BSTR */ => new string((char*)value.Pointer, 0, (int)SysStringLen((char*)value.Pointer)),
+                _ => "",
+            };
+            PropVariantClear(&value);
+            key.Id = 26;
+            if (GetValue(store, &key, &value) != 0) throw ReadFailed();
+            Guid? toast = value.Vt switch
+            {
+                0 /* VT_EMPTY */ => Guid.Empty,
+                72 /* VT_CLSID */ => *(Guid*)value.Pointer,
+                _ => null,
+            };
+            return (appId, toast);
+        }
+        finally { PropVariantClear(&value); }
+    }
+
+    // Chromium's SetAppIdForPropertyStore and SetClsidForPropertyStore: each value is set, then committed.
     private static bool SetAppUserModel(void* link, WindowsShortcut fields)
     {
         var store = Query(link, s_iidPropertyStore);
@@ -194,85 +302,77 @@ public static unsafe class WindowsShellOps
         {
             if (fields.AppUserModelId is { } id)
             {
-                var key = new PropertyKey { Format = s_appUserModel, Id = 5 };
                 var value = new PropVariant { Vt = 31 /* VT_LPWSTR */, Pointer = (void*)Marshal.StringToCoTaskMemUni(id) };
-                var hr = ((delegate* unmanaged<void*, PropertyKey*, PropVariant*, int>)Slot(store, 6))(store, &key, &value);
-                PropVariantClear(&value);
-                if (hr < 0) return false;
+                if (!SetAndCommit(store, 5, &value)) return false;
             }
             if (fields.ToastActivatorClsid is { } clsid)
             {
-                var key = new PropertyKey { Format = s_appUserModel, Id = 26 };
                 var guid = (Guid*)Marshal.AllocCoTaskMem(sizeof(Guid));
                 *guid = clsid;
                 var value = new PropVariant { Vt = 72 /* VT_CLSID */, Pointer = guid };
-                var hr = ((delegate* unmanaged<void*, PropertyKey*, PropVariant*, int>)Slot(store, 6))(store, &key, &value);
-                PropVariantClear(&value);
-                if (hr < 0) return false;
+                if (!SetAndCommit(store, 26, &value)) return false;
             }
-            return ((delegate* unmanaged<void*, int>)Slot(store, 7))(store) >= 0;
+            return true;
         }
         finally { Release(store); }
     }
 
-    private static (string? Id, Guid? Toast) ReadAppUserModel(void* link)
+    private static bool SetAndCommit(void* store, uint id, PropVariant* value)
     {
-        var store = Query(link, s_iidPropertyStore);
-        if (store is null) return (null, null);
+        var key = new PropertyKey { Format = s_appUserModel, Id = id };
+        var hr = ((delegate* unmanaged<void*, PropertyKey*, PropVariant*, int>)Slot(store, 6))(store, &key, value);
+        PropVariantClear(value);
+        if (hr == 0) hr = ((delegate* unmanaged<void*, int>)Slot(store, 7))(store);
+        return hr >= 0;
+    }
+
+    private static int GetValue(void* store, PropertyKey* key, PropVariant* value)
+        => ((delegate* unmanaged<void*, PropertyKey*, PropVariant*, int>)Slot(store, 5))(store, key, value);
+
+    // Chromium's InitializeShortcutInterfaces: both interfaces, or neither if creating or loading (read-write) fails.
+    private static void Initialize(char* shortcut, void** link, void** file)
+    {
+        var l = CreateLink();
+        if (l is null) return;
+        var f = Query(l, s_iidPersistFile);
+        if (f is null || (shortcut is not null && Call(f, 5, shortcut, 2u /* STGM_READWRITE */) < 0))
+        {
+            Release(f);
+            Release(l);
+            return;
+        }
+        *link = l;
+        *file = f;
+    }
+
+    // ui::win::InvokeShellExecuteDirectly with kManuallyParsePathForShellExecute: the path goes in as an id list.
+    private static bool ExecuteIdList(string path, string workingDirectory, string? verb, string? className)
+    {
+        void* idList = null;
         try
         {
-            string? id = null;
-            Guid? toast = null;
-            var key = new PropertyKey { Format = s_appUserModel, Id = 5 };
-            var value = default(PropVariant);
-            if (((delegate* unmanaged<void*, PropertyKey*, PropVariant*, int>)Slot(store, 5))(store, &key, &value) >= 0 && value.Vt == 31 && value.Pointer is not null)
-                id = new string((char*)value.Pointer);
-            PropVariantClear(&value);
-            key.Id = 26;
-            value = default;
-            if (((delegate* unmanaged<void*, PropertyKey*, PropVariant*, int>)Slot(store, 5))(store, &key, &value) >= 0 && value.Vt == 72 && value.Pointer is not null)
-                toast = *(Guid*)value.Pointer;
-            PropVariantClear(&value);
-            return (id, toast);
-        }
-        finally { Release(store); }
-    }
-
-    // ShellExecuteEx; null on success, else the system's message.
-    private static string? Execute(string file, string? directory)
-    {
-        fixed (char* verb = "open", f = file, d = directory)
-        {
-            var info = new ShellExecuteInfo
+            fixed (char* p = path)
+                if (SHParseDisplayName(p, null, &idList, 0x40000000 /* SFGAO_FILESYSTEM */, null) < 0) return false;
+            var mask = 0x00000100u /* SEE_MASK_NOASYNC */ | 0x00000004u /* SEE_MASK_IDLIST */;
+            if (className is not null) mask |= 0x00000001u; // SEE_MASK_CLASSNAME
+            fixed (char* v = verb, d = workingDirectory.Length == 0 ? null : workingDirectory, c = className)
             {
-                Size = (uint)sizeof(ShellExecuteInfo),
-                Mask = 0x00000400 /* SEE_MASK_FLAG_NO_UI */ | 0x00000100 /* SEE_MASK_NOASYNC */,
-                Verb = verb,
-                File = f,
-                Directory = d,
-                Show = 1 /* SW_SHOWNORMAL */,
-            };
-            return ShellExecuteExW(&info) != 0 ? null : new System.ComponentModel.Win32Exception(Marshal.GetLastSystemError()).Message;
+                var info = new ShellExecuteInfo { Size = (uint)sizeof(ShellExecuteInfo), Mask = mask, Verb = v, Directory = d, Class = c, Show = 1, IdList = idList };
+                return ShellExecuteExW(&info) != 0;
+            }
         }
+        finally { CoTaskMemFree(idList); }
     }
 
-    private static bool SchemeRegistered(string scheme)
-    {
-        nint key;
-        fixed (char* s = scheme)
-        {
-            if (RegOpenKeyExW(unchecked((nint)0x80000000) /* HKEY_CLASSES_ROOT */, s, 0, 0x20019 /* KEY_READ */, &key) != 0) return false;
-        }
-        RegCloseKey(key);
-        return true;
-    }
+    private static int ParseDisplayName(void* folder, char* name, void** idList)
+        => ((delegate* unmanaged<void*, nint, void*, char*, uint*, void**, uint*, int>)Slot(folder, 3))(folder, 0, null, name, null, idList, null);
 
     private static void* CreateLink()
     {
         void* link;
         var clsid = s_clsidShellLink;
         var iid = s_iidShellLinkW;
-        return CoCreateInstance(&clsid, null, 1, &iid, &link) < 0 ? null : link;
+        return CoCreateInstance(&clsid, null, 1 /* CLSCTX_INPROC_SERVER */, &iid, &link) < 0 ? null : link;
     }
 
     private static bool SetString(void* link, int slot, string value)
@@ -298,7 +398,7 @@ public static unsafe class WindowsShellOps
         if (com is not null) ((delegate* unmanaged<void*, uint>)Slot(com, 2))(com);
     }
 
-    /// <summary>An <c>IFileOperationProgressSink</c> that aborts a delete Windows would not send to the Recycle Bin.</summary>
+    /// <summary>Electron's <c>DeleteFileProgressSink</c>: aborts a delete Windows would not send to the Recycle Bin.</summary>
     private static class RecycleOnlySink
     {
         private const int SlotCount = 19;
@@ -320,7 +420,9 @@ public static unsafe class WindowsShellOps
             v[1] = (nint)(delegate* unmanaged<void*, uint>)&AddRef;
             v[2] = (nint)(delegate* unmanaged<void*, uint>)&ReleaseSink;
             for (var i = 3; i < SlotCount; i++) v[i] = (nint)(delegate* unmanaged<void*, nint, nint, nint, nint, nint, nint, int>)&Ok;
-            // PreDeleteItem.
+            // Electron answers E_NOTIMPL for the rename, move, copy and new-item notifications after PreRenameItem.
+            foreach (var slot in (ReadOnlySpan<int>)[6, 7, 8, 9, 10, 13, 14])
+                v[slot] = (nint)(delegate* unmanaged<void*, nint, nint, nint, nint, nint, nint, int>)&NotImplemented;
             v[11] = (nint)(delegate* unmanaged<void*, uint, void*, int>)&PreDeleteItem;
             return v;
         }
@@ -349,9 +451,12 @@ public static unsafe class WindowsShellOps
             return (uint)count;
         }
 
-        // The other notifications only ask for S_OK; extra arguments are ignored under the x64 convention.
+        // Extra arguments are ignored under the x64 convention.
         [UnmanagedCallersOnly]
         private static int Ok(void* self, nint a, nint b, nint c, nint d, nint e, nint f) => 0;
+
+        [UnmanagedCallersOnly]
+        private static int NotImplemented(void* self, nint a, nint b, nint c, nint d, nint e, nint f) => unchecked((int)0x80004001); // E_NOTIMPL
 
         [UnmanagedCallersOnly]
         private static int PreDeleteItem(void* self, uint flags, void* item)
@@ -394,12 +499,96 @@ public static unsafe class WindowsShellOps
 
     [DllImport("shell32.dll")] private static extern int ShellExecuteExW(ShellExecuteInfo* info);
     [DllImport("shell32.dll")] private static extern int SHParseDisplayName(char* name, void* bindContext, void** idList, uint sfgaoIn, uint* sfgaoOut);
+    [DllImport("shell32.dll")] private static extern int SHGetDesktopFolder(void** folder);
     [DllImport("shell32.dll")] private static extern int SHOpenFolderAndSelectItems(void* folder, uint count, void** items, uint flags);
     [DllImport("shell32.dll")] private static extern int SHCreateItemFromParsingName(char* path, void* bindContext, Guid* iid, void** item);
+    [DllImport("shell32.dll")] private static extern void SHChangeNotify(int eventId, uint flags, void* item1, void* item2);
     [DllImport("ole32.dll")] private static extern int CoCreateInstance(Guid* clsid, void* outer, uint context, Guid* iid, void** result);
     [DllImport("ole32.dll")] private static extern void CoTaskMemFree(void* memory);
     [DllImport("ole32.dll")] private static extern int PropVariantClear(PropVariant* variant);
+    [DllImport("oleaut32.dll")] private static extern uint SysStringLen(char* text);
     [DllImport("user32.dll")] private static extern int MessageBeep(uint type);
-    [DllImport("advapi32.dll")] private static extern int RegOpenKeyExW(nint key, char* subKey, uint options, uint access, nint* result);
-    [DllImport("advapi32.dll")] private static extern int RegCloseKey(nint key);
+    [DllImport("kernel32.dll")] private static extern uint FormatMessageW(uint flags, void* source, uint messageId, uint languageId, char** buffer, uint size, void* arguments);
+    [DllImport("kernel32.dll")] private static extern void* LocalFree(void* memory);
+}
+
+/// <summary>Chromium's <c>base::FilePath</c> rules on Windows that Electron's shell calls depend on, and
+/// <c>base::CollapseWhitespace</c>: pure string code.</summary>
+public static class WindowsPaths
+{
+    private static bool IsSeparator(char c) => c is '\\' or '/';
+
+    /// <summary><c>NormalizePathSeparators</c>: every <c>/</c> becomes <c>\</c>.</summary>
+    public static string NormalizeSeparators(string path) => path.Replace('/', '\\');
+
+    /// <summary><c>FilePath::DirName</c>: the parent, keeping a drive's root separator and a leading <c>\\</c>, "." when
+    /// there is none.</summary>
+    public static string DirName(string path)
+    {
+        var p = StripTrailingSeparators(path);
+        var letter = DriveLetter(p);
+        var lastSeparator = p.LastIndexOfAny(['\\', '/']);
+        if (lastSeparator < 0) p = p[..(letter + 1)];
+        else if (lastSeparator == letter + 1) p = p[..(letter + 2)];
+        else if (lastSeparator == letter + 2 && IsSeparator(p[letter + 1])) p = p[..(letter + 3)];
+        else if (lastSeparator != 0) p = p[..lastSeparator];
+        p = StripTrailingSeparators(p);
+        return p.Length == 0 ? "." : p;
+    }
+
+    /// <summary><c>AsEndingWithSeparator</c>: unchanged if empty or already ending in a separator.</summary>
+    public static string AsEndingWithSeparator(string path) => path.Length == 0 || IsSeparator(path[^1]) ? path : path + "\\";
+
+    // FindDriveLetter: the index of the ':' after a leading letter, or -1 (Chromium's npos, which it adds to).
+    private static int DriveLetter(string p) => p.Length >= 2 && p[1] == ':' && char.IsAsciiLetter(p[0]) ? 1 : -1;
+
+    private static string StripTrailingSeparators(string path)
+    {
+        var start = DriveLetter(path) + 2;
+        var lastStripped = -1;
+        var length = path.Length;
+        for (var pos = path.Length; pos > start && IsSeparator(path[pos - 1]); pos--)
+        {
+            // Two separators at the very start are a network path's and stay, unless there were more.
+            if (pos != start + 1 || lastStripped == start + 2 || !IsSeparator(path[start - 1]))
+            {
+                length = pos - 1;
+                lastStripped = pos;
+            }
+        }
+        return path[..length];
+    }
+
+    /// <summary><c>base::CollapseWhitespace</c> with line-break trimming: runs of whitespace become one space, and runs
+    /// that hold a line break, or start or end the text, vanish.</summary>
+    public static string CollapseWhitespace(string text)
+    {
+        var result = new StringBuilder();
+        var inWhitespace = true;
+        var alreadyTrimmed = true;
+        foreach (var c in text)
+        {
+            if (char.IsWhiteSpace(c))
+            {
+                if (!inWhitespace)
+                {
+                    inWhitespace = true;
+                    result.Append(' ');
+                }
+                if (!alreadyTrimmed && c is '\n' or '\r')
+                {
+                    alreadyTrimmed = true;
+                    result.Length--;
+                }
+            }
+            else
+            {
+                inWhitespace = false;
+                alreadyTrimmed = false;
+                result.Append(c);
+            }
+        }
+        if (inWhitespace && !alreadyTrimmed) result.Length--;
+        return result.ToString();
+    }
 }

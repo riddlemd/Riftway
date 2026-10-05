@@ -209,9 +209,13 @@ static unsafe class WindowsShell
     /// <summary>Closes every Explorer window showing <paramref name="folder"/>.</summary>
     internal static void CloseExplorerAt(string folder)
     {
+        bool At(string path) => string.Equals(Path.TrimEndingDirectorySeparator(path), Path.TrimEndingDirectorySeparator(folder), StringComparison.OrdinalIgnoreCase);
         foreach (var (path, _, window) in ExplorerWindows())
-            if (string.Equals(Path.TrimEndingDirectorySeparator(path), Path.TrimEndingDirectorySeparator(folder), StringComparison.OrdinalIgnoreCase))
-                window.Quit();
+            if (At(path)) window.Quit();
+        // Quit returns before the window is gone, and the shell hands the next open of that folder to the dying window.
+        var deadline = DateTime.UtcNow.AddSeconds(5);
+        while (DateTime.UtcNow < deadline && ExplorerWindows().Any(w => At(w.Folder))) Thread.Sleep(100);
+        Thread.Sleep(500);
     }
 
     /// <summary>The Recycle Bin's file for an item that was <paramref name="originalPath"/>, or null.</summary>
@@ -228,6 +232,26 @@ static unsafe class WindowsShell
                 return (string)item.Path;
         }
         return null;
+    }
+
+    /// <summary>The clipboard owner window's process id and class name, read straight from Win32; (0, "") with no owner.</summary>
+    internal static (int ProcessId, string ClassName) ClipboardOwner()
+    {
+        var owner = GetClipboardOwner();
+        if (owner == 0) return (0, "");
+        uint pid = 0;
+        if (GetWindowThreadProcessId(owner, &pid) == 0) return (0, "");
+        var name = stackalloc char[256];
+        var length = GetClassNameW(owner, name, 256);
+        return ((int)pid, new string(name, 0, Math.Max(length, 0)));
+    }
+
+    /// <summary>A .lnk file's fields as WScript.Shell reads them, independently of Oriel's IShellLink code.</summary>
+    internal static (string Target, string Arguments, string WorkingDirectory, string Description, string IconLocation) ShortcutFields(string path)
+    {
+        dynamic shell = Activator.CreateInstance(OperatingSystem.IsWindows() ? Type.GetTypeFromProgID("WScript.Shell")! : throw new PlatformNotSupportedException())!;
+        var link = shell.CreateShortcut(path);
+        return ((string)link.TargetPath, (string)link.Arguments, (string)link.WorkingDirectory, (string)link.Description, (string)link.IconLocation);
     }
 
     /// <summary>Deletes a recycled item for good: its <c>$R</c> file and the <c>$I</c> record beside it.</summary>
@@ -282,5 +306,8 @@ static unsafe class WindowsShell
     [DllImport("user32.dll")] private static extern nint DefWindowProcW(nint hwnd, uint message, nint wParam, nint lParam);
     [DllImport("user32.dll", CharSet = CharSet.Unicode)] private static extern nint FindWindowW(string? cls, string? name);
     [DllImport("kernel32.dll")] private static extern nint GetModuleHandleW(char* name);
+    [DllImport("user32.dll")] private static extern nint GetClipboardOwner();
+    [DllImport("user32.dll")] private static extern uint GetWindowThreadProcessId(nint hwnd, uint* pid);
+    [DllImport("user32.dll")] private static extern int GetClassNameW(nint hwnd, char* name, int capacity);
     [DllImport("ole32.dll")] private static extern int CoCreateInstance(Guid* clsid, void* outer, uint context, Guid* iid, void** result);
 }
