@@ -344,10 +344,15 @@ public sealed unsafe partial class BrowserWindow
             _opener = opener;
             return;
         }
+        // CEF refuses a browser view while its profile is still loading (cef_browser_view_create returns null), which a
+        // new on-disk session's is for a moment.
+        var profile = WebContents.Session;
+        profile.WaitUntilInitialized();
         CefThread.InvokeOnUi(() =>
         {
             if (_options.Parent is { _window: null }) throw new InvalidOperationException("The parent window is closed.");
-            CreateNative();
+            if (profile.Initialized.IsCompleted) CreateNative();
+            else profile.Initialized.ContinueWith(_ => CefThread.RunOnUi(CreateNative), TaskScheduler.Default);
             return true;
         });
     }

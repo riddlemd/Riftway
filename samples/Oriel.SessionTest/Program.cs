@@ -56,7 +56,6 @@ async Task RunAsync()
     Check("FromPath rejects a nested path",
         await Throws(() => Task.FromResult(Session.FromPath(Path.Combine(diskPath!, "nested")))) is ArgumentException);
     Check("FromPath rejects a relative path", await Throws(() => Task.FromResult(Session.FromPath("relative"))) is ArgumentException);
-
     // Cookies, isolated per session.
     foreach (var s in new[] { defaultSession, memory, other, disk })
         foreach (var c in await s.Cookies.GetAsync(new CookieFilter { Domain = "oriel.test" }))
@@ -135,6 +134,21 @@ async Task RunAsync()
         WebPreferences = new WebPreferences { Partition = "memory" },
     });
     Check("WebContents.Session follows Partition", ReferenceEquals(win.WebContents.Session, memory));
+    // A window opened at once in a brand-new on-disk session, by partition name and by Session object. After win: closing
+    // the only window would quit the app.
+    var freshWin = new BrowserWindow(new BrowserWindowOptions { Show = false, WebPreferences = new WebPreferences { Partition = "persist:fresh" } });
+    var freshLoad = await Throws(() => freshWin.LoadUrl("data:text/html,fresh").WaitAsync(TimeSpan.FromSeconds(10)));
+    Check("a window opened at once in a new persist: partition loads", freshLoad is null && freshWin.WebContents.GetUrl() == "data:text/html,fresh", freshLoad?.GetType().Name);
+    freshWin.Close();
+    var freshSession = Session.FromPartition("persist:fresh-object");
+    freshSession.Protocol.Handle("https", _ => ProtocolResponse.Text(Page, "text/html"));
+    var freshObjectWin = new BrowserWindow(new BrowserWindowOptions { Show = false, Width = 640, Height = 480, WebPreferences = new WebPreferences { Session = freshSession } });
+    // The constructor returns with the native window made, as for any other session.
+    var freshObjectBounds = freshObjectWin.GetBounds();
+    var freshObjectLoad = await Throws(() => freshObjectWin.LoadUrl(Site).WaitAsync(TimeSpan.FromSeconds(10)));
+    Check("a window opened at once in a new on-disk Session object exists when the constructor returns, and loads", freshObjectLoad is null && freshObjectWin.WebContents.GetUrl() == Site
+        && freshObjectBounds.Width == 640 && freshObjectBounds.Height == 480, $"{freshObjectLoad?.GetType().Name} {freshObjectBounds}");
+    freshObjectWin.Close();
     await win.LoadUrl(Site);
     var seen = (await win.WebContents.ExecuteJavaScriptAsync("document.cookie"))?.ToString();
     Check("the page sees its session's cookies only", seen == "inMemory=2", seen);
@@ -1493,6 +1507,11 @@ static async Task<string> ServeOneProxyRequest(TcpListener listener)
 // Fresh, so the run shows CEF creating the persistent partition's directory.
 var staleDisk = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "Oriel.SessionTest", "Partition disk");
 if (Directory.Exists(staleDisk)) Directory.Delete(staleDisk, recursive: true);
+foreach (var name in new[] { "fresh", "fresh-object" })
+{
+    var freshDir = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "Oriel.SessionTest", "Partition " + name);
+    if (Directory.Exists(freshDir)) Directory.Delete(freshDir, recursive: true);
+}
 // The webRequest checks fetch this scheme from an https page.
 Protocol.RegisterSchemesAsPrivileged(new PrivilegedScheme(CustomScheme, new SchemePrivileges { Standard = true, Secure = true, SupportFetchApi = true, CorsEnabled = true }));
 

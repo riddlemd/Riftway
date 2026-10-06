@@ -322,8 +322,11 @@ public sealed unsafe partial class Session
     // Preferences read before the profile finishes loading can be wrong. The default session is ready with the app.
     private Task _initialized = Task.CompletedTask;
 
+    /// <summary>Completes once the session's profile has loaded.</summary>
+    internal Task Initialized => _initialized;
+
     /// <summary>Waits, off the UI thread, until the session's profile has loaded.</summary>
-    private void WaitUntilInitialized()
+    internal void WaitUntilInitialized()
     {
         if (!CefThread.IsOnUiThread) _initialized.Wait(TimeSpan.FromSeconds(10));
     }
