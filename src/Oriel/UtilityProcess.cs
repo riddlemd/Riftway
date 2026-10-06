@@ -25,6 +25,12 @@ public sealed record UtilityProcessErrorEventArgs(string Type, string Location, 
 public sealed partial class UtilityProcess
 {
     internal const string PipeVariable = "ORIEL_UTILITY_PIPE";
+
+    /// <summary>The channel's pipe name: a bare name on Windows; on Unix the socket's absolute path in this process's temp
+    /// directory, which .NET uses as given.</summary>
+    /// <remarks>A relative name resolves under the child's own $TMPDIR, which a replaced environment drops (macOS keeps it
+    /// under /var/folders). The id stays short: a macOS socket path must fit in 104 bytes.</remarks>
+    internal static string PipeName(string id, bool windows, string tempPath) => windows ? id : Path.Combine(tempPath, id);
     internal const string TokenVariable = "ORIEL_UTILITY_TOKEN";
 
     // Electron's kLaunchFailureExitCode.
@@ -137,8 +143,7 @@ public sealed partial class UtilityProcess
         var launch = UtilityLaunch.Resolve(full, args, options.ExecArgv ?? [], Environment.ProcessPath,
             RuntimeEnvironment.GetRuntimeDirectory(), OperatingSystem.IsWindows(), File.Exists);
 
-        // Short: on macOS the socket path, under a long $TMPDIR, must fit in 104 bytes.
-        var name = "oriel-up-" + RandomNumberGenerator.GetHexString(16, lowercase: true);
+        var name = PipeName("oriel-up-" + RandomNumberGenerator.GetHexString(16, lowercase: true), OperatingSystem.IsWindows(), Path.GetTempPath());
         var token = RandomNumberGenerator.GetHexString(32, lowercase: true);
         NamedPipeServerStream? server = null;
         try

@@ -233,6 +233,12 @@ public class PortWireTests
         public TaskCompletionSource<(string, string)> Fatal { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
     }
 
+    [Theory]
+    [InlineData(true, "oriel-up-1", "oriel-up-1")]
+    [InlineData(false, "oriel-up-1", "/var/folders/ab/T/oriel-up-1")]
+    public void PipeName_IsTheSocketPathOnUnix(bool windows, string id, string expected)
+        => Assert.Equal(expected.Replace('/', Path.DirectorySeparatorChar), UtilityProcess.PipeName(id, windows, "/var/folders/ab/T/".Replace('/', Path.DirectorySeparatorChar)));
+
     private static (Side A, Side B) Pair(bool startA = true)
     {
         var name = "oriel-test-" + Guid.NewGuid().ToString("N")[..16];
