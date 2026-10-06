@@ -171,6 +171,8 @@ public sealed unsafe partial class OrielApp
 
         // userData or sessionData set before Run moves the profile, as Electron's before ready.
         var dataDirectory = DataDirectory = GetPath("sessionData");
+        // Electron's default log file is in DIR_LOGS, which release Chromium puts in userData.
+        _loggingSwitches = CommandLine.ElectronLoggingSwitches(Environment.GetEnvironmentVariable, GetPath("userData"));
         var settings = new cef_settings_t
         {
             size = (nuint)sizeof(cef_settings_t),
@@ -266,11 +268,9 @@ public sealed unsafe partial class OrielApp
         if (processType.Length == 0) AppendSwitch(commandLine, "disable-chrome-login-prompt");
         if (processType.Length == 0 && s_current is { } app)
         {
-            foreach (var (name, value) in app.CommandLine.Appended)
-            {
-                if (value is null) AppendSwitch(commandLine, name);
-                else AppendSwitch(commandLine, name, value);
-            }
+            // After Oriel's own switches, so the app can remove them as an Electron app can Electron's.
+            app.CommandLine.ApplyTo(commandLine);
+            CommandLine.Append(commandLine, app._loggingSwitches);
         }
     }
 

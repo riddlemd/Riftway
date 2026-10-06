@@ -5,12 +5,12 @@ electron/electron). When Electron adds or changes a module, this table changes w
 
 ## Progress
 
-Recounted 2026-10-05 against `src/Oriel`. Update these figures when a row or checklist item changes.
+Recounted 2026-10-06 against `src/Oriel`. Update these figures when a row or checklist item changes.
 
 | Measure | Done | Partial | Not started | Total |
 |---|---|---|---|---|
-| Module rows below | 2 | 21 | 44 | 67 |
-| M2 rows | 1 | 13 | 7 | 21 |
+| Module rows below | 3 | 22 | 42 | 67 |
+| M2 rows | 2 | 14 | 5 | 21 |
 
 The 67 rows include `BrowserView` (deprecated, never implemented; counted as not started).
 
@@ -36,10 +36,10 @@ Where an implemented module differs from Electron, the difference and its reason
 | Electron | Oriel | Source | Wave | Status |
 |---|---|---|---|---|
 | `app` | `OrielApp` | CEF + OS | M2 | partial: `ready`, `window-all-closed`, `second-instance`, `before-quit`, `will-quit`, `quit()`, `exit()`, `enableSandbox`, `isReady`, `name`, `quit` (as `Exited`), `userAgentFallback`, `browser-window-created`, `web-contents-created`, `session-created`, `browser-window-focus`, `browser-window-blur`, `getVersion` (as `Version`), `hide`, `show`, `isHidden`, `focus`, `setBadgeCount`, `getBadgeCount`, `getAppMetrics` (A18), `getPath`, `setPath`, `getPreferredSystemLanguages`, `getSystemLocale`, `getLocaleCountryCode`, `certificate-error`, `login`, `select-client-certificate` (see DRIFT.md) |
-| `process` | `OrielProcess` | .NET + CEF | M2 | partial: `type`, `versions` (`chrome`, `oriel`), `getCreationTime`, `getCPUUsage`, `getSystemMemoryInfo`, `getSystemVersion`, `setFdLimit`, `getProcessMemoryInfo` (`shared` is 0, P8); no `crash`, `hang`, `mas`, `windowsStore`, `resourcesPath`; V8/Blink-only members are P7 |
-| `CommandLine` (`app.commandLine`) | `OrielApp.CommandLine` | CEF | M2 | partial: `appendSwitch`, `hasSwitch`, `getSwitchValue` (see DRIFT.md A19) |
-| Command-line switches | same switches | CEF | M2 | — |
-| Environment variables | same variables | .NET | M2 | — |
+| `process` | `OrielProcess` | .NET + CEF | M2 | partial: `type`, `versions` (`chrome`, `oriel`), `getCreationTime`, `getCPUUsage`, `getSystemMemoryInfo`, `getSystemVersion`, `setFdLimit`, `getProcessMemoryInfo` (`shared` is 0, P8), `windowsStore` (P10), `resourcesPath` (P17), `crash`, `hang` (P18); no `mas`; V8/Blink-only members are P7 |
+| `CommandLine` (`app.commandLine`) | `OrielApp.CommandLine` | CEF | M2 | done: `appendSwitch`, `appendArgument`, `hasSwitch`, `getSwitchValue`, `removeSwitch`, in Chromium's switch syntax, applied before Chromium starts (DRIFT A19) |
+| Command-line switches | same switches | CEF | M2 | partial: Chromium's switches pass through from the process's arguments and `CommandLine`; `--enable-logging`, `--log-file`, `--log-level` work (DRIFT A6); Node's (`--inspect`, ...) do not apply; the rest not checked one by one |
+| Environment variables | same variables | .NET | M2 | partial: `ELECTRON_ENABLE_LOGGING`, `ELECTRON_LOG_FILE`, with `ORIEL_*` aliases (DRIFT A5) |
 | `utilityProcess` | `UtilityProcess` (.NET child process) | .NET | M6 | — |
 | `parentPort` | `ParentPort` | .NET | M6 | — |
 | `MessageChannelMain` / `MessagePortMain` | `MessageChannelMain` / `MessagePortMain` | .NET + CEF | M6 | partial: channels in the main process, ports moved to and from pages (`webContents.postMessage`, `frame.postMessage`, `ipcRenderer.postMessage`, `event.ports`), ports through ports, `start`, `close`; JSON messages (I1); no `close` from a page's own `close()` (I7) |

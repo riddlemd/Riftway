@@ -52,6 +52,45 @@ public static class OrielProcess
     /// <c>process.windowsStore</c>, which Electron leaves undefined rather than false.</summary>
     public static bool WindowsStore { get; } = OperatingSystem.IsWindows() && ProcessInfo.WindowsIsPackaged();
 
+    /// <summary>The app's resources directory, whether or not it exists: the bundle's <c>Contents/Resources</c> on macOS,
+    /// else <c>resources</c> beside the executable. Electron's <c>process.resourcesPath</c>.</summary>
+    public static string ResourcesPath { get; } = ResourcesPathFor(Environment.ProcessPath ?? Path.Combine(AppContext.BaseDirectory, "app"), OperatingSystem.IsMacOS());
+
+    // Electron's GetResourcesPath: MainApplicationBundlePath (three levels above the executable) on macOS, DIR_ASSETS
+    // (the executable's directory) elsewhere.
+    internal static string ResourcesPathFor(string executable, bool macOS)
+    {
+        var directory = Path.GetDirectoryName(executable) ?? "";
+        if (!macOS) return Path.Combine(directory, "resources");
+        var bundle = Path.GetDirectoryName(Path.GetDirectoryName(directory)) ?? "";
+        return Path.Combine(bundle, "Contents", "Resources");
+    }
+
+    /// <summary>Crashes the process at once with a segmentation fault, as Electron's <c>process.crash()</c>: no events,
+    /// no managed exception handlers.</summary>
+    public static void Crash()
+    {
+        // A fault inside native code: .NET turns a managed null write into a NullReferenceException instead.
+        if (OperatingSystem.IsWindows()) WindowsMemset(0, 0, 1);
+        else UnixMemset(0, 0, 1);
+    }
+
+    [System.Runtime.InteropServices.DllImport("libc", EntryPoint = "memset")] private static extern nint UnixMemset(nint destination, int value, nuint count);
+    [System.Runtime.InteropServices.DllImport("ucrtbase", EntryPoint = "memset")] private static extern nint WindowsMemset(nint destination, int value, nuint count);
+
+    /// <summary>Hangs the UI thread, Electron's main thread, for ever: the app stops responding. Called from another
+    /// thread, it returns while the UI thread hangs. Electron's <c>process.hang()</c>.</summary>
+    public static void Hang()
+    {
+        if (OrielApp.CurrentOrNull is { IsReady: true }) Oriel.Cef.CefThread.RunOnUi(HangHere);
+        else HangHere();
+    }
+
+    private static void HangHere()
+    {
+        for (;;) Thread.Sleep(1000);
+    }
+
     /// <summary>When the process started, in milliseconds since the Unix epoch, or null if unknown. Electron's
     /// <c>process.getCreationTime()</c>.</summary>
     public static double? GetCreationTime()
