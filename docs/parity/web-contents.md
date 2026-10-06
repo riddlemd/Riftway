@@ -150,7 +150,7 @@ Percentages are over the non-n/a items; the second counts a partial item as half
 | `isCaretBrowsingEnabled()` | — | missing |  |
 | `setZoomMode()` | — | missing |  |
 | `getZoomMode()` | — | missing |  |
-| `setVisualZoomLevelLimits()` | — | missing |  |
+| `setVisualZoomLevelLimits()` | `SetVisualZoomLevelLimits` | partial | Pinch on or off; off on Windows/Linux (C37) |
 | `centerSelection()` | `CenterSelection` | partial | Script; does nothing off macOS, as Electron (C20). |
 | `copyImageAt()` | — | missing |  |
 | `copyVideoFrameAt()` | — | missing |  |

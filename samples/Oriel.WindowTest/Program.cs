@@ -1542,6 +1542,41 @@ async Task WebContentsMethodsAsync()
         Check("a Ctrl+wheel the page handles raises no zoom-changed", Zooms() == "In,Out", Zooms());
     }
 
+    // Visual zoom: a touchpad pinch, which Electron's page scale limits of 1 keep from zooming until the app widens them.
+    await wc.LoadFile(page);
+    async Task<double> PinchedScale()
+    {
+        await wc.DevToolsCommandAsync("Input.synthesizePinchGesture", w =>
+        {
+            w.WriteNumber("x", 100);
+            w.WriteNumber("y", 100);
+            w.WriteNumber("scaleFactor", 2);
+            w.WriteString("gestureSourceType", "mouse");
+        });
+        await Task.Delay(300);
+        var scale = Convert.ToDouble((await wc.ExecuteJavaScriptAsync("visualViewport.scale"))?.ToString(), System.Globalization.CultureInfo.InvariantCulture);
+        await wc.DevToolsCommandAsync("Emulation.setPageScaleFactor", w => w.WriteNumber("pageScaleFactor", 1));
+        return scale;
+    }
+    var defaultPinch = await PinchedScale();
+    Check("a touchpad pinch does not zoom by default, as Electron's page scale limits of 1", defaultPinch == 1, $"scale={defaultPinch}");
+    await wc.SetVisualZoomLevelLimits(1, 3);
+    await Task.Delay(200);
+    var widenedPinch = await PinchedScale();
+    // Electron keeps the limits in the page's web preferences, so they outlive a load.
+    await wc.LoadFile(page);
+    var widenedAfterLoad = await PinchedScale();
+    await wc.SetVisualZoomLevelLimits(1, 1);
+    await Task.Delay(200);
+    var narrowedPinch = await PinchedScale();
+    var pinches = $"widened={widenedPinch} afterLoad={widenedAfterLoad} narrowed={narrowedPinch}";
+    if (OperatingSystem.IsMacOS())
+        Check("SetVisualZoomLevelLimits(1, 3) lets a pinch zoom, also after a load, and (1, 1) stops it again",
+            widenedPinch > 1 && widenedAfterLoad > 1 && narrowedPinch == 1, pinches);
+    else
+        Check("on Windows and Linux a pinch stays off even with wider limits: every Ctrl+wheel is cancelled (drift C37)",
+            widenedPinch == 1 && widenedAfterLoad == 1 && narrowedPinch == 1, pinches);
+
     // did-change-theme-color: the first matching, valid meta theme-color, as uppercase #RRGGBB; raised on change.
     var themes = new List<string>();
     EventHandler<string?> onTheme = (_, c) => { lock (themes) themes.Add(c ?? "null"); };

@@ -35,6 +35,9 @@ public sealed unsafe partial class WebContents
             case "zoomLevel":
                 SetZoomLevel(root.GetProperty("value").GetDouble());
                 return Done();
+            case "visualZoom":
+                TellFramesPinch(AllowsPinch(root.GetProperty("min").GetDouble(), root.GetProperty("max").GetDouble()));
+                return Done();
             case "insertCSS":
                 return InsertCssInFrameAsync(root.GetProperty("css").GetString()!, frame).ContinueWith(t => (JsonNode?)JsonValue.Create(t.Result), TaskScheduler.Default);
             case "removeCSS":
@@ -54,7 +57,19 @@ public sealed unsafe partial class WebContents
 
     // UI thread: a frame's preload world started; it learns its frame token and the page's zoom.
     private void TellFrameItself(int context, string frameId)
-        => Deliver(context, new JsonObject { ["t"] = "frame", ["token"] = frameId, ["zoomLevel"] = _zoomLevelForFrames }.ToJsonString());
+        => Deliver(context, new JsonObject { ["t"] = "frame", ["token"] = frameId, ["zoomLevel"] = _zoomLevelForFrames, ["pinch"] = _pinchForFrames }.ToJsonString());
+
+    // Whether the page's preloads let a pinch through; kept across navigations, as Electron's web preference is.
+    private bool _pinchForFrames;
+
+    // UI thread.
+    private void TellFramesPinch(bool allowed)
+    {
+        _pinchForFrames = allowed;
+        var message = new JsonObject { ["t"] = "pinch", ["allowed"] = allowed }.ToJsonString();
+        foreach (var frame in _frames.Values)
+            if (frame.IsolatedContext is { } context) Deliver(context, message);
+    }
 
     // The zoom the page's preloads report; Chromium sends no notice of zoom changes, so only Oriel's own are seen.
     private double _zoomLevelForFrames;

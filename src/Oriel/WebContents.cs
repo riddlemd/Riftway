@@ -370,6 +370,18 @@ public sealed unsafe partial class WebContents
 
     private readonly HashSet<string> _zoomedHosts = new(StringComparer.OrdinalIgnoreCase);
 
+    /// <summary>Sets the pinch-to-zoom range; Electron starts every page at 1 and 1, which turns pinching off.
+    /// Electron's <c>webContents.setVisualZoomLevelLimits()</c>.</summary>
+    /// <remarks>Oriel turns pinching on or off; the page's scale range itself stays Chromium's (drift C37).</remarks>
+    public Task SetVisualZoomLevelLimits(double minimumLevel, double maximumLevel)
+    {
+        CefThread.RunOnUi(() => TellFramesPinch(AllowsPinch(minimumLevel, maximumLevel)));
+        return Task.CompletedTask;
+    }
+
+    // Electron's default_minimum/maximum_page_scale_factor of 1 leaves no room to pinch; any wider range allows it.
+    internal static bool AllowsPinch(double minimumLevel, double maximumLevel) => minimumLevel < 1 || maximumLevel > 1;
+
     /// <summary>The page's zoom level. Electron's <c>webContents.getZoomLevel()</c>.</summary>
     public double GetZoomLevel() => QueryHost(host => host->get_zoom_level(host), 0);
 
@@ -1198,6 +1210,18 @@ public sealed unsafe partial class WebContents
             Deliver(context, message);
         }
         else if (frame.Id == _mainFrameId) _pendingDeliveries.Add(message);
+    }
+
+    /// <summary>Sends a DevTools command to the page and completes with its result; for tests.</summary>
+    internal Task<JsonElement> DevToolsCommandAsync(string method, Action<Utf8JsonWriter>? writeParams = null)
+    {
+        var done = new TaskCompletionSource<JsonElement>(TaskCreationOptions.RunContinuationsAsynchronously);
+        CefThread.RunOnUi(() => _devTools.Send(method, writeParams, (result, error) =>
+        {
+            if (error is null) done.TrySetResult(result.Clone());
+            else done.TrySetException(new InvalidOperationException(error));
+        }));
+        return done.Task;
     }
 
     private void Deliver(int context, string message)
