@@ -186,7 +186,7 @@ Percentages are over the non-n/a items; the second counts a partial item as half
 | `disableDeviceEmulation()` | `DisableDeviceEmulation` | done |  |
 | `beginFrameSubscription()` | — | missing |  |
 | `endFrameSubscription()` | — | missing |  |
-| `startDrag()` | `StartDrag` | partial | Windows only; the drag blocks queued UI tasks and its image is painted with GDI (C33). |
+| `startDrag()` | `StartDrag` | partial | Windows only; the drag blocks queued UI tasks and its image is painted with GDI (C40). |
 | `savePage()` | — | missing |  |
 | `showDefinitionForSelection()` | — | missing |  |
 | `isOffscreen()` | — | missing |  |

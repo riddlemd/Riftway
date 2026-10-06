@@ -27,10 +27,10 @@ public sealed unsafe partial class WebContents
     /// is still down. Returns once the user drops or cancels; an empty icon starts no drag. Electron's
     /// <c>webContents.startDrag(item)</c>.</summary>
     /// <remarks>Windows only. While the drag runs, the UI thread answers window messages but runs no queued UI tasks
-    /// (drift C33).</remarks>
+    /// (drift C40).</remarks>
     /// <exception cref="ArgumentException">No icon (<c>'icon' parameter is required</c>), an icon path that does not
     /// load, or no files (<c>Must specify either 'file' or 'files' option</c>), with Electron's messages.</exception>
-    /// <exception cref="PlatformNotSupportedException">On macOS and Linux (drift C33).</exception>
+    /// <exception cref="PlatformNotSupportedException">On macOS and Linux (drift C40).</exception>
     public void StartDrag(StartDragItem item)
     {
         ArgumentNullException.ThrowIfNull(item);

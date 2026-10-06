@@ -20,7 +20,7 @@ static class StartDragTests
                 File = "/tmp/x",
                 Icon = NativeImage.CreateFromBitmap(new byte[16], new NativeImageBitmapOptions { Width = 2, Height = 2 }),
             }));
-            check("startDrag throws PlatformNotSupportedException off Windows (drift C33)", thrown is PlatformNotSupportedException, thrown?.GetType().Name);
+            check("startDrag throws PlatformNotSupportedException off Windows (drift C40)", thrown is PlatformNotSupportedException, thrown?.GetType().Name);
             return;
         }
 
@@ -138,7 +138,7 @@ static class StartDragTests
             check("the drag image is the icon and title button: 150 DIPs wide, icon height plus insets, cursor at its DIP centre",
                 image is { } im && im.Cx == (int)Math.Ceiling(150 * scale) && im.Cy == (int)Math.Ceiling(42 * scale) && im.Ox == 75 && im.Oy == 21,
                 image is null ? $"none; formats={formats}" : $"{image} scale={scale}");
-            check("UI tasks wait while the drag runs (drift C33)", s_uiTaskRanInDrag == false, s_uiTaskRanInDrag);
+            check("UI tasks wait while the drag runs (drift C40)", s_uiTaskRanInDrag == false, s_uiTaskRanInDrag);
 
             var emptyDrag = await DragWithMouse(new StartDragItem { Files = [first], Icon = NativeImage.CreateEmpty() });
             check("startDrag with an empty icon starts no drag and returns at once", emptyDrag && dragError is null && DropTarget.Enters == 0,
