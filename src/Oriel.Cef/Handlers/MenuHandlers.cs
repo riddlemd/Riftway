@@ -43,6 +43,78 @@ public sealed unsafe class MenuModelDelegate
     }
 }
 
+/// <summary><c>cef_button_delegate_t</c>: a plain Views button's presses and state changes (hover, press).</summary>
+public sealed unsafe class ButtonDelegate
+{
+    public ButtonDelegate(Action pressed, Action<cef_button_state_t> stateChanged, Action? themeChanged = null)
+    {
+        Pressed = pressed;
+        StateChanged = stateChanged;
+        ThemeChanged = themeChanged;
+        Native = NativeObject.Create<cef_button_delegate_t>(this);
+        Native->on_button_pressed = &OnButtonPressed;
+        Native->on_button_state_changed = &OnButtonStateChanged;
+        if (themeChanged is not null) Native->@base.on_theme_changed = &OnThemeChanged;
+    }
+
+    /// <summary>The theme reset the view's colours, as it does when the view first joins a window.</summary>
+    public Action? ThemeChanged { get; }
+
+    [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])]
+    private static void OnThemeChanged(cef_view_delegate_t* self, cef_view_t* view)
+    {
+        var owner = NativeObject.Owner<ButtonDelegate>(self);
+        Guard.Run(() => owner.ThemeChanged!());
+        NativeObject.Release(view);
+    }
+
+    public cef_button_delegate_t* Native { get; }
+
+    public Action Pressed { get; }
+
+    public Action<cef_button_state_t> StateChanged { get; }
+
+    [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])]
+    private static void OnButtonPressed(cef_button_delegate_t* self, cef_button_t* button)
+    {
+        var owner = NativeObject.Owner<ButtonDelegate>(self);
+        Guard.Run(owner.Pressed);
+        NativeObject.Release(button);
+    }
+
+    [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])]
+    private static void OnButtonStateChanged(cef_button_delegate_t* self, cef_button_t* button)
+    {
+        var owner = NativeObject.Owner<ButtonDelegate>(self);
+        var state = button->get_state(button);
+        Guard.Run(() => owner.StateChanged(state));
+        NativeObject.Release(button);
+    }
+}
+
+/// <summary><c>cef_panel_delegate_t</c>: told when the theme resets the panel's colours.</summary>
+public sealed unsafe class PanelDelegate
+{
+    public PanelDelegate(Action themeChanged)
+    {
+        ThemeChanged = themeChanged;
+        Native = NativeObject.Create<cef_panel_delegate_t>(this);
+        Native->@base.on_theme_changed = &OnThemeChanged;
+    }
+
+    public cef_panel_delegate_t* Native { get; }
+
+    public Action ThemeChanged { get; }
+
+    [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])]
+    private static void OnThemeChanged(cef_view_delegate_t* self, cef_view_t* view)
+    {
+        var owner = NativeObject.Owner<PanelDelegate>(self);
+        Guard.Run(owner.ThemeChanged);
+        NativeObject.Release(view);
+    }
+}
+
 /// <summary><c>cef_menu_button_delegate_t</c>: a Views button that opens a menu.</summary>
 public sealed unsafe class MenuButtonDelegate
 {

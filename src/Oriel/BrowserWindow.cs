@@ -96,6 +96,14 @@ public sealed record BrowserWindowOptions
     /// <summary>Opens the window in kiosk mode: full screen. Electron's <c>kiosk</c>.</summary>
     public bool Kiosk { get; init; }
 
+    /// <summary>How the title bar looks; anything but <see cref="Oriel.TitleBarStyle.Default"/> hides it on Windows and
+    /// Linux. Electron's <c>titleBarStyle</c>.</summary>
+    public TitleBarStyle TitleBarStyle { get; init; }
+
+    /// <summary>With a hidden title bar, draws the window's minimize, maximize and close buttons over the page's top right.
+    /// Windows only for now. Electron's <c>titleBarOverlay</c>.</summary>
+    public TitleBarOverlayOptions? TitleBarOverlay { get; init; }
+
     /// <summary>What Windows 11 22H2 and later draws behind the window; null leaves the system default. Unless
     /// <see cref="BackgroundColor"/> is set, any value but <see cref="Oriel.BackgroundMaterial.None"/> makes the page
     /// background transparent so the material shows. Windows only: ignored on macOS and Linux. Electron's
@@ -261,6 +269,8 @@ public sealed unsafe partial class BrowserWindow
     // Electron's layered_: once given an opacity, the window stays layered when click-through ends.
     private bool _layered;
     private Rectangle _normalBounds;
+    private TitleBarOverlayView? _titleBarOverlay;
+    private IReadOnlyList<DraggableRegion> _pageRegions = [];
     // Whether the app means the window to be shown; CEF activates windows that are not.
     private bool _meantVisible;
     private readonly NativeImage? _icon;
@@ -338,7 +348,8 @@ public sealed unsafe partial class BrowserWindow
         };
         _client = new ClientHandler(WebContents.Display, WebContents.Load, WebContents.JsDialog, WebContents.Request, WebContents.Command,
             WebContents.ContextMenuRequests, new KeyboardHandler(keyEvent => WebContents.OnPreKeyEvent(keyEvent) || (!WebContents.IgnoresMenuShortcuts && (_menuBar?.OnKeyEvent(keyEvent) ?? false))),
-            new LifeSpanHandler { BeforePopup = OnBeforePopup, PopupAborted = OnPopupAborted })
+            new LifeSpanHandler { BeforePopup = OnBeforePopup, PopupAborted = OnPopupAborted },
+            new DragHandler(regions => Command(w => SetDraggableRegionsOn(w, regions))))
         {
             Permission = WebContents.Permissions,
             Download = WebContents.Downloads,
@@ -375,7 +386,7 @@ public sealed unsafe partial class BrowserWindow
             Minimizable = _options.Minimizable,
             Maximizable = _options.Maximizable && !_transparent,
             ThemeChanged = () => Command(ApplyBackgroundColor),
-            Frameless = !_options.Frame,
+            Frameless = IsFrameless,
             MinimumSize = new cef_size_t { width = _options.MinWidth, height = _options.MinHeight },
             MaximumSize = new cef_size_t { width = _options.MaxWidth, height = _options.MaxHeight },
             Parent = _options.Parent is { } parent ? () => (nint)parent._window : null,
@@ -898,6 +909,90 @@ public sealed unsafe partial class BrowserWindow
 
     /// <summary>Whether the window stays above others. Electron's <c>win.isAlwaysOnTop()</c>.</summary>
     public bool IsAlwaysOnTop => Query(w => w->is_always_on_top(w) != 0, false);
+
+    /// <summary>Changes the colours or height of the buttons drawn over a hidden title bar; null fields keep their value.
+    /// Electron's <c>win.setTitleBarOverlay()</c>.</summary>
+    /// <exception cref="InvalidOperationException">The window was not created with a hidden title bar and an overlay.</exception>
+    /// <exception cref="ArgumentException">A colour Chromium's CSS colour parser rejects; Electron's <c>TypeError</c>,
+    /// with its message. As in Electron, a valid colour given with an invalid symbol colour is still kept.</exception>
+    public void SetTitleBarOverlay(TitleBarOverlayOptions options)
+    {
+        ArgumentNullException.ThrowIfNull(options);
+        if (!TitleBar.HasOverlay(_options.TitleBarStyle, _options.TitleBarOverlay, OperatingSystem.IsMacOS()))
+            throw new InvalidOperationException("The title bar overlay is not enabled: create the window with a hidden TitleBarStyle and TitleBarOverlay.");
+        uint? color = null, symbol = null;
+        if (options.Color is { } c)
+            color = CssColor.TryParse(c, out var argb) ? argb : throw new ArgumentException("Could not parse color as CSS color");
+        if (options.SymbolColor is { } s)
+        {
+            if (!CssColor.TryParse(s, out var argb))
+            {
+                // Electron stores the colour before it rejects the symbol colour, and repaints nothing.
+                if (color is { } kept) Command(_ => _titleBarColors.Color = kept);
+                throw new ArgumentException("Could not parse symbol color as CSS color");
+            }
+            symbol = argb;
+        }
+        Command(_ =>
+        {
+            if (_titleBarOverlay is not { } overlay) return;
+            var (oldColor, oldSymbol) = _titleBarColors;
+            _titleBarColors = (color ?? oldColor, symbol ?? oldSymbol);
+            overlay.Update(_titleBarColors.Color, _titleBarColors.Symbol, options.Height ?? overlay.Height);
+            ApplyDraggableRegions(_window);
+        });
+    }
+
+    // Not in Electron, whose page reads this through the Window Controls Overlay API (DRIFT W34); kept for tests.
+    internal Rectangle GetTitleBarOverlayBounds() => Query(w =>
+    {
+        if (_titleBarOverlay is not { } overlay) return default;
+        var bounds = ToRectangle(w->@base.@base.get_bounds_in_screen(&w->@base.@base));
+        return new Rectangle(bounds.Width - overlay.Width, 0, overlay.Width, overlay.Height);
+    }, default);
+
+    private bool IsFrameless => TitleBar.IsFrameless(_options.Frame, _options.TitleBarStyle, OperatingSystem.IsMacOS());
+
+    private (uint Color, uint Symbol) _titleBarColors;
+
+    private static uint CaptionForeground() => TitleBar.CaptionForeground(TitleBar.DefaultFrame(OperatingSystem.IsWindows() && WindowsWindowStyle.AppsUseDarkTheme()));
+
+    private void AttachTitleBarOverlay(cef_window_t* w, TitleBarOverlayOptions options)
+    {
+        var (face, text) = OperatingSystem.IsWindows() ? WindowsWindowStyle.ButtonColors() : (0xFFF0F0F0u, 0xFF000000u);
+        // Electron ignores a colour it cannot parse here and keeps the default.
+        _titleBarColors = (CssColor.TryParse(options.Color, out var color) ? color : face, CssColor.TryParse(options.SymbolColor, out var symbol) ? symbol : text);
+        var height = options.Height ?? (OperatingSystem.IsWindows() ? WindowsWindowStyle.CaptionHeight(Hwnd(w)) : TitleBar.FallbackHeight);
+        _titleBarOverlay = new TitleBarOverlayView(this, CaptionForeground);
+        _titleBarOverlay.Attach(w, _titleBarColors.Color, _titleBarColors.Symbol, height);
+        _titleBarOverlay.SetMaximized(w->is_maximized(w) != 0);
+    }
+
+    private void SetDraggableRegionsOn(cef_window_t* w, IReadOnlyList<DraggableRegion> regions)
+    {
+        _pageRegions = regions;
+        ApplyDraggableRegions(w);
+    }
+
+    // CEF hit-tests the regions in window coordinates; the page starts below a menu bar. CEF ignores them in a framed
+    // window, as Electron does. The overlay's buttons are cut out, or a drag strip under them would take their clicks.
+    private void ApplyDraggableRegions(cef_window_t* w)
+    {
+        if (w is null || (_pageRegions.Count == 0 && _titleBarOverlay is null)) return;
+        var window = ToRectangle(w->@base.@base.get_bounds_in_screen(&w->@base.@base));
+        var page = ContentBoundsOn(w);
+        var moved = TitleBar.ToWindow(_pageRegions, page.X - window.X, page.Y - window.Y);
+        if (_titleBarOverlay is { } overlay)
+            moved = [.. moved, new DraggableRegion(window.Width - overlay.Width, 0, overlay.Width, overlay.Height, Draggable: false)];
+        var native = new cef_draggable_region_t[moved.Length];
+        for (var i = 0; i < moved.Length; i++)
+            native[i] = new cef_draggable_region_t
+            {
+                bounds = new cef_rect_t { x = moved[i].X, y = moved[i].Y, width = moved[i].Width, height = moved[i].Height },
+                draggable = moved[i].Draggable ? 1 : 0,
+            };
+        fixed (cef_draggable_region_t* first = native) w->set_draggable_regions(w, (nuint)native.Length, first);
+    }
 
     /// <summary>Shows the window without focusing it. Windows only for now: macOS and Linux show and focus it.
     /// Electron's <c>win.showInactive()</c>.</summary>
@@ -1529,6 +1624,7 @@ public sealed unsafe partial class BrowserWindow
             _routedNSWindow = MacWindow.RouteFullScreenToggle((nint)window->get_window_handle(window), () => SetSimpleFullScreen(!IsSimpleFullScreen));
         if (_options.AlwaysOnTop) window->set_always_on_top(window, 1);
         if (OperatingSystem.IsWindows()) ApplyWindowsStyles(window);
+        if (TitleBar.HasOverlay(_options.TitleBarStyle, _options.TitleBarOverlay, OperatingSystem.IsMacOS())) AttachTitleBarOverlay(window, _options.TitleBarOverlay!);
         if (_options.Show)
         {
             window->show(window);
@@ -1617,7 +1713,11 @@ public sealed unsafe partial class BrowserWindow
         _lastBounds = bounds;
         if (_window is not null && IsNormal(_window)) _normalBounds = bounds;
         if (bounds.X != previous.X || bounds.Y != previous.Y) Moved?.Invoke(this, EventArgs.Empty);
-        if (bounds.Width != previous.Width || bounds.Height != previous.Height) Resized?.Invoke(this, EventArgs.Empty);
+        if (bounds.Width != previous.Width || bounds.Height != previous.Height)
+        {
+            if (_titleBarOverlay is not null && _window is not null) ApplyDraggableRegions(_window);
+            Resized?.Invoke(this, EventArgs.Empty);
+        }
         RaiseStateChanges();
     }
 
@@ -1629,13 +1729,16 @@ public sealed unsafe partial class BrowserWindow
         if (maximized != _wasMaximized) (maximized ? Maximized : Unmaximized)?.Invoke(this, EventArgs.Empty);
         if (minimized != _wasMinimized) (minimized ? Minimized : Restored)?.Invoke(this, EventArgs.Empty);
         _wasMaximized = maximized;
+        _titleBarOverlay?.SetMaximized(maximized);
         _wasMinimized = minimized;
     }
 
     private void OnFullscreenTransition(bool completed)
     {
         if (!completed || _window is null) return;
-        (_window->is_fullscreen(_window) != 0 ? EnteredFullScreen : LeftFullScreen)?.Invoke(this, EventArgs.Empty);
+        var fullscreen = _window->is_fullscreen(_window) != 0;
+        _titleBarOverlay?.SetVisible(!fullscreen);
+        (fullscreen ? EnteredFullScreen : LeftFullScreen)?.Invoke(this, EventArgs.Empty);
     }
 
     private void OnBrowserDestroyed(cef_browser_t* browser) => WebContents.OnBrowserDestroyed();
@@ -1645,6 +1748,7 @@ public sealed unsafe partial class BrowserWindow
         if (_routedNSWindow != 0 && OperatingSystem.IsMacOS()) MacWindow.UnrouteFullScreenToggle(_routedNSWindow);
         Menu.ApplicationMenuChanged -= _applicationMenuChanged;
         _menuBar?.Detach();
+        _titleBarOverlay?.Detach();
         if (OperatingSystem.IsWindows())
             foreach (var icon in _thumbarIcons) WindowsTaskbar.DestroyIconHandle(icon);
         NativeObject.Release(_browserView);

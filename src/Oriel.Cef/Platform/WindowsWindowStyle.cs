@@ -92,6 +92,26 @@ public static unsafe class WindowsWindowStyle
     public static void BringToTopInactive(nint hwnd)
         => SetWindowPos(hwnd, 0 /* HWND_TOP */, 0, 0, 0, 0, 0x1 /* SWP_NOSIZE */ | 0x2 /* SWP_NOMOVE */ | 0x10 /* SWP_NOACTIVATE */);
 
+    /// <summary>The system's caption height for the window's DPI, in DIPs: caption, sizing frame and padded border, the
+    /// height of Windows' own caption buttons.</summary>
+    public static int CaptionHeight(nint hwnd)
+    {
+        var dpi = GetDpiForWindow(hwnd) is var d and > 0 ? d : 96;
+        var pixels = GetSystemMetricsForDpi(4 /* SM_CYCAPTION */, dpi) + GetSystemMetricsForDpi(33 /* SM_CYSIZEFRAME */, dpi)
+            + GetSystemMetricsForDpi(92 /* SM_CXPADDEDBORDER */, dpi);
+        return (int)Math.Round(pixels * 96.0 / dpi);
+    }
+
+    /// <summary>Whether apps use the dark theme (<c>AppsUseLightTheme</c> is 0), which Chromium's colours follow.</summary>
+    public static bool AppsUseDarkTheme()
+        => Microsoft.Win32.Registry.GetValue(@"HKEY_CURRENT_USER\Software\Microsoft\Windows\CurrentVersion\Themes\Personalize", "AppsUseLightTheme", 1) is 0;
+
+    /// <summary>The system's button face and button text colours as ARGB, Electron's default overlay colours.</summary>
+    public static (uint Face, uint Text) ButtonColors() => (Argb(GetSysColor(15 /* COLOR_BTNFACE */)), Argb(GetSysColor(18 /* COLOR_BTNTEXT */)));
+
+    // COLORREF is 0x00BBGGRR.
+    private static uint Argb(uint colorRef) => 0xFF000000 | ((colorRef & 0xFF) << 16) | (colorRef & 0xFF00) | ((colorRef >> 16) & 0xFF);
+
     /// <summary>The top-level window that contains <paramref name="hwnd"/>.</summary>
     public static nint Root(nint hwnd) => GetAncestor(hwnd, 2 /* GA_ROOT */);
 
@@ -138,6 +158,9 @@ public static unsafe class WindowsWindowStyle
     [DllImport("user32.dll")] private static extern int GetMonitorInfoW(nint monitor, MonitorInfo* info);
     [DllImport("user32.dll")] private static extern int GetWindowRect(nint hwnd, Rect* rect);
     [DllImport("user32.dll")] private static extern nint GetAncestor(nint hwnd, uint flags);
+    [DllImport("user32.dll")] private static extern uint GetDpiForWindow(nint hwnd);
+    [DllImport("user32.dll")] private static extern int GetSystemMetricsForDpi(int index, uint dpi);
+    [DllImport("user32.dll")] private static extern uint GetSysColor(int index);
     [DllImport("user32.dll")] private static extern int SetWindowPos(nint hwnd, nint after, int x, int y, int cx, int cy, uint flags);
     [DllImport("dwmapi.dll")] private static extern int DwmGetWindowAttribute(nint hwnd, uint attribute, void* value, uint size);
 }
