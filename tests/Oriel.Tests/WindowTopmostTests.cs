@@ -20,6 +20,17 @@ public sealed class WindowTopmostTests
         finally { _ = DestroyWindow(hwnd); }
     }
 
+    [Theory]
+    [InlineData(true, 3L, false, true)]
+    [InlineData(true, 0L, false, true)]
+    [InlineData(false, 3L, false, false)]
+    [InlineData(true, 3L, true, true)]
+    [InlineData(true, -1L, true, true)]
+    [InlineData(true, 0L, true, false)]
+    [InlineData(false, 3L, true, false)]
+    public void StaysOnTop_FollowsElectron(bool flag, long macLevel, bool mac, bool expected)
+        => Assert.Equal(expected, BrowserWindow.StaysOnTop(flag, macLevel, mac));
+
     private const uint WsPopup = 0x80000000;
 
     [DllImport("user32.dll", CharSet = CharSet.Unicode)]
