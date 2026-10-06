@@ -2608,6 +2608,7 @@ async Task FramesAsync()
         "oriel.contextBridge.exposeInMainWorld('bridge', {",
         "  send: (m) => ipcRenderer.send('frame-test', m),",
         "  ask: () => ipcRenderer.invoke('ask'),",
+        "  askSync: (v) => JSON.stringify(ipcRenderer.sendSync('sync-test', v)),",
         "  listen: () => ipcRenderer.on('to-frame', (_e, v) => document.title = 'got:' + v),",
         "  listenOnce: () => ipcRenderer.once('count', () => document.title = 'once:' + (++onceCount)),",
         "  listenThenOff: () => { ipcRenderer.on('off-test', offListener); ipcRenderer.off('off-test', offListener); },",
@@ -2730,6 +2731,51 @@ async Task FramesAsync()
     answers.Add((await a.ExecuteJavaScriptAsync("bridge.ask()"))?.ToString());
     IpcMain.RemoveHandler("ask");
     Check("invoke is answered by the frame's handler, else the page's, else ipcMain's", answers.SequenceEqual(["frame", "contents", "ipcMain", "ipcMain"]), string.Join(",", answers));
+
+    // sendSync: the page waits for returnValue; dispatch follows Electron's order; an unset reply errors once collected.
+    WebFrameMain? syncSender = null;
+    var syncOrder = new List<string>();
+    void SyncHeard(string who) { lock (syncOrder) syncOrder.Add(who); }
+    EventHandler<IpcMessageEventArgs> onSyncMessage = (_, m) => SyncHeard("ipc-message-sync:" + m.Channel);
+    Action<IpcMainEvent> syncInFrame = _ => SyncHeard("frame");
+    Action<IpcMainEvent> syncInContents = _ => SyncHeard("contents");
+    Action<IpcMainEvent> answerSync = e => { SyncHeard("ipcMain"); syncSender = e.SenderFrame; e.ReturnValue = "got:" + e.Args[0].GetString(); };
+    host.WebContents.IpcMessageSync += onSyncMessage;
+    a.Ipc.On("sync-test", syncInFrame);
+    host.WebContents.Ipc.On("sync-test", syncInContents);
+    IpcMain.On("sync-test", answerSync);
+    var syncAnswer = (await a.ExecuteJavaScriptAsync("bridge.askSync('x')"))?.ToString();
+    string SyncOrder() { lock (syncOrder) return string.Join(",", syncOrder); }
+    Check("ipcRenderer.sendSync returns the returnValue a listener sets, from the sending frame", syncAnswer == "\"got:x\"" && syncSender == a, $"{syncAnswer} {syncSender?.Name}");
+    Check("sendSync reaches ipc-message-sync, then the frame's ipc, the page's and ipcMain, as Electron's", SyncOrder() == "ipc-message-sync:sync-test,frame,contents,ipcMain", SyncOrder());
+    host.WebContents.IpcMessageSync -= onSyncMessage;
+    a.Ipc.RemoveListener("sync-test", syncInFrame);
+    host.WebContents.Ipc.RemoveListener("sync-test", syncInContents);
+    IpcMain.RemoveListener("sync-test", answerSync);
+
+    Action<IpcMainEvent> answerLater = e => Task.Delay(300).ContinueWith(_ => e.ReturnValue = "later");
+    IpcMain.On("sync-test", answerLater);
+    var waitStarted = DateTime.UtcNow;
+    var lateAnswer = (await a.ExecuteJavaScriptAsync("bridge.askSync('y')"))?.ToString();
+    var waited = DateTime.UtcNow - waitStarted;
+    IpcMain.RemoveListener("sync-test", answerLater);
+    Check("a returnValue set later still answers, with the page held until then", lateAnswer == "\"later\"" && waited >= TimeSpan.FromMilliseconds(250), $"{lateAnswer} after {waited.TotalMilliseconds:F0} ms");
+
+    Action<IpcMainEvent> ignore = _ => { };
+    IpcMain.On("sync-test", ignore);
+    var unanswered = a.ExecuteJavaScriptAsync("bridge.askSync('z')");
+    for (var i = 0; i < 50 && !unanswered.IsCompleted; i++)
+    {
+        GC.Collect();
+        GC.WaitForPendingFinalizers();
+        await Task.WhenAny(unanswered, Task.Delay(100));
+    }
+    IpcMain.RemoveListener("sync-test", ignore);
+    var neverSent = unanswered.IsCompleted ? (await unanswered)?.ToString() : "still waiting";
+    Check("an unanswered sendSync gets Electron's error once the event is collected", neverSent == "{\"error\":\"reply was never sent\"}", neverSent);
+
+    var forged = (await a.ExecuteJavaScriptAsync("(() => { const x = new XMLHttpRequest(); x.open('POST', 'oriel-ipc://sync/', false); x.send('{}'); return x.status; })()"))?.ToString();
+    Check("the page's own scripts cannot use the sync channel without its isolated world's secret", forged == "400", forged);
 
     // The page side: ipcRenderer.once, off and removeAllListeners.
     await a.ExecuteJavaScriptAsync("bridge.listenOnce(); bridge.listenThenOff(); 1");

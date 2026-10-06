@@ -5,6 +5,9 @@
   const post = globalThis.__orielIpc;
   delete globalThis.__orielIpc;
 
+  const syncSecret = Array.from(crypto.getRandomValues(new Uint8Array(16)), (b) => b.toString(16).padStart(2, '0')).join('');
+  post(JSON.stringify({ t: 'sync-hello', ch: '', args: [syncSecret] }));
+
   // Declared by the script around this runtime, so its preload wrappers can report failures as Electron's init does.
   reportPreloadError = (path, error) => post(JSON.stringify({
     t: 'preload-error', ch: '',
@@ -134,6 +137,16 @@
         pendingInvokes.set(id, { resolve, reject });
         post(JSON.stringify({ t: 'invoke', id, ch: String(channel), args }));
       });
+    },
+    // Electron's sendSync: a synchronous XHR to Oriel's private scheme, which answers once a listener sets returnValue.
+    // The secret, registered when this world started, is what tells the main process which document is asking.
+    sendSync(channel, ...args) {
+      const xhr = new XMLHttpRequest();
+      xhr.open('POST', 'oriel-ipc://sync/', false);
+      xhr.setRequestHeader('Content-Type', 'text/plain');
+      xhr.send(JSON.stringify({ secret: syncSecret, ch: String(channel), args }));
+      const reply = JSON.parse(xhr.responseText);
+      return 'error' in reply ? reply : reply.value;
     },
     send(channel, ...args) {
       post(JSON.stringify({ t: 'send', ch: String(channel), args }));

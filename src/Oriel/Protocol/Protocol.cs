@@ -84,7 +84,7 @@ public static unsafe class Protocol
         lock (s_gate)
         {
             s_started = true;
-            return [.. s_privileged.Select(s => new CustomScheme(s.Scheme, ToCefOptions(s.Privileges)))];
+            return [.. s_privileged.Select(s => new CustomScheme(s.Scheme, ToCefOptions(s.Privileges))), SyncIpc.Registration];
         }
     }
 
@@ -94,6 +94,7 @@ public static unsafe class Protocol
         lock (s_gate)
         {
             s_ready = true;
+            RegisterFactory(SyncIpc.Scheme, SyncIpc.Factory);
             foreach (var (scheme, factory) in s_handlers) RegisterFactory(scheme, factory);
         }
     }

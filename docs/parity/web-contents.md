@@ -11,14 +11,14 @@ Percentages are over the non-n/a items; the second counts a partial item as half
 | Area | Items | Done | Partial | Missing | n/a | % done | % done + partial/2 |
 |---|---|---|---|---|---|---|---|
 | Static methods | 5 | 2 | 2 | 1 | 0 | 40.0% | 60.0% |
-| Instance events | 59 | 30 | 16 | 11 | 2 | 52.6% | 66.7% |
+| Instance events | 59 | 31 | 16 | 10 | 2 | 54.4% | 68.4% |
 | Instance methods | 118 | 38 | 22 | 50 | 8 | 34.5% | 44.5% |
 | Instance properties | 18 | 9 | 1 | 7 | 1 | 52.9% | 55.9% |
 | navigationHistory | 14 | 12 | 0 | 2 | 0 | 85.7% | 85.7% |
 | WebFrameMain events and statics | 3 | 1 | 0 | 2 | 0 | 33.3% | 33.3% |
 | WebFrameMain methods | 9 | 1 | 4 | 4 | 0 | 11.1% | 33.3% |
 | WebFrameMain properties | 15 | 10 | 0 | 5 | 0 | 66.7% | 66.7% |
-| **Total** | 241 | 103 | 45 | 82 | 11 | 44.8% | 54.6% |
+| **Total** | 241 | 104 | 45 | 81 | 11 | 45.2% | 55.0% |
 
 ## Checklist
 
@@ -92,7 +92,7 @@ Percentages are over the non-n/a items; the second counts a partial item as half
 | `console-message` | `ConsoleMessage` | partial | No `frame` (C28). |
 | `preload-error` | `PreloadError` | done | The error arrives as its name, message and stack. |
 | `ipc-message` | `IpcMessage` | done |  |
-| `ipc-message-sync` | — | missing | Sync IPC (I2). |
+| `ipc-message-sync` | `IpcMessageSync` | done | Through a synchronous XHR (I9). |
 | `preferred-size-changed` | — | missing |  |
 | `frame-created` | `FrameCreated` | partial | Subframes only (C29). |
 

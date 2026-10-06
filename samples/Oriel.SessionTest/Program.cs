@@ -525,6 +525,19 @@ async Task RunAsync()
         await Throws(() => Task.FromResult(preloaded.RegisterPreloadScript(new PreloadScriptRegistration("frame", "relative.js")))) is ArgumentException
         && await Throws(() => Task.FromResult(preloaded.RegisterPreloadScript(new PreloadScriptRegistration("frame", PreloadFile("again")) { Id = s2 }))) is ArgumentException
         && await Throws(() => Task.FromResult(preloaded.RegisterPreloadScript(new PreloadScriptRegistration("service-worker", PreloadFile("sw"))))) is NotSupportedException);
+    // sendSync from a page in its own session reaches the main process too.
+    var syncPreload = Path.Combine(preloadDir, "sync.js");
+    File.WriteAllText(syncPreload, "oriel.contextBridge.exposeInMainWorld('sync', { ask: (v) => oriel.ipcRenderer.sendSync('session-sync', v) });");
+    var syncSession = Session.FromPartition("sync-session");
+    syncSession.Protocol.Handle("https", _ => ProtocolResponse.Text(Page, "text/html"));
+    var syncWin = new BrowserWindow(new BrowserWindowOptions { Show = false, WebPreferences = new WebPreferences { Session = syncSession, Preload = syncPreload } });
+    await syncWin.LoadUrl(Site);
+    Action<IpcMainEvent> sessionSync = e => e.ReturnValue = "session:" + e.Args[0].GetString();
+    IpcMain.On("session-sync", sessionSync);
+    var sessionAnswer = (await syncWin.WebContents.ExecuteJavaScriptAsync("sync.ask('ok')"))?.ToString();
+    IpcMain.RemoveListener("session-sync", sessionSync);
+    Check("ipcRenderer.sendSync works from a page in another session", sessionAnswer == "session:ok", sessionAnswer);
+    syncWin.Destroy();
     Directory.Delete(preloadDir, recursive: true);
 
     // Spell checker: Chromium's, driven through the session as Electron's.

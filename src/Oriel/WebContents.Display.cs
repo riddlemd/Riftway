@@ -1,4 +1,5 @@
 using System.ComponentModel;
+using System.Text.Json;
 using System.Drawing;
 using Oriel.Cef;
 using Oriel.Cef.Handlers;
@@ -88,6 +89,18 @@ public sealed unsafe partial class WebContents
     public event EventHandler<IpcMessageEventArgs>? IpcMessage;
 
     internal void RaiseIpcMessage(string channel, IpcMainEvent e) => Raise(IpcMessage, new IpcMessageEventArgs(channel, e), "ipc-message");
+
+    /// <summary>The page sent a message with <c>ipcRenderer.sendSync</c>; raised before any IPC listener. Set the event's
+    /// <see cref="IpcMainEvent.ReturnValue"/> to answer. Electron's <c>ipc-message-sync</c>.</summary>
+    public event EventHandler<IpcMessageEventArgs>? IpcMessageSync;
+
+    internal bool HasIpcMessageSyncListeners => IpcMessageSync is not null;
+
+    internal void RaiseIpcMessageSync(string channel, IpcMainEvent e) => Raise(IpcMessageSync, new IpcMessageEventArgs(channel, e), "ipc-message-sync");
+
+    // UI thread.
+    internal Task<string> DispatchSync(int context, string channel, IReadOnlyList<JsonElement> args)
+        => IpcMain.DispatchSync(this, FrameForContext(context), channel, args);
 
     /// <summary>A preload script failed to load or threw; the others still ran. Electron's <c>preload-error</c>.</summary>
     public event EventHandler<PreloadErrorEventArgs>? PreloadError;

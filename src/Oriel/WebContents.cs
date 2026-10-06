@@ -907,6 +907,7 @@ public sealed unsafe partial class WebContents
     internal void OnBrowserDestroyed()
     {
         _destroyed.Cancel();
+        SyncIpc.Forget(this, null);
         UnregisterLifecycle();
         _devTools.Detach();
         NativeObject.Release(_browser);
@@ -976,6 +977,7 @@ public sealed unsafe partial class WebContents
                 var gone = parameters.GetProperty("executionContextId").GetInt32();
                 if (gone == _isolatedContext) _isolatedContext = null;
                 PortLink.ContextGone(this, gone);
+                SyncIpc.Forget(this, gone);
                 if (_contextFrames.Remove(gone, out var owner) && _frames.TryGetValue(owner, out var ownerFrame))
                 {
                     if (ownerFrame.DefaultContext == gone) ownerFrame.DefaultContext = null;
@@ -985,6 +987,7 @@ public sealed unsafe partial class WebContents
 
             case "Runtime.executionContextsCleared":
                 foreach (var cleared in _contextFrames.Keys) PortLink.ContextGone(this, cleared);
+                SyncIpc.Forget(this, null);
                 _isolatedContext = null;
                 _contextFrames.Clear();
                 foreach (var frame in _frames.Values) frame.DefaultContext = frame.IsolatedContext = null;
@@ -1031,6 +1034,9 @@ public sealed unsafe partial class WebContents
 
             case "mousedown":
                 PageMouseDown?.Invoke();
+                break;
+            case "sync-hello":
+                SyncIpc.Register(args[0].GetString()!, this, context);
                 break;
             case "zoom":
                 Raise(ZoomChanged, args[0].GetBoolean() ? ZoomDirection.In : ZoomDirection.Out, "zoom-changed");

@@ -12,7 +12,12 @@ public sealed unsafe class SessionProtocol
     private readonly Lock _gate = new();
     private readonly Dictionary<string, SchemeHandlerFactory> _handlers = new(StringComparer.Ordinal);
 
-    internal SessionProtocol(Session session) => _session = session;
+    internal SessionProtocol(Session session)
+    {
+        _session = session;
+        // Every session's pages need the sync IPC scheme; the default session's is registered with CEF's global context.
+        if (!session.IsDefault) Register(SyncIpc.Scheme, SyncIpc.Factory);
+    }
 
     /// <summary>Serves requests to <paramref name="scheme"/> in this session. Electron's <c>protocol.handle()</c>.</summary>
     /// <exception cref="InvalidOperationException">The scheme is already handled.</exception>

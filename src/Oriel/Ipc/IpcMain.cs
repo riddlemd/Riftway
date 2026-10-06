@@ -33,6 +33,29 @@ public class IpcMainEvent
 
     /// <summary>Ports the page sent with <c>ipcRenderer.postMessage</c>. Electron's <c>event.ports</c>.</summary>
     public IReadOnlyList<MessagePortMain> Ports { get; init; } = [];
+
+    /// <summary>The value <c>ipcRenderer.sendSync</c> returns in the page; set it, now or later, to answer. Left unset, the
+    /// page gets <c>{ error: 'reply was never sent' }</c> once this event is collected, as in Electron. Has no effect on
+    /// other messages. Electron's <c>event.returnValue</c>.</summary>
+    public JsonNode? ReturnValue
+    {
+        get => _returnValue;
+        set
+        {
+            _returnValue = value;
+            _syncReply?.Send(value);
+        }
+    }
+
+    private JsonNode? _returnValue;
+    private SyncReply? _syncReply;
+    private SyncReplySentinel? _sentinel;
+
+    internal void ExpectReply(SyncReply reply)
+    {
+        _syncReply = reply;
+        _sentinel = new SyncReplySentinel(reply);
+    }
 }
 
 /// <summary>An <c>ipcRenderer.invoke</c> call: Electron's <c>IpcMainInvokeEvent</c>.</summary>
@@ -163,6 +186,11 @@ public sealed class IpcMainScope
         }
     }
 
+    internal bool HasListeners(string channel)
+    {
+        lock (_gate) return _listeners.TryGetValue(channel, out var list) && list.Count > 0;
+    }
+
     internal Func<IpcMainInvokeEvent, CancellationToken, Task<JsonNode?>>? HandlerFor(string channel)
     {
         lock (_gate) return _handlers.GetValueOrDefault(channel);
@@ -212,6 +240,27 @@ public static class IpcMain
         senderFrame?.Ipc.Emit(channel, e);
         sender.Ipc.Emit(channel, e);
         Global.Emit(channel, e);
+    }
+
+    // Electron's ipc-dispatch for a sync message: a warning when nothing listens, then ipc-message-sync, the frame's
+    // listeners, the page's and ipcMain's; the reply waits for a listener to set returnValue.
+    internal static Task<string> DispatchSync(WebContents sender, WebFrameMain? senderFrame, string channel, IReadOnlyList<JsonElement> args)
+    {
+        var reply = new SyncReply();
+        Dispatch(new IpcMainEvent(sender, senderFrame, args));
+        return reply.Sent;
+
+        // Its own method, so the event is unreachable once the listeners are done with it.
+        void Dispatch(IpcMainEvent e)
+        {
+            e.ExpectReply(reply);
+            if (!sender.HasIpcMessageSyncListeners && senderFrame?.Ipc.HasListeners(channel) != true && !sender.Ipc.HasListeners(channel) && !Global.HasListeners(channel))
+                Console.Error.WriteLine($"WebContents #{sender.Id} called ipcRenderer.sendSync() with '{channel}' channel without listeners.");
+            sender.RaiseIpcMessageSync(channel, e);
+            senderFrame?.Ipc.Emit(channel, e);
+            sender.Ipc.Emit(channel, e);
+            Global.Emit(channel, e);
+        }
     }
 
     // The first of the frame's, the page's and ipcMain's handlers for the channel answers, as Electron's.
