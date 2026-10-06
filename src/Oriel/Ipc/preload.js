@@ -18,6 +18,54 @@
   globalThis.addEventListener('focus', () => post(JSON.stringify({ t: 'focus', ch: '', args: [] })), true);
   // Chromium's MediaStartedPlaying and MediaStoppedPlaying, per player; captured, as media events do not bubble.
   globalThis.addEventListener('playing', () => post(JSON.stringify({ t: 'media', ch: '', args: [true] })), true);
+  // Chromium turns a Ctrl+wheel the page leaves unhandled into ContentsZoomChange, one per whole wheel tick, except on
+  // macOS; Electron only reports it, so the page is not zoomed here either.
+  if (!/^Mac/.test(navigator.platform)) {
+    let ticks = 0;
+    globalThis.addEventListener('wheel', (e) => {
+      if (!e.ctrlKey || e.defaultPrevented) return;
+      e.preventDefault();
+      ticks += e.wheelDeltaY / 120;
+      const whole = Math.round(ticks);
+      ticks -= whole;
+      if (whole !== 0) post(JSON.stringify({ t: 'zoom', ch: '', args: [whole > 0] }));
+    }, { passive: false });
+  }
+
+  // Blink's theme color: the first meta[name=theme-color] in tree order whose media matches and whose content is a color.
+  // The main process reports a change, as Chromium does.
+  if (globalThis === globalThis.top) {
+    const canvas = new OffscreenCanvas(1, 1).getContext('2d');
+    const themeColor = () => {
+      for (const meta of document.documentElement?.querySelectorAll('meta') ?? []) {
+        if ((meta.getAttribute('name') ?? '').toLowerCase() !== 'theme-color') continue;
+        const media = (meta.getAttribute('media') ?? '').trim();
+        if (media && !matchMedia(media).matches) continue;
+        const content = (meta.getAttribute('content') ?? '').trim();
+        if (!CSS.supports('color', content)) continue;
+        canvas.fillStyle = '#000';
+        canvas.fillStyle = content;
+        canvas.fillRect(0, 0, 1, 1);
+        const [red, green, blue] = canvas.getImageData(0, 0, 1, 1, { colorSpace: 'srgb' }).data;
+        canvas.clearRect(0, 0, 1, 1);
+        return '#' + [red, green, blue].map((v) => v.toString(16).padStart(2, '0').toUpperCase()).join('');
+      }
+      return null;
+    };
+    const watched = new Set();
+    const report = () => {
+      for (const meta of document.querySelectorAll('meta[media]')) {
+        const media = meta.getAttribute('media').trim();
+        if (media && !watched.has(media)) { watched.add(media); matchMedia(media).addEventListener('change', report); }
+      }
+      post(JSON.stringify({ t: 'theme', ch: '', args: [themeColor()] }));
+    };
+    document.addEventListener('DOMContentLoaded', () => {
+      report();
+      new MutationObserver(report).observe(document.documentElement, { subtree: true, childList: true, attributes: true, attributeFilter: ['name', 'content', 'media'] });
+    });
+  }
+
   // A player that reaches its end fires pause before ended, so pause alone is each stop once.
   globalThis.addEventListener('pause', () => post(JSON.stringify({ t: 'media', ch: '', args: [false] })), true);
 

@@ -53,6 +53,16 @@ public sealed class ContentBoundsUpdatedEventArgs(Rectangle bounds) : CancelEven
     public Rectangle Bounds { get; } = bounds;
 }
 
+/// <summary>Which way <see cref="WebContents.ZoomChanged"/> asks to zoom; Electron's <c>zoomDirection</c>.</summary>
+public enum ZoomDirection
+{
+    /// <summary>Electron's <c>in</c>.</summary>
+    In,
+
+    /// <summary>Electron's <c>out</c>.</summary>
+    Out,
+}
+
 /// <summary>Options for <see cref="WebContents.Close"/>; Electron's <c>close()</c> options.</summary>
 public sealed record WebContentsCloseOptions
 {
@@ -64,6 +74,8 @@ public sealed unsafe partial class WebContents
 {
     // UI thread.
     private bool _hasFocus;
+    private string? _themeColor;
+    private bool _ignoreMenuShortcuts;
     private bool _closingWithoutUnload;
 
     /// <summary>Handlers and listeners for this page's messages, asked before <see cref="IpcMain"/>'s. Electron's
@@ -91,6 +103,29 @@ public sealed unsafe partial class WebContents
 
     /// <summary>Media in the page paused or ended. Electron's <c>media-paused</c>.</summary>
     public event EventHandler? MediaPaused;
+
+    /// <summary>The user asked to zoom with Ctrl and the mouse wheel, which the page left unhandled; the page is not zoomed,
+    /// as in Electron. Never raised on macOS, as Chromium does not. Electron's <c>zoom-changed</c>.</summary>
+    public event EventHandler<ZoomDirection>? ZoomChanged;
+
+    /// <summary>The page's theme color changed: <c>#RRGGBB</c>, or null when it has none. Electron's
+    /// <c>did-change-theme-color</c>.</summary>
+    public event EventHandler<string?>? DidChangeThemeColor;
+
+    /// <summary>Makes the window's menu accelerators ignore keys typed into this page (Windows, Linux). Electron's
+    /// <c>webContents.setIgnoreMenuShortcuts()</c>.</summary>
+    public void SetIgnoreMenuShortcuts(bool ignore) => CefThread.RunOnUi(() => _ignoreMenuShortcuts = ignore);
+
+    // UI thread.
+    internal bool IgnoresMenuShortcuts => _ignoreMenuShortcuts;
+
+    // UI thread: the main frame reports its color on each load and change; a change is raised, as Chromium's.
+    private void OnThemeColor(string? color)
+    {
+        if (color == _themeColor) return;
+        _themeColor = color;
+        Raise(DidChangeThemeColor, color, "did-change-theme-color");
+    }
 
     /// <summary>The page logged a message. Electron's <c>console-message</c>.</summary>
     public event EventHandler<ConsoleMessageEventArgs>? ConsoleMessage;

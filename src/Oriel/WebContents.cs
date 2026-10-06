@@ -1031,6 +1031,12 @@ public sealed unsafe partial class WebContents
             case "mousedown":
                 PageMouseDown?.Invoke();
                 break;
+            case "zoom":
+                Raise(ZoomChanged, args[0].GetBoolean() ? ZoomDirection.In : ZoomDirection.Out, "zoom-changed");
+                break;
+            case "theme":
+                OnThemeColor(args[0].ValueKind == JsonValueKind.Null ? null : args[0].GetString());
+                break;
             case "media":
                 Raise(args[0].GetBoolean() ? MediaStartedPlaying : MediaPaused, EventArgs.Empty, args[0].GetBoolean() ? "media-started-playing" : "media-paused");
                 break;

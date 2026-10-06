@@ -11,14 +11,14 @@ Percentages are over the non-n/a items; the second counts a partial item as half
 | Area | Items | Done | Partial | Missing | n/a | % done | % done + partial/2 |
 |---|---|---|---|---|---|---|---|
 | Static methods | 5 | 1 | 2 | 2 | 0 | 20.0% | 40.0% |
-| Instance events | 59 | 29 | 13 | 15 | 2 | 50.9% | 62.3% |
-| Instance methods | 118 | 37 | 21 | 52 | 8 | 33.6% | 43.2% |
+| Instance events | 59 | 30 | 14 | 13 | 2 | 52.6% | 64.9% |
+| Instance methods | 118 | 37 | 22 | 51 | 8 | 33.6% | 43.6% |
 | Instance properties | 18 | 9 | 1 | 7 | 1 | 52.9% | 55.9% |
 | navigationHistory | 14 | 12 | 0 | 2 | 0 | 85.7% | 85.7% |
 | WebFrameMain events and statics | 3 | 1 | 0 | 2 | 0 | 33.3% | 33.3% |
 | WebFrameMain methods | 9 | 1 | 4 | 4 | 0 | 11.1% | 33.3% |
 | WebFrameMain properties | 15 | 10 | 0 | 5 | 0 | 66.7% | 66.7% |
-| **Total** | 241 | 100 | 41 | 89 | 11 | 43.5% | 52.4% |
+| **Total** | 241 | 101 | 43 | 86 | 11 | 43.9% | 53.3% |
 
 ## Checklist
 
@@ -68,7 +68,7 @@ Percentages are over the non-n/a items; the second counts a partial item as half
 | `before-mouse-event` | — | missing |  |
 | `enter-html-full-screen` | `EnterHtmlFullScreen` | done |  |
 | `leave-html-full-screen` | `LeaveHtmlFullScreen` | done |  |
-| `zoom-changed` | — | missing |  |
+| `zoom-changed` | `ZoomChanged` | partial | From the page's wheel events (C35). |
 | `blur` | `Blurred` | partial | Raised when the window loses focus; another view in the window taking focus is not seen (C30). |
 | `focus` | `Focused` | done |  |
 | `devtools-open-url` | — | missing |  |
@@ -83,7 +83,7 @@ Percentages are over the non-n/a items; the second counts a partial item as half
 | `media-started-playing` | `MediaStartedPlaying` | partial | From the page's media events (C33). |
 | `media-paused` | `MediaPaused` | partial | From the page's media events (C33). |
 | `audio-state-changed` | — | missing | CEF never reports audio for Chrome-style browsers (C23). |
-| `did-change-theme-color` | — | missing |  |
+| `did-change-theme-color` | `DidChangeThemeColor` | done | Computed in the main frame by Blink's rule. |
 | `update-target-url` | `UpdateTargetUrl` | done |  |
 | `cursor-changed` | `CursorChanged` | done |  |
 | `select-bluetooth-device` | — | missing |  |
@@ -142,7 +142,7 @@ Percentages are over the non-n/a items; the second counts a partial item as half
 | `insertCSS()` | `InsertCssAsync` | partial | Inspector sheet; `user` origin applied as author (C25). |
 | `removeInsertedCSS()` | `RemoveInsertedCssAsync` | done |  |
 | `executeJavaScriptInIsolatedWorld()` | `ExecuteJavaScriptInIsolatedWorldAsync` | partial | DevTools-named worlds, JSON results (C26). |
-| `setIgnoreMenuShortcuts()` | — | missing |  |
+| `setIgnoreMenuShortcuts()` | `SetIgnoreMenuShortcuts` | partial | Windows and Linux (C34). |
 | `setAudioMuted()` | `SetAudioMuted` | done |  |
 | `isAudioMuted()` | `IsAudioMuted` | done |  |
 | `isCurrentlyAudible()` | — | missing | CEF never reports audio for Chrome-style browsers (C23). |

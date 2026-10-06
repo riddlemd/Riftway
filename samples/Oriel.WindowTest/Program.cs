@@ -1505,6 +1505,53 @@ async Task WebContentsMethodsAsync()
     forcedContents.Close();
     Check("Close without waiting skips beforeunload, even after user activation", Eventually(() => forcedContents.IsDestroyed(), step) && forcedPreventions == 0, $"preventions={forcedPreventions}");
 
+    // zoom-changed: Ctrl+wheel the page leaves alone is reported, one per tick, and does not zoom; never on macOS.
+    File.WriteAllText(page, "<!doctype html><div id=box style='height:3000px'>zoom</div>");
+    await wc.LoadFile(page);
+    var zooms = new List<ZoomDirection>();
+    EventHandler<ZoomDirection> onZoom = (_, d) => { lock (zooms) zooms.Add(d); };
+    wc.ZoomChanged += onZoom;
+    string Zooms() { lock (zooms) return string.Join(",", zooms); }
+    void Wheel(int deltaY) => wc.SendInputEvent(new MouseInputEvent(MouseInputEventType.MouseWheel, 50, 50) { DeltaY = deltaY, Modifiers = InputModifiers.Control });
+    Wheel(120);
+    Wheel(-120);
+    await Task.Delay(800);
+    var zoomsSeen = Zooms();
+    await wc.ExecuteJavaScriptAsync("box.addEventListener('wheel', e => e.preventDefault(), { passive: false }); 1");
+    Wheel(120);
+    await Task.Delay(800);
+    wc.ZoomChanged -= onZoom;
+    var zoomFactor = wc.GetZoomFactor();
+    if (OperatingSystem.IsMacOS())
+        Check("Ctrl+wheel raises no zoom-changed on macOS, as Chromium's, and does not zoom", Zooms() == "" && zoomFactor == 1, $"{Zooms()} zoom={zoomFactor}");
+    else
+    {
+        Check("Ctrl+wheel raises zoom-changed in then out, one per tick, without zooming the page", zoomsSeen == "In,Out" && zoomFactor == 1, $"{zoomsSeen} zoom={zoomFactor}");
+        Check("a Ctrl+wheel the page handles raises no zoom-changed", Zooms() == "In,Out", Zooms());
+    }
+
+    // did-change-theme-color: the first matching, valid meta theme-color, as uppercase #RRGGBB; raised on change.
+    var themes = new List<string>();
+    EventHandler<string?> onTheme = (_, c) => { lock (themes) themes.Add(c ?? "null"); };
+    wc.DidChangeThemeColor += onTheme;
+    string Themes() { lock (themes) return string.Join(",", themes); }
+    File.WriteAllText(page, "<!doctype html><meta name=theme-color media='(min-width: 99999px)' content='blue'><meta name=Theme-Color content='not a color'>"
+        + "<meta name=theme-color content='rgb(255, 128, 0)'><meta name=theme-color content=red><p>themed</p>");
+    await wc.LoadFile(page);
+    var firstTheme = Eventually(() => Themes() == "#FF8000", step);
+    await wc.ExecuteJavaScriptAsync("document.querySelector('meta[content=\"rgb(255, 128, 0)\"]').content = 'lime'; 1");
+    var changedTheme = Eventually(() => Themes() == "#FF8000,#00FF00", step);
+    await wc.ExecuteJavaScriptAsync("document.querySelector('p').textContent = 'same'; 1");
+    await Task.Delay(400);
+    var unchanged = Themes() == "#FF8000,#00FF00";
+    File.WriteAllText(page, "<!doctype html><p>plain</p>");
+    await wc.LoadFile(page);
+    var clearedTheme = Eventually(() => Themes() == "#FF8000,#00FF00,null", step);
+    wc.DidChangeThemeColor -= onTheme;
+    Check("did-change-theme-color picks the first matching, valid meta, as #RRGGBB", firstTheme, Themes());
+    Check("did-change-theme-color follows a change, and only a change", changedTheme && unchanged, Themes());
+    Check("a page without a theme color raises null", clearedTheme, Themes());
+
     // content-bounds-updated: the page's moveTo and resizeTo move its window unless prevented.
     var mover = new BrowserWindow(new BrowserWindowOptions { Width = 320, Height = 240, X = 60, Y = 80 });
     File.WriteAllText(page, "<!doctype html><p>mover</p>");
@@ -1918,6 +1965,17 @@ async Task BarMenusAsync(BrowserWindow win, Menu menu, MenuItem save, MenuItem g
     await Task.Delay(500);
     Check("a disabled item's accelerator does nothing", clicks.Count == 0, string.Join(",", clicks));
     save.Enabled = true;
+    win.WebContents.SetIgnoreMenuShortcuts(true);
+    win.WebContents.SendInputEvent(new KeyboardInputEvent(KeyboardInputEventType.KeyDown, "K") { Modifiers = InputModifiers.Control | InputModifiers.Shift });
+    win.WebContents.SendInputEvent(new KeyboardInputEvent(KeyboardInputEventType.KeyUp, "K") { Modifiers = InputModifiers.Control | InputModifiers.Shift });
+    await Task.Delay(500);
+    var ignoredShortcut = clicks.Count == 0;
+    win.WebContents.SetIgnoreMenuShortcuts(false);
+    win.WebContents.SendInputEvent(new KeyboardInputEvent(KeyboardInputEventType.KeyDown, "K") { Modifiers = InputModifiers.Control | InputModifiers.Shift });
+    win.WebContents.SendInputEvent(new KeyboardInputEvent(KeyboardInputEventType.KeyUp, "K") { Modifiers = InputModifiers.Control | InputModifiers.Shift });
+    Check("SetIgnoreMenuShortcuts keeps the page's keys from the window's accelerators until cleared",
+        ignoredShortcut && Eventually(() => clicks.Contains("save:True"), step), string.Join(",", clicks));
+    clicks.Clear();
 
     win.AutoHideMenuBar = true;
     Check("AutoHideMenuBar hides the bar", Eventually(() => !win.IsMenuBarVisible && win.GetContentBounds() == content && PageHeight() == fullHeight, step), $"{win.GetContentBounds()} page={PageHeight()}/{fullHeight}");
@@ -1942,6 +2000,12 @@ async Task BarMenusAsync(BrowserWindow win, Menu menu, MenuItem save, MenuItem g
     Check("Alt shows an auto-hidden bar", Eventually(() => win.IsMenuBarVisible, step));
     PressAlt();
     Check("Alt again hides it", Eventually(() => !win.IsMenuBarVisible, step));
+    win.WebContents.SetIgnoreMenuShortcuts(true);
+    PressAlt();
+    await Task.Delay(500);
+    var altIgnored = !win.IsMenuBarVisible;
+    win.WebContents.SetIgnoreMenuShortcuts(false);
+    Check("SetIgnoreMenuShortcuts keeps Alt from the auto-hidden bar, as Electron skips the window's key handling", altIgnored);
     PressAlt();
     Eventually(() => win.IsMenuBarVisible, step);
     Key("A", KeyboardInputEventType.KeyDown);

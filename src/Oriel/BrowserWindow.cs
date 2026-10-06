@@ -294,7 +294,7 @@ public sealed unsafe partial class BrowserWindow
             ReadyToShow?.Invoke(this, EventArgs.Empty);
         };
         _client = new ClientHandler(WebContents.Display, WebContents.Load, WebContents.JsDialog, WebContents.Request, WebContents.Command,
-            WebContents.ContextMenuRequests, new KeyboardHandler(keyEvent => WebContents.OnPreKeyEvent(keyEvent) || (_menuBar?.OnKeyEvent(keyEvent) ?? false)),
+            WebContents.ContextMenuRequests, new KeyboardHandler(keyEvent => WebContents.OnPreKeyEvent(keyEvent) || (!WebContents.IgnoresMenuShortcuts && (_menuBar?.OnKeyEvent(keyEvent) ?? false))),
             new LifeSpanHandler { BeforePopup = OnBeforePopup, PopupAborted = OnPopupAborted })
         {
             Permission = WebContents.Permissions,
@@ -334,7 +334,7 @@ public sealed unsafe partial class BrowserWindow
             MaximumSize = new cef_size_t { width = _options.MaxWidth, height = _options.MaxHeight },
             Parent = _options.Parent is { } parent ? () => (nint)parent._window : null,
             Modal = _options.Modal,
-            Accelerator = commandId => _menuBar?.OnAccelerator(commandId) ?? false,
+            Accelerator = commandId => !WebContents.IgnoresMenuShortcuts && (_menuBar?.OnAccelerator(commandId) ?? false),
             KeyEvent = keyEvent => _menuBar?.OnKeyEvent(keyEvent) ?? false,
         };
 
