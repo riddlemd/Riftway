@@ -138,6 +138,18 @@ Entries marked _(branch `x`)_ are on that branch and not yet in `main`.
 | C42 | `preferred-size-changed` carries Chromium's preferred size: `LayoutView::ComputeMinimumWidth` and the root element's `ScrollHeight`, recomputed after every main-frame layout and floored to DIPs; the mode starts when a load stops, per renderer, so a cross-site navigation waits for its own load to stop | The main frame's preload world measures the root's min-content width (an adopted `html { width: min-content }` sheet held for the measurement, so the page sees no DOM change) plus its margins, and the viewport's scroll height when the page overflows, else the root's box height; it measures after DOM mutations, root resizes, window resizes and subresource and font loads, so a layout change none of these see is missed. Overflow past a short root's box, the root's `min-width`/`max-width` and vertical writing modes are not modelled; the mode starts at the first load's stop and then stays on; a `transition` on the root's `width` with `interpolate-size` can be started by the measurement | CEF: no `UpdatePreferredSize` callback, and `EnablePreferredSizeMode` is not exposed | Patch: expose both |
 | C43 | `webContents.debugger` is its own protocol client: it sees only the domains it enables, and cannot break other clients | Shares the protocol session Oriel drives the page with: `Message` also carries `Page` and `Runtime` events Oriel enabled, and disabling those domains breaks Oriel's IPC, frames and `ExecuteJavaScriptAsync` | CEF: one DevTools session per browser, with message ids shared by every sender | A child session through `Target.attachToTarget`, if Chromium allows a page session to attach to itself; else Patch |
 
+## View / WebContentsView
+
+| ID | Electron | Oriel | Why | Possible resolution |
+|---|---|---|---|---|
+| V1 | `view.setBorderRadius()` | Missing | CEF: `cef_view_t` has no corner radius | Patch |
+| V2 | A `WebContentsView` page is like any other | Alloy style, unlike the window's own Chrome-style page: no Chrome command handling (so `DevTools = false` cannot block Chrome's shortcuts there, which Alloy lacks anyway), Alloy's context menu default | CEF: a Chrome-style window hosts at most one Chrome-style browser | None; revisit if CEF lifts the limit |
+| V4 | `new WebContentsView({ webContents })` adopts an existing page | Only `WebPreferences`; every view makes a new page | CEF: a browser cannot move to another browser view | None |
+| V7 | A `View` can draw over a `WebContentsView` | Hidden under the page on macOS; Windows and Linux not checked | CEF: a browser is a native view above what Views draws | None for plain views; a `WebContentsView` can overlap one |
+| V9 | `BaseWindow`, `win.setContentView()` | Missing; `BrowserWindow.ContentView` exists | Todo (phase 3) | Extract `BaseWindow` from `BrowserWindow` |
+| V12 | A view's page is its new size as soon as its bounds change | Linux applies the size asynchronously; a page whose view was empty since its browser started misses its first size, so Oriel sends it twice | CEF/X11: the page's child window is resized later | None needed |
+| V13 | A page follows its view's size wherever the view moves | Linux: a page whose view was moved to another parent can keep a stale size (WindowTest saw it stay at its first size for 8 s in about 1 run in 4, on the branch alone too); resizing it again does not always get through | Unknown: not diagnosed; resizes seem to stop reaching the renderer | Investigate CEF's Alloy browser view on X11 (Chromium's visual-properties acknowledgement) |
+
 ## Menu / MenuItem
 
 | ID | Electron | Oriel | Why | Possible resolution |

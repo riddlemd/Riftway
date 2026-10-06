@@ -941,11 +941,17 @@ public sealed unsafe partial class WebContents
     /// <summary>Cancelled when the page's browser is destroyed.</summary>
     internal CancellationToken DestroyedToken => _destroyed.Token;
 
+    /// <summary>Windows this page opened that close with it.</summary>
+    internal List<BrowserWindow> Popups { get; } = [];
+
     internal void OnBrowserDestroyed()
     {
         _destroyed.Cancel();
         SyncIpc.Forget(this, null);
         UnregisterLifecycle();
+        // As Electron: windows the page opened close with it unless they asked to outlive it.
+        foreach (var popup in Popups.ToArray()) popup.Destroy();
+        Popups.Clear();
         _devTools.Detach();
         Debugger.OnTargetDestroyed();
         NativeObject.Release(_browser);

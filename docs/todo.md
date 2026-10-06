@@ -32,8 +32,12 @@ Cross-platform work. Platform-specific items: [linux-todo.md](linux-todo.md), [w
 - [x] `WebFrameMain` (`WebContents.MainFrame`, IPC `SenderFrame`)
 - [x] Core `Session` (`Session`, `Cookies`, partitions; gaps DRIFT E1-E11) and `NativeImage` (gaps DRIFT B1, B3-B5)
 - [x] `Debugger` (`WebContents.Debugger`; shares Oriel's protocol session, DRIFT C43)
-- [ ] Remaining M2 modules: `BaseWindow`, `View`, `WebContentsView`; the remaining Electron command-line
-      switches and `ELECTRON_*` variables, checked one by one
+- [ ] `View` and `WebContentsView` ([design](design/web-contents-view.md)): phase 1 done (`ContentView`, child views,
+      bounds, visibility, `bounds-changed`, popups and `close()` from view pages); next `BaseWindow` (DRIFT V1, V2, V4, V7, V9, V12, V13)
+- [ ] Windows: closing a view's page tears it down in a hidden, never-shown window; check it takes no focus there
+- [ ] macOS: check whether a hidden window or a `LoadUrl` takes focus (it did on Windows; fixed on branch `window-polish`)
+- [ ] Remaining M2 modules: `BaseWindow`; the remaining Electron command-line switches and `ELECTRON_*` variables,
+      checked one by one
 - [x] `app.commandLine` (`OrielApp.CommandLine`; DRIFT A19)
 - [x] `window.open` handling: `SetWindowOpenHandler`, `DidCreateWindow` (branch `window-open`)
 - [x] Menus: Alt+letter mnemonics and the Alt toggle (was DRIFT W19)
@@ -41,7 +45,6 @@ Cross-platform work. Platform-specific items: [linux-todo.md](linux-todo.md), [w
 - [x] `OrielApp.Quit()` from any thread (was DRIFT A4)
 - [ ] `Protocol`: `AllowServiceWorkers` and `CodeCache` privileges throw `NotSupportedException`
 
-- [ ] When merging `web-contents-view`: a `WebContentsView` in a persistent partition must create its browser once `Session.Initialized` completes, as `BrowserWindow` does (CEF refuses a browser view on a profile still loading)
 
 ## Tests
 

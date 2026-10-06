@@ -19,7 +19,14 @@ BrowserWindow? childAlive = null;
 var willQuit = 0;
 KeyboardEvent? saveKeys = null;
 ExitedEventArgs? exited = null;
-app.Exited += (_, e) => exited = e;
+// A view page left outside every window; quitting must close it before CEF shuts down, which follows Exited.
+WebContents? strandedPage = null;
+bool? strandedClosedAtExit = null;
+app.Exited += (_, e) =>
+{
+    exited = e;
+    strandedClosedAtExit = strandedPage?.IsDestroyed();
+};
 void countWillQuit(object? _, CancelEventArgs e) => willQuit++;
 
 void Check(string name, bool pass, object? detail = null)
@@ -273,6 +280,7 @@ async Task RunAsync(BrowserWindow win, BrowserWindow simple)
     await CommandLineAsync();
     await ProcessChildrenAsync();
     await ThemeAsync(win);
+    await ViewsAsync();
     await WindowsApisAsync();
     await TransparencyAsync();
     await MacTransparencyAsync();
@@ -3433,6 +3441,239 @@ static bool SystemIsDark()
     return false;
 }
 
+async Task ViewsAsync()
+{
+    static Exception? ThrowsOf(Action act)
+    {
+        try { act(); return null; }
+        catch (Exception e) { return e; }
+    }
+
+    var dir = Directory.CreateTempSubdirectory("oriel-views-").FullName;
+    var page = Path.Combine(dir, "view.html");
+    File.WriteAllText(page, "<!doctype html><title>view</title><body style='margin:0;background:#2a4'>view</body>");
+    var preload = Path.Combine(dir, "preload.js");
+    File.WriteAllText(preload, "oriel.contextBridge.exposeInMainWorld('bridge', { ask: () => oriel.ipcRenderer.invoke('view-ask') });");
+
+    var host = new BrowserWindow(new BrowserWindowOptions { Width = 600, Height = 400, Title = "views" });
+    await host.WebContents.LoadFile(page);
+    var main = host.ContentView.Children;
+    Check("Views: ContentView's first child shows the window's page",
+        main.Count == 1 && main[0] is WebContentsView own && own.WebContents == host.WebContents);
+
+    var view = new WebContentsView(new WebContentsViewOptions { WebPreferences = new WebPreferences { Preload = preload } });
+    host.ContentView.AddChildView(view);
+    view.SetBounds(new Rectangle(10, 20, 200, 150));
+    await view.WebContents.LoadFile(page);
+    Check("Views: AddChildView adds above the page", host.ContentView.Children is [WebContentsView, var added] && added == view);
+    Check("Views: the view's page loads", view.WebContents.GetUrl().EndsWith("view.html"), view.WebContents.GetUrl());
+    Check("Views: GetBounds reads SetBounds back", view.GetBounds() == new Rectangle(10, 20, 200, 150), view.GetBounds());
+    var size = await PageSizeBecomes(view, "\"200x150\"");
+    Check("Views: the page is the size of its bounds", size == "\"200x150\"", size);
+
+    host.SetContentSize(700, 500);
+    var grown = Eventually(() => main[0].GetBounds() is { Width: 700, Height: 500 }, step);
+    Check("Views: the window's page fills the content view as it resizes", grown, main[0].GetBounds());
+    string? keptWidth = null;
+    for (var i = 0; i < 40 && keptWidth != "200"; i++)
+    {
+        keptWidth = await ViewJs(view, "innerWidth");
+        if (keptWidth != "200") await Task.Delay(100);
+    }
+    Check("Views: a view keeps its bounds when the window resizes",
+        view.GetBounds() == new Rectangle(10, 20, 200, 150) && keptWidth == "200", $"{view.GetBounds()} innerWidth={keptWidth}");
+
+    // Moving a view that is already laid out.
+    var viewMoves = 0;
+    view.BoundsChanged += (_, _) => viewMoves++;
+    view.SetBounds(new Rectangle(30, 40, 220, 160));
+    var immediately = view.GetBounds();
+    var movedSize = await PageSizeBecomes(view, "\"220x160\"");
+    Check("Views: SetBounds moves a view that is already laid out",
+        immediately == new Rectangle(30, 40, 220, 160) && movedSize == "\"220x160\"", $"{immediately} {movedSize}");
+
+    var movesAfterOne = viewMoves;
+    view.SetBounds(new Rectangle(30, 40, 220, 160));
+    Check("Views: BoundsChanged once for a move, not for the same bounds", movesAfterOne == 1 && viewMoves == 1, $"{movesAfterOne} {viewMoves}");
+    var contentMoves = 0;
+    var pageMoves = 0;
+    host.ContentView.BoundsChanged += (_, _) => contentMoves++;
+    main[0].BoundsChanged += (_, _) => pageMoves++;
+    host.SetContentSize(640, 480);
+    Check("Views: a window resize raises BoundsChanged on the content view and its page",
+        Eventually(() => contentMoves > 0 && pageMoves > 0, step) && viewMoves == 1, $"content={contentMoves} page={pageMoves} view={viewMoves}");
+
+    // IPC from a view's page.
+    WebContents? asker = null;
+    IpcMain.Handle("view-ask", e => { asker = e.Sender; return "answered"; });
+    var answer = await ViewJs(view, "bridge.ask()");
+    IpcMain.RemoveHandler("view-ask");
+    Check("Views: IPC from a view's page names its WebContents as the sender",
+        answer == "\"answered\"" && asker == view.WebContents, answer);
+    Check("Views: FromWebContents is null for a view's page (as Electron)",
+        BrowserWindow.FromWebContents(view.WebContents) is null && BrowserWindow.FromWebContents(host.WebContents) == host);
+
+    // Alt from a view's page reaches the window's menu bar (Windows and Linux), as from its own page.
+    if (!OperatingSystem.IsMacOS())
+    {
+        host.SetMenu(new Menu { new MenuItem { Label = "&File", Submenu = new Menu { new MenuItem { Label = "Quit" } } } });
+        host.AutoHideMenuBar = true;
+        host.Focus();
+        await Task.Delay(300);
+        view.WebContents.SendInputEvent(new KeyboardInputEvent(KeyboardInputEventType.KeyDown, "Alt") { Modifiers = InputModifiers.Alt });
+        view.WebContents.SendInputEvent(new KeyboardInputEvent(KeyboardInputEventType.KeyUp, "Alt"));
+        Check("Views: Alt in a view's page shows the window's auto-hidden menu bar", Eventually(() => host.IsMenuBarVisible, step));
+        host.RemoveMenu();
+    }
+
+    // Visibility.
+    view.SetVisible(false);
+    Check("Views: SetVisible(false) hides; the page keeps running", !view.GetVisible() && await ViewJs(view, "1 + 1") == "2");
+    view.SetVisible(true);
+    Check("Views: SetVisible(true) shows", view.GetVisible());
+
+    // Order and moves.
+    var second = new WebContentsView();
+    host.ContentView.AddChildView(second, 1);
+    Check("Views: AddChildView at an index",
+        host.ContentView.Children is [_, var s1, var v2] && s1 == second && v2 == view && host.ContentView.NativeChildrenMatch());
+    host.ContentView.AddChildView(second);
+    Check("Views: adding a child again moves it to the top",
+        host.ContentView.Children is [_, var v1, var s2] && v1 == view && s2 == second && host.ContentView.NativeChildrenMatch());
+    var group = new View();
+    host.ContentView.AddChildView(group);
+    group.SetBounds(new Rectangle(250, 20, 300, 200));
+    group.AddChildView(second);
+    Check("Views: adding to another view leaves the first",
+        !host.ContentView.Children.Contains(second) && group.Children is [var g] && g == second
+        && host.ContentView.NativeChildrenMatch() && group.NativeChildrenMatch());
+    second.SetBounds(new Rectangle(5, 5, 100, 80));
+    await second.WebContents.LoadFile(page);
+    Check("Views: a moved view is placed in its new parent", second.GetBounds() == new Rectangle(5, 5, 100, 80), second.GetBounds());
+    // A page that never moved: on Linux a moved page can keep a stale size (DRIFT V13).
+    var nestedPage = new WebContentsView();
+    group.AddChildView(nestedPage);
+    nestedPage.SetBounds(new Rectangle(120, 5, 90, 70));
+    await nestedPage.WebContents.LoadFile(page);
+    var nested = await PageSizeBecomes(nestedPage, "\"90x70\"");
+    Check("Views: a nested view's page is the size of its bounds", nested == "\"90x70\"", $"{nested} view={nestedPage.GetBounds()} group={group.GetBounds()}");
+    // A new persistent session's profile loads asynchronously, and CEF refuses a browser view until it has.
+    var persistent = new WebContentsView(new WebContentsViewOptions { WebPreferences = new WebPreferences { Partition = "persist:views" } });
+    host.ContentView.AddChildView(persistent);
+    persistent.SetBounds(new Rectangle(0, 0, 50, 50));
+    var persistentLoad = persistent.WebContents.LoadFile(page);
+    Check("Views: a view in a new persistent session loads its page",
+        await Task.WhenAny(persistentLoad, Task.Delay(step * 3)) == persistentLoad && persistent.WebContents.GetUrl().EndsWith("view.html"),
+        persistent.WebContents.GetUrl());
+    host.ContentView.RemoveChildView(persistent);
+    persistent.WebContents.Close();
+
+    // Removing keeps the page; adding it back shows it again.
+    await view.WebContents.ExecuteJavaScriptAsync("window.marker = 'kept'; 1");
+    host.ContentView.RemoveChildView(view);
+    Check("Views: RemoveChildView removes", !host.ContentView.Children.Contains(view) && host.ContentView.NativeChildrenMatch());
+    await Task.Delay(500);
+    host.ContentView.AddChildView(view);
+    Check("Views: a removed view's page survives and comes back", await ViewJs(view, "window.marker") == "\"kept\"");
+
+    // Errors.
+    // As Electron, a WebContentsView is a View: children go above its page.
+    var overlay = new WebContentsView();
+    view.AddChildView(overlay);
+    overlay.SetBounds(new Rectangle(10, 10, 60, 40));
+    await overlay.WebContents.LoadFile(page);
+    Check("Views: a WebContentsView holds child views above its page",
+        view.Children is [var o] && o == overlay && view.NativeChildrenMatch() && await PageSizeBecomes(overlay, "\"60x40\"") == "\"60x40\""
+        && await PageSizeBecomes(view, "\"220x160\"") == "\"220x160\"");
+    view.RemoveChildView(overlay);
+    overlay.WebContents.Close();
+    Check("Views: a view cannot be added inside itself", ThrowsOf(() => group.AddChildView(host.ContentView)) is InvalidOperationException);
+    var extra = new View();
+    host.ContentView.AddChildView(extra, 99);
+    Check("Views: an index past the end adds at the end, as Electron", host.ContentView.Children[^1] == extra && host.ContentView.NativeChildrenMatch());
+    host.ContentView.AddChildView(view, 99);
+    Check("Views: an existing child moved past the end goes to the top",
+        host.ContentView.Children[^1] == view && host.ContentView.Children.Contains(extra) && host.ContentView.NativeChildrenMatch());
+    host.ContentView.RemoveChildView(extra);
+    var before = host.ContentView.Children;
+    Check("Views: a negative index is refused and an existing child stays",
+        ThrowsOf(() => host.ContentView.AddChildView(view, -1)) is ArgumentOutOfRangeException
+        && host.ContentView.Children.SequenceEqual(before) && host.ContentView.NativeChildrenMatch());
+
+    // A view's page opens windows as a window's page does; they close with it.
+    var popupHost = new WebContentsView();
+    host.ContentView.AddChildView(popupHost);
+    popupHost.SetBounds(new Rectangle(0, 0, 120, 90));
+    await popupHost.WebContents.LoadFile(page);
+    BrowserWindow? viewPopup = null;
+    popupHost.WebContents.DidCreateWindow += (_, e) => viewPopup = e.Window;
+    var opened = (await popupHost.WebContents.ExecuteJavaScriptAsync("window.open('about:blank') !== null", userGesture: true))?.ToString();
+    Check("Views: window.open from a view's page opens a BrowserWindow",
+        opened == "true" && Eventually(() => viewPopup is not null, step) && BrowserWindow.GetAllWindows().Contains(viewPopup!)
+        && viewPopup!.WebContents.Session == popupHost.WebContents.Session, opened);
+
+    // Closing a view's page: the view leaves its parent, the window stays, its popups close.
+    var pageDestroyed = false;
+    popupHost.WebContents.Destroyed += (_, _) => pageDestroyed = true;
+    popupHost.WebContents.Close();
+    Check("Views: WebContents.Close closes a view's page; the view stays where it was, as Electron",
+        Eventually(() => pageDestroyed && popupHost.WebContents.IsDestroyed(), step) && host.ContentView.Children.Contains(popupHost)
+        && host.ContentView.NativeChildrenMatch() && popupHost.NativeChildrenMatch() && BrowserWindow.GetAllWindows().Contains(host));
+    host.ContentView.RemoveChildView(popupHost);
+    Check("Views: windows a view's page opened close with it",
+        Eventually(() => viewPopup is not null && !BrowserWindow.GetAllWindows().Contains(viewPopup), step));
+
+    // A view left outside every window when the app quits.
+    var detached = new WebContentsView();
+    host.ContentView.AddChildView(detached);
+    await detached.WebContents.LoadFile(page);
+    host.ContentView.RemoveChildView(detached);
+    strandedPage = detached.WebContents;
+
+    // WebContents.Close on a window's page closes the window.
+    var closingWindow = new BrowserWindow(new BrowserWindowOptions { Show = false });
+    await closingWindow.WebContents.LoadFile(page);
+    var windowClosed = false;
+    closingWindow.Closed += (_, _) => windowClosed = true;
+    closingWindow.WebContents.Close();
+    Check("Views: WebContents.Close on a window's page closes the window", Eventually(() => windowClosed, step));
+
+    // Closing the window takes its views' pages with it.
+    var closed = false;
+    host.Closed += (_, _) => closed = true;
+    host.Close();
+    Check("Views: the window closes with views in it", Eventually(() => closed, step));
+    Check("Views: the views' pages outlive their window, as in Electron",
+        !view.WebContents.IsDestroyed() && !second.WebContents.IsDestroyed() && await ViewJs(view, "window.marker") == "\"kept\"",
+        $"view={view.WebContents.IsDestroyed()} second={second.WebContents.IsDestroyed()} marker={await ViewJs(view, "window.marker")} parent={view.GetBounds()}");
+    view.WebContents.Close();
+    second.WebContents.Close();
+    Check("Views: a page outliving its window still closes",
+        Eventually(() => view.WebContents.IsDestroyed() && second.WebContents.IsDestroyed(), step));
+    Directory.Delete(dir, recursive: true);
+}
+
+// Linux applies a page's new size asynchronously (DRIFT V12).
+async Task<string?> PageSizeBecomes(View v, string size)
+{
+    string? seen = null;
+    for (var i = 0; i < 80 && seen != size; i++)
+    {
+        seen = await ViewJs(v, "innerWidth + 'x' + innerHeight");
+        if (seen != size) await Task.Delay(100);
+    }
+    return seen;
+}
+
+async Task<string?> ViewJs(View v, string code) => await JsOf(((WebContentsView)v).WebContents, code);
+
+async Task<string?> JsOf(WebContents contents, string code)
+{
+    var task = contents.ExecuteJavaScriptAsync(code);
+    if (await Task.WhenAny(task, Task.Delay(step)) != task) return "timeout";
+    return task.IsCompletedSuccessfully ? task.Result?.ToJsonString() : task.Exception?.InnerException?.Message;
+}
+
 async Task FramesAsync()
 {
     var dir = Directory.CreateTempSubdirectory("oriel-frames-").FullName;
@@ -3933,6 +4174,7 @@ if (failures >= 0)
     // Checked once Run has returned: the final Quit must have raised WillQuit on its way out.
     Check("WillQuit is raised when the app quits", willQuit == 1, willQuit);
     Check("Exited is raised with the exit code, as Electron's quit event", exited is { ExitCode: 0 }, exited);
+    Check("Views: quitting closes the page of a view outside every window", strandedClosedAtExit == true, strandedClosedAtExit);
     failures = results.Count(r => r.StartsWith("FAIL", StringComparison.Ordinal));
 }
 Console.WriteLine(failures < 0 ? "RESULT: did not finish" : $"RESULT: {failures} failure(s)");

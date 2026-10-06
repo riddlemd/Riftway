@@ -9,14 +9,14 @@ Recounted 2026-10-06 against `src/Oriel`. Update these figures when a row or che
 
 | Measure | Done | Partial | Not started | Total |
 |---|---|---|---|---|
-| Module rows below | 4 | 27 | 36 | 67 |
-| M2 rows | 3 | 15 | 3 | 21 |
+| Module rows below | 4 | 29 | 34 | 67 |
+| M2 rows | 3 | 17 | 1 | 21 |
 
 The 67 rows include `BrowserView` (deprecated, never implemented; counted as not started).
 
 | Checklist | Applicable items | Done | Partial | Missing | % done | % done + partial/2 |
 |---|---|---|---|---|---|---|
-| [BrowserWindow](parity/browser-window.md) (with `BaseWindow`) | 294 | 140 | 18 | 136 | 47.6% | 50.7% |
+| [BrowserWindow](parity/browser-window.md) (with `BaseWindow`) | 294 | 142 | 18 | 134 | 48.3% | 51.4% |
 | [webContents](parity/web-contents.md) (with `navigationHistory`, `WebFrameMain`) | 230 | 105 | 48 | 77 | 45.7% | 56.1% |
 
 **Source** — where the implementation comes from:
@@ -55,9 +55,9 @@ Detailed item-by-item status: [parity/browser-window.md](parity/browser-window.m
 | Electron | Oriel | Source | Wave | Status |
 |---|---|---|---|---|
 | `BaseWindow` | `BaseWindow` | CEF (Views) | M2 | — |
-| `BrowserWindow` | `BrowserWindow` | CEF (Views) | M2 | partial: 140 of 294 applicable items done (47.6%), see parity/browser-window.md |
-| `View` | `View` | CEF (Views panel) | M2 | — |
-| `WebContentsView` | `WebContentsView` | CEF (Views browser view) | M2 | — |
+| `BrowserWindow` | `BrowserWindow` | CEF (Views) | M2 | partial: 142 of 294 applicable items done (48.3%), see parity/browser-window.md |
+| `View` | `View` | CEF (Views panel) | M2 | partial: `addChildView` (index, move to top, reparent), `removeChildView`, `children`, `setBounds`/`getBounds`, `setVisible`/`getVisible`, `setBackgroundColor`, `bounds-changed`; no `setBorderRadius` (DRIFT V1) |
+| `WebContentsView` | `WebContentsView` | CEF (Views browser view) | M2 | partial: `new WebContentsView({ webPreferences })`, `webContents`, child views over the page, in `BrowserWindow.ContentView`; pages outlive their window and the view stays when its page closes, as Electron; popups and `webContents.close()` from view pages; Alloy style (DRIFT V2, V4, V7, V9, V12, V13) |
 | `ImageView` | `ImageView` | CEF + .NET | M5 | — |
 | `win.setSimpleFullScreen` (macOS) | `BrowserWindow.SetSimpleFullScreen` | OS | M2 | done (native full screen blacks out other displays on macOS) |
 | `BrowserView` (deprecated) | not implemented; use `WebContentsView` | — | — | — |
