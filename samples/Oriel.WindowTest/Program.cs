@@ -65,8 +65,9 @@ async Task RunAsync(BrowserWindow win, BrowserWindow simple)
     string? seenTitle = null;
     EventHandler<PageTitleUpdatedEventArgs> onTitle = (_, e) => seenTitle = e.Title;
     win.PageTitleUpdated += onTitle;
+    // The first load also starts the renderer process, which takes longer than step on a loaded machine.
     var loaded = Fires(h => win.WebContents.DidFinishLoad += h, h => win.WebContents.DidFinishLoad -= h,
-        () => win.WebContents.LoadFile(page, new Dictionary<string, string> { ["q"] = "1 2" }, "top"), step);
+        () => win.WebContents.LoadFile(page, new Dictionary<string, string> { ["q"] = "1 2" }, "top"), step * 4);
     Check("LoadFile raises DidFinishLoad", loaded);
     var navigatorAgent = (await win.WebContents.ExecuteJavaScriptAsync("navigator.userAgent"))?.ToString();
     Check("the default user agent is Electron's format, with the app's and Oriel's tokens",
@@ -2301,6 +2302,9 @@ async Task NavigationAsync()
     noScript.WebContents.NavigationHistory.GoToIndex(0);
     Check("GoToIndex works without the page's scripts", Eventually(() => noScript.WebContents.NavigationHistory.GetActiveIndex() == 0, step),
         noScript.WebContents.NavigationHistory.GetActiveIndex());
+    // The active index is Chromium's current entry, the pending one included: an offset taken before the move back
+    // commits counts from the page still showing, as in Electron.
+    Eventually(() => !noScript.WebContents.IsLoading(), step);
     noScript.WebContents.NavigationHistory.GoToOffset(1);
     Check("GoToOffset works without the page's scripts", Eventually(() => noScript.WebContents.NavigationHistory.GetActiveIndex() == 1, step),
         noScript.WebContents.NavigationHistory.GetActiveIndex());
