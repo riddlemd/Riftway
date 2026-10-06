@@ -1082,6 +1082,39 @@ async Task RunAsync()
         && usage.PercentCPUUsage <= 110 && usage.CumulativeCPUUsage > 0.3 && (OperatingSystem.IsWindows() ? usage.IdleWakeupsPerSecond == 0 : usage.IdleWakeupsPerSecond > 0), $"{usage} spins={spins}");
     Check("process type and versions are Electron's shape", OrielProcess.Type == "browser" && OrielProcess.Versions.Chrome.Split('.').Length == 4, OrielProcess.Versions);
 
+    // app.getAppMetrics: this process and the Chromium children it started, as ps lists them.
+    var busyWin = new BrowserWindow(new BrowserWindowOptions { Show = false });
+    await busyWin.LoadUrl("data:text/html,<p>busy</p>");
+    var firstMetrics = app.GetAppMetrics();
+    Check("GetAppMetrics starts with this process as Browser, and every CPU reading starts at 0", firstMetrics[0] is { Type: "Browser" } browserMetric
+        && browserMetric.Pid == Environment.ProcessId && Math.Abs(browserMetric.CreationTime - (OrielProcess.GetCreationTime() ?? 0)) < 1500
+        && firstMetrics.All(m => m.Cpu.PercentCPUUsage == 0 && m.Cpu.CumulativeCPUUsage >= 0), string.Join(" ", firstMetrics.Select(m => $"{m.Pid}:{m.Type}:{m.Cpu.PercentCPUUsage}")));
+    if (OperatingSystem.IsLinux())
+    {
+        var table = Output("/bin/ps", "-eo", "pid=,ppid=,args=").Split('\n', StringSplitOptions.RemoveEmptyEntries)
+            .Select(l => l.Trim().Split(' ', 3, StringSplitOptions.RemoveEmptyEntries)).Where(p => p.Length == 3)
+            .Select(p => (Pid: int.Parse(p[0], CultureInfo.InvariantCulture), Parent: int.Parse(p[1], CultureInfo.InvariantCulture), Args: p[2])).ToList();
+        bool Under(int pid) { for (var i = 0; i < 64; i++) { var row = table.FirstOrDefault(t => t.Pid == pid); if (row.Pid == 0) return false; if (row.Parent == Environment.ProcessId) return true; pid = row.Parent; } return false; }
+        string KindOf(string args) => args.Contains("--type=renderer") ? "Tab" : args.Contains("--type=gpu-process") ? "GPU" : args.Contains("--type=utility") ? "Utility" : "";
+        var expectedChildren = table.Where(t => Under(t.Pid) && KindOf(t.Args) != "").Select(t => $"{t.Pid}:{KindOf(t.Args)}").Order().ToList();
+        var listedChildren = firstMetrics.Skip(1).Select(m => $"{m.Pid}:{m.Type}").Order().ToList();
+        Check("on Linux, the children are the renderers, GPU and utility processes ps shows under this one, with a utility's service",
+            expectedChildren.SequenceEqual(listedChildren) && listedChildren.Any(c => c.EndsWith(":Tab", StringComparison.Ordinal))
+            && firstMetrics.Any(m => m.ServiceName == "network.mojom.NetworkService") && firstMetrics.All(m => m.Memory is null && m.Name is null),
+            $"{string.Join(",", expectedChildren)} vs {string.Join(",", listedChildren)}");
+        var etimes = firstMetrics.Skip(1).Select(m => (m, Seconds: double.Parse(Output("/bin/ps", "-o", "etimes=", "-p", m.Pid.ToString(CultureInfo.InvariantCulture)), CultureInfo.InvariantCulture))).ToList();
+        var nowMs = (DateTime.UtcNow - DateTime.UnixEpoch).TotalMilliseconds;
+        Check("each child's creation time is when ps says it started", etimes.All(e => Math.Abs(nowMs - e.Seconds * 1000 - e.m.CreationTime) < 2500),
+            string.Join(",", etimes.Select(e => $"{e.m.Pid}:{nowMs - e.Seconds * 1000 - e.m.CreationTime:F0}")));
+    }
+    await busyWin.WebContents.ExecuteJavaScriptAsync("const end = performance.now() + 500; while (performance.now() < end) {} 1");
+    var secondMetrics = app.GetAppMetrics();
+    Check("a page that keeps its renderer busy shows CPU use since the last call", secondMetrics.Any(m => m.Type == "Tab" && m.Cpu.PercentCPUUsage > 1)
+        // One renderer thread uses at most one CPU, so its share of all of them stays near 1/count.
+        && secondMetrics.All(m => m.Type != "Tab" || m.Cpu.PercentCPUUsage <= 120.0 / Environment.ProcessorCount),
+        string.Join(" ", secondMetrics.Select(m => $"{m.Pid}:{m.Type}:{m.Cpu.PercentCPUUsage:F1}")));
+    busyWin.Destroy();
+
     // Proxy: requests go to a local listener posing as the proxy.
     var proxied = Session.FromPartition("proxied");
     using var listener = new TcpListener(IPAddress.Loopback, 0);

@@ -133,9 +133,10 @@ public static class OrielProcess
         private TimeSpan _lastCpu;
         private TimeSpan _lastTime;
 
-        public (double Percent, double Cumulative) Sample()
+        public (double Percent, double Cumulative) Sample() => Sample(cumulativeCpu());
+
+        public (double Percent, double Cumulative) Sample(TimeSpan cpu)
         {
-            var cpu = cumulativeCpu();
             var time = elapsedSince(_start);
             lock (_gate)
             {
