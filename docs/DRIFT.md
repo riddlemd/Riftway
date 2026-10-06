@@ -240,6 +240,15 @@ Entries marked _(branch `x`)_ are on that branch and not yet in `main`.
 | K9 | `electron application/findtext` goes through Chromium's `FindPasteboard` copy, which another app's find text replaces when the app becomes active | Same once the app is ready (CEF's own `FindPasteboard` singleton). Before `Ready` the find pasteboard is read and written directly, so another app's find text shows at once _(branch `mac-clipboard`)_ | Design: the singleton lives in CEF and needs AppKit's main thread, which CEF's UI thread is only once CEF runs | None needed |
 | K10 | On macOS `ClipboardMac` catches the Objective-C exception `NSImage` may throw for malformed image data, reading no image | An exception from `initWithPasteboard:` is not caught: it ends the process _(branch `mac-clipboard`)_ | Design: raw `objc_msgSend` from .NET cannot catch Objective-C exceptions | A native shim with `@try` |
 | K11 | On macOS a raw format (`osclipboard` or an arbitrary MIME) with a non-ASCII name stops the process (`CHECK` in `ClipboardFormatType::CustomPlatformType`) | Written and read under that name _(branch `mac-clipboard`)_ | Design: the safe equivalent of a crash | None needed |
+## systemPreferences
+
+| ID | Electron | Oriel | Why | Possible resolution |
+|---|---|---|---|---|
+| SP1 | `getAccentColor`, `getColor`, `getMediaAccessStatus`, `getAnimationSettings` and `accent-color-changed` on macOS and Linux | Throw `PlatformNotSupportedException`; the events are never raised | OS: only the Windows sources are ported | Port the macOS (`NSColor`, `AVCaptureDevice`) and Linux (`NativeTheme::user_color`) sources |
+| SP2 | `getMediaAccessStatus('camera')` returns `'granted'`; a bad media type or colour name throws an `Error` | Enums `MediaAccessType` and `MediaAccessStatus`; a bad value throws `ArgumentOutOfRangeException` ("Invalid media type"), a bad colour name `ArgumentException` ("Unknown color: …"). `GetColor` still takes Electron's names | Design | None |
+| SP3 | `getAnimationSettings()` reads values Chromium caches and refreshes when `WM_SETTINGCHANGE` arrives | Reads `SPI_GETCLIENTAREAANIMATION` on every call | Design: same value once Chromium has refreshed; only the moment between the setting change and the refresh differs | None |
+| SP4 | `systemPreferences` takes its accent baseline and starts watching when the module loads | On first use (`GetAccentColor` or subscribing to an event); a change before that is not reported. Before `Ready`, accent changes are compared on the watcher's thread instead of a UI task | Design: a static class has no load moment | None |
+
 ## IPC, contextBridge, protocol
 
 | ID | Electron | Oriel | Why | Possible resolution |

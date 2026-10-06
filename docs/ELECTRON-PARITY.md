@@ -123,7 +123,7 @@ Detailed item-by-item status, including `navigationHistory` and `WebFrameMain`: 
 | `powerMonitor` | `PowerMonitor` | OS | M5 | — |
 | `powerSaveBlocker` | `PowerSaveBlocker` | OS | M5 | — |
 | `safeStorage` | `SafeStorage` | OS | M5 | — |
-| `systemPreferences` | `SystemPreferences` | OS | M5 | — |
+| `systemPreferences` | `SystemPreferences` | OS | M5 | partial: Windows `getAccentColor`, `getColor` (all 30 Windows names), `getMediaAccessStatus`, `getAnimationSettings`, `accent-color-changed`, `color-changed`; macOS and Linux not yet (DRIFT SP1); macOS-only members not ported: notifications (`post*`/`subscribe*`/`unsubscribe*`), user defaults, `isSwipeTrackingFromScrollEventsEnabled`, `getEffectiveAppearance`/`effectiveAppearance`, `getSystemColor`, `canPromptTouchID`/`promptTouchID`, `isTrustedAccessibilityClient`, `askForMediaAccess`, `accessibilityDisplayShouldReduceTransparency` |
 | `desktopCapturer` | `DesktopCapturer` | CEF + Patch (verify) | M5 | — |
 
 ## macOS-only

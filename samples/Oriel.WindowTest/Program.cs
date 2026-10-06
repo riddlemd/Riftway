@@ -281,6 +281,7 @@ async Task RunAsync(BrowserWindow win, BrowserWindow simple)
     await ClipboardAsync();
     await WindowPolishAsync(win);
     await TitleBarAsync(win);
+    await SystemPreferencesChecks.RunAsync(Check, step);
 
     // Closing cancelled once: the window must survive the first close.
     var closingCount = 0;
