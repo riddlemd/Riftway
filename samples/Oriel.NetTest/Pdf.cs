@@ -83,19 +83,40 @@ sealed partial class Pdf
         var text = new StringBuilder();
         foreach (var (_, dict) in _objects.Where(o => PageRegex().IsMatch(o.Value)).OrderBy(o => o.Key))
         {
-            var fonts = PageFonts(dict);
+            var resources = Resources(dict);
             foreach (var content in ContentsOf(dict))
             {
-                var map = new Dictionary<int, string>();
-                foreach (Match token in ContentTokenRegex().Matches(content))
-                {
-                    if (token.Groups[1].Success) map = fonts.GetValueOrDefault(token.Groups[1].Value, []);
-                    else AppendRun(text, token.Groups[2].Value, map);
-                }
+                Walk(content, resources, text, 0);
                 text.Append('\n');
             }
         }
         return text.Length > 0 ? text.ToString() : MergedText();
+    }
+
+    // One content stream in order: Tf picks the font, hex strings are runs, Do draws a form XObject, whose content is
+    // walked with its own resources (Linux Chromium draws header and footer templates this way).
+    private void Walk(string content, string? resources, StringBuilder text, int depth)
+    {
+        var fonts = Fonts(resources);
+        var map = new Dictionary<int, string>();
+        foreach (Match token in ContentTokenRegex().Matches(content))
+        {
+            if (token.Groups[1].Success) map = fonts.GetValueOrDefault(token.Groups[1].Value, []);
+            else if (token.Groups[2].Success) AppendRun(text, token.Groups[2].Value, map);
+            else if (depth < 8 && FormXObject(resources, token.Groups[3].Value) is { } form)
+                Walk(form.Content, DictValue(form.Dict, "/Resources") ?? resources, text, depth + 1);
+        }
+    }
+
+    private (string Dict, string Content)? FormXObject(string? resources, string name)
+    {
+        var xobjects = resources is null ? null : DictValue(resources, "/XObject");
+        if (xobjects is null) return null;
+        var entry = NamedRefRegex().Matches(xobjects).FirstOrDefault(m => m.Groups[1].Value == name);
+        if (entry is null) return null;
+        var number = int.Parse(entry.Groups[2].Value, CultureInfo.InvariantCulture);
+        return _objects.TryGetValue(number, out var dict) && FormRegex().IsMatch(dict) && _streamOf.TryGetValue(number, out var content)
+            ? (dict, content) : null;
     }
 
     private static void AppendRun(StringBuilder text, string digits, Dictionary<int, string> map)
@@ -104,11 +125,10 @@ sealed partial class Pdf
             text.Append(map.GetValueOrDefault(Hex(digits.Substring(i, 4)), ""));
     }
 
-    // The resource name of each font a page uses, mapped to that font's ToUnicode CMap.
-    private Dictionary<string, Dictionary<int, string>> PageFonts(string page)
+    // The resource name of each font in a resource dictionary, mapped to that font's ToUnicode CMap.
+    private Dictionary<string, Dictionary<int, string>> Fonts(string? resources)
     {
         var fonts = new Dictionary<string, Dictionary<int, string>>();
-        var resources = Resources(page);
         if (resources is null) return fonts;
         var fontDict = DictValue(resources, "/Font");
         if (fontDict is null) return fonts;
@@ -276,7 +296,10 @@ sealed partial class Pdf
     [GeneratedRegex(@"(\d+)\s+\d+\s+R")]
     private static partial Regex RefRegex();
 
-    // A font selection ("/F1 12 Tf") or a hex string run, in content order.
-    [GeneratedRegex(@"/([^\s/<>\[\]()]+)\s+[-\d.]+\s+Tf|<([0-9A-Fa-f]+)>")]
+    // A font selection ("/F1 12 Tf"), a hex string run, or an XObject drawn ("/X1 Do"), in content order.
+    [GeneratedRegex(@"/([^\s/<>\[\]()]+)\s+[-\d.]+\s+Tf|<([0-9A-Fa-f]+)>|/([^\s/<>\[\]()]+)\s+Do\b")]
     private static partial Regex ContentTokenRegex();
+
+    [GeneratedRegex(@"/Subtype\s*/Form\b")]
+    private static partial Regex FormRegex();
 }

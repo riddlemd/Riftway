@@ -539,6 +539,20 @@ async Task PrintChecks()
             }));
             var headerText = header.Text();
             Check("printToPDF: header and footer templates are printed", headerText.Contains("ORIELHEADER") && headerText.Contains("ORIELFOOTER 3/3"), Trim(headerText));
+            // The reader itself: glyph code 1 is "A", then "P" after the page switches font, and "X" in the form drawn with Do, as Linux
+            // Chromium draws header and footer templates.
+            var synthetic = new Pdf(System.Text.Encoding.Latin1.GetBytes(string.Join("\n",
+                "%PDF-1.4",
+                "1 0 obj <</Type /Page /Resources <</Font <</F1 3 0 R /F3 9 0 R>> /XObject <</X1 5 0 R>>>> /Contents 4 0 R>> endobj",
+                "3 0 obj <</Type /Font /ToUnicode 6 0 R>> endobj",
+                "6 0 obj <</Length 0>>stream", "begincmap 1 beginbfrange <0001> <0002> <0041> endbfrange endcmap", "endstream endobj",
+                "4 0 obj <</Length 0>>stream", "BT /F1 12 Tf <00010002> Tj /F3 12 Tf <0001> Tj ET /X1 Do", "endstream endobj",
+                "5 0 obj <</Type /XObject /Subtype /Form /Resources <</Font <</F2 7 0 R>>>>>>stream", "BT /F2 9 Tf <00010002> Tj ET", "endstream endobj",
+                "7 0 obj <</Type /Font /ToUnicode 8 0 R>> endobj", "9 0 obj <</Type /Font /ToUnicode 10 0 R>> endobj",
+                "8 0 obj <</Length 0>>stream", "begincmap 1 beginbfrange <0001> <0002> <0058> endbfrange endcmap", "endstream endobj",
+                "10 0 obj <</Length 0>>stream", "begincmap 1 beginbfrange <0001> <0001> <0050> endbfrange endcmap", "endstream endobj",
+                "%%EOF")));
+            Check("the test's PDF reader decodes each font with its own map and follows form XObjects", synthetic.Text().Contains("ABPXY"), Trim(synthetic.Text()));
             var plain = pdf.Text();
             Check("printToPDF: no header without displayHeaderFooter", !plain.Contains("ORIELHEADER"));
 
