@@ -9,10 +9,21 @@ using Cookie = Oriel.Cookie;
 // End-to-end Session check: partitions, cookies, per-session protocol and proxy, driven from a worker thread.
 // The exit code is the number of failures (-1 when the run never finishes).
 // Linux: two client certificates in the user's NSS store, which Chromium opens at start-up.
-var clientCertificates = OperatingSystem.IsLinux() && File.Exists("/usr/bin/certutil") && File.Exists("/usr/bin/pk12util") ? InstallClientCertificates() : false;
+// With MediaChild the process runs only the getUserMedia checks, on fake devices, for the main run to collect: Linux's
+// desktop capture died with the fake-device switch on, so the screen capture checks stay in a process without it.
+const string MediaChild = "--oriel-media-child";
+var mediaChild = args.Contains(MediaChild);
+var clientCertificates = !mediaChild && OperatingSystem.IsLinux() && File.Exists("/usr/bin/certutil") && File.Exists("/usr/bin/pk12util") ? InstallClientCertificates() : false;
 var app = OrielApp.Create("Oriel.SessionTest");
-// The media checks need devices that exist everywhere and ask for no OS consent; the handler still decides.
-app.CommandLine.AppendSwitch("use-fake-device-for-media-stream");
+if (mediaChild)
+{
+    // Its own data directory: Chromium's process singleton would hand this run to the main one.
+    var childData = Path.Combine(Path.GetTempPath(), $"oriel-session-media-{Environment.ProcessId}");
+    Directory.CreateDirectory(childData);
+    app.SetPath("sessionData", childData);
+    // Devices that exist everywhere and need no OS consent; the handler still decides.
+    app.CommandLine.AppendSwitch("use-fake-device-for-media-stream");
+}
 var failures = -1;
 var results = new List<string>();
 
@@ -1424,7 +1435,7 @@ static async Task Respond(Stream stream, int status, string reason, string heade
 }
 
 // Permissions: Electron's request, check and display media handlers, driven by real page requests.
-async Task PermissionChecks()
+async Task PermissionChecks(bool mediaOnly = false)
 {
     // Geolocation: a refusal is error 1; a grant goes on to the (absent) location source, so any other outcome.
     const string Geolocation = "new Promise(r => navigator.geolocation.getCurrentPosition(() => r('ok'), e => r(e.code === 1 ? 'denied' : 'granted'), { timeout: 2000 }))";
@@ -1456,6 +1467,83 @@ async Task PermissionChecks()
     {
         lock (asked) return string.Join("; ", asked.Select(a => $"{a.Permission} {a.Details.RequestingUrl} main={a.Details.IsMainFrame} [{string.Join(",", a.Details.MediaTypes)}] {a.Details.SecurityOrigin}"));
     }
+
+    // getUserMedia on fake devices, in the MediaChild process. The handler decides, not Chromium's prompt.
+    async Task DeviceMediaChecks()
+    {
+        // An unsigned app never gets macOS's consent, and Chrome style waits for it (drift E33).
+        if (OperatingSystem.IsMacOS() && MacMediaConsent.Read() is var (audio, video) && (audio != MacMediaConsent.Authorized || video != MacMediaConsent.Authorized))
+        {
+            Console.WriteLine($"SKIP  getUserMedia checks: macOS media consent is audio={audio} video={video} ({MacMediaConsent.Authorized} = authorized)");
+            return;
+        }
+        var mediaAsked = new List<(WebContents Page, string Permission, PermissionRequestDetails Details)>();
+        var mediaAllow = true;
+        var devicesSession = Session.FromPartition("perm-media-devices");
+        devicesSession.SetPermissionRequestHandler(Recorder(mediaAsked, () => mediaAllow));
+        var mediaWin = await Open(devicesSession);
+        const string Microphone = "navigator.mediaDevices.getUserMedia({ audio: true }).then(s => { s.getTracks().forEach(t => t.stop()); return 'ok'; }, e => e.name)";
+        const string CameraAndMicrophone = "navigator.mediaDevices.getUserMedia({ audio: true, video: true }).then(s => { s.getTracks().forEach(t => t.stop()); return 'ok'; }, e => e.name)";
+        var heard = await Run(mediaWin, Microphone);
+        Check("getUserMedia asks the handler for media: mediaTypes ['audio'], securityOrigin, the frame's URL and isMainFrame", heard != "NotAllowedError"
+            && mediaAsked is [(_, "media", { MediaTypes: ["audio"], SecurityOrigin: Origin, RequestingUrl: Site, IsMainFrame: true })], $"{heard} {Seen(mediaAsked)}");
+        var labels = await Run(mediaWin, "navigator.mediaDevices.getUserMedia({ audio: true, video: true }).then(s => { const l = s.getTracks().map(t => t.label).join(','); s.getTracks().forEach(t => t.stop()); return l; }, e => e.name)");
+        Check("CommandLine.AppendSwitch before Run reaches Chromium: capture uses the fake devices", app.CommandLine.HasSwitch("use-fake-device-for-media-stream")
+            && labels?.Contains("fake", StringComparison.OrdinalIgnoreCase) == true, labels);
+        lock (mediaAsked) mediaAsked.Clear();
+        var both = await Run(mediaWin, CameraAndMicrophone);
+        Check("camera and microphone together are one media request, mediaTypes audio then video, as Electron lists them", both != "NotAllowedError"
+            && mediaAsked is [(_, "media", { MediaTypes: ["audio", "video"] })], $"{both} {Seen(mediaAsked)}");
+        lock (mediaAsked) mediaAsked.Clear();
+        mediaAllow = false;
+        var refusedMedia = await Run(mediaWin, Microphone);
+        var refusedMediaAgain = await Run(mediaWin, Microphone);
+        Check("a handler that refuses media fails getUserMedia with NotAllowedError, and is asked on every request", refusedMedia == "NotAllowedError"
+            && refusedMediaAgain == "NotAllowedError" && mediaAsked.Count == 2, $"{refusedMedia} {refusedMediaAgain} {Seen(mediaAsked)}");
+        mediaAllow = true;
+    }
+
+    if (mediaOnly)
+    {
+        await DeviceMediaChecks();
+        return;
+    }
+
+    // The getUserMedia checks, from a MediaChild process; its PASS and FAIL lines are this run's. First, while no window of
+    // this run has closed: closing the last one would quit the app.
+    var childStart = new System.Diagnostics.ProcessStartInfo(Environment.ProcessPath!) { RedirectStandardOutput = true, RedirectStandardError = true };
+    childStart.ArgumentList.Add(MediaChild);
+    using (var child = System.Diagnostics.Process.Start(childStart)!)
+    {
+        var childErrors = child.StandardError.ReadToEndAsync();
+        string childOutput;
+        // Output to EOF only: WaitForExit can hang inside the CEF process.
+        try { childOutput = await child.StandardOutput.ReadToEndAsync().WaitAsync(TimeSpan.FromSeconds(240)); }
+        catch (TimeoutException)
+        {
+            child.Kill(entireProcessTree: true);
+            childOutput = "";
+        }
+        var childLines = childOutput.Split('\n').Select(l => l.TrimEnd('\r')).ToList();
+        var forwarded = 0;
+        foreach (var line in childLines.Where(l => l.StartsWith("PASS", StringComparison.Ordinal) || l.StartsWith("FAIL", StringComparison.Ordinal)))
+        {
+            results.Add(line);
+            Console.WriteLine(line);
+            forwarded++;
+        }
+        var skipped = childLines.Where(l => l.StartsWith("SKIP", StringComparison.Ordinal)).ToList();
+        foreach (var line in skipped) Console.WriteLine(line);
+        Check("the getUserMedia checks ran in their own process, with fake devices", (forwarded > 0 || skipped.Count > 0)
+            && childLines.Any(l => l.StartsWith("RESULT: ", StringComparison.Ordinal) && !l.Contains("no result")),
+            childLines.LastOrDefault(l => l.StartsWith("RESULT", StringComparison.Ordinal)) ?? (childErrors.IsCompleted ? childErrors.Result.Split('\n').LastOrDefault(l => l.Length > 0) : "no output"));
+        // The child's data directory, once its files are let go.
+        var childData = Path.Combine(Path.GetTempPath(), $"oriel-session-media-{child.Id}");
+        for (var attempt = 0; attempt < 40 && Directory.Exists(childData); attempt++)
+        {
+            try { Directory.Delete(childData, recursive: true); }
+            catch (Exception e) when (e is IOException or UnauthorizedAccessException) { await Task.Delay(250); }
+        }    }
 
     var byDefault = await Open(Session.FromPartition("perm-default"));
     var grantedByDefault = await Run(byDefault, Geolocation);
@@ -1535,33 +1623,12 @@ async Task PermissionChecks()
     else Console.WriteLine("SKIP  navigator.clipboard.readText: the document has no focus");
     clipWin.Destroy();
 
-    // Media: the handler decides, not Chromium's prompt, on the fake devices the app's AppendSwitch asked for.
+    // Screen capture: the request handler's media first, then the display media handler, as Electron. No fake devices here.
     var mediaAsked = new List<(WebContents Page, string Permission, PermissionRequestDetails Details)>();
     var mediaAllow = true;
     var media = Session.FromPartition("perm-media");
     media.SetPermissionRequestHandler(Recorder(mediaAsked, () => mediaAllow));
-    var mediaWin = await Open(media);
-    const string Microphone = "navigator.mediaDevices.getUserMedia({ audio: true }).then(s => { s.getTracks().forEach(t => t.stop()); return 'ok'; }, e => e.name)";
-    const string CameraAndMicrophone = "navigator.mediaDevices.getUserMedia({ audio: true, video: true }).then(s => { s.getTracks().forEach(t => t.stop()); return 'ok'; }, e => e.name)";
-    var heard = await Run(mediaWin, Microphone);
-    Check("getUserMedia asks the handler for media: mediaTypes ['audio'], securityOrigin, the frame's URL and isMainFrame", heard != "NotAllowedError"
-        && mediaAsked is [(_, "media", { MediaTypes: ["audio"], SecurityOrigin: Origin, RequestingUrl: Site, IsMainFrame: true })], $"{heard} {Seen(mediaAsked)}");
-    var labels = await Run(mediaWin, "navigator.mediaDevices.getUserMedia({ audio: true, video: true }).then(s => { const l = s.getTracks().map(t => t.label).join(','); s.getTracks().forEach(t => t.stop()); return l; }, e => e.name)");
-    Check("CommandLine.AppendSwitch before Run reaches Chromium: capture uses the fake devices", app.CommandLine.HasSwitch("use-fake-device-for-media-stream")
-        && labels?.Contains("fake", StringComparison.OrdinalIgnoreCase) == true, labels);
-    lock (mediaAsked) mediaAsked.Clear();
-    var both = await Run(mediaWin, CameraAndMicrophone);
-    Check("camera and microphone together are one media request, mediaTypes audio then video, as Electron lists them", both != "NotAllowedError"
-        && mediaAsked is [(_, "media", { MediaTypes: ["audio", "video"] })], $"{both} {Seen(mediaAsked)}");
-    lock (mediaAsked) mediaAsked.Clear();
-    mediaAllow = false;
-    var refusedMedia = await Run(mediaWin, Microphone);
-    var refusedMediaAgain = await Run(mediaWin, Microphone);
-    Check("a handler that refuses media fails getUserMedia with NotAllowedError, and is asked on every request", refusedMedia == "NotAllowedError"
-        && refusedMediaAgain == "NotAllowedError" && mediaAsked.Count == 2, $"{refusedMedia} {refusedMediaAgain} {Seen(mediaAsked)}");
-    mediaAllow = true;
-    // Screen capture: the request handler's media first, then the display media handler, as Electron.
-    const string Screen = "navigator.mediaDevices.getDisplayMedia({ video: true, audio: true }).then(s => { const kinds = s.getTracks().map(t => t.kind).sort().join(','); s.getTracks().forEach(t => t.stop()); return kinds; }, e => e.name)";
+    var mediaWin = await Open(media);    const string Screen = "navigator.mediaDevices.getDisplayMedia({ video: true, audio: true }).then(s => { const kinds = s.getTracks().map(t => t.kind).sort().join(','); s.getTracks().forEach(t => t.stop()); return kinds; }, e => e.name)";
     lock (mediaAsked) mediaAsked.Clear();
     var unhandled = await Run(mediaWin, Screen, gesture: true);
     Check("getDisplayMedia asks the request handler for media, without mediaTypes, then is refused with no display media handler", unhandled == "NotAllowedError"
@@ -1682,13 +1749,13 @@ static async Task<string> ServeOneProxyRequest(TcpListener listener)
 
 // Fresh, so the run shows CEF creating the persistent partition's directory.
 var staleDisk = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "Oriel.SessionTest", "Partition disk");
-if (Directory.Exists(staleDisk)) Directory.Delete(staleDisk, recursive: true);
+if (!mediaChild && Directory.Exists(staleDisk)) Directory.Delete(staleDisk, recursive: true);
 // The webRequest checks fetch this scheme from an https page.
 Protocol.RegisterSchemesAsPrivileged(new PrivilegedScheme(CustomScheme, new SchemePrivileges { Standard = true, Secure = true, SupportFetchApi = true, CorsEnabled = true }));
 
 app.Ready += (_, _) => _ = Task.Run(async () =>
 {
-    try { await RunAsync(); }
+    try { await (mediaChild ? PermissionChecks(mediaOnly: true) : RunAsync()); }
     catch (Exception e) { Check("run completed", false, e); }
     failures = results.Count(r => r.StartsWith("FAIL"));
     app.Quit();
@@ -1785,5 +1852,35 @@ static class TokenProbe
             finally { CloseHandle(token); }
         }
         finally { CloseHandle(process); }
+    }
+}
+
+// macOS's camera and microphone consent for this app: AVCaptureDevice authorizationStatusForMediaType:.
+[System.Runtime.Versioning.SupportedOSPlatform("macos")]
+static class MacMediaConsent
+{
+    private const string ObjC = "/usr/lib/libobjc.A.dylib";
+
+    // AVAuthorizationStatusAuthorized.
+    public const long Authorized = 3;
+
+    [System.Runtime.InteropServices.DllImport(ObjC)] private static extern nint objc_getClass([System.Runtime.InteropServices.MarshalAs(System.Runtime.InteropServices.UnmanagedType.LPUTF8Str)] string name);
+    [System.Runtime.InteropServices.DllImport(ObjC)] private static extern nint sel_registerName([System.Runtime.InteropServices.MarshalAs(System.Runtime.InteropServices.UnmanagedType.LPUTF8Str)] string name);
+    [System.Runtime.InteropServices.DllImport(ObjC, EntryPoint = "objc_msgSend")] private static extern nint SendString(nint receiver, nint selector, [System.Runtime.InteropServices.MarshalAs(System.Runtime.InteropServices.UnmanagedType.LPUTF8Str)] string value);
+    [System.Runtime.InteropServices.DllImport(ObjC, EntryPoint = "objc_msgSend")] private static extern nint SendObject(nint receiver, nint selector, nint value);
+
+    /// <summary>The audio and video statuses (0 not determined, 1 restricted, 2 denied, 3 authorized); -1 when unreadable.</summary>
+    public static (long Audio, long Video) Read()
+    {
+        // Chromium links AVFoundation already; loading it again is a no-op that makes sure the class exists.
+        System.Runtime.InteropServices.NativeLibrary.TryLoad("/System/Library/Frameworks/AVFoundation.framework/AVFoundation", out _);
+        var device = objc_getClass("AVCaptureDevice");
+        if (device == 0) return (-1, -1);
+        var status = sel_registerName("authorizationStatusForMediaType:");
+        var nsString = objc_getClass("NSString");
+        var fromUtf8 = sel_registerName("stringWithUTF8String:");
+        // AVMediaTypeAudio and AVMediaTypeVideo are the strings "soun" and "vide".
+        long Of(string mediaType) => SendObject(device, status, SendString(nsString, fromUtf8, mediaType));
+        return (Of("soun"), Of("vide"));
     }
 }
