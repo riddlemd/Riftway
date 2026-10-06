@@ -4,10 +4,10 @@ using Oriel.Cef.Interop;
 
 namespace Oriel.Cef.Handlers;
 
-/// <summary>A cookie as CEF reports it, copied out of CEF's memory.</summary>
+/// <summary>A cookie as CEF reports it, copied out of CEF's memory; times in CEF's microseconds since 1601.</summary>
 public sealed record CefCookie(
     string Name, string Value, string Domain, string Path, bool Secure, bool HttpOnly,
-    long? Expires, cef_cookie_same_site_t SameSite);
+    long? Expires, cef_cookie_same_site_t SameSite, long Creation = 0);
 
 /// <summary><c>cef_request_context_handler_t</c>: tells when a request context can be configured, and hooks the
 /// context's requests that have no page.</summary>
@@ -109,7 +109,7 @@ public sealed unsafe class CookieVisitor : IReleaseObserver
         var copy = new CefCookie(
             CefString.Read(&cookie->name), CefString.Read(&cookie->value), CefString.Read(&cookie->domain),
             CefString.Read(&cookie->path), cookie->secure != 0, cookie->httponly != 0,
-            cookie->has_expires != 0 ? cookie->expires.val : null, cookie->same_site);
+            cookie->has_expires != 0 ? cookie->expires.val : null, cookie->same_site, cookie->creation.val);
         lock (owner._cookies) owner._cookies.Add(copy);
         return 1;
     }
