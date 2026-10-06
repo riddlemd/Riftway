@@ -28,6 +28,10 @@ public static unsafe class BootstrapHost
         return true;
     }
 
+    /// <summary>Whether this process was started by the bootstrap host (the default Windows layout).</summary>
+    [SupportedOSPlatform("windows")]
+    public static bool IsHosted => TryGetSandboxInfo(out _);
+
     /// <summary>bootstrap.exe loads the client DLL named after the exe, beside it.</summary>
     internal static string? ClientDllPath(string? processPath)
         => string.IsNullOrEmpty(processPath) ? null : Path.ChangeExtension(processPath, ".dll");

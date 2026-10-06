@@ -90,7 +90,8 @@ public static class CrashReporter
             var previous = ReadOwnedConfig(s_configPath);
             var slots = CrashReporterConfig.AssignSlots(
                 s_global.Keys.Concat(s_parameterOrder).Concat(previous?.Select(s => s.Name) ?? []));
-            var externalHandler = OperatingSystem.IsWindows() ? Cef.Platform.CefLayout.SubprocessName + ".exe" : null;
+            // The bootstrap layout has no Oriel.Subprocess.exe: CEF then starts the handler from the main exe, as Chrome does.
+            var externalHandler = OperatingSystem.IsWindows() && !Cef.Platform.BootstrapHost.IsHosted ? Cef.Platform.CefLayout.SubprocessName + ".exe" : null;
             // Without a URL the handler starts no upload thread: Chrome re-enables Crashpad's upload flag at will.
             WriteConfig(s_configPath, CrashReporterConfig.Build(
                 AppName(), productName, version, options.UploadToServer ? submitUrl : "", options.RateLimit,

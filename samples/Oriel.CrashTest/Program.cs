@@ -131,10 +131,14 @@ internal static class Child
     private static void Report(string key, object value)
         => Console.WriteLine($"R {key}={(value is bool b ? (b ? "true" : "false") : value)}");
 
-    // The handler is the subprocess exe (ExternalHandler) started for this app's database.
+    // The handler is the subprocess exe (ExternalHandler) started for this app's database; in the bootstrap layout,
+    // which has no subprocess exe, CEF starts it from the app's own exe.
+    internal static string HandlerName()
+        => OperatingSystem.IsWindows() && Oriel.Cef.Platform.BootstrapHost.IsHosted ? Path.GetFileNameWithoutExtension(Environment.ProcessPath)! : "Oriel.Subprocess";
+
     private static string? HandlerCommandLine(string appName)
     {
-        foreach (var process in Process.GetProcessesByName("Oriel.Subprocess"))
+        foreach (var process in Process.GetProcessesByName(HandlerName()))
         {
             using (process)
             {
@@ -200,7 +204,7 @@ internal static class Driver
         Check("getUploadToServer is true after start", Fact(facts, "uploadToServer") == "true");
         var handler = Fact(facts, "handler") ?? "";
         Check("the handler is the subprocess exe with this app's database",
-            handler.Contains("Oriel.Subprocess.exe", StringComparison.Ordinal)
+            handler.Contains(Child.HandlerName() + ".exe", StringComparison.Ordinal)
             && handler.Contains($@"\{appName}\User Data\Crashpad", StringComparison.Ordinal), handler);
         Check("rateLimit false: the handler does not rate limit", handler.Contains("--no-rate-limit", StringComparison.Ordinal), handler);
         Check("database pruning is Crashpad's default (128 MB, 365 days)",
@@ -367,7 +371,8 @@ internal static class Driver
     }
 
     private static List<Process> OurSubprocesses()
-        => Process.GetProcessesByName("Oriel.Subprocess")
+        => Process.GetProcessesByName(Child.HandlerName())
+            .Where(p => p.Id != Environment.ProcessId && (Child.HandlerName() == "Oriel.Subprocess" || Native.CommandLine(p)?.Contains("--type=crashpad-handler", StringComparison.Ordinal) == true))
             .Where(p => { try { return p.MainModule?.FileName?.StartsWith(AppContext.BaseDirectory, StringComparison.OrdinalIgnoreCase) == true; } catch (System.ComponentModel.Win32Exception) { return false; } })
             .ToList();
 }
