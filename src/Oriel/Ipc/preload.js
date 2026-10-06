@@ -23,7 +23,13 @@
   globalThis.addEventListener('playing', () => post(JSON.stringify({ t: 'media', ch: '', args: [true] })), true);
   // Chromium turns a Ctrl+wheel the page leaves unhandled into ContentsZoomChange, one per whole wheel tick, except on
   // macOS; Electron only reports it, so the page is not zoomed here either.
-  if (!/^Mac/.test(navigator.platform)) {
+  // A touchpad pinch reaches the page as a Ctrl+wheel, and cancelling it cancels the pinch. On Windows and Linux the
+  // listener below cancels every Ctrl+wheel, pinches too (drift C37).
+  if (/^Mac/.test(navigator.platform)) {
+    globalThis.addEventListener('wheel', (e) => {
+      if (e.ctrlKey && !pinchAllowed) e.preventDefault();
+    }, { passive: false });
+  } else {
     let ticks = 0;
     globalThis.addEventListener('wheel', (e) => {
       if (!e.ctrlKey || e.defaultPrevented) return;
@@ -98,6 +104,8 @@
   // What webFrame answers at once: the main process reports both, and Oriel's own zoom changes.
   let frameToken = '';
   let zoomLevel = 0;
+  // Electron sets every page's page scale limits to 1, so a pinch zooms nothing until the app widens them.
+  let pinchAllowed = false;
 
   let nextInvokeId = 1;
   const pendingInvokes = new Map();
@@ -115,8 +123,11 @@
       } else if (message.t === 'frame') {
         frameToken = message.token;
         zoomLevel = message.zoomLevel;
+        pinchAllowed = message.pinch;
       } else if (message.t === 'zoom') {
         zoomLevel = message.level;
+      } else if (message.t === 'pinch') {
+        pinchAllowed = message.allowed;
       } else if (message.t === 'port-msg') {
         bridged.get(message.id)?.postMessage(message.data, (message.ports ?? []).map(bridge));
       } else if (message.t === 'port-close') {
@@ -233,6 +244,9 @@
       webFrameCall('zoomLevel', { value: zoomLevel });
     },
     getZoomLevel: () => zoomLevel,
+    setVisualZoomLevelLimits(minimumLevel, maximumLevel) {
+      webFrameCall('visualZoom', { min: Number(minimumLevel), max: Number(maximumLevel) }).catch(() => {});
+    },
     insertCSS(css, options = {}) {
       const key = String(++nextCssKey);
       const created = webFrameCall('insertCSS', { css: String(css), origin: options.cssOrigin ?? 'author' });
