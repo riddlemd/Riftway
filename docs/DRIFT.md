@@ -270,6 +270,12 @@ Entries marked _(branch `x`)_ are on that branch and not yet in `main`.
 | U1 | `powerMonitor` and `powerSaveBlocker` on macOS and Linux | Windows only: macOS and Linux throw `PlatformNotSupportedException` _(branch `power-shortcuts`)_ | OS | macOS IOKit power notifications and assertions; Linux logind over D-Bus and the Inhibit portal |
 | U2 | `thermal-state-change`, `getCurrentThermalState` (macOS), `shutdown` (Linux, macOS), `user-did-become-active`/`user-did-resign-active` (macOS) | Missing _(branch `power-shortcuts`)_ | OS: not emitted on Windows either (Chromium has no Windows thermal or shutdown source) | macOS IOKit and `NSProcessInfo` thermal state; Linux logind `PrepareForShutdown` |
 
+## Tray
+
+| ID | Electron | Oriel | Why | Possible resolution |
+|---|---|---|---|---|
+| T1 | `Tray` on macOS and Linux, with the macOS-only events (`mouse-up`, `mouse-down`, drop) and setters (`setPressedImage`, `setTitle`, `setIgnoreDoubleClickEvents`) | Windows only: macOS and Linux throw `PlatformNotSupportedException` behind `ITrayBackend`; on Windows the macOS-only setters do nothing, as in Electron _(branch `tray`)_ | OS | macOS `NSStatusItem`; Linux StatusNotifierItem over D-Bus |
+
 ## IPC, contextBridge, protocol
 
 | ID | Electron | Oriel | Why | Possible resolution |

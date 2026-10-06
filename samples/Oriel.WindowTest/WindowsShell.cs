@@ -48,11 +48,12 @@ static unsafe class WindowsShell
     private static readonly Guid s_iidAutomation = new("30CBE57D-D9D0-452A-AB13-7AC5AC4825EE");
 
     /// <summary>The names of every element under the taskbar (Shell_TrayWnd), as UI Automation reports them.</summary>
-    internal static List<string> TaskbarNames()
+    internal static List<string> TaskbarNames() => FindWindowW("Shell_TrayWnd", null) is var tray and not 0 ? ElementNames(tray) : [];
+
+    /// <summary>The names of every element under <paramref name="hwnd"/>, as UI Automation reports them.</summary>
+    internal static List<string> ElementNames(nint hwnd)
     {
         var names = new List<string>();
-        var tray = FindWindowW("Shell_TrayWnd", null);
-        if (tray == 0) return names;
         void* automation;
         var clsid = s_clsidAutomation;
         var iid = s_iidAutomation;
@@ -61,7 +62,7 @@ static unsafe class WindowsShell
         void* root = null, condition = null, all = null;
         try
         {
-            if (((delegate* unmanaged<void*, nint, void**, int>)Slot(automation, 6))(automation, tray, &root) < 0) return names; // ElementFromHandle
+            if (((delegate* unmanaged<void*, nint, void**, int>)Slot(automation, 6))(automation, hwnd, &root) < 0) return names; // ElementFromHandle
             if (((delegate* unmanaged<void*, void**, int>)Slot(automation, 21))(automation, &condition) < 0) return names; // CreateTrueCondition
             if (((delegate* unmanaged<void*, int, void*, void**, int>)Slot(root, 6))(root, 4 /* TreeScope_Descendants */, condition, &all) < 0) return names; // FindAll
             int length;
@@ -183,13 +184,6 @@ static unsafe class WindowsShell
     [DllImport("gdi32.dll")] private static extern nint CreateDIBSection(nint dc, BitmapInfoHeader* header, uint usage, void** bits, nint section, uint offset);
     [DllImport("gdi32.dll")] private static extern nint SelectObject(nint dc, nint obj);
     [DllImport("gdi32.dll")] private static extern int BitBlt(nint dc, int x, int y, int w, int h, nint src, int sx, int sy, uint rop);
-    /// <summary>The names of every element under <paramref name="hwnd"/>, as UI Automation reports them.</summary>
-    internal static List<string> ElementNames(nint hwnd)
-    {
-        var names = new List<string>();
-        Walk(hwnd, (_, name) => names.Add(name));
-        return names;
-    }
 
     /// <summary>Selects the list items named <paramref name="names"/> under <paramref name="hwnd"/> through UI
     /// Automation's SelectionItem pattern, as Ctrl+clicks would; how many were selected.</summary>
@@ -788,6 +782,122 @@ static unsafe class WindowsShell
     [DllImport("user32.dll")] private static extern int RegisterHotKey(nint hwnd, int id, uint modifiers, uint vk);
     [DllImport("user32.dll")] private static extern int UnregisterHotKey(nint hwnd, int id);
     [DllImport("user32.dll")] private static extern void keybd_event(byte vk, byte scan, uint flags, nint extra);
+    /// <summary>Oriel's hidden tray host window, or 0.</summary>
+    internal static nint TrayHost() => FindWindowW("OrielTrayHost", null);
+
+    /// <summary>Sends a version 0 tray callback to the host, as the shell does without <c>NIM_SETVERSION</c>: the icon's id
+    /// in wParam, the mouse or <c>NIN_</c> message in lParam.</summary>
+    internal static void TrayCallback(nint host, uint id, uint message)
+    {
+        nint result;
+        _ = SendMessageTimeoutW(host, 0x8001, (nint)id, (nint)message, 2, 2000, &result);
+    }
+
+    /// <summary>The visible Chromium Views menu of this process: a <c>Chrome_WidgetWin_</c> popup whose owner is hidden
+    /// (a tray menu's), or 0.</summary>
+    internal static nint ViewsMenuWindow()
+    {
+        nint found = 0;
+        var name = stackalloc char[64];
+        for (var hwnd = FindWindowExW(0, 0, null, null); hwnd != 0; hwnd = FindWindowExW(0, hwnd, null, null))
+        {
+            uint pid;
+            _ = GetWindowThreadProcessId(hwnd, &pid);
+            if (pid != (uint)Environment.ProcessId || IsWindowVisible(hwnd) == 0) continue;
+            var owner = GetWindow(hwnd, 4 /* GW_OWNER */);
+            if (owner == 0 || IsWindowVisible(owner) != 0) continue;
+            if ((GetWindowLongW(hwnd, -16 /* GWL_STYLE */) & 0x80000000 /* WS_POPUP */) == 0) continue;
+            var length = GetClassNameW(hwnd, name, 64);
+            if (new string(name, 0, length).StartsWith("Chrome_WidgetWin_", StringComparison.Ordinal)) found = hwnd;
+        }
+        return found;
+    }
+
+    /// <summary>Moves the pointer to a point in screen pixels.</summary>
+    internal static bool MoveCursor(int x, int y) => SetCursorPos(x, y) != 0;
+
+    /// <summary>The pointer's position in screen pixels.</summary>
+    internal static (int X, int Y) CursorPos()
+    {
+        var p = stackalloc int[2];
+        _ = GetCursorPos(p);
+        return (p[0], p[1]);
+    }
+
+    /// <summary>Sends the host a registered window message by name, such as <c>TaskbarCreated</c>.</summary>
+    internal static void SendRegistered(nint hwnd, string name)
+    {
+        uint message;
+        fixed (char* n = name) message = RegisterWindowMessageW(n);
+        nint result;
+        _ = SendMessageTimeoutW(hwnd, message, 0, 0, 2, 2000, &result);
+    }
+
+    /// <summary>Whether the shell holds an icon (host, id, or its GUID), asked by modifying its tooltip; or deletes it.</summary>
+    internal static bool NotifyIcon(nint host, uint id, bool delete, Guid? guid = null)
+    {
+        var data = new NotifyIconData { Size = (uint)sizeof(NotifyIconData), Hwnd = host, Id = id, Flags = delete ? 0u : 0x4u /* NIF_TIP */ };
+        if (guid is { } g) (data.Flags, data.Guid) = (data.Flags | 0x20 /* NIF_GUID */, g);
+        return Shell_NotifyIconW(delete ? 2u : 1u, &data) != 0;
+    }
+
+    /// <summary>The visible popup menu window (<c>#32768</c>), or 0.</summary>
+    internal static nint MenuWindow()
+    {
+        var menu = FindWindowW("#32768", null);
+        return menu != 0 && IsWindowVisible(menu) != 0 ? menu : 0;
+    }
+
+    /// <summary>The items of the menu a <c>#32768</c> window shows: text (accelerator after a tab) and <c>MF_</c> state.</summary>
+    internal static List<(string Text, uint State)> MenuItems(nint menuWindow)
+    {
+        var items = new List<(string, uint)>();
+        nint result;
+        if (SendMessageTimeoutW(menuWindow, 0x01E1 /* MN_GETHMENU */, 0, 0, 2, 1000, &result) == 0 || result == 0) return items;
+        var count = GetMenuItemCount(result);
+        var buffer = stackalloc char[256];
+        for (var i = 0; i < count; i++)
+        {
+            var length = GetMenuStringW(result, (uint)i, buffer, 256, 0x400 /* MF_BYPOSITION */);
+            items.Add((new string(buffer, 0, Math.Max(0, length)), GetMenuState(result, (uint)i, 0x400)));
+        }
+        return items;
+    }
+
+    /// <summary>Posts a key to a window, as a menu's loop reads keys from its thread's queue.</summary>
+    internal static void PostKey(nint hwnd, int virtualKey)
+    {
+        _ = PostMessageW(hwnd, 0x0100 /* WM_KEYDOWN */, virtualKey, 0);
+        _ = PostMessageW(hwnd, 0x0101 /* WM_KEYUP */, virtualKey, unchecked((nint)0xC0000001));
+    }
+
+    [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)]
+    private struct NotifyIconData
+    {
+        public uint Size;
+        public nint Hwnd;
+        public uint Id;
+        public uint Flags;
+        public uint CallbackMessage;
+        public nint Icon;
+        public fixed char Tip[128];
+        public uint State;
+        public uint StateMask;
+        public fixed char Info[256];
+        public uint Version;
+        public fixed char InfoTitle[64];
+        public uint InfoFlags;
+        public Guid Guid;
+        public nint BalloonIcon;
+    }
+
+    [DllImport("shell32.dll")] private static extern int Shell_NotifyIconW(uint message, NotifyIconData* data);
+    [DllImport("user32.dll")] private static extern int PostMessageW(nint hwnd, uint message, nint wParam, nint lParam);
+    [DllImport("user32.dll")] private static extern int GetWindowLongW(nint hwnd, int index);
+    [DllImport("user32.dll")] private static extern int GetCursorPos(int* point);
+    [DllImport("user32.dll")] private static extern int GetMenuItemCount(nint menu);
+    [DllImport("user32.dll")] private static extern int GetMenuStringW(nint menu, uint item, char* text, int max, uint flags);
+    [DllImport("user32.dll")] private static extern uint GetMenuState(nint menu, uint item, uint flags);
 
     private static void* Slot(void* com, int index) => (*(void***)com)[index];
 

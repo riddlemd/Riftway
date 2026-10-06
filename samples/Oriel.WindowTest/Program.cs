@@ -288,6 +288,7 @@ async Task RunAsync(BrowserWindow win, BrowserWindow simple)
     if (OperatingSystem.IsWindows()) await SafeStorageAsync();
     if (OperatingSystem.IsWindows()) await NotificationAsync();
     await PowerAndShortcutsAsync();
+    await TrayAsync();
 
     // Closing cancelled once: the window must survive the first close.
     var closingCount = 0;
@@ -4127,6 +4128,154 @@ async Task PowerAndShortcutsAsync()
         Check("Stop ends each, and a stopped blocker cannot be stopped again", PowerSaveBlocker.Stop(display) && PowerSaveBlocker.Stop(app) && !PowerSaveBlocker.Stop(app) && !PowerSaveBlocker.IsStarted(display)
             && WindowsShell.ExecutionState() == baseline, $"0x{baseline:X} -> 0x{WindowsShell.ExecutionState():X}");
     }
+}
+
+async Task TrayAsync()
+{
+    static NativeImage Square(byte b, byte g, byte r)
+    {
+        var pixels = new byte[16 * 16 * 4];
+        for (var i = 0; i < pixels.Length; i += 4) (pixels[i], pixels[i + 1], pixels[i + 2], pixels[i + 3]) = (b, g, r, 255);
+        return NativeImage.CreateFromBitmap(pixels, new NativeImageBitmapOptions { Width = 16, Height = 16 });
+    }
+    if (!OperatingSystem.IsWindows())
+    {
+        Check("Tray throws PlatformNotSupportedException off Windows", Throws<PlatformNotSupportedException>(() => _ = new Tray(Square(0, 0, 255))));
+        return;
+    }
+
+    // The process's first tray icon: Electron numbers icons from 2.
+    const uint Id = 2;
+    var tray = new Tray(Square(0, 0, 255));
+    tray.SetToolTip("Oriel tray test");
+    var host = WindowsShell.TrayHost();
+    Check("a Tray puts an icon in the notification area under Electron's first id (the shell holds it)", host != 0 && WindowsShell.NotifyIcon(host, Id, delete: false), host);
+    var bounds = tray.GetBounds();
+    Check("GetBounds is the icon's place, or empty while it sits in the overflow", bounds == default || Screen.GetAllDisplays().Any(d => d.Bounds.X <= bounds.X && bounds.X < d.Bounds.X + d.Bounds.Width), bounds);
+
+    // Version 0 callbacks, as Electron leaves the icon: the id in wParam, the message in lParam; events arrive posted.
+    var events = new List<string>();
+    TrayEventArgs? clickArgs = null, doubleArgs = null;
+    tray.Clicked += (_, e) => { events.Add("click"); clickArgs = e; };
+    tray.DoubleClicked += (_, e) => { events.Add("double"); doubleArgs = e; };
+    tray.MiddleClicked += (_, _) => events.Add("middle");
+    tray.RightClicked += (_, _) => events.Add("right");
+    tray.MouseMoved += (_, _) => events.Add("move");
+    tray.MouseEntered += (_, _) => events.Add("enter");
+    tray.MouseLeft += (_, _) => events.Add("leave");
+    tray.BalloonShown += (_, _) => events.Add("balloon-show");
+    tray.BalloonClicked += (_, _) => events.Add("balloon-click");
+    tray.BalloonClosed += (_, _) => events.Add("balloon-closed");
+    var savedCursor = WindowsShell.CursorPos();
+    var primary = Screen.GetPrimaryDisplay().Bounds;
+    var away = Screen.DipToScreenPoint(new Point(primary.X + primary.Width / 2, primary.Y + primary.Height / 2));
+    WindowsShell.MoveCursor(away.X, away.Y);
+    string[] expected = ["click", "double", "middle", "middle", "right", "right", "balloon-show", "balloon-click", "balloon-closed"];
+    // WM_L/M/RBUTTON(DOWN|DBLCLK), WM_CONTEXTMENU, NIN_KEYSELECT, NIN_BALLOON*, WM_LBUTTONUP.
+    foreach (var message in new uint[] { 0x0201, 0x0203, 0x0207, 0x0209, 0x0204, 0x007B, 0x0206, 0x0401, 0x0402, 0x0405, 0x0404, 0x0403, 0x0202 })
+        WindowsShell.TrayCallback(host, Id, message);
+    Check("the shell's callbacks raise Electron's events (presses, not releases; no right double click, key select or balloon hide)",
+        Eventually(() => events.Count >= expected.Length, step) && events.SequenceEqual(expected), string.Join(",", events));
+    Check("a click carries the bounds and the pointer; a double click the bounds only",
+        clickArgs is { } c && doubleArgs is { } d && c.Position == Screen.ScreenToDipPoint(new Point(away.X, away.Y)) && c.Bounds == tray.GetBounds() && d.Position == default(Point) && d.Bounds == c.Bounds,
+        $"{clickArgs?.Position} {clickArgs?.Bounds} {doubleArgs?.Position}");
+
+    // Hover, as Electron's MouseEnteredExitedDetector: a move counts only inside the bounds; leaving is polled every 250 ms.
+    events.Clear();
+    WindowsShell.TrayCallback(host, Id, 0x0200 /* WM_MOUSEMOVE */);
+    await Task.Delay(600);
+    Check("a move reported while the pointer is off the icon raises nothing", events.Count == 0, string.Join(",", events));
+    bounds = tray.GetBounds();
+    if (bounds == default) Check("entering and leaving the icon raise MouseEntered once, then MouseLeft (skipped: the icon is in the overflow)", true);
+    else
+    {
+        var centre = Screen.DipToScreenPoint(new Point(bounds.X + bounds.Width / 2, bounds.Y + bounds.Height / 2));
+        WindowsShell.MoveCursor(centre.X, centre.Y);
+        WindowsShell.TrayCallback(host, Id, 0x0200);
+        WindowsShell.TrayCallback(host, Id, 0x0200);
+        var entered = Eventually(() => events.Count >= 3, step) && events.SequenceEqual(["enter", "move", "move"]);
+        WindowsShell.MoveCursor(away.X, away.Y);
+        Check("entering and leaving the icon raise MouseEntered once, then MouseLeft",
+            entered && Eventually(() => events.Count >= 4, step) && events.SequenceEqual(["enter", "move", "move", "leave"]), string.Join(",", events));
+    }
+    WindowsShell.MoveCursor(savedCursor.X, savedCursor.Y);
+
+    // The context menu: a Chromium Views menu, as Electron's, read back through UI Automation.
+    var shown = false;
+    var menu = new Menu
+    {
+        new MenuItem { Label = "&Show", Accelerator = "CmdOrCtrl+S", Click = (_, _, _) => shown = true },
+        new MenuItem { Type = MenuItemType.Separator },
+        new MenuItem { Label = "Pinned", Type = MenuItemType.Checkbox, Checked = true },
+        new MenuItem { Label = "Off", Enabled = false },
+        new MenuItem { Label = "Hidden", Visible = false },
+        new MenuItem { Label = "More", Submenu = new Menu { new MenuItem { Label = "Deep" } } },
+    };
+    tray.SetContextMenu(menu);
+    events.Clear();
+    WindowsShell.TrayCallback(host, Id, 0x0204 /* WM_RBUTTONDOWN */);
+    nint menuWindow = 0;
+    Check("a right press opens the context menu, a Views menu, instead of raising RightClicked",
+        Eventually(() => (menuWindow = WindowsShell.ViewsMenuWindow()) != 0, step) && WindowsShell.MenuWindow() == 0 && !events.Contains("right"), string.Join(",", events));
+    var names = menuWindow != 0 ? WindowsShell.ElementNames(menuWindow).Where(n => n.Length > 0).ToList() : [];
+    Check("the menu has the visible items and accelerators of Oriel's Menu", names.SequenceEqual(["Show Ctrl+S", "Pinned", "Off", "More"]), string.Join(" | ", names));
+    WindowsShell.PostKey(menuWindow, 0x28 /* VK_DOWN */);
+    WindowsShell.PostKey(menuWindow, 0x0D /* VK_RETURN */);
+    Check("choosing an item runs its click", Eventually(() => shown && WindowsShell.ViewsMenuWindow() == 0, step), $"shown={shown} open={WindowsShell.ViewsMenuWindow() != 0}");
+    var popped = Task.Run(() => tray.PopUpContextMenu(position: new Point(200, 200)));
+    Check("PopUpContextMenu opens it from code and returns while it is open", popped.Wait(step) && Eventually(() => WindowsShell.ViewsMenuWindow() != 0, step));
+    Check("other Tray calls answer while the menu is open", Task.Run(() => tray.GetTitle()).Wait(step) && WindowsShell.ViewsMenuWindow() != 0);
+    tray.CloseContextMenu();
+    Check("CloseContextMenu closes it", Eventually(() => WindowsShell.ViewsMenuWindow() == 0, step));
+
+    // Explorer restarting broadcasts TaskbarCreated; the icon comes back as Electron's ResetIcon re-adds it: image, no tooltip.
+    tray.SetToolTip("Oriel tray test");
+    await Task.Delay(500);
+    var tipShown = WindowsShell.TaskbarNames().Contains("Oriel tray test");
+    WindowsShell.NotifyIcon(host, Id, delete: true);
+    var goneBehindOurBack = !WindowsShell.NotifyIcon(host, Id, delete: false);
+    WindowsShell.SendRegistered(host, "TaskbarCreated");
+    await Task.Delay(500);
+    var tipAfter = WindowsShell.TaskbarNames().Contains("Oriel tray test");
+    Check("TaskbarCreated adds the icon again", goneBehindOurBack && WindowsShell.NotifyIcon(host, Id, delete: false), goneBehindOurBack);
+    // The notification area names a visible icon by its tooltip; an icon in the overflow has no name to read.
+    Check(tipShown ? "TaskbarCreated drops the tooltip, as Electron" : "TaskbarCreated drops the tooltip, as Electron (skipped: the icon is in the overflow)", !tipShown || !tipAfter, $"before={tipShown} after={tipAfter}");
+
+    // As Electron, a refused icon is logged, not thrown, and a GUID in use is only warned about: the first icon keeps it.
+    var refused = new StringWriter();
+    var stderrBefore = Console.Error;
+    Console.SetError(refused);
+    var guid = Guid.NewGuid();
+    Tray? first = null, second = null;
+    var threw = false;
+    var firstLog = "";
+    try { first = new Tray(Square(0, 0, 255), guid); firstLog = refused.ToString(); second = new Tray(Square(0, 0, 255), guid); }
+    catch (Exception) { threw = true; }
+    Console.SetError(stderrBefore);
+    var log = refused.ToString();
+    Check("a GUID already in use is warned about, the shell's refusal logged, nothing thrown, and the first icon keeps it",
+        !threw && second is not null && !firstLog.Contains("Guid already in use.") && log.Contains("Guid already in use.") && log.Contains("Unable to create status tray icon.") && WindowsShell.NotifyIcon(host, Id + 1, delete: false, guid),
+        $"threw={threw} log=[{log.Trim()}]");
+    first?.Destroy();
+    second?.Destroy();
+
+    // A balloon is a toast on Windows 11; the shell reports it shown unless notifications are off or quiet hours hold it.
+    events.Clear();
+    tray.DisplayBalloon(new DisplayBalloonOptions { Title = "Oriel", Content = "Tray balloon test", IconType = BalloonIconType.Info, NoSound = true });
+    Check("DisplayBalloon shows a balloon (BalloonShown)", Eventually(() => events.Contains("balloon-show"), TimeSpan.FromSeconds(8)), string.Join(",", events));
+    tray.RemoveBalloon();
+    tray.SetImage(Square(0, 200, 0));
+    Check("SetImage keeps the icon in place", WindowsShell.NotifyIcon(host, Id, delete: false));
+    Check("the macOS-only title and double-click setting read back as Electron's Windows defaults", Ok(() => { tray.SetTitle("t"); tray.SetIgnoreDoubleClickEvents(true); }) && tray.GetTitle() == "" && !tray.GetIgnoreDoubleClickEvents(),
+        $"{tray.GetTitle()} {tray.GetIgnoreDoubleClickEvents()}");
+    tray.Destroy();
+    Check("Destroy removes the icon", tray.IsDestroyed() && !WindowsShell.NotifyIcon(host, Id, delete: false) && tray.GetBounds() == default);
+}
+
+static bool Ok(Action action)
+{
+    action();
+    return true;
 }
 
 async Task NativeImageAsync()
