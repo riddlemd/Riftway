@@ -6,6 +6,9 @@ using Oriel;
 
 // End-to-end check of Oriel's net module and printing against a local raw HTTP server, driven from a worker
 // thread. The exit code is the number of failures (-1 when the run never finishes).
+// Linux, from the repo root (checks that need Windows print SKIP):
+//   docker run --rm -v "$PWD":/src -v "$HOME/.cache/oriel/cef":/cef-cache --shm-size=1g oriel-linux-dev \
+//     /src/eng/docker/test-linux.sh samples/Oriel.NetTest Oriel.NetTest
 var app = OrielApp.Create("Oriel.NetTest");
 var failures = -1;
 var results = new List<string>();
@@ -13,6 +16,13 @@ var results = new List<string>();
 void Check(string name, bool pass, object? detail = null)
 {
     var line = $"{(pass ? "PASS" : "FAIL")}  {name}  [{detail}]";
+    lock (results) results.Add(line);
+    Console.WriteLine(line);
+}
+
+void Skip(string name, string reason)
+{
+    var line = $"SKIP  {name}  [{reason}]";
     lock (results) results.Add(line);
     Console.WriteLine(line);
 }
@@ -281,7 +291,9 @@ async Task NetChecks()
 
     await Section("login", async () =>
     {
-        var ok = await Run(Net.Request(server.Url("/auth")), rec => rec.OnLogin = l => l.Callback("user", "pass"));
+        LoginEventArgs? loginArgs = null;
+        var ok = await Run(Net.Request(server.Url("/auth")), rec => rec.OnLogin = l => { loginArgs = l; l.Callback("user", "pass"); });
+        Check("login: the request's URL, no WebContents", loginArgs is { WebContents: null } && loginArgs.Url == server.Url("/auth"), loginArgs?.Url);
         Check("login: raised with Electron's authInfo", ok.Logins is [{ Realm: "Foo", Scheme: "basic", IsProxy: false, Host: "127.0.0.1" } info] && info.Port == server.Port,
             ok.Logins.FirstOrDefault());
         Check("login: credentials reach the server", ok.Response?.StatusCode == 200 && ok.BodyText == "ok:Basic " + Convert.ToBase64String(Encoding.ASCII.GetBytes("user:pass")),
@@ -326,6 +338,11 @@ async Task NetChecks()
         var refused = await Run(Net.Request($"http://127.0.0.1:{closedPort}/"));
         Check("connection refused: net::ERR_CONNECTION_REFUSED after finish and close",
             refused.Events == "finish,close,error:net::ERR_CONNECTION_REFUSED", refused.Events);
+
+        // .invalid never resolves (RFC 6761), so this fails in DNS on every machine.
+        var noHost = await Run(Net.Request("http://oriel-nettest.invalid/"));
+        Check("unresolvable host: net::ERR_NAME_NOT_RESOLVED after finish and close",
+            noHost.Events == "finish,close,error:net::ERR_NAME_NOT_RESOLVED", noHost.Events);
 
         var midDrop = await Run(Net.Request(server.Url("/dropmid")));
         var midError = midDrop.Errors.FirstOrDefault()?.Message ?? "";
@@ -404,6 +421,8 @@ async Task NetChecks()
         probe.Stop();
         var refused = await Throws(() => Net.FetchAsync($"http://127.0.0.1:{closedPort}/").WaitAsync(TimeSpan.FromSeconds(15)));
         Check("fetch: network error rejects with net::ERR_CONNECTION_REFUSED", refused is NetException { Message: "net::ERR_CONNECTION_REFUSED" }, refused?.Message);
+        var noHost = await Throws(() => Net.FetchAsync("http://oriel-nettest.invalid/").WaitAsync(TimeSpan.FromSeconds(15)));
+        Check("fetch: unresolvable host rejects with net::ERR_NAME_NOT_RESOLVED", noHost is NetException { Message: "net::ERR_NAME_NOT_RESOLVED" }, noHost?.Message);
         var preCancelled = await Throws(() => Net.FetchAsync(server.Url("/hello"), new FetchInit { CancellationToken = new CancellationToken(true) }));
         Check("fetch: an already-cancelled token rejects", preCancelled is OperationCanceledException, preCancelled?.GetType().Name);
         using var cts = new CancellationTokenSource(TimeSpan.FromMilliseconds(300));
@@ -431,21 +450,54 @@ async Task NetChecks()
         if (partitionText is not null) Check("session.fetch uses that session's protocol handler", false, partitionText.Message);
         var request = await Throws(() => Task.FromResult(Net.Request("oriel-net://app/resource")));
         Check("net.request stays http(s) only for custom schemes", request?.Message == "ClientRequest only supports http: and https: protocols", request?.Message);
+
+        var intercepting = Session.FromPartition("nettest-bypass");
+        intercepting.Protocol.Handle("http", _ => ProtocolResponse.Text("intercepted"));
+        try
+        {
+            var handled = await (await intercepting.FetchAsync(server.Url("/hello"))).TextAsync();
+            Check("fetch: an http protocol handler serves the request", handled == "intercepted", handled);
+            var bypassed = await (await intercepting.FetchAsync(server.Url("/hello"), new FetchInit { BypassCustomProtocolHandlers = true })).TextAsync();
+            Check("fetch bypassCustomProtocolHandlers: the http handler is skipped, the server answers", bypassed == "Hello World!", bypassed);
+            var viaRequest = await Run(Net.Request(new ClientRequestOptions { Url = server.Url("/hello"), Session = intercepting, BypassCustomProtocolHandlers = true }));
+            var notBypassed = await Run(Net.Request(new ClientRequestOptions { Url = server.Url("/hello"), Session = intercepting }));
+            Check("net.request bypassCustomProtocolHandlers: skipped with it, served without it",
+                viaRequest.BodyText == "Hello World!" && notBypassed.BodyText == "intercepted", $"{viaRequest.BodyText} / {notBypassed.BodyText}");
+            var after = await (await intercepting.FetchAsync(server.Url("/hello"))).TextAsync();
+            Check("bypassCustomProtocolHandlers affects only its own request", after == "intercepted", after);
+        }
+        finally
+        {
+            intercepting.Protocol.Unhandle("http");
+        }
+        var unknownScheme = await Throws(() => Net.FetchAsync("oriel-net://app/resource", new FetchInit { BypassCustomProtocolHandlers = true }).WaitAsync(TimeSpan.FromSeconds(15)));
+        Check("fetch bypassCustomProtocolHandlers on a handled custom scheme: net::ERR_UNKNOWN_URL_SCHEME",
+            unknownScheme is NetException { Message: "net::ERR_UNKNOWN_URL_SCHEME" }, $"{unknownScheme?.GetType().Name}: {unknownScheme?.Message}");
     });
 
     await Section("online and resolve", async () =>
     {
         var online = Net.IsOnline();
-        // An independent reading: Windows' own connectivity hint through PowerShell's NetConnectionProfile.
-        var psi = new ProcessStartInfo("powershell.exe", "-NoProfile -Command \"(Get-NetConnectionProfile | Measure-Object).Count\"")
-        { RedirectStandardOutput = true, UseShellExecute = false, CreateNoWindow = true };
-        using var ps = Process.Start(psi)!;
-        var profiles = int.TryParse((await ps.StandardOutput.ReadToEndAsync()).Trim(), out var n) ? n : -1;
-        await ps.WaitForExitAsync();
-        Check("isOnline agrees with Windows' connection profiles", online == (profiles > 0), $"isOnline={online} profiles={profiles}");
+        if (OperatingSystem.IsWindows())
+        {
+            // An independent reading: Windows' own connectivity hint through PowerShell's NetConnectionProfile.
+            var psi = new ProcessStartInfo("powershell.exe", "-NoProfile -Command \"(Get-NetConnectionProfile | Measure-Object).Count\"")
+            { RedirectStandardOutput = true, UseShellExecute = false, CreateNoWindow = true };
+            using var ps = Process.Start(psi)!;
+            var profiles = int.TryParse((await ps.StandardOutput.ReadToEndAsync()).Trim(), out var n) ? n : -1;
+            await ps.WaitForExitAsync();
+            Check("isOnline agrees with Windows' connection profiles", online == (profiles > 0), $"isOnline={online} profiles={profiles}");
+        }
+        else
+        {
+            Skip("isOnline agrees with Windows' connection profiles", "Windows only");
+        }
         Check("online property matches isOnline()", Net.Online == online);
         var resolved = await Net.ResolveHostAsync("localhost");
         Check("resolveHost resolves localhost", resolved.Endpoints.Any(e => e.Address is "127.0.0.1" or "::1"), string.Join(",", resolved.Endpoints));
+        var noHost = await Throws(() => Net.ResolveHostAsync("oriel-nettest.invalid"));
+        Check("resolveHost: an unresolvable host throws with net::ERR_NAME_NOT_RESOLVED's code (-105)", noHost is HostResolutionException { ErrorCode: -105 },
+            $"{noHost?.GetType().Name}: {noHost?.Message}");
     });
 }
 
@@ -531,12 +583,20 @@ async Task PrintChecks()
                 == "height and width properties are required for pageSize");
             var tiny = ThrowsNow(() => wc.Print(new PrintOptions { PageSize = PageSize.Custom(352, 100000) }));
             Check("print rejects a side of 352 microns", tiny is ArgumentOutOfRangeException && tiny.Message == "height and width properties must be minimum 352 microns.", tiny?.Message);
+            var printers = await wc.GetPrintersAsync();
+            if (!OperatingSystem.IsWindows())
+            {
+                // Off Windows the printer checks are not made (DRIFT Z4), so a deviceName would open the dialog.
+                Skip("print: an unknown deviceName fails with Electron's reason", "Windows only (DRIFT Z4)");
+                Skip("getPrintersAsync lists the system's printers", "Windows only (DRIFT Z4)");
+                Check("getPrintersAsync off Windows: an empty list (DRIFT Z4)", printers.Count == 0, printers.Count);
+                return;
+            }
             var outcome = new TaskCompletionSource<(bool, string)>();
             wc.Print(new PrintOptions { DeviceName = "No Such Printer 42" }, (ok, reason) => outcome.TrySetResult((ok, reason)));
             var result = await outcome.Task.WaitAsync(TimeSpan.FromSeconds(5));
             Check("print: an unknown deviceName fails with Electron's reason", result == (false, "Invalid deviceName provided"), result);
 
-            var printers = await wc.GetPrintersAsync();
             var psi = new ProcessStartInfo("powershell.exe", "-NoProfile -Command \"Get-CimInstance Win32_Printer | ForEach-Object { $_.Name }\"")
             { RedirectStandardOutput = true, UseShellExecute = false, CreateNoWindow = true };
             using var ps = Process.Start(psi)!;
@@ -574,7 +634,7 @@ app.Ready += (_, _) => _ = Task.Run(async () =>
     }
     catch (Exception e) { Check("run completed", false, e); }
     lock (results) failures = results.Count(r => r.StartsWith("FAIL"));
-    Console.WriteLine(failures < 0 ? "RESULT: no result" : $"RESULT: {failures} failure(s) of {results.Count} checks");
+    lock (results) Console.WriteLine($"RESULT: {failures} failure(s) of {results.Count} checks ({results.Count(r => r.StartsWith("SKIP"))} skipped)");
     Console.Out.Flush();
     Environment.Exit(failures);
 });

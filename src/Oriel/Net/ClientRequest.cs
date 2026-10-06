@@ -26,6 +26,8 @@ public sealed unsafe class ClientRequest
     private readonly RequestCache? _cache;
     private readonly ReferrerPolicy? _referrerPolicy;
     private readonly string _origin;
+    private readonly bool _bypassCustomProtocolHandlers;
+    private string? _bypassMark;
     // Insertion-ordered by lower-case name, as Electron keeps them in a JS object.
     private readonly OrderedDictionary<string, KeyValuePair<string, string>> _headers = new(StringComparer.Ordinal);
     private readonly MemoryStream _body = new();
@@ -73,6 +75,7 @@ public sealed unsafe class ClientRequest
         _cache = options.Cache;
         _referrerPolicy = options.ReferrerPolicy;
         _origin = options.Origin ?? "";
+        _bypassCustomProtocolHandlers = options.BypassCustomProtocolHandlers;
         _session = options.Session ?? Session.FromPartition(options.Partition ?? "");
     }
 
@@ -256,8 +259,13 @@ public sealed unsafe class ClientRequest
         var request = CefNative.cef_request_create();
         cef_string_utf16_t text = default;
         CefString.Set(&text, url);
-        request->set_url(request, &text);
         request->set_first_party_for_cookies(request, &text);
+        if (_bypassCustomProtocolHandlers)
+        {
+            lock (_gate) _bypassMark ??= SchemeHandlerFactory.NewBypassMark();
+            CefString.Set(&text, SchemeHandlerFactory.WithBypassMark(url, _bypassMark));
+        }
+        request->set_url(request, &text);
         CefString.Set(&text, method);
         request->set_method(request, &text);
         // CEF takes the referrer only through set_referrer, as Electron takes it only from the Referer header.
@@ -292,7 +300,7 @@ public sealed unsafe class ClientRequest
             lock (_gate) _uploadProgress = progress;
             UploadProgressChanged?.Invoke(this, progress);
         };
-        client.AuthCredentials = (isProxy, host, port, realm, scheme, callback) => OnAuth(hop, isProxy, host, port, realm, scheme, callback);
+        client.AuthCredentials = (isProxy, host, port, realm, scheme, callback) => OnAuth(hop, url, isProxy, host, port, realm, scheme, callback);
         client.Completed = r => { if (hop == _hop) OnComplete((cef_urlrequest_t*)r, url, method, headers, body); };
         _client = client;
 
@@ -361,6 +369,7 @@ public sealed unsafe class ClientRequest
         if (status == cef_urlrequest_status_t.UR_SUCCESS)
         {
             EmitResponse(request);
+            ReleaseBypassMark();
             _response?.Complete();
             return;
         }
@@ -436,21 +445,20 @@ public sealed unsafe class ClientRequest
         StartHop(newUrl, newMethod, kept, clearBody ? null : body);
     }
 
-    private bool OnAuth(int hop, bool isProxy, string host, int port, string realm, string scheme, cef_auth_callback_t* callback)
+    private bool OnAuth(int hop, string url, bool isProxy, string host, int port, string realm, string scheme, cef_auth_callback_t* callback)
     {
         // With credentials omitted CEF never asks, as Chromium raises no challenge then.
         if (hop != _hop || Login is not { } login) return false;
         var pending = (nint)callback;
-        var answered = 0;
-        var args = new LoginEventArgs(new AuthInfo(isProxy, scheme, host, port, realm), (user, password) =>
+        var args = new LoginEventArgs(null, url, new AuthInfo(isProxy, scheme, host, port, realm));
+        args.Answered.ContinueWith(t =>
         {
-            if (Interlocked.Exchange(ref answered, 1) != 0) return;
             var cb = (cef_auth_callback_t*)pending;
-            if (user is not null && password is not null)
+            if (t.Result is { } credentials)
             {
                 cef_string_utf16_t u = default, p = default;
-                CefString.Set(&u, user);
-                CefString.Set(&p, password);
+                CefString.Set(&u, credentials.User);
+                CefString.Set(&p, credentials.Password);
                 cb->cont(cb, &u, &p);
                 CefString.Clear(&u);
                 CefString.Clear(&p);
@@ -460,7 +468,7 @@ public sealed unsafe class ClientRequest
                 cb->cancel(cb);
             }
             NativeObject.Release(cb);
-        });
+        }, TaskScheduler.Default);
         login(this, args);
         return true;
     }
@@ -496,6 +504,14 @@ public sealed unsafe class ClientRequest
             request->cancel(request);
             NativeObject.Release(request);
         }
+        ReleaseBypassMark();
         _response?.Destroy(error);
+    }
+
+    private void ReleaseBypassMark()
+    {
+        string? mark;
+        lock (_gate) (mark, _bypassMark) = (_bypassMark, null);
+        if (mark is not null) SchemeHandlerFactory.ReleaseBypassMark(mark);
     }
 }

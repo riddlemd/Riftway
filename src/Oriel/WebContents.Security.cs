@@ -40,24 +40,31 @@ public sealed class CertificateErrorEventArgs : CancelEventArgs
 }
 
 /// <summary>A server or proxy asking for credentials; Electron's <c>authInfo</c>.</summary>
+/// <param name="IsProxy">Whether a proxy asks, rather than the server.</param>
+/// <param name="Scheme">The authentication scheme, lower case (e.g. <c>basic</c>).</param>
+/// <param name="Host">The host asking.</param>
+/// <param name="Port">Its port.</param>
+/// <param name="Realm">The realm.</param>
 public sealed record AuthInfo(bool IsProxy, string Scheme, string Host, int Port, string Realm);
 
-/// <summary>Arguments for <see cref="WebContents.Login"/> and <see cref="OrielApp.Login"/>. Set
-/// <see cref="CancelEventArgs.Cancel"/> (Electron's <c>event.preventDefault()</c>) and call <see cref="Callback"/> with
-/// credentials; otherwise the login is cancelled, as Electron's default.</summary>
+/// <summary>Arguments for <see cref="WebContents.Login"/>, <see cref="OrielApp.Login"/> and
+/// <see cref="ClientRequest.Login"/>. For the page and app events, set <see cref="CancelEventArgs.Cancel"/> (Electron's
+/// <c>event.preventDefault()</c>) and call <see cref="Callback"/> with credentials; otherwise the login is cancelled,
+/// as Electron's default. A <see cref="ClientRequest.Login"/> handler just calls <see cref="Callback"/>, as Electron's
+/// has no event to prevent.</summary>
 public sealed class LoginEventArgs : CancelEventArgs
 {
     private readonly TaskCompletionSource<(string User, string Password)?> _answer = new(TaskCreationOptions.RunContinuationsAsynchronously);
 
-    internal LoginEventArgs(WebContents webContents, string url, AuthInfo authInfo)
+    internal LoginEventArgs(WebContents? webContents, string url, AuthInfo authInfo)
     {
         WebContents = webContents;
         Url = url;
         AuthInfo = authInfo;
     }
 
-    /// <summary>The page whose request was challenged.</summary>
-    public WebContents WebContents { get; }
+    /// <summary>The page whose request was challenged; null for a <see cref="ClientRequest"/>.</summary>
+    public WebContents? WebContents { get; }
 
     /// <summary>The URL that asked; Electron's <c>authenticationResponseDetails.url</c>.</summary>
     public string Url { get; }
@@ -71,6 +78,9 @@ public sealed class LoginEventArgs : CancelEventArgs
         => _answer.TrySetResult(username is null ? null : (username, password ?? ""));
 
     internal Task<(string User, string Password)?> Answer => Cancel ? _answer.Task : Task.FromResult<(string User, string Password)?>(null);
+
+    // ClientRequest's answer: Electron's request login ignores preventDefault.
+    internal Task<(string User, string Password)?> Answered => _answer.Task;
 }
 
 /// <summary>Arguments for <see cref="WebContents.SelectClientCertificate"/> and <see cref="OrielApp.SelectClientCertificate"/>.

@@ -1,3 +1,4 @@
+using System.Collections.Concurrent;
 using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
 using Oriel.Cef;
@@ -19,6 +20,33 @@ internal sealed unsafe class SchemeHandlerFactory
 
     public cef_scheme_handler_factory_t* Native { get; }
 
+    // The factory's request is read-only and carries nothing of the cef_urlrequest_t that sent it, so a request that
+    // skips handlers is tagged by a one-off fragment, which never goes on the wire.
+    private static readonly ConcurrentDictionary<string, byte> s_bypassMarks = new(StringComparer.Ordinal);
+
+    /// <summary>A fragment that makes every factory decline the request, until <see cref="ReleaseBypassMark"/>.</summary>
+    internal static string NewBypassMark()
+    {
+        var mark = "oriel-bypass-" + Guid.NewGuid().ToString("N");
+        s_bypassMarks[mark] = 0;
+        return mark;
+    }
+
+    internal static void ReleaseBypassMark(string mark) => s_bypassMarks.TryRemove(mark, out _);
+
+    /// <summary><paramref name="url"/> with its fragment replaced by <paramref name="mark"/>.</summary>
+    internal static string WithBypassMark(string url, string mark)
+    {
+        var hash = url.IndexOf('#');
+        return (hash < 0 ? url : url[..hash]) + "#" + mark;
+    }
+
+    internal static bool IsBypassed(string url)
+    {
+        var hash = url.IndexOf('#');
+        return hash >= 0 && s_bypassMarks.ContainsKey(url[(hash + 1)..]);
+    }
+
     // Runs on CEF's IO thread, which all networking shares: snapshot and return, never wait.
     [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])]
     private static cef_resource_handler_t* Create(
@@ -27,6 +55,8 @@ internal sealed unsafe class SchemeHandlerFactory
     {
         try
         {
+            // Null is CEF's default handling: the network for http(s), net::ERR_UNKNOWN_URL_SCHEME otherwise.
+            if (IsBypassed(CefString.ReadUserFree(request->get_url(request)))) return null;
             var owner = NativeObject.Owner<SchemeHandlerFactory>(self);
             return new ResourceHandler(Snapshot(request), owner._handler).Native;
         }

@@ -190,7 +190,7 @@ Entries marked _(branch `x`)_ are on that branch and not yet in `main`.
 | E26 | `certificate-error` also fires for a subframe, with `isMainFrame` false | Only a main-frame navigation raises it; a subframe's invalid certificate is refused without asking (checked) | CEF: `on_certificate_error` is not called for subframes | Patch |
 | E11 | Session events (`select-*-device`, ...) | None | Todo: with E10 | With E10 |
 
-## net / ClientRequest / IncomingMessage _(branch `win-net-print`)_
+## net / ClientRequest / IncomingMessage _(branch `net-module`)_
 
 | ID | Electron | Oriel | Why | Possible resolution |
 |---|---|---|---|---|
@@ -198,7 +198,7 @@ Entries marked _(branch `x`)_ are on that branch and not yet in `main`.
 | L2 | `Set-Cookie` is in `headers` (always a list), `rawHeaders` and fetch's `headers` | Never present | CEF: the response handed to a `cef_urlrequest_t` has no `Set-Cookie` lines | Patch |
 | L3 | `chunkedEncoding` streams the body (`Transfer-Encoding: chunked`) and the first write starts the request | The body is buffered and sent with `Content-Length` when `End` is called; the property and its errors behave as Electron's | CEF: `cef_post_data_t` has no streaming element | Patch |
 | L4 | `rawHeaders` in wire order; `httpVersion`, `httpVersionMajor`, `httpVersionMinor`; `response` at the response head | `RawHeaders` sorted by name (repeats kept in order); no HTTP version; `Response` raised at CEF's first progress or data callback, or at completion for an empty body | CEF: the header map is a sorted multimap, the version is not exposed, and the client has no response-started callback | Patch |
-| L5 | `origin` (request initiator, `Sec-Fetch-Site`), `Sec-Fetch-Mode`/`-Dest`/`-User` steering and the `sec-fetch-dest ... requires sec-fetch-mode 'navigate'` error, `priority`, `priorityIncremental`, `bypassCustomProtocolHandlers`, `cache: 'no-cache'`/`'force-cache'` | Accepted and ignored, except that `credentials: SameOrigin` still requires `Origin`; Sec-Fetch-* headers are sent as given | CEF: `cef_request_t` has no initiator, priority, or validate/skip-validation load flags, and scheme handlers always apply | Patch |
+| L5 | `origin` (request initiator, `Sec-Fetch-Site`), `Sec-Fetch-Mode`/`-Dest`/`-User` steering and the `sec-fetch-dest ... requires sec-fetch-mode 'navigate'` error, `priority`, `priorityIncremental`, `cache: 'no-cache'`/`'force-cache'` | Accepted and ignored, except that `credentials: SameOrigin` still requires `Origin`; Sec-Fetch-* headers are sent as given | CEF: `cef_request_t` has no initiator, priority, or validate/skip-validation load flags | Patch |
 | L6 | `write`/`end` take an optional callback | `Write(byte[])`, `Write(string, Encoding)`, `End(...)`; no callbacks (`upload-progress` and `getUploadProgress` match Electron: `UploadProgressChanged`, and `{active, started, current, total}` set from CEF's report, `active` never cleared) | Design: synchronous .NET writes | Add if needed |
 | L7 | Events on the JS thread; a stream is read with `on('data')`/`pipe` | .NET events on CEF's UI thread; the body is held until a `Data` handler is added or `Resume()` is called; `Abort()` method with an `Aborted` event (C# cannot name both `Abort`) | Design (S1) | None |
 | L8 | `net.resolveHost(host, { queryType, source, cacheUsage, secureDnsPolicy })`; rejects with `net::ERR_…` | No options; throws `HostResolutionException` (code in `ErrorCode`) | CEF: `resolve_host` takes only a URL | Patch |
@@ -206,7 +206,7 @@ Entries marked _(branch `x`)_ are on that branch and not yet in `main`.
 | L10 | `net.isOnline()` from Chromium's NetworkChangeNotifier on every OS | Windows follows `NetworkChangeNotifierWin` (NLA query, then adapters as `ConnectionTypeFromInterfaces`); macOS and Linux use the adapter scan only; read live, not from a notifier | OS: SCNetworkReachability / netlink not wired | Per-OS code |
 | L11 | `net.WebSocket` | Missing | Todo | CEF has no WebSocket client; .NET `ClientWebSocket` would bypass the session's proxy and cookies |
 
-## Printing _(branch `win-net-print`)_
+## Printing _(branch `net-module`)_
 
 | ID | Electron | Oriel | Why | Possible resolution |
 |---|---|---|---|---|

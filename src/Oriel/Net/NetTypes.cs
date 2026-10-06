@@ -123,33 +123,6 @@ public sealed record ClientRequestOptions
     internal bool AllowNonHttpProtocols { get; init; }
 }
 
-/// <summary>Who is asking for credentials. Electron's <c>AuthInfo</c>.</summary>
-/// <param name="IsProxy">Whether a proxy asks, rather than the server.</param>
-/// <param name="Scheme">The authentication scheme, lower case (e.g. <c>basic</c>).</param>
-/// <param name="Host">The host asking.</param>
-/// <param name="Port">Its port.</param>
-/// <param name="Realm">The realm.</param>
-public sealed record AuthInfo(bool IsProxy, string Scheme, string Host, int Port, string Realm);
-
-/// <summary>Arguments for <see cref="ClientRequest.Login"/>.</summary>
-public sealed class LoginEventArgs : EventArgs
-{
-    private readonly Action<string?, string?> _callback;
-
-    internal LoginEventArgs(AuthInfo authInfo, Action<string?, string?> callback)
-    {
-        AuthInfo = authInfo;
-        _callback = callback;
-    }
-
-    /// <summary>Who is asking.</summary>
-    public AuthInfo AuthInfo { get; }
-
-    /// <summary>Answers the challenge; any thread, once. Null credentials cancel it, and the response is the 401.
-    /// Electron's <c>callback(username, password)</c>.</summary>
-    public void Callback(string? username = null, string? password = null) => _callback(username, password);
-}
-
 /// <summary>Arguments for <see cref="ClientRequest.Redirect"/>.</summary>
 /// <param name="StatusCode">The redirect's status code.</param>
 /// <param name="Method">The method the redirected request uses.</param>
