@@ -10,7 +10,7 @@ Percentages are over the non-n/a items; the second counts a partial item as half
 
 | Area | Items | Done | Partial | Missing | n/a | % done | % done + partial/2 |
 |---|---|---|---|---|---|---|---|
-| Static methods | 5 | 1 | 2 | 2 | 0 | 20.0% | 40.0% |
+| Static methods | 5 | 2 | 2 | 1 | 0 | 40.0% | 60.0% |
 | Instance events | 59 | 30 | 14 | 13 | 2 | 52.6% | 64.9% |
 | Instance methods | 118 | 37 | 22 | 51 | 8 | 33.6% | 43.6% |
 | Instance properties | 18 | 9 | 1 | 7 | 1 | 52.9% | 55.9% |
@@ -18,7 +18,7 @@ Percentages are over the non-n/a items; the second counts a partial item as half
 | WebFrameMain events and statics | 3 | 1 | 0 | 2 | 0 | 33.3% | 33.3% |
 | WebFrameMain methods | 9 | 1 | 4 | 4 | 0 | 11.1% | 33.3% |
 | WebFrameMain properties | 15 | 10 | 0 | 5 | 0 | 66.7% | 66.7% |
-| **Total** | 241 | 101 | 43 | 86 | 11 | 43.9% | 53.3% |
+| **Total** | 241 | 102 | 43 | 85 | 11 | 44.3% | 53.7% |
 
 ## Checklist
 
@@ -29,7 +29,7 @@ Percentages are over the non-n/a items; the second counts a partial item as half
 | `getAllWebContents()` | `GetAllWebContents` | partial | Window pages only (C17). |
 | `getFocusedWebContents()` | `GetFocusedWebContents` | partial | Never a DevTools page (C17). |
 | `fromId(id)` | `FromId` | done |  |
-| `fromFrame(frame)` | — | missing |  |
+| `fromFrame(frame)` | `FromFrame` | done |  |
 | `fromDevToolsTargetId(targetId)` | — | missing |  |
 
 ### Instance events

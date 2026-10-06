@@ -187,6 +187,14 @@ public sealed unsafe partial class WebContents
 
     internal FocusHandler FocusEvents => _focusEvents ??= new FocusHandler { GotFocus = OnGotFocus };
 
+    /// <summary>The page <paramref name="frame"/> belongs to, or null once it is gone. Electron's
+    /// <c>webContents.fromFrame()</c>.</summary>
+    public static WebContents? FromFrame(WebFrameMain frame)
+    {
+        ArgumentNullException.ThrowIfNull(frame);
+        return frame.Page is { } page && !page.IsDestroyed() ? page : null;
+    }
+
     private FocusHandler? _focusEvents;
 
     // UI thread. CEF reports only the gain; the loss comes from the window, the view's one way to lose focus here.

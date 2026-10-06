@@ -1200,7 +1200,8 @@ async Task WebContentsMethodsAsync()
     var wc = w.WebContents;
     await wc.LoadUrl(origin + "/");
     (bool Loading, bool Main, bool Waiting) State() => (wc.IsLoading(), wc.IsLoadingMainFrame(), wc.IsWaitingForResponse());
-    Check("a loaded page is not loading, nor waiting", State() == (false, false, false), State());
+    // did-finish-load, which LoadUrl waits for, comes before did-stop-loading, as in Chromium.
+    Check("a loaded page is not loading, nor waiting", Eventually(() => State() == (false, false, false), step), State());
 
     // isLoading / isLoadingMainFrame / isWaitingForResponse through a navigation's phases, and stop().
     _ = wc.LoadUrl(origin + "/slow?stop").ContinueWith(t => _ = t.Exception, TaskScheduler.Default);
@@ -1551,6 +1552,17 @@ async Task WebContentsMethodsAsync()
     Check("did-change-theme-color picks the first matching, valid meta, as #RRGGBB", firstTheme, Themes());
     Check("did-change-theme-color follows a change, and only a change", changedTheme && unchanged, Themes());
     Check("a page without a theme color raises null", clearedTheme, Themes());
+
+    // fromFrame: a frame's page, from the main frame or an iframe.
+    File.WriteAllText(page, "<!doctype html><iframe srcdoc='x'></iframe>");
+    await wc.LoadFile(page);
+    Eventually(() => wc.MainFrame?.Frames.Count == 1, step);
+    var framePage = wc.MainFrame is { } topFrame && WebContents.FromFrame(topFrame) == wc && WebContents.FromFrame(topFrame.Frames[0]) == wc;
+    var closing = new BrowserWindow(new BrowserWindowOptions { Show = false });
+    await closing.WebContents.LoadFile(page);
+    var goneFrame = closing.WebContents.MainFrame!;
+    closing.Destroy();
+    Check("WebContents.FromFrame finds a frame's page, and null once the page is gone", framePage && Eventually(() => WebContents.FromFrame(goneFrame) is null, step));
 
     // content-bounds-updated: the page's moveTo and resizeTo move its window unless prevented.
     var mover = new BrowserWindow(new BrowserWindowOptions { Width = 320, Height = 240, X = 60, Y = 80 });

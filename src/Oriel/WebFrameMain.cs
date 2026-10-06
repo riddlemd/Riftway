@@ -24,6 +24,8 @@ public sealed class WebFrameMain
     private readonly WebContents _page;
     private readonly FrameState _state;
 
+    internal WebContents Page => _page;
+
     internal WebFrameMain(WebContents page, FrameState state)
     {
         _page = page;
