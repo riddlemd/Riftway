@@ -70,9 +70,8 @@ Entries marked _(branch `x`)_ are on that branch and not yet in `main`.
 | ID | Electron | Oriel | Why | Possible resolution |
 |---|---|---|---|---|
 | B1 | `createThumbnailFromPath` (macOS, Windows), `createFromNamedImage` and `getNativeHandle` (macOS) | Missing | OS: Quick Look, `IShellItemImageFactory`, `NSImage` | P/Invoke per OS |
-| B2 | `resize` `quality` `good`/`better`/`best` pick Skia filters | One filter for all three: box averaging when shrinking, bilinear when enlarging | Todo | Lanczos for `best` |
 | B3 | `setTemplateImage` makes macOS tint the image in menus and the tray | Stored only; nothing in Oriel draws template images yet | Module: `Tray`, menu item icons | Apply in `Tray` and `NSMenu` items |
-| B4 | `toPNG`, `toBitmap`, `toDataURL`, `getSize`, `getAspectRatio` take `{ scaleFactor }`; `createFromPath` also reads ICO on Windows | A `double scaleFactor` parameter; PNG and JPEG only (CEF's codecs) | Design for the parameter; CEF for the formats | ICO through WIC on Windows |
+| B4 | `toPNG`, `toBitmap`, `toDataURL`, `getSize`, `getAspectRatio` take `{ scaleFactor }` | A `double scaleFactor` parameter; PNG and JPEG only (CEF's codecs). `.ico` is read by `createFromPath` on Windows only, as Electron does, by a managed decoder: PNG and 1/4/8/24/32-bit DIB entries, the entry nearest 256 wide, stretched to 256x256 with the resize filter where Windows' `LoadImage` uses its own stretch | Design for the parameter; CEF for the formats | None for the parameter; BMP, GIF and WebP are not read |
 | B5 | `nativeImage` decodes with Chromium's codecs in the main process | Decoding and encoding PNG/JPEG need CEF, so after `OrielApp.Create`; raw bitmaps, crop and resize work any time | CEF: the codecs live in libcef | Managed PNG codec |
 
 ## window.open

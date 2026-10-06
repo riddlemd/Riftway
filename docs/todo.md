@@ -30,7 +30,7 @@ Cross-platform work. Platform-specific items: [linux-todo.md](linux-todo.md), [w
 - [x] File `Dialog` and `Screen`; gaps in [DRIFT.md](DRIFT.md)
 - [x] `NavigationHistory` (`WebContents.NavigationHistory`)
 - [x] `WebFrameMain` (`WebContents.MainFrame`, IPC `SenderFrame`)
-- [x] Core `Session` (`Session`, `Cookies`, partitions; gaps DRIFT E1-E11) and `NativeImage` (gaps DRIFT B1-B5)
+- [x] Core `Session` (`Session`, `Cookies`, partitions; gaps DRIFT E1-E11) and `NativeImage` (gaps DRIFT B1, B3-B5)
 - [x] `Debugger` (`WebContents.Debugger`; shares Oriel's protocol session, DRIFT C43)
 - [ ] Remaining M2 modules: `BaseWindow`, `View`, `WebContentsView`; the remaining Electron command-line
       switches and `ELECTRON_*` variables, checked one by one
