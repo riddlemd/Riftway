@@ -56,6 +56,10 @@ public sealed record WebRequestDetails
     /// <summary>When the event happened, in milliseconds since the Unix epoch.</summary>
     public required double Timestamp { get; init; }
 
+    /// <summary>The origin that issued the request, such as <c>https://example.com</c>, or <c>null</c> for an opaque one;
+    /// kept from the original request across redirects, and absent for requests the browser started itself.</summary>
+    public string? InitiatorOrigin { get; init; }
+
     /// <summary>The page that made the request; null for a request without one, such as a service worker's.</summary>
     public WebContents? WebContents { get; init; }
 
@@ -296,7 +300,17 @@ public sealed class WebRequest
         WebContents = page,
         WebContentsId = page?.Id,
         UploadData = UploadDataOf(request.Upload),
+        InitiatorOrigin = OriginOf(request.Initiator),
     };
+
+    /// <summary>The serialized origin Electron reports: scheme, host and any port, or "null" for an opaque one.</summary>
+    internal static string? OriginOf(string? initiator)
+    {
+        if (initiator is null) return null;
+        // An opaque "null" is already serialized; "file://" comes out unchanged below.
+        if (!Uri.TryCreate(initiator, UriKind.Absolute, out var uri)) return initiator;
+        return uri.IsDefaultPort ? $"{uri.Scheme}://{uri.Host}" : $"{uri.Scheme}://{uri.Host}:{uri.Port}";
+    }
 
     // UI thread, where the page's frames are known.
     private static WebRequestDetails WithFrame(WebRequestDetails details, WebContents? page, RequestInfo request)

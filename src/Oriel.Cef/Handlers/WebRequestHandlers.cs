@@ -11,6 +11,10 @@ public sealed record RequestInfo(ulong Id, string Url, string Method, string Ref
 
     /// <summary>The requesting frame's name and URL, then each parent's up to the main frame; null without a frame.</summary>
     public IReadOnlyList<(string Name, string Url)>? FramePath { get; init; }
+
+    /// <summary>The origin that issued the request, as CEF gave it when the request began; null for one the browser
+    /// started itself.</summary>
+    public string? Initiator { get; init; }
 }
 
 /// <summary>One element of a request body: bytes, or a file's path.</summary>
@@ -25,6 +29,23 @@ public sealed record RequestDecision(bool Cancel = false, string? RedirectUrl = 
 /// <summary>Reads and writes CEF's header multimaps.</summary>
 public static unsafe class HeaderMap
 {
+    // CEF names a request's initiator only when it picks the request's handler; ids are unique in the process. The
+    // first answer stays, as Electron keeps the original initiator across redirects.
+    private static readonly System.Collections.Concurrent.ConcurrentDictionary<ulong, string> s_initiators = new();
+
+    /// <summary>Remembers <paramref name="requestInitiator"/> for <paramref name="request"/>; IO thread.</summary>
+    public static void NoteInitiator(cef_request_t* request, cef_string_utf16_t* requestInitiator, bool isNavigation, bool hasPage)
+    {
+        if (requestInitiator is null || CefString.Read(requestInitiator) is not { Length: > 0 } initiator) return;
+        // CEF serializes a missing initiator as an opaque "null"; Chromium leaves it out for navigations the browser
+        // starts and requests without a page, which a page's own requests never are.
+        if (initiator == "null" && (isNavigation || !hasPage)) return;
+        s_initiators.TryAdd(request->get_identifier(request), initiator);
+    }
+
+    /// <summary>Forgets a finished request's initiator.</summary>
+    public static void ForgetInitiator(ulong id) => s_initiators.TryRemove(id, out _);
+
     public static IReadOnlyList<KeyValuePair<string, string>> Read(cef_request_t* request)
         => Read(map => request->get_header_map(request, map));
 
@@ -80,6 +101,7 @@ public static unsafe class HeaderMap
     {
         Upload = Upload(request),
         FramePath = frame is null ? null : FramePath(frame),
+        Initiator = s_initiators.TryGetValue(request->get_identifier(request), out var initiator) ? initiator : null,
     };
 
     // Blob and stream bodies are elements CEF leaves out (has_excluded_elements): they cannot be listed.
