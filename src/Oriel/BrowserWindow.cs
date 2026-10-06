@@ -848,12 +848,14 @@ public sealed unsafe partial class BrowserWindow
         if (IsMaximizedOn(w)) return;
         _restoreBounds = ToRectangle(w->@base.@base.get_bounds_in_screen(&w->@base.@base));
         ApplyOuterBounds(w, WorkAreaOf(w), animate: false);
+        // Electron's emulated maximize notifies itself; WM_SIZE only says the window was resized.
+        RaiseEmulated(Maximized);
     });
 
     /// <summary>Leaves the maximized state. Electron's <c>win.unmaximize()</c>.</summary>
     public void Unmaximize() => Command(w =>
     {
-        if (IsMaximizedOn(w)) RestoreOn(w);
+        if (IsMaximizedOn(w) && RestoreOn(w)) RaiseEmulated(Unmaximized);
     });
 
     /// <summary>Whether the window is maximized. Electron's <c>win.isMaximized()</c>.</summary>
@@ -863,11 +865,22 @@ public sealed unsafe partial class BrowserWindow
         => w->is_maximized(w) != 0 || (_transparent && WindowTransparency.FillsWorkArea(
             ToRectangle(w->@base.@base.get_bounds_in_screen(&w->@base.@base)), WorkAreaOf(w), w->is_minimized(w) != 0));
 
-    // A transparent window leaves its emulated maximize by going back to the bounds it had.
-    private void RestoreOn(cef_window_t* w)
+    // A transparent window leaves its emulated maximize by going back to the bounds it had; true when it did.
+    private bool RestoreOn(cef_window_t* w)
     {
-        if (_transparent && _restoreBounds is { } bounds && w->is_maximized(w) == 0 && IsMaximizedOn(w)) ApplyOuterBounds(w, bounds, animate: false);
-        else w->restore(w);
+        if (_transparent && _restoreBounds is { } bounds && w->is_maximized(w) == 0 && IsMaximizedOn(w))
+        {
+            ApplyOuterBounds(w, bounds, animate: false);
+            return true;
+        }
+        w->restore(w);
+        return false;
+    }
+
+    // Where the poll raises the state events (no WM_SIZE route), it sees the emulated change itself.
+    private void RaiseEmulated(EventHandler? handler)
+    {
+        if (_sizeState is not null) handler?.Invoke(this, EventArgs.Empty);
     }
 
     private static Rectangle WorkAreaOf(cef_window_t* w)
@@ -884,7 +897,10 @@ public sealed unsafe partial class BrowserWindow
     public void Minimize() => Command(w => w->minimize(w));
 
     /// <summary>Restores the window from minimized. Electron's <c>win.restore()</c>.</summary>
-    public void Restore() => Command(RestoreOn);
+    public void Restore() => Command(w =>
+    {
+        if (RestoreOn(w)) RaiseEmulated(Restored);
+    });
 
     /// <summary>Whether the window is minimized. Electron's <c>win.isMinimized()</c>.</summary>
     public bool IsMinimized => Query(w => w->is_minimized(w) != 0, false);

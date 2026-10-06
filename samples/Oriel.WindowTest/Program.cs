@@ -3288,10 +3288,26 @@ async Task TransparencyAsync()
     Check("the user cannot resize a transparent window: no sizing code at its edge (WM_NCHITTEST)", WindowsShell.LeftEdgeHitTest(framelessHwnd) is not (>= 10 and <= 17), WindowsShell.LeftEdgeHitTest(framelessHwnd));
     var before = frameless.GetBounds();
     var workArea = Screen.GetDisplayMatching(before).WorkArea;
+    var stateEvents = new System.Collections.Concurrent.ConcurrentQueue<string>();
+    frameless.Maximized += (_, _) => stateEvents.Enqueue("maximize");
+    frameless.Unmaximized += (_, _) => stateEvents.Enqueue("unmaximize");
+    frameless.Restored += (_, _) => stateEvents.Enqueue("restore");
     frameless.Maximize();
     Check("Maximize on a transparent window fills the work area and reports maximized", Eventually(() => frameless.GetBounds() == workArea && frameless.IsMaximized, step), $"{frameless.GetBounds()} vs {workArea}");
+    await Task.Delay(600);
+    // Electron's NativeWindowViews emulates both on Windows and notifies maximize/unmaximize itself.
+    Check("Maximize on a transparent window raises Maximized once, as Electron's emulated maximize", stateEvents.SequenceEqual(["maximize"]), string.Join(",", stateEvents));
+    stateEvents.Clear();
     frameless.Unmaximize();
     Check("Unmaximize puts a transparent window back", Eventually(() => frameless.GetBounds() == before && !frameless.IsMaximized, step), frameless.GetBounds());
+    await Task.Delay(600);
+    Check("Unmaximize on a transparent window raises Unmaximized once", stateEvents.SequenceEqual(["unmaximize"]), string.Join(",", stateEvents));
+    stateEvents.Clear();
+    frameless.Maximize();
+    Eventually(() => frameless.IsMaximized, step);
+    stateEvents.Clear();
+    frameless.Restore();
+    Check("Restore leaves a transparent window's emulated maximize and raises Restored once, as Electron", Eventually(() => frameless.GetBounds() == before && !frameless.IsMaximized, step) && Eventually(() => stateEvents.SequenceEqual(["restore"]), step), $"{frameless.GetBounds()} [{string.Join(",", stateEvents)}]");
     await Close(frameless);
 
     var (acrylic, acrylicHwnd) = await Open(new BrowserWindowOptions { Title = "Oriel window test: acrylic", BackgroundMaterial = BackgroundMaterial.Acrylic });
