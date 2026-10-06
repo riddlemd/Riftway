@@ -20,7 +20,7 @@ Counted from the Checklist at the end: `BaseWindow` and `BrowserWindow` are one 
 | BaseWindow + BrowserWindow options | 54 | 27 | 2 | 25 | 0 | 50.0% | 51.9% |
 | webPreferences | 46 | 11 | 4 | 24 | 7 | 28.2% | 33.3% |
 | Instance methods | 143 | 71 | 9 | 57 | 6 | 51.8% | 55.1% |
-| Instance properties | 24 | 11 | 0 | 13 | 0 | 45.8% | 45.8% |
+| Instance properties | 24 | 11 | 2 | 11 | 0 | 45.8% | 50.0% |
 | Events | 35 | 14 | 4 | 17 | 0 | 40.0% | 45.7% |
 | Static methods | 6 | 4 | 0 | 1 | 1 | 80.0% | 80.0% |
 | **Total** | 308 | 138 | 19 | 137 | 14 | 46.9% | 50.2% |
@@ -103,6 +103,15 @@ Counted from the Checklist at the end: `BaseWindow` and `BrowserWindow` are one 
   and Linux (CEF accelerators have no such modifier); Alt shows an auto-hidden bar until pressed again, rather than
   until the menu is used; the bar takes CEF Views' default look.
 
+- Window polish, Windows (branch `window-polish`): `ShowInactive` (shown through CEF with `SWP_NOACTIVATE` forced in
+  `WM_WINDOWPOSCHANGING`), `Opacity`/`SetOpacity`/`GetOpacity` (`WS_EX_LAYERED` alpha), `HasShadow`/`SetHasShadow` (stored only,
+  as Electron on Windows), `SetIgnoreMouseEvents` (`WS_EX_TRANSPARENT`; `Forward` posts mouse moves to the page from a
+  low-level mouse hook, as Electron), `SetContentProtection`/`IsContentProtected` (`WDA_EXCLUDEFROMCAPTURE`),
+  `Kiosk`/`SetKiosk`/`IsKiosk` (full screen; `IsKiosk` is `IsFullScreen`), `GetNormalBounds` (`GetWindowPlacement`),
+  cancellable `WillResize`/`WillMove` (`WM_SIZING`/`WM_MOVING`). Gaps: DRIFT W30, W31, W33.
+  Fixed on the way: CEF activated a window created hidden, and any window starting a load, taking the keyboard from
+  the window in front; a window meant to be hidden now hands activation back, and loads restore the foreground.
+
 ## Next, by importance
 
 1. Remaining webPreferences:
@@ -119,9 +128,9 @@ Counted from the Checklist at the end: `BaseWindow` and `BrowserWindow` are one 
 2. `setParentWindow` — CEF Views sets the parent only at creation, so this needs OS code (`addChildWindow:`, an owner
    `HWND`, `XSetTransientForHint`).
 3. `titleBarStyle`, `titleBarOverlay`, `trafficLightPosition` — `D.with_standard_window_buttons`, `D.get_titlebar_height`, `W.add_overlay_view`, OS.
-4. `showInactive` — OS.
+4. `showInactive`, `opacity`, `setIgnoreMouseEvents`, content protection, `will-resize`/`will-move` on macOS and Linux (W30) — OS.
 5. Window state persistence (`windowStatePersistence`, `getNormalBounds`, `persisted-state-restored`) — Oriel.
-6. `opacity`, `hasShadow`, `setIgnoreMouseEvents`, content protection, `setKiosk`, `will-*`/`resized`/`moved` events — OS.
+6. `resized`/`moved` events, `hasShadow` on macOS and Linux (W31), kiosk presentation options on macOS (W33) — OS.
 
 Accuracy gaps in done items: `Shown`/`Hidden` fire only from `Show()`/`Hide()`, not when the OS shows or hides the
 window; `devTools: false` blocks
@@ -176,7 +185,7 @@ Parameters in brackets are optional in Electron. `webContents` members are in [w
 | `simpleFullscreen` | `SimpleFullScreen` | done | macOS only, as in Electron. |
 | `skipTaskbar` | `SkipTaskbar` | done |  |
 | `hiddenInMissionControl` | `HiddenInMissionControl` | done | macOS. |
-| `kiosk` | — | missing |  |
+| `kiosk` | `Kiosk` | partial | Full screen; macOS presentation options not yet (W33). |
 | `name` | — | missing |  |
 | `windowStatePersistence` | — | missing |  |
 | `title` | `Title` | done |  |
@@ -190,8 +199,8 @@ Parameters in brackets are optional in Electron. `webContents` members are in [w
 | `autoHideMenuBar` | `AutoHideMenuBar` | done |  |
 | `enableLargerThanScreen` | — | missing |  |
 | `backgroundColor` | `BackgroundColor` | done |  |
-| `hasShadow` | — | missing |  |
-| `opacity` | — | missing |  |
+| `hasShadow` | `HasShadow` | partial | Stored only, which is Electron's behaviour on Windows; macOS and Linux not yet (W31). |
+| `opacity` | `Opacity` | partial | Windows only for now (W30). |
 | `darkTheme` | — | missing |  |
 | `transparent` | `Transparent` | partial | Windows only (W24). |
 | `type` | — | missing |  |
@@ -273,7 +282,7 @@ Parameters in brackets are optional in Electron. `webContents` members are in [w
 | `isFocused()` | `IsFocused` | done |  |
 | `isDestroyed()` | `IsDestroyed` | done |  |
 | `show()` | `Show` | done |  |
-| `showInactive()` | — | missing | OS. |
+| `showInactive()` | `ShowInactive` | partial | Windows only; macOS and Linux show and focus (W30). |
 | `hide()` | `Hide` | done |  |
 | `isVisible()` | `IsVisible` | done |  |
 | `isModal()` | `IsModal` | done |  |
@@ -297,7 +306,7 @@ Parameters in brackets are optional in Electron. `webContents` members are in [w
 | `getBackgroundColor()` | `GetBackgroundColor` | done |  |
 | `setContentBounds(bounds, animate)` | `SetContentBounds` | partial | No `animate` argument (macOS-only parameter). |
 | `getContentBounds()` | `GetContentBounds` | done |  |
-| `getNormalBounds()` | — | missing |  |
+| `getNormalBounds()` | `GetNormalBounds` | done | Windows: `GetWindowPlacement`; elsewhere the last bounds seen while normal. |
 | `setEnabled(enable)` | — | missing |  |
 | `isEnabled()` | — | missing |  |
 | `setSize(width, height, animate)` | `SetSize` | partial | No `animate` argument (macOS-only parameter). |
@@ -334,8 +343,8 @@ Parameters in brackets are optional in Electron. `webContents` members are in [w
 | `setSheetOffset(offsetY, offsetX)` | — | missing |  |
 | `flashFrame(flag)` | `FlashFrame` | done |  |
 | `setSkipTaskbar(skip)` | `SetSkipTaskbar` | done |  |
-| `setKiosk(flag)` | — | missing | OS. |
-| `isKiosk()` | — | missing |  |
+| `setKiosk(flag)` | `SetKiosk` | partial | Full screen (W33). |
+| `isKiosk()` | `IsKiosk` | done |  |
 | `isTabletMode()` | — | missing |  |
 | `getMediaSourceId()` | — | missing |  |
 | `getNativeWindowHandle()` | `GetNativeWindowHandle` | done | Returns `nint`, not a Buffer (S6). |
@@ -358,10 +367,10 @@ Parameters in brackets are optional in Electron. `webContents` members are in [w
 | `setProgressBar(progress, options)` | `SetProgressBar` | partial | No Linux progress; macOS error/paused show as plain bar (W20). |
 | `setOverlayIcon(overlay, description)` | `SetOverlayIcon` | done | Takes a `NativeImage`. |
 | `invalidateShadow()` | — | missing |  |
-| `setHasShadow(hasShadow)` | — | missing |  |
-| `hasShadow()` | — | missing |  |
-| `setOpacity(opacity)` | — | missing |  |
-| `getOpacity()` | — | missing |  |
+| `setHasShadow(hasShadow)` | `SetHasShadow` | partial | Stored only, as Electron on Windows; macOS and Linux not yet (W31). |
+| `hasShadow()` | `GetHasShadow` | done | Returns the value set. |
+| `setOpacity(opacity)` | `SetOpacity` | partial | Windows only for now (W30). |
+| `getOpacity()` | `GetOpacity` | done |  |
 | `setShape(rects)` | — | missing |  |
 | `setThumbarButtons(buttons)` | `SetThumbarButtons` | done | Windows only, as in Electron. |
 | `setThumbnailClip(region)` | `SetThumbnailClip` | done | Windows only, as in Electron. |
@@ -379,9 +388,9 @@ Parameters in brackets are optional in Electron. `webContents` members are in [w
 | `isSnapped()` | — | missing |  |
 | `setVisibleOnAllWorkspaces(visible, options)` | `SetVisibleOnAllWorkspaces` | done | macOS and Linux; Windows has no workspaces, as in Electron. |
 | `isVisibleOnAllWorkspaces()` | `IsVisibleOnAllWorkspaces` | done |  |
-| `setIgnoreMouseEvents(ignore, options)` | — | missing |  |
-| `setContentProtection(enable)` | — | missing |  |
-| `isContentProtected()` | — | missing |  |
+| `setIgnoreMouseEvents(ignore, options)` | `SetIgnoreMouseEvents` | partial | Windows only, `forward` included (W30). |
+| `setContentProtection(enable)` | `SetContentProtection` | partial | Windows only for now (W30). |
+| `isContentProtected()` | `IsContentProtected` | partial | Windows only for now (W30). |
 | `setFocusable(focusable)` | — | missing |  |
 | `isFocusable()` | — | missing |  |
 | `setParentWindow(parent)` | — | missing | W8. |
@@ -421,9 +430,9 @@ Parameters in brackets are optional in Electron. `webContents` members are in [w
 | `fullScreen` | `SetFullScreen / IsFullScreen` | done |  |
 | `focusable` | — | missing |  |
 | `visibleOnAllWorkspaces` | — | missing |  |
-| `shadow` | — | missing |  |
+| `shadow` | `SetHasShadow / GetHasShadow` | partial | Stored only, as Electron on Windows (W31). |
 | `menuBarVisible` | `SetMenuBarVisibility / IsMenuBarVisible` | done |  |
-| `kiosk` | — | missing |  |
+| `kiosk` | `SetKiosk / IsKiosk` | partial | Full screen; macOS presentation options not yet (W33). |
 | `documentEdited` | — | missing |  |
 | `representedFilename` | — | missing |  |
 | `title` | `SetTitle / GetTitle` | done |  |
@@ -457,10 +466,10 @@ Parameters in brackets are optional in Electron. `webContents` members are in [w
 | `unmaximize` | `Unmaximized` | done |  |
 | `minimize` | `Minimized` | partial | Polled every 250 ms (W2). |
 | `restore` | `Restored` | partial | Polled every 250 ms (W2). |
-| `will-resize` | — | missing |  |
+| `will-resize` | `WillResize` | partial | Windows only for now (W30). |
 | `resize` | `Resized` | done |  |
 | `resized` | — | missing |  |
-| `will-move` | — | missing |  |
+| `will-move` | `WillMove` | partial | Windows only for now (W30). |
 | `move` | `Moved` | done |  |
 | `moved` | — | missing |  |
 | `enter-full-screen` | `EnteredFullScreen` | done |  |

@@ -64,6 +64,9 @@ Entries marked _(branch `x`)_ are on that branch and not yet in `main`.
 | W25 | `titleBarStyle: 'hidden'` with `titleBarOverlay` (Windows caption buttons over the page, `getTitleBarOverlay` geometry) | Missing | OS: needs a frameless window, caption buttons drawn over the page and `WM_NCHITTEST` for the drag area | Frameless window plus an overlay view (`W.add_overlay_view`) with min/max/close buttons, after `titleBarStyle` |
 | W26 | `icon` option takes a `NativeImage` or a path | Two options: `Icon` (path) and `IconImage` (`NativeImage`, wins over `Icon`) | Design: a C# property has one type | None |
 | W29 | Windows: `setAlwaysOnTop` levels from `pop-up-menu` up put the window above the taskbar, the lower ones behind it | Always on top at one level; `level` and `relativeLevel` work on macOS only | CEF: `set_always_on_top` has no level; Todo: the taskbar ordering on Windows | Win32 z-order against the taskbar |
+| W30 | `showInactive`, `opacity`/`setOpacity`, `setIgnoreMouseEvents`, `setContentProtection` and the `will-resize`/`will-move` events work on macOS too (`opacity` also on Linux) | Windows only: elsewhere `ShowInactive` shows and focuses, the opacity is stored but not shown, the others do nothing and the events never come _(branch `window-polish`)_ | OS | macOS: `orderFront:` without key, `alphaValue`, `ignoresMouseEvents`, `sharingType`, `windowWillResize:`/`windowWillMove:`; Linux: `_NET_WM_WINDOW_OPACITY` |
+| W31 | `hasShadow: false` takes the shadow away on macOS (`NSWindow.hasShadow`) and changes the frame layout on Linux; on Windows it is only stored | Stored only on every OS, which is Electron's behaviour on Windows _(branch `window-polish`)_ | OS | macOS: `NSWindow.hasShadow`; Linux: the frame layout |
+| W33 | `kiosk` on macOS also hides the Dock and menu bar and blocks app switching | Full screen on every OS _(branch `window-polish`)_ | OS | macOS presentation options |
 
 ## nativeImage
 

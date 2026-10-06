@@ -85,6 +85,17 @@ public sealed record BrowserWindowOptions
     /// Electron's <c>skipTaskbar</c>.</summary>
     public bool SkipTaskbar { get; init; }
 
+    /// <summary>The window's opacity, 0 to 1. Windows only for now: stored but not shown on macOS and Linux.
+    /// Electron's <c>opacity</c>.</summary>
+    public double Opacity { get; init; } = 1.0;
+
+    /// <summary>Whether the window has a shadow. Stored only: on Windows, as in Electron, it changes nothing, and macOS and
+    /// Linux are not done yet. Electron's <c>hasShadow</c>.</summary>
+    public bool HasShadow { get; init; } = true;
+
+    /// <summary>Opens the window in kiosk mode: full screen. Electron's <c>kiosk</c>.</summary>
+    public bool Kiosk { get; init; }
+
     /// <summary>What Windows 11 22H2 and later draws behind the window; null leaves the system default. Unless
     /// <see cref="BackgroundColor"/> is set, any value but <see cref="Oriel.BackgroundMaterial.None"/> makes the page
     /// background transparent so the material shows. Windows only: ignored on macOS and Linux. Electron's
@@ -243,6 +254,15 @@ public sealed unsafe partial class BrowserWindow
 
     private bool _closable;
     private bool _skipTaskbar;
+    private double _opacity;
+    private bool _hasShadow;
+    // macOS: Electron's is_kiosk_; elsewhere kiosk is full screen itself.
+    private bool _kiosk;
+    // Electron's layered_: once given an opacity, the window stays layered when click-through ends.
+    private bool _layered;
+    private Rectangle _normalBounds;
+    // Whether the app means the window to be shown; CEF activates windows that are not.
+    private bool _meantVisible;
     private readonly NativeImage? _icon;
     private bool _thumbarAdded;
     private readonly nint[] _thumbarIcons = new nint[Thumbar.MaxButtons];
@@ -292,6 +312,9 @@ public sealed unsafe partial class BrowserWindow
         Id = Interlocked.Increment(ref s_nextId);
         _closable = _options.Closable;
         _skipTaskbar = _options.SkipTaskbar;
+        _opacity = WindowPolish.ClampOpacity(_options.Opacity);
+        _hasShadow = _options.HasShadow;
+        _kiosk = _options.Kiosk;
         _icon = _options.IconImage ?? (_options.Icon is { } iconPath ? NativeImage.CreateFromBuffer(File.ReadAllBytes(iconPath)) : null);
         _transparent = _options.Transparent && OperatingSystem.IsWindows();
         _resizable = _options.Resizable;
@@ -657,6 +680,16 @@ public sealed unsafe partial class BrowserWindow
     /// <summary>The window changed size. Electron's <c>resize</c>.</summary>
     public event EventHandler? Resized;
 
+    /// <summary>Raised while the user drags an edge of the window, before it resizes; cancel to keep the size.
+    /// Windows only for now. Electron's <c>'will-resize'</c>.</summary>
+    /// <remarks>Raised on the UI thread from inside the drag: handlers must return quickly.</remarks>
+    public event EventHandler<WillResizeEventArgs>? WillResize;
+
+    /// <summary>Raised while the user drags the window, before it moves; cancel to keep it in place.
+    /// Windows only for now. Electron's <c>'will-move'</c>.</summary>
+    /// <remarks>Raised on the UI thread from inside the drag: handlers must return quickly.</remarks>
+    public event EventHandler<WillMoveEventArgs>? WillMove;
+
     /// <summary>The window was maximized. Electron's <c>maximize</c>.</summary>
     public event EventHandler? Maximized;
 
@@ -693,6 +726,7 @@ public sealed unsafe partial class BrowserWindow
     public void Show() => Command(w =>
     {
         var wasVisible = w->@base.@base.is_visible(&w->@base.@base) != 0;
+        _meantVisible = true;
         w->show(w);
         ApplySkipTaskbar(w);
         if (!wasVisible) Shown?.Invoke(this, EventArgs.Empty);
@@ -702,6 +736,7 @@ public sealed unsafe partial class BrowserWindow
     public void Hide() => Command(w =>
     {
         var wasVisible = w->@base.@base.is_visible(&w->@base.@base) != 0;
+        _meantVisible = false;
         w->hide(w);
         if (wasVisible) Hidden?.Invoke(this, EventArgs.Empty);
     });
@@ -863,6 +898,117 @@ public sealed unsafe partial class BrowserWindow
 
     /// <summary>Whether the window stays above others. Electron's <c>win.isAlwaysOnTop()</c>.</summary>
     public bool IsAlwaysOnTop => Query(w => w->is_always_on_top(w) != 0, false);
+
+    /// <summary>Shows the window without focusing it. Windows only for now: macOS and Linux show and focus it.
+    /// Electron's <c>win.showInactive()</c>.</summary>
+    public void ShowInactive() => Command(w =>
+    {
+        var wasVisible = w->@base.@base.is_visible(&w->@base.@base) != 0;
+        _meantVisible = true;
+        // Through CEF, so Views knows the window is shown; the position changes it makes are kept from activating it.
+        if (!OperatingSystem.IsWindows() || !WindowsSubclass.WithoutActivation(Hwnd(w), () => w->show(w))) w->show(w);
+        // Handing the foreground back raised the previous window; an inactive show still comes out in front.
+        else WindowsWindowStyle.BringToTopInactive(Hwnd(w));
+        ApplySkipTaskbar(w);
+        if (!wasVisible) Shown?.Invoke(this, EventArgs.Empty);
+    });
+
+    /// <summary>Sets the window's opacity, clamped to 0–1. Windows only for now: stored but not shown on macOS and
+    /// Linux. Electron's <c>win.setOpacity()</c>.</summary>
+    /// <exception cref="ArgumentOutOfRangeException">The opacity is NaN.</exception>
+    public void SetOpacity(double opacity)
+    {
+        var clamped = WindowPolish.ClampOpacity(opacity);
+        Command(w =>
+        {
+            _opacity = clamped;
+            if (OperatingSystem.IsWindows()) ApplyOpacity(w);
+        });
+    }
+
+    /// <summary>The window's opacity, as set. Electron's <c>win.getOpacity()</c>.</summary>
+    public double GetOpacity() => Query(_ => _opacity, 1.0);
+
+    /// <summary>Gives the window a shadow or takes it away. Stored only: on Windows, as in Electron, it changes nothing,
+    /// and macOS and Linux are not done yet. Electron's <c>win.setHasShadow()</c>.</summary>
+    public void SetHasShadow(bool hasShadow) => Command(_ => _hasShadow = hasShadow);
+
+    /// <summary>Whether the window has a shadow, as set. Electron's <c>win.hasShadow()</c>.</summary>
+    public bool GetHasShadow() => Query(_ => _hasShadow, true);
+
+    /// <summary>Lets mouse input pass through the window to whatever is below it, or stops that; with
+    /// <see cref="IgnoreMouseEventsOptions.Forward"/> the page still gets mouse moves. Windows only for now.
+    /// Electron's <c>win.setIgnoreMouseEvents()</c>.</summary>
+    public void SetIgnoreMouseEvents(bool ignore, IgnoreMouseEventsOptions? options = null) => Command(w =>
+    {
+        if (!OperatingSystem.IsWindows()) return;
+        var hwnd = Hwnd(w);
+        WindowsWindowStyle.SetClickThrough(hwnd, ignore, keepLayered: _layered);
+        // Forwarding only applies while ignoring; taking the mouse back always ends it.
+        if (!WindowsSubclass.ForwardMouseMoves(hwnd, ignore && options?.Forward == true))
+            Console.Error.WriteLine("[Oriel] Mouse moves cannot be forwarded to the page.");
+    });
+
+    /// <summary>Keeps the window out of screenshots and screen recordings, or lets it back in. Windows only for now.
+    /// Electron's <c>win.setContentProtection()</c>.</summary>
+    public void SetContentProtection(bool enable) => Command(w =>
+    {
+        if (OperatingSystem.IsWindows() && !WindowsWindowStyle.SetExcludedFromCapture(Hwnd(w), enable))
+            Console.Error.WriteLine("[Oriel] Windows did not take the content protection.");
+    });
+
+    /// <summary>Whether the window is kept out of captures, read back from Windows; false elsewhere.
+    /// Electron's <c>win.isContentProtected()</c>.</summary>
+    public bool IsContentProtected() => Query(w => OperatingSystem.IsWindows() && WindowsWindowStyle.IsExcludedFromCapture(Hwnd(w)), false);
+
+    /// <summary>Enters or leaves kiosk mode: full screen. Electron's <c>win.setKiosk()</c>.</summary>
+    public void SetKiosk(bool flag)
+    {
+        Command(_ => _kiosk = flag);
+        SetFullScreen(flag);
+    }
+
+    /// <summary>Whether the window is in kiosk mode: on Windows and Linux, whether it is full screen, however it got
+    /// there, as Electron answers. Electron's <c>win.isKiosk()</c>.</summary>
+    public bool IsKiosk() => OperatingSystem.IsMacOS() ? Query(_ => _kiosk, false) : IsFullScreen;
+
+    /// <summary>The bounds the window has, or returns to, when it is neither maximized, minimized nor full screen.
+    /// Electron's <c>win.getNormalBounds()</c>.</summary>
+    public Rectangle GetNormalBounds() => Query(w =>
+    {
+        if (OperatingSystem.IsWindows() && WindowsWindowStyle.GetNormalBounds(Hwnd(w)) is var (x, y, width, height))
+            return Screen.ScreenToDipRect(this, new Rectangle(x, y, width, height));
+        return IsNormal(w) ? ToRectangle(w->@base.@base.get_bounds_in_screen(&w->@base.@base)) : _normalBounds;
+    }, default);
+
+    private static bool IsNormal(cef_window_t* w) => w->is_maximized(w) == 0 && w->is_minimized(w) == 0 && w->is_fullscreen(w) == 0;
+
+    [System.Runtime.Versioning.SupportedOSPlatform("windows")]
+    private void ApplyWindowsStyles(cef_window_t* w)
+    {
+        if (_opacity < 1) ApplyOpacity(w);
+        var hwnd = Hwnd(w);
+        WindowsSubclass.RouteSizing(hwnd, (wmsz, r) => Cancelled(WillResize, new WillResizeEventArgs(PixelsToDips(r), WindowPolish.EdgeFromWmsz(wmsz))));
+        WindowsSubclass.RouteMoving(hwnd, r => Cancelled(WillMove, new WillMoveEventArgs(PixelsToDips(r))));
+    }
+
+    private bool Cancelled<T>(EventHandler<T>? handler, T args) where T : CancelEventArgs
+    {
+        if (handler is null) return false;
+        handler(this, args);
+        return args.Cancel;
+    }
+
+    private Rectangle PixelsToDips((int Left, int Top, int Right, int Bottom) r)
+        => Screen.ScreenToDipRect(this, new Rectangle(r.Left, r.Top, r.Right - r.Left, r.Bottom - r.Top));
+
+    [System.Runtime.Versioning.SupportedOSPlatform("windows")]
+    private void ApplyOpacity(cef_window_t* w)
+    {
+        _layered = true;
+        if (!WindowsWindowStyle.SetAlpha(Hwnd(w), WindowPolish.ToAlpha(_opacity)))
+            Console.Error.WriteLine("[Oriel] Windows did not take the opacity.");
+    }
 
     /// <summary>Sets the title bar text. Electron's <c>win.setTitle()</c>.</summary>
     public void SetTitle(string title)
@@ -1324,6 +1470,8 @@ public sealed unsafe partial class BrowserWindow
 
     private void OnWindowCreated(cef_window_t* window)
     {
+        _meantVisible = _options.Show;
+        if (OperatingSystem.IsWindows()) WindowsSubclass.RefuseActivationWhileHidden(Hwnd(window), () => !_meantVisible);
         if (_menuBar is not null)
         {
             _menuBar.Attach(window, _browserView);
@@ -1380,6 +1528,7 @@ public sealed unsafe partial class BrowserWindow
         if (UsesSimpleFullScreen && OperatingSystem.IsMacOS())
             _routedNSWindow = MacWindow.RouteFullScreenToggle((nint)window->get_window_handle(window), () => SetSimpleFullScreen(!IsSimpleFullScreen));
         if (_options.AlwaysOnTop) window->set_always_on_top(window, 1);
+        if (OperatingSystem.IsWindows()) ApplyWindowsStyles(window);
         if (_options.Show)
         {
             window->show(window);
@@ -1387,7 +1536,7 @@ public sealed unsafe partial class BrowserWindow
         }
         if (_options.HiddenInMissionControl && OperatingSystem.IsMacOS())
             MacWindow.SetCollectionBehavior((nint)window->get_window_handle(window), MacWindow.Transient, true);
-        if (_options.FullScreen)
+        if (_options.FullScreen || _kiosk)
         {
             if (UsesSimpleFullScreen && OperatingSystem.IsMacOS()) MacWindow.SetSimpleFullScreen((nint)window->get_window_handle(window), true);
             else window->set_fullscreen(window, 1);
@@ -1466,6 +1615,7 @@ public sealed unsafe partial class BrowserWindow
         var bounds = ToRectangle(rect);
         var previous = _lastBounds;
         _lastBounds = bounds;
+        if (_window is not null && IsNormal(_window)) _normalBounds = bounds;
         if (bounds.X != previous.X || bounds.Y != previous.Y) Moved?.Invoke(this, EventArgs.Empty);
         if (bounds.Width != previous.Width || bounds.Height != previous.Height) Resized?.Invoke(this, EventArgs.Empty);
         RaiseStateChanges();

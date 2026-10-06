@@ -830,9 +830,22 @@ public sealed unsafe partial class WebContents
             CefThread.PostUi(() => { if (_loadDone == current) CompleteLoad(null); });
         cef_string_utf16_t value = default;
         CefString.Set(&value, url);
-        frame->load_url(frame, &value);
+        if (OperatingSystem.IsWindows()) LoadWithoutActivation(frame, &value);
+        else frame->load_url(frame, &value);
         CefString.Clear(&value);
         NativeObject.Release(frame);
+    }
+
+    // Chrome-style CEF activates the window as a navigation starts, even a hidden one; Electron's loadURL never does.
+    [System.Runtime.Versioning.SupportedOSPlatform("windows")]
+    private void LoadWithoutActivation(cef_frame_t* frame, cef_string_utf16_t* url)
+    {
+        var host = _browser->get_host(_browser);
+        var root = Oriel.Cef.Platform.WindowsWindowStyle.Root((nint)host->get_window_handle(host));
+        NativeObject.Release(host);
+        var (f, u) = ((nint)frame, (nint)url);
+        if (root == 0 || !Oriel.Cef.Platform.WindowsSubclass.WithoutActivation(root, () => ((cef_frame_t*)f)->load_url((cef_frame_t*)f, (cef_string_utf16_t*)u)))
+            frame->load_url(frame, url);
     }
 
     // IO thread: only the main-frame navigation a LoadUrl with options started needs the hop.

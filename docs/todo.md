@@ -21,10 +21,10 @@ Cross-platform work. Platform-specific items: [linux-todo.md](linux-todo.md), [w
   - [x] Windows: `setAppDetails`, `setThumbnailClip`, `setThumbnailToolTip`, `backgroundMaterial`/`setBackgroundMaterial`
   - [x] Make `backgroundMaterial` visible; `transparent` on Windows
   - [ ] `transparent` on macOS and Linux (DRIFT W24)
-  - [ ] `showInactive`
+  - [x] Windows: `showInactive`, `opacity`, `hasShadow` (stored, as Electron), `setIgnoreMouseEvents` (with `forward`), content protection, kiosk, `getNormalBounds`, `will-resize`/`will-move` (branch `window-polish`)
   - [x] `loadURL` options (userAgent, extraHeaders, httpReferrer, postData); `baseURLForDataURL` throws
-  - [ ] Window state persistence (`getNormalBounds`, `persisted-state-restored`)
-  - [ ] `opacity`, `hasShadow`, `setIgnoreMouseEvents`, content protection, `setKiosk`, `will-*` events
+  - [ ] Window state persistence (`persisted-state-restored`)
+  - [ ] `resized`/`moved` events
   - [ ] Accuracy gaps: `Shown`/`Hidden` fire only from `Show()`/`Hide()`
 - [x] webContents: `executeJavaScript`, DevTools open/close/toggle, zoom factor/level, `setUserAgent`/`getUserAgent`
 - [x] File `Dialog` and `Screen`; gaps in [DRIFT.md](DRIFT.md)

@@ -129,6 +129,105 @@ static unsafe class WindowsShell
         }
     }
 
+    /// <summary>The screen pixel at (<paramref name="x"/>, <paramref name="y"/>) as R, G, B, read the way screen capture
+    /// reads it.</summary>
+    internal static (byte R, byte G, byte B) ScreenPixel(int x, int y)
+    {
+        var dc = GetDC(0);
+        try
+        {
+            var c = GetPixel(dc, x, y);
+            return ((byte)c, (byte)(c >> 8), (byte)(c >> 16));
+        }
+        finally { _ = ReleaseDC(0, dc); }
+    }
+
+    /// <summary>The window's layered alpha, read back from Win32.</summary>
+    internal static byte? Alpha(nint hwnd) => OperatingSystem.IsWindows() ? Oriel.Cef.Platform.WindowsWindowStyle.GetAlpha(hwnd) : null;
+
+    /// <summary>Whether the window has <c>WS_EX_TRANSPARENT</c>.</summary>
+    internal static bool ClickThrough(nint hwnd) => OperatingSystem.IsWindows() && Oriel.Cef.Platform.WindowsWindowStyle.IsClickThrough(hwnd);
+
+    /// <summary>Whether the window forwards mouse moves to its page, read back from Oriel's hook set.</summary>
+    internal static bool Forwarding(nint hwnd) => OperatingSystem.IsWindows() && Oriel.Cef.Platform.WindowsSubclass.IsForwardingMouseMoves(hwnd);
+
+    /// <summary>Puts the real cursor at a screen point and wiggles it a mickey, so low-level mouse hooks see moves.</summary>
+    internal static void MoveMouse(int x, int y)
+    {
+        _ = SetCursorPos(x, y);
+        mouse_event(0x0001 /* MOVE */, 1, 0, 0, 0);
+        Thread.Sleep(40);
+        mouse_event(0x0001 /* MOVE */, -1, 0, 0, 0);
+        Thread.Sleep(40);
+    }
+
+    /// <summary>Whether DWM renders the window's frame.</summary>
+    internal static bool NcRendering(nint hwnd) => OperatingSystem.IsWindows() && Oriel.Cef.Platform.WindowsWindowStyle.IsDwmNonClientRendering(hwnd);
+
+    /// <summary>The foreground window.</summary>
+    internal static nint Foreground() => GetForegroundWindow();
+
+    /// <summary>The top-level window that takes the mouse at (<paramref name="x"/>, <paramref name="y"/>).</summary>
+    internal static nint RootAt(int x, int y) => GetAncestor(WindowFromPoint(new PointNative { X = x, Y = y }), 2 /* GA_ROOT */);
+
+    /// <summary>The window's bounds in screen pixels.</summary>
+    internal static (int X, int Y, int Width, int Height) Bounds(nint hwnd)
+    {
+        RectNative r;
+        _ = GetWindowRect(hwnd, &r);
+        return (r.Left, r.Top, r.Right - r.Left, r.Bottom - r.Top);
+    }
+
+    /// <summary>Drags the real mouse with the left button from one screen point to another, in steps.</summary>
+    internal static void Drag(int x0, int y0, int x1, int y1)
+    {
+        _ = SetCursorPos(x0, y0);
+        Thread.Sleep(150);
+        mouse_event(0x0002 /* LEFTDOWN */, 0, 0, 0, 0);
+        Thread.Sleep(150);
+        for (var i = 1; i <= 10; i++)
+        {
+            _ = SetCursorPos(x0 + (x1 - x0) * i / 10, y0 + (y1 - y0) * i / 10);
+            Thread.Sleep(40);
+        }
+        Thread.Sleep(150);
+        mouse_event(0x0004 /* LEFTUP */, 0, 0, 0, 0);
+        Thread.Sleep(300);
+    }
+
+    /// <summary>Sends <c>WM_SIZING</c> (edge <paramref name="wmsz"/>) or, when null, <c>WM_MOVING</c> with a proposed
+    /// rectangle, and returns the rectangle the window left in it.</summary>
+    internal static (int Left, int Top, int Right, int Bottom) SendDrag(nint hwnd, int? wmsz, (int Left, int Top, int Right, int Bottom) proposed)
+    {
+        var r = new RectNative { Left = proposed.Left, Top = proposed.Top, Right = proposed.Right, Bottom = proposed.Bottom };
+        nint result;
+        _ = SendMessageTimeoutW(hwnd, wmsz is null ? 0x0216u : 0x0214u, wmsz ?? 0, (nint)(&r), 2, 1000, &result);
+        return (r.Left, r.Top, r.Right, r.Bottom);
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct PointNative
+    {
+        public int X;
+        public int Y;
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct RectNative
+    {
+        public int Left;
+        public int Top;
+        public int Right;
+        public int Bottom;
+    }
+
+    [DllImport("user32.dll")] private static extern nint GetForegroundWindow();
+    [DllImport("user32.dll")] private static extern nint WindowFromPoint(PointNative point);
+    [DllImport("user32.dll")] private static extern nint GetAncestor(nint hwnd, uint flags);
+    [DllImport("user32.dll")] private static extern int GetWindowRect(nint hwnd, RectNative* rect);
+    [DllImport("user32.dll")] private static extern int SetCursorPos(int x, int y);
+    [DllImport("user32.dll")] private static extern void mouse_event(uint flags, int dx, int dy, int data, nint extra);
+
     /// <summary>Sends the window the <c>WM_COMMAND</c> a click on thumbnail button <paramref name="id"/> sends.</summary>
     internal static void ClickThumbButton(nint hwnd, int id)
     {
