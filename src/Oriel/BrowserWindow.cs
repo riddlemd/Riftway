@@ -844,6 +844,7 @@ public sealed unsafe partial class BrowserWindow
         {
             var onTop = flag && level != "normal";
             w->set_always_on_top(w, onTop ? 1 : 0);
+            if (onTop && OperatingSystem.IsWindows()) WindowsWindow.EnsureTopmost((nint)w->get_window_handle(w));
             if (OperatingSystem.IsMacOS()) MacWindow.SetLevel((nint)w->get_window_handle(w), onTop ? macLevel + relativeLevel : 0);
         });
     }
