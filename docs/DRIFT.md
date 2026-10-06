@@ -164,7 +164,7 @@ Entries marked _(branch `x`)_ are on that branch and not yet in `main`.
 | G9 | `securityScopedBookmarks` returns bookmarks in Mac App Store builds only; there `bookmarks` is always present (`[]` when cancelled or not asked), and `bookmark` is `""` when cancelled and absent when not asked | macOS, any build: `Bookmarks` (`Bookmark`) only when asked (empty when cancelled), else null; a save path's file is created for its bookmark, as Electron's MAS build | Design: an Oriel app has no MAS/non-MAS build split; a sandboxed app needs them | — |
 | MB1 | An already-aborted `signal` resolves `{ cancelId, checkboxChecked }` (no `response`; the Sync form returns that promise) | `MessageBoxResult(Response: cancelId, CheckboxChecked)`; the Sync form returns the cancel id | Design: a typed result cannot carry Electron's misnamed field _(branch `win-message-box`)_ | None |
 | MB2 | Aborting cannot reach a `showMessageBoxSync` box: the main thread is blocked in it | Cancelling `Signal` from another thread closes a Sync box too, which answers the cancel id | Design (superset): .NET callers can cancel from other threads _(branch `win-message-box`)_ | None |
-| MB3 | Message boxes on macOS and Linux | Throw `PlatformNotSupportedException` | OS _(branch `win-message-box`)_ | `NSAlert`; GTK `GtkMessageDialog` as `message_box_gtk.cc` |
+| MB3 | Message boxes on Linux | Throw `PlatformNotSupportedException`; macOS is NSAlert as `message_box_mac.mm` | Todo: no GTK in Oriel's Linux build | GTK `GtkMessageDialog` as `message_box_gtk.cc` |
 
 ## session
 

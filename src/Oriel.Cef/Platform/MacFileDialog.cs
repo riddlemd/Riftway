@@ -78,8 +78,9 @@ public static unsafe class MacFileDialog
         public double X, Y, Width, Height;
     }
 
+    // Shared with MacMessageBox, which also needs AppKit completion handlers.
     [StructLayout(LayoutKind.Sequential)]
-    private struct Block
+    internal struct Block
     {
         public nint Isa;
         public int Flags;
@@ -90,7 +91,7 @@ public static unsafe class MacFileDialog
     }
 
     [StructLayout(LayoutKind.Sequential)]
-    private struct BlockDescriptor
+    internal struct BlockDescriptor
     {
         public nuint Reserved;
         public nuint Size;
@@ -331,7 +332,7 @@ public static unsafe class MacFileDialog
         return Read(Send(data, Sel("base64EncodedStringWithOptions:"u8), 0)) ?? "";
     }
 
-    private static Block NewBlock(Action<nint> completed) => new()
+    internal static Block NewBlock(Action<nint> completed) => new()
     {
         Isa = s_stackBlock,
         Flags = BlockHasSignature,

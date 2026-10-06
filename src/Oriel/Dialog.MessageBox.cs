@@ -101,6 +101,7 @@ public static partial class Dialog
         var settings = PrepareMessageBox(options);
         // Electron answers an already-aborted signal without a box.
         if (options.Signal.IsCancellationRequested) return Task.FromResult(new MessageBoxResult(settings.CancelId, settings.CheckboxChecked));
+        if (OperatingSystem.IsMacOS()) return ShowAsyncOnMac(window, options, settings);
         if (!OperatingSystem.IsWindows()) throw MessageBoxNotYet();
         return ShowAsyncOnWindows(window, options, settings);
     }
@@ -120,6 +121,7 @@ public static partial class Dialog
     {
         var settings = PrepareMessageBox(options);
         if (options.Signal.IsCancellationRequested) return settings.CancelId;
+        if (OperatingSystem.IsMacOS()) return ShowSyncOnMac(window, options, settings);
         if (!OperatingSystem.IsWindows()) throw MessageBoxNotYet();
         return ShowSyncOnWindows(window, options, settings);
     }
@@ -135,8 +137,26 @@ public static partial class Dialog
     /// <exception cref="PlatformNotSupportedException">Not on Windows yet.</exception>
     public static void ShowErrorBox(string title, string content)
     {
+        if (OperatingSystem.IsMacOS())
+        {
+            ShowErrorBoxOnMac(title ?? "", content ?? "");
+            return;
+        }
         if (!OperatingSystem.IsWindows()) throw MessageBoxNotYet();
         ShowErrorBoxOnWindows(ErrorBoxSettingsOf(title, content));
+    }
+
+    [SupportedOSPlatform("macos")]
+    private static void ShowErrorBoxOnMac(string title, string content)
+    {
+        if (OrielApp.CurrentOrNull is { IsReady: true } && !CefThread.IsOnUiThread) CefThread.InvokeOnUi(() => ShowError());
+        else ShowError();
+
+        bool ShowError()
+        {
+            MacMessageBox.ShowError(title, content);
+            return true;
+        }
     }
 
     [SupportedOSPlatform("windows")]
@@ -254,6 +274,66 @@ public static partial class Dialog
         if (icon is null || icon.IsEmpty()) return null;
         var bitmap = ImagePixels.Unpremultiply(icon.BitmapAt(1.0));
         return new WindowsIconBitmap(bitmap.Bgra, bitmap.Width, bitmap.Height);
+    }
+
+    // Electron's CreateNSAlert settings: the type, buttons, ids, texts, checkbox, the icon's 1x image and the text width.
+    private static MacAlertSettings MacAlertOf(MessageBoxOptions options, WindowsMessageBoxSettings settings)
+        => new((int)settings.Type, settings.Buttons, settings.DefaultId, settings.CancelId, settings.Message, settings.Detail,
+            settings.CheckboxLabel, settings.CheckboxChecked, options.Icon is { } icon && !icon.IsEmpty() ? icon.ToPng(1.0) : null, options.TextWidth);
+
+    // Electron's mac ShowMessageBox: runModal without a window, which the abort signal cannot reach; else a sheet, which
+    // the signal ends with the cancel id, the answer posted to the next UI task as Electron does.
+    [SupportedOSPlatform("macos")]
+    private static Task<MessageBoxResult> ShowAsyncOnMac(BrowserWindow? window, MessageBoxOptions options, WindowsMessageBoxSettings settings)
+    {
+        var mac = MacAlertOf(options, settings);
+        var done = new TaskCompletionSource<MessageBoxResult>(TaskCreationOptions.RunContinuationsAsynchronously);
+        CefThread.RunOnUi(() =>
+        {
+            var alert = MacMessageBox.Create(mac);
+            var view = window is null || window.IsDestroyed ? 0 : window.GetNativeWindowHandle();
+            if (view == 0)
+            {
+                var response = MacMessageBox.RunModal(alert);
+                var checkedNow = MacMessageBox.Checked(alert);
+                MacMessageBox.Release(alert);
+                done.TrySetResult(new MessageBoxResult(response, checkedNow));
+                return;
+            }
+            var registration = options.Signal.Register(() => CefThread.RunOnUi(() => MacMessageBox.EndSheet(alert)));
+            MacMessageBox.BeginSheet(alert, view, response =>
+            {
+                registration.Dispose();
+                var answer = new MessageBoxResult(response < 0 ? settings.CancelId : response, MacMessageBox.Checked(alert));
+                MacMessageBox.Release(alert);
+                CefThread.PostUi(() => done.TrySetResult(answer));
+            });
+        });
+        return done.Task;
+    }
+
+    // Electron's mac ShowMessageBoxSync: runModal without a visible window, else a sheet with the window run modally.
+    // Cancelling Signal from another thread stops either and answers the cancel id (drift MB2).
+    [SupportedOSPlatform("macos")]
+    private static int ShowSyncOnMac(BrowserWindow? window, MessageBoxOptions options, WindowsMessageBoxSettings settings)
+    {
+        var mac = MacAlertOf(options, settings);
+        return CefThread.InvokeOnUi(() =>
+        {
+            var alert = MacMessageBox.Create(mac);
+            var view = window is null || window.IsDestroyed || !window.IsVisible ? 0 : window.GetNativeWindowHandle();
+            var aborted = false;
+            // The UI thread waits in AppKit's modal loop, where CEF's tasks do not run, so the abort goes straight to it.
+            using var registration = options.Signal.Register(() => MacMessageBox.PostToMainLoop(() =>
+            {
+                aborted = true;
+                if (view == 0) MacMessageBox.AbortModal();
+                else MacMessageBox.EndSheet(alert);
+            }));
+            var response = view == 0 ? MacMessageBox.RunModal(alert) : MacMessageBox.RunSheetModal(alert, view);
+            MacMessageBox.Release(alert);
+            return aborted ? settings.CancelId : response;
+        });
     }
 
     // Electron's ShowMessageBox: a dedicated COM STA thread per box, the answer delivered on the UI thread.

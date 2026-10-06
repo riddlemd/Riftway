@@ -8,6 +8,11 @@ static class MessageBoxTest
 
     internal static async Task RunAsync(BrowserWindow win, CheckFn check, TimeSpan step)
     {
+        if (OperatingSystem.IsMacOS())
+        {
+            await MacMessageBoxTest.RunAsync(win, check, step);
+            return;
+        }
         if (!OperatingSystem.IsWindows())
         {
             check("message boxes are not implemented here yet", Throws<PlatformNotSupportedException>(() => Dialog.ShowMessageBoxAsync(win, new MessageBoxOptions())), null);
