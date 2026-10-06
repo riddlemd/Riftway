@@ -55,7 +55,11 @@ public sealed unsafe partial class Session
         {
             RequireReady();
             Session session;
-            lock (s_gate) session = s_default ??= new Session(CefNative.cef_request_context_get_global_context(), OrielApp.DataDirectory, null);
+            lock (s_gate)
+            {
+                session = s_default ??= new Session(CefNative.cef_request_context_get_global_context(), OrielApp.DataDirectory, null);
+                if (s_defaultPagelessContext == 0) ShareDefaultForPageless(session._context);
+            }
             return Announce(session);
         }
     }
@@ -284,14 +288,12 @@ public sealed unsafe partial class Session
     private static Session Create(string? path)
     {
         var initialized = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-        var handler = new RequestContextHandler
+        Session? session = null;
+        var handler = WebRequest.PagelessHandler(() => session?.WebRequest, context =>
         {
-            Initialized = context =>
-            {
-                ApplyElectronDefaults((cef_request_context_t*)context);
-                initialized.TrySetResult();
-            },
-        };
+            ApplyElectronDefaults((cef_request_context_t*)context);
+            initialized.TrySetResult();
+        });
         var context = CefThread.InvokeOnUi(() =>
         {
             var settings = new cef_request_context_settings_t { size = (nuint)sizeof(cef_request_context_settings_t) };
@@ -302,8 +304,20 @@ public sealed unsafe partial class Session
             return (nint)created;
         });
         if (context == 0) throw new InvalidOperationException($"CEF could not create a session{(path is null ? "" : $" at {path}")}.");
-        return new Session((cef_request_context_t*)context, path, handler) { _initialized = initialized.Task };
+        return session = new Session((cef_request_context_t*)context, path, handler) { _initialized = initialized.Task };
     }
+
+    // The global context can have no handler, but CEF hands a profile's worker requests to the handler of any context
+    // sharing it (CefBrowserContext::UpdateWorkerRequestContextHandler), so this context exists only to carry one.
+    private static readonly RequestContextHandler s_defaultPageless = WebRequest.PagelessHandler(() => Volatile.Read(ref s_default)?.WebRequest);
+    private static nint s_defaultPagelessContext;
+
+    private static void ShareDefaultForPageless(cef_request_context_t* global) => s_defaultPagelessContext = CefThread.InvokeOnUi(() =>
+    {
+        NativeObject.AddRef(s_defaultPageless.Native);
+        NativeObject.AddRef(global);
+        return (nint)CefNative.cef_request_context_cef_create_context_shared(global, s_defaultPageless.Native);
+    });
 
     // Preferences read before the profile finishes loading can be wrong. The default session is ready with the app.
     private Task _initialized = Task.CompletedTask;

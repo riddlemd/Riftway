@@ -4,7 +4,17 @@ namespace Oriel.Cef.Handlers;
 
 /// <summary>A request as CEF reported it; CEF's request object is valid only during its callback.</summary>
 public sealed record RequestInfo(ulong Id, string Url, string Method, string Referrer, cef_resource_type_t ResourceType,
-    IReadOnlyList<KeyValuePair<string, string>> Headers);
+    IReadOnlyList<KeyValuePair<string, string>> Headers)
+{
+    /// <summary>The body's elements CEF represents (bytes and files); null for a request without a body.</summary>
+    public IReadOnlyList<UploadElement>? Upload { get; init; }
+
+    /// <summary>The requesting frame's name and URL, then each parent's up to the main frame; null without a frame.</summary>
+    public IReadOnlyList<(string Name, string Url)>? FramePath { get; init; }
+}
+
+/// <summary>One element of a request body: bytes, or a file's path.</summary>
+public sealed record UploadElement(byte[]? Bytes, string? File);
 
 /// <summary>A response as CEF reported it.</summary>
 public sealed record ResponseInfo(int Status, string StatusText, cef_errorcode_t Error, IReadOnlyList<KeyValuePair<string, string>> Headers);
@@ -60,13 +70,62 @@ public static unsafe class HeaderMap
         CefNative.cef_string_multimap_free(map);
     }
 
-    internal static RequestInfo Info(cef_request_t* request) => new(
+    internal static RequestInfo Info(cef_request_t* request, cef_frame_t* frame) => new(
         request->get_identifier(request),
         CefString.ReadUserFree(request->get_url(request)),
         CefString.ReadUserFree(request->get_method(request)),
         CefString.ReadUserFree(request->get_referrer_url(request)),
         request->get_resource_type(request),
-        Read(request));
+        Read(request))
+    {
+        Upload = Upload(request),
+        FramePath = frame is null ? null : FramePath(frame),
+    };
+
+    // Blob and stream bodies are elements CEF leaves out (has_excluded_elements): they cannot be listed.
+    private static List<UploadElement>? Upload(cef_request_t* request)
+    {
+        var postData = request->get_post_data(request);
+        if (postData is null) return null;
+        var count = postData->get_element_count(postData);
+        var elements = new cef_post_data_element_t*[(int)count];
+        fixed (cef_post_data_element_t** first = elements) postData->get_elements(postData, &count, first);
+        var upload = new List<UploadElement>();
+        foreach (var element in elements)
+        {
+            if (element is null) continue;
+            switch (element->get_type(element))
+            {
+                case cef_postdataelement_type_t.PDE_TYPE_BYTES:
+                    var size = element->get_bytes_count(element);
+                    var bytes = new byte[(int)size];
+                    fixed (byte* data = bytes) element->get_bytes(element, size, data);
+                    upload.Add(new UploadElement(bytes, null));
+                    break;
+                case cef_postdataelement_type_t.PDE_TYPE_FILE:
+                    upload.Add(new UploadElement(null, CefString.ReadUserFree(element->get_file(element))));
+                    break;
+            }
+            NativeObject.Release(element);
+        }
+        NativeObject.Release(postData);
+        return upload;
+    }
+
+    /// <summary>The frame's name and current URL, then its parent's, up to the main frame. Borrows the frame.</summary>
+    public static IReadOnlyList<(string Name, string Url)> FramePath(cef_frame_t* frame)
+    {
+        var path = new List<(string, string)>();
+        NativeObject.AddRef(frame);
+        for (var current = frame; current is not null;)
+        {
+            path.Add((CefString.ReadUserFree(current->get_name(current)), CefString.ReadUserFree(current->get_url(current))));
+            var parent = current->get_parent(current);
+            NativeObject.Release(current);
+            current = parent;
+        }
+        return path;
+    }
 
     internal static ResponseInfo Info(cef_response_t* response) => new(
         response->get_status(response),

@@ -407,7 +407,7 @@ public sealed unsafe class RequestHandler
         if (owner.BeforeBrowse is { } decide)
         {
             var browse = new BrowseRequest(CefString.ReadUserFree(request->get_url(request)), isRedirect != 0, userGesture != 0,
-                (uint)request->get_transition_type(request), FramePath(frame));
+                (uint)request->get_transition_type(request), HeaderMap.FramePath(frame));
             cancel = Guard.Run(() => decide(browse), false);
         }
         NativeObject.Release(request);
@@ -416,20 +416,6 @@ public sealed unsafe class RequestHandler
         return cancel ? 1 : 0;
     }
 
-    // The frame's name and current URL, then its parent's, up to the main frame.
-    private static IReadOnlyList<(string Name, string Url)> FramePath(cef_frame_t* frame)
-    {
-        var path = new List<(string, string)>();
-        NativeObject.AddRef(frame);
-        for (var current = frame; current is not null;)
-        {
-            path.Add((CefString.ReadUserFree(current->get_name(current)), CefString.ReadUserFree(current->get_url(current))));
-            var parent = current->get_parent(current);
-            NativeObject.Release(current);
-            current = parent;
-        }
-        return path;
-    }
 
     /// <summary>A server asks for a client certificate; the task's result is the index of the one to use, or null for
     /// none. Null picks the first. UI thread.</summary>
@@ -520,12 +506,13 @@ public sealed unsafe class ResourceRequestHandler
     {
         var owner = NativeObject.Owner<ResourceRequestHandler>(self);
         if (owner.BeforeResourceLoad is { } handler) Guard.Run(() => handler(frame, request));
-        var decision = owner.Decide is { } decide ? Guard.Run(() => decide(HeaderMap.Info(request)), null) : null;
+        var info = HeaderMap.Info(request, frame);
+        var decision = owner.Decide is { } decide ? Guard.Run(() => decide(info), null) : null;
         if (frame is not null) NativeObject.Release(frame);
         if (browser is not null) NativeObject.Release(browser);
         if (decision is null)
         {
-            owner.Notify(owner.Sent, request);
+            owner.Notify(owner.Sent, request, info.FramePath);
             NativeObject.Release(callback);
             NativeObject.Release(request);
             return cef_return_value_t.RV_CONTINUE;
@@ -546,7 +533,7 @@ public sealed unsafe class ResourceRequestHandler
                     request->set_url(request, &native);
                     CefString.Clear(&native);
                 }
-                else owner.Notify(owner.Sent, request);
+                else owner.Notify(owner.Sent, request, info.FramePath);
                 callback->cont(callback);
             }
             NativeObject.Release(callback);
@@ -555,10 +542,11 @@ public sealed unsafe class ResourceRequestHandler
         return cef_return_value_t.RV_CONTINUE_ASYNC;
     }
 
-    private void Notify(Action<RequestInfo>? action, cef_request_t* request)
+    // The frame is gone once the decision comes, so its path is the one read before.
+    private void Notify(Action<RequestInfo>? action, cef_request_t* request, IReadOnlyList<(string Name, string Url)>? framePath)
     {
         if (action is null) return;
-        var info = HeaderMap.Info(request);
+        var info = HeaderMap.Info(request, null) with { FramePath = framePath };
         Guard.Run(() => action(info));
     }
 
@@ -569,7 +557,7 @@ public sealed unsafe class ResourceRequestHandler
         var owner = NativeObject.Owner<ResourceRequestHandler>(self);
         if (owner.Redirected is { } redirected)
         {
-            var (info, answer, url) = (HeaderMap.Info(request), HeaderMap.Info(response), CefString.Read(newUrl));
+            var (info, answer, url) = (HeaderMap.Info(request, frame), HeaderMap.Info(response), CefString.Read(newUrl));
             Guard.Run(() => redirected(info, answer, url));
         }
         ReleaseAll(browser, frame, request, response);
@@ -582,7 +570,7 @@ public sealed unsafe class ResourceRequestHandler
         var owner = NativeObject.Owner<ResourceRequestHandler>(self);
         if (owner.ResponseStarted is { } started)
         {
-            var (info, answer) = (HeaderMap.Info(request), HeaderMap.Info(response));
+            var (info, answer) = (HeaderMap.Info(request, frame), HeaderMap.Info(response));
             Guard.Run(() => started(info, answer));
         }
         ReleaseAll(browser, frame, request, response);
@@ -596,7 +584,7 @@ public sealed unsafe class ResourceRequestHandler
         var owner = NativeObject.Owner<ResourceRequestHandler>(self);
         if (owner.Completed is { } completed)
         {
-            var (info, answer) = (HeaderMap.Info(request), HeaderMap.Info(response));
+            var (info, answer) = (HeaderMap.Info(request, frame), HeaderMap.Info(response));
             Guard.Run(() => completed(info, answer, status));
         }
         ReleaseAll(browser, frame, request, response);

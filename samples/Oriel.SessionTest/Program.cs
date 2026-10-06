@@ -30,6 +30,7 @@ static async Task<Exception?> Throws(Func<Task> act)
 static string Names(IEnumerable<Cookie> cookies) => string.Join(",", cookies.Select(c => c.Name).Order());
 
 const string Site = "https://oriel.test/";
+const string CustomScheme = "x-webrequest";
 const string Page = "<!doctype html><title>session</title><p>session test</p>";
 
 async Task RunAsync()
@@ -359,6 +360,8 @@ async Task RunAsync()
             "/data" => ProtocolResponse.Text("data"),
             "/echo" => ProtocolResponse.Text($"added={request.Headers.GetValueOrDefault("X-Added")} removed={request.Headers.GetValueOrDefault("X-Removed")}"),
             "/server-redirect" => new ProtocolResponse { StatusCode = 302, Headers = new Dictionary<string, string> { ["Location"] = Site + "data" } },
+            "/shared.js" => ProtocolResponse.Text("fetch('/from-shared');", "text/javascript"),
+            "/sw.js" => ProtocolResponse.Text("self.addEventListener('install', e => e.waitUntil(fetch('/from-sw')));", "text/javascript"),
             _ => ProtocolResponse.Text(Page, "text/html"),
         };
     });
@@ -443,6 +446,78 @@ async Task RunAsync()
     var redirect = await WaitFor(() => Saw("redirect", "server-redirect"));
     Check("onBeforeRedirect reports a server redirect", followed == "data" && redirect is { StatusCode: 302, RedirectUrl: Site + "data" },
         $"{followed} {redirect?.StatusCode} {redirect?.RedirectUrl}");
+
+    // Details Electron fills from the request's body, frame and page.
+    var getDetails = Saw("before", "data");
+    var mainFrame = requestWin.WebContents.MainFrame;
+    Check("details carry webContentsId and the requesting frame, and no uploadData without a body",
+        getDetails is { UploadData: null, Frame: not null } && getDetails.WebContentsId == requestWin.WebContents.Id && ReferenceEquals(getDetails.Frame, mainFrame),
+        $"{getDetails?.WebContentsId}/{requestWin.WebContents.Id} {getDetails?.Frame?.Url} {getDetails?.UploadData?.Count}");
+    var posted = await Fetch("/data", "{ method: 'POST', body: 'name=post%20test&type=string' }");
+    var postBefore = Saw("before", "data");
+    var postCompleted = await WaitFor(() => Saw("completed", "data") is { Method: "POST" } d ? d : null);
+    static string? Body(WebRequestDetails? d) => d?.UploadData is [{ Type: "rawData", Bytes: { } bytes }] ? Encoding.UTF8.GetString(bytes) : null;
+    Check("a POST's uploadData holds its bytes, in onBeforeRequest and onCompleted", posted == "data" && postBefore?.Method == "POST"
+        && Body(postBefore) == "name=post%20test&type=string" && Body(postCompleted) == Body(postBefore), $"{Body(postBefore)} | {Body(postCompleted)}");
+
+    await requestWin.WebContents.ExecuteJavaScriptAsync("new Promise(r => { const f = document.createElement('iframe'); f.name = 'sub'; f.src = '/frame'; f.onload = r; document.body.append(f); })");
+    var iframe = requestWin.WebContents.MainFrame?.Frames.FirstOrDefault();
+    var fromFrame = iframe is null ? null : (await iframe.ExecuteJavaScriptAsync("fetch('/from-frame').then(r => r.text())"))?.ToString();
+    var frameRequest = await WaitFor(() => Saw("before", "from-frame"));
+    Check("a request from an iframe carries that frame and the page's webContentsId", fromFrame == Page && iframe is not null
+        && ReferenceEquals(frameRequest?.Frame, iframe) && frameRequest?.WebContentsId == requestWin.WebContents.Id,
+        $"{fromFrame?.Length} {frameRequest?.Frame?.Url} {frameRequest?.WebContentsId}");
+    var subFrameNav = Saw("before", "frame");
+    Check("an iframe's navigation is a subFrame request of the page", subFrameNav is { ResourceType: "subFrame" } && subFrameNav.WebContentsId == requestWin.WebContents.Id,
+        $"{subFrameNav?.ResourceType} frame={subFrameNav?.Frame?.Url ?? "null"}");
+
+    // Requests without a page reach the session's listeners with no webContents, as Electron's.
+    await requestWin.WebContents.ExecuteJavaScriptAsync("new SharedWorker('/shared.js'); 1");
+    var fromShared = await WaitFor(() => Saw("completed", "from-shared"));
+    Check("a shared worker's fetch reaches webRequest without a page", fromShared is { WebContents: null, WebContentsId: null, Frame: null } && Saw("before", "from-shared") is not null,
+        fromShared is null ? "not seen" : $"{fromShared.WebContents is null} {fromShared.ResourceType}");
+    var registered = (await requestWin.WebContents.ExecuteJavaScriptAsync("navigator.serviceWorker.register('/sw.js').then(() => 'ok', e => String(e))"))?.ToString();
+    var fromServiceWorker = await WaitFor(() => Saw("completed", "from-sw"));
+    Check("a service worker's fetch reaches webRequest without a page", registered == "ok" && fromServiceWorker is { WebContents: null, WebContentsId: null, Frame: null },
+        fromServiceWorker is null ? $"{registered}; not seen" : $"{fromServiceWorker.ResourceType} script={Saw("before", "sw.js")?.WebContents is null}");
+
+    // A custom scheme's requests are shown, as Electron's ("can capture CORS requests"); Oriel's sendSync channel is not.
+    watched.Protocol.Handle(CustomScheme, _ => new ProtocolResponse
+    {
+        ContentType = "text/plain", Body = new MemoryStream(Encoding.UTF8.GetBytes("custom")),
+        Headers = new Dictionary<string, string> { ["Access-Control-Allow-Origin"] = "*" },
+    });
+    var custom = await Fetch($"{CustomScheme}://app/data");
+    var customDone = await WaitFor(() => events.LastOrDefault(s => s.Event == "completed" && s.Details.Url == $"{CustomScheme}://app/data").Details);
+    Check("webRequest sees a request to a custom scheme a session protocol handler serves", custom == "custom" && customDone is { StatusCode: 200 }
+        && events.Any(s => s.Event == "send" && s.Details.Url == $"{CustomScheme}://app/data"), $"{custom} {customDone?.StatusCode}");
+    var syncFile = Path.Combine(Path.GetTempPath(), $"oriel-webrequest-sync-{Environment.ProcessId}.js");
+    File.WriteAllText(syncFile, "oriel.contextBridge.exposeInMainWorld('sync', { ask: (v) => oriel.ipcRenderer.sendSync('webrequest-sync', v) });");
+    var ipcWin = new BrowserWindow(new BrowserWindowOptions { Show = false, WebPreferences = new WebPreferences { Session = watched, Preload = syncFile } });
+    await ipcWin.LoadUrl(Site);
+    Action<IpcMainEvent> answerSync = e => e.ReturnValue = "sync:" + e.Args[0].GetString();
+    IpcMain.On("webrequest-sync", answerSync);
+    var syncAnswer = (await ipcWin.WebContents.ExecuteJavaScriptAsync("sync.ask('ok')"))?.ToString();
+    IpcMain.RemoveListener("webrequest-sync", answerSync);
+    await Task.Delay(300);
+    Check("webRequest never sees Oriel's sendSync requests", syncAnswer == "sync:ok" && !events.Any(s => s.Details.Url.StartsWith("oriel-ipc:", StringComparison.Ordinal)),
+        $"{syncAnswer} {events.Count(s => s.Details.Url.StartsWith("oriel-ipc:", StringComparison.Ordinal))}");
+    ipcWin.Destroy();
+    File.Delete(syncFile);
+    // The default session's requests without a page come through the global request context's handler.
+    var defaultSeen = new System.Collections.Concurrent.ConcurrentQueue<WebRequestDetails>();
+    defaultSession.Protocol.Handle("https", r => new Uri(r.Url).AbsolutePath == "/shared.js"
+        ? ProtocolResponse.Text("fetch('/from-default-shared');", "text/javascript") : ProtocolResponse.Text(Page, "text/html"));
+    defaultSession.WebRequest.OnCompleted(null, defaultSeen.Enqueue);
+    var defaultWin = new BrowserWindow(new BrowserWindowOptions { Show = false });
+    await defaultWin.LoadUrl(Site);
+    await defaultWin.WebContents.ExecuteJavaScriptAsync("new SharedWorker('/shared.js'); 1");
+    var defaultShared = await WaitFor(() => defaultSeen.FirstOrDefault(d => d.Url == Site + "from-default-shared"));
+    defaultSession.WebRequest.OnCompleted(null, null);
+    defaultSession.Protocol.Unhandle("https");
+    defaultWin.Destroy();
+    Check("the default session's webRequest sees a shared worker's fetch without a page", defaultShared is { WebContents: null, WebContentsId: null },
+        defaultShared is null ? "not seen" : defaultShared.ResourceType);
 
     var typed = new System.Collections.Concurrent.ConcurrentQueue<string>();
     watched.WebRequest.OnCompleted(new WebRequestFilter { Types = ["mainFrame"] }, details => typed.Enqueue(details.Url));
@@ -1358,6 +1433,8 @@ static async Task<string> ServeOneProxyRequest(TcpListener listener)
 // Fresh, so the run shows CEF creating the persistent partition's directory.
 var staleDisk = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "Oriel.SessionTest", "Partition disk");
 if (Directory.Exists(staleDisk)) Directory.Delete(staleDisk, recursive: true);
+// The webRequest checks fetch this scheme from an https page.
+Protocol.RegisterSchemesAsPrivileged(new PrivilegedScheme(CustomScheme, new SchemePrivileges { Standard = true, Secure = true, SupportFetchApi = true, CorsEnabled = true }));
 
 app.Ready += (_, _) => _ = Task.Run(async () =>
 {
