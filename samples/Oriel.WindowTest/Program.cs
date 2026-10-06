@@ -2327,7 +2327,9 @@ async Task TaskbarAsync(BrowserWindow win)
     if (!OperatingSystem.IsWindows()) return;
 
     // The shell groups an app's windows under one button named "<app> - N running windows"; DeleteTab lowers N.
-    var app = System.Diagnostics.Process.GetCurrentProcess().ProcessName;
+    // The shell names the group after the exe's FileDescription; in the bootstrap layout the exe's own name differs.
+    var app = System.Diagnostics.FileVersionInfo.GetVersionInfo(Environment.ProcessPath!).FileDescription is { Length: > 0 } description
+        ? description : System.Diagnostics.Process.GetCurrentProcess().ProcessName;
     int? Buttons() => WindowsShell.TaskbarNames().FirstOrDefault(n => n.StartsWith(app + " - ", StringComparison.Ordinal)) is { } name
         && System.Text.RegularExpressions.Regex.Match(name[(app.Length + 3)..], @"\d+") is { Success: true } m ? int.Parse(m.Value) : null;
 
@@ -2385,7 +2387,9 @@ async Task WindowsApisAsync()
 {
     if (!OperatingSystem.IsWindows()) return;
 
-    var app = System.Diagnostics.Process.GetCurrentProcess().ProcessName;
+    // The shell names the group after the exe's FileDescription; in the bootstrap layout the exe's own name differs.
+    var app = System.Diagnostics.FileVersionInfo.GetVersionInfo(Environment.ProcessPath!).FileDescription is { Length: > 0 } description
+        ? description : System.Diagnostics.Process.GetCurrentProcess().ProcessName;
     int? Buttons() => WindowsShell.TaskbarNames().FirstOrDefault(n => n.StartsWith(app + " - ", StringComparison.Ordinal)) is { } name
         && System.Text.RegularExpressions.Regex.Match(name[(app.Length + 3)..], @"\d+") is { Success: true } m ? int.Parse(m.Value) : null;
 

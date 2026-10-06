@@ -116,7 +116,11 @@ static const char* windows_scheme_switch(void) {
   value[strcspn(value, " \"")] = '\0';
   return value;
 }
+#endif
 
+// Oriel.Host.Native includes this file for its child-process path and brings its own entry point.
+#ifndef ORIEL_SUBPROCESS_NO_MAIN
+#ifdef _WIN32
 // A GUI-subsystem entry: a console exe launched by a GUI app opens a console window per process.
 int WINAPI wWinMain(HINSTANCE instance, HINSTANCE prev, PWSTR command_line, int show) {
   (void)prev; (void)command_line; (void)show;
@@ -140,3 +144,4 @@ int main(int argc, char* argv[]) {
   return cef_execute_process(&args, app_for(schemes), NULL);
 }
 #endif
+#endif  // ORIEL_SUBPROCESS_NO_MAIN

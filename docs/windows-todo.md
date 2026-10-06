@@ -2,17 +2,22 @@
 
 General items: [todo.md](todo.md). Windows work runs on the Windows laptop.
 
-- [ ] **Sandbox**: today's layout (.NET apphost + `Oriel.Subprocess.exe`) can never be sandboxed: CEF forces
-      `--no-sandbox` whenever `browser_subprocess_path` is set, and CEF 154 ships no linkable `cef_sandbox.lib`
-      for MSVC. The workable model is CEF's `bootstrap.exe` renamed to `<App>.exe` plus a native `<App>.dll`
-      exporting `RunWinMain` that hosts .NET in the browser process only. Experiments, in order:
-  - [x] (a) Build cefsimple from the standard CEF 154 dist with `USE_SANDBOX=ON`; confirm `chrome://sandbox`
-  - [x] (b) Probe: `bootstrap.exe` → `OrielProbe.exe` + `OrielProbe.dll` hosting Oriel.Sample through hostfxr;
-        pass when the renderer runs at Untrusted and GPU at Low integrity with no certificate/compat errors
-        (2026-10-03, both pass: renderers Untrusted/Lockdown, GPU Low, CLR in the browser process only;
-        ProtocolTest, IpcTest and WindowTest pass sandboxed, unsigned. Probe on the laptop's unmerged
-        `win-sandbox-probe`; packaging facts in the relay doc windows-laptop-oriel-windows-todo-sandbox-1791075323473)
-  - [ ] Then decide packaging: re-brand and sign per CEF bump, no .NET apphost, likely no single-file publish
+- [x] **Sandbox** (branch `win-sandbox`): renderers, GPU and the storage service are sandboxed by default, as in
+      Electron, in the bootstrap layout: CEF's `bootstrap.exe` renamed `<Exe>.exe` plus `src/Oriel.Host.Native` as
+      `<Exe>.dll` (`RunWinMain`: children go to `cef_execute_process` with bootstrap's sandbox info; the browser
+      starts the self-contained app through hostfxr, and `OrielApp.Run` takes the sandbox info from the DLL's
+      `oriel_sandbox_info` and leaves `browser_subprocess_path` unset). `eng/layout-windows.ps1` builds it by
+      default and copies the apphost's version resources and icon onto the exe. chrome://sandbox and token reads
+      (2026-10-05): renderers Untrusted/Lockdown, GPU Low/Limited, storage Untrusted, network service unsandboxed
+      (Chromium's default); `--no-sandbox` turns it all off. WindowTest 400/401 (always-on-top flake), SessionTest
+      141/143 (spellcheck flake, getAppMetrics CPU: no Windows children, A18), IpcTest 11/11, ProtocolTest 37/37.
+  - [ ] Per-window `sandbox: false`: no CEF hook maps a renderer launch to its browser (DRIFT W13)
+  - [ ] Signing: tested unsigned only; exe and DLL must share a certificate (DRIFT P13). Test a mismatch and a real signature
+  - [ ] Packaging (M4): build `Oriel.Host.Native` per RID into the runtime package; an MSBuild target instead of
+        the script; re-check `bootstrap.exe`'s resources and hash on every CEF bump
+  - [ ] The shell caches an exe path's FileDescription (MuiCache) on first launch: installers must lay out before
+        any run, or the taskbar keeps "CEF Bootstrap Application"
+  - [ ] getAppMetrics `sandboxed`/`integrityLevel` per child once the Windows process walk lands (A18)
 - [x] Re-run Oriel.ProtocolTest on Windows: the 2 checks added since (video blob control, video paints frames)
 - [x] Confirm the startup `observer_list.h:192` lines are gone on Windows (fixed in 86c2ae3, verified on macOS)
 - [x] Run Oriel.WindowTest on Windows: 90/91 (3 checks are macOS-only). DevTools, F12, webPreferences and
