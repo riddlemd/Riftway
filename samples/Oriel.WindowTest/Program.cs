@@ -254,6 +254,8 @@ async Task RunAsync(BrowserWindow win, BrowserWindow simple)
     await MenusAsync(win);
     await ContextMenusAsync(win);
     await MouseEventsAsync();
+    await InputEventAsync();
+    await PreferredSizeAsync();
     await WindowOpenAsync(win);
     await LoadAndSizeAsync(win);
     await NavigationAsync();
@@ -1841,6 +1843,215 @@ async Task MouseEventsAsync()
         log = await Log();
     }
     Check("SendInputEvent ContextMenu raises the page's contextmenu", log.Contains("ctx"), log);
+    w.Destroy();
+    File.Delete(page);
+}
+
+async Task InputEventAsync()
+{
+    var page = Path.Combine(Path.GetTempPath(), "oriel-input-event.html");
+    File.WriteAllText(page, "<!doctype html><title>oriel-input-event</title><body style='margin:0;height:3000px'><input id=k><script>window.moves=[];" +
+        "addEventListener('mousemove',e=>moves.push([e.clientX,e.clientY,e.screenX,e.screenY]))</script>");
+    var w = new BrowserWindow(new BrowserWindowOptions { Width = 400, Height = 300 });
+    await w.WebContents.LoadFile(page);
+    var seen = new System.Collections.Concurrent.ConcurrentQueue<WebInputEvent>();
+    EventHandler<WebInputEvent> onInput = (_, e) => seen.Enqueue(e);
+    w.WebContents.InputEvent += onInput;
+    w.Focus();
+    await Js(w, "document.getElementById('k').focus(); 1");
+    List<WebInputEvent> Keys() => [.. seen.Where(e => e is WebKeyboardEvent)];
+    List<WebInputEvent> Mice() => [.. seen.Where(e => e is WebMouseEvent)];
+    string Types(IEnumerable<WebInputEvent> events) => string.Join(",", events.Select(e => e.Type.ElectronName()));
+    async Task<double[]> LastMove() => (await w.WebContents.ExecuteJavaScriptAsync("moves.at(-1) ?? []"))!.AsArray().Select(n => n!.GetValue<double>()).ToArray();
+    // The pointer reporting is turned on in the page asynchronously.
+    await Task.Delay(500);
+
+    // Keys from sendInputEvent: Electron forwards keyDown as rawKeyDown, and a char on its own.
+    seen.Clear();
+    w.WebContents.SendInputEvent(new KeyboardInputEvent(KeyboardInputEventType.KeyDown, "A") { Modifiers = InputModifiers.Shift });
+    w.WebContents.SendInputEvent(new KeyboardInputEvent(KeyboardInputEventType.Char, "A") { Modifiers = InputModifiers.Shift });
+    w.WebContents.SendInputEvent(new KeyboardInputEvent(KeyboardInputEventType.KeyUp, "A") { Modifiers = InputModifiers.Shift });
+    Check("InputEvent: sent keys arrive as rawKeyDown, char, keyUp", Eventually(() => Keys().Count >= 3, step) && Types(Keys()) == "rawKeyDown,char,keyUp", Types(Keys()));
+    var down = Keys().FirstOrDefault() as WebKeyboardEvent;
+    Check("InputEvent: a key event's key, code, location and modifiers", down is { Key: "A", Code: "KeyA", Location: 0, Shift: true, Control: false, IsAutoRepeat: false }
+        && down.Modifiers.ElectronNames().Contains("shift"), down);
+    var typed = Keys().ElementAtOrDefault(1) as WebKeyboardEvent;
+    Check("InputEvent: a char event carries the character", typed is { Type: InputEventType.Char, Key: "A" }, typed);
+
+    // A key before-input-event cancels never reaches the renderer, so input-event never sees it.
+    EventHandler<BeforeInputEventArgs> cancelQ = (_, e) => { if (e.Input.Key == "q") e.Cancel = true; };
+    w.WebContents.BeforeInputEvent += cancelQ;
+    seen.Clear();
+    w.WebContents.SendInputEvent(new KeyboardInputEvent(KeyboardInputEventType.KeyDown, "Q"));
+    w.WebContents.SendInputEvent(new KeyboardInputEvent(KeyboardInputEventType.KeyDown, "B"));
+    Check("InputEvent: a key BeforeInputEvent cancelled is not reported, the next one is",
+        Eventually(() => Keys().Any(e => e is WebKeyboardEvent { Key: "b" }), step) && !Keys().Any(e => e is WebKeyboardEvent { Key: "q" }),
+        string.Join(",", Keys().Select(e => ((WebKeyboardEvent)e).Key)));
+    w.WebContents.BeforeInputEvent -= cancelQ;
+
+    // Mouse events from sendInputEvent.
+    seen.Clear();
+    w.WebContents.SendInputEvent(new MouseInputEvent(MouseInputEventType.MouseMove, 40, 50));
+    w.WebContents.SendInputEvent(new MouseInputEvent(MouseInputEventType.MouseDown, 40, 50));
+    w.WebContents.SendInputEvent(new MouseInputEvent(MouseInputEventType.MouseUp, 40, 50));
+    Check("InputEvent: sent mouse events arrive as mouseMove, mouseDown, mouseUp",
+        Eventually(() => Mice().Any(e => e.Type == InputEventType.MouseUp), step) && Types(Mice()) == "mouseMove,mouseDown,mouseUp", Types(Mice()));
+    var move = Mice().FirstOrDefault() as WebMouseEvent;
+    var moved = await LastMove();
+    Check("InputEvent: a move's position, global position, no button, no clicks and no modifiers",
+        move is { X: 40, Y: 50, Button: MouseButton.None, ClickCount: 0, Modifiers: InputModifiers.None } && moved.Length == 4 && move.GlobalX == moved[2] && move.GlobalY == moved[3],
+        $"{move} page {string.Join(",", moved)}");
+    var press = Mice().ElementAtOrDefault(1) as WebMouseEvent;
+    var release = Mice().ElementAtOrDefault(2) as WebMouseEvent;
+    Check("InputEvent: a press and release carry the button and click count",
+        press is { Button: MouseButton.Left, ClickCount: 1, X: 40, Y: 50 } && release is { Button: MouseButton.Left, ClickCount: 1 }, $"{press} {release}");
+
+    // A wheel is not one of Blink's mouse event types: Electron reports its type and modifiers only.
+    seen.Clear();
+    w.WebContents.SendInputEvent(new MouseInputEvent(MouseInputEventType.MouseWheel, 50, 50) { DeltaY = -120, Modifiers = InputModifiers.Control | InputModifiers.Alt });
+    Check("InputEvent: a wheel is a plain InputEvent with its modifiers",
+        Eventually(() => seen.Any(e => e.Type == InputEventType.MouseWheel), step) && seen.First(e => e.Type == InputEventType.MouseWheel) is var wheel
+            && wheel.GetType() == typeof(WebInputEvent) && wheel.Modifiers == (InputModifiers.Control | InputModifiers.Alt),
+        seen.FirstOrDefault(e => e.Type == InputEventType.MouseWheel));
+
+    seen.Clear();
+    w.WebContents.SendInputEvent(new MouseInputEvent(MouseInputEventType.MouseLeave, 20, 20));
+    Check("InputEvent: the pointer leaving the page is mouseLeave", Eventually(() => seen.Any(e => e.Type == InputEventType.MouseLeave), step), Types(seen));
+
+    // Chromium's positions are DIPs, so they scale with the zoom; DevTools' sent positions are CSS pixels.
+    w.WebContents.SetZoomFactor(2.0);
+    Eventually(() => Math.Abs(w.WebContents.GetZoomFactor() - 2.0) < 0.01, step);
+    seen.Clear();
+    w.WebContents.SendInputEvent(new MouseInputEvent(MouseInputEventType.MouseMove, 60, 70));
+    Eventually(() => Mice().Any(), step);
+    var zoomed = Mice().FirstOrDefault() as WebMouseEvent;
+    moved = await LastMove();
+    Check("InputEvent: positions are DIPs, the page's CSS pixels times the zoom",
+        zoomed is not null && moved.Length == 4 && zoomed.X == moved[0] * 2 && zoomed.Y == moved[1] * 2 && zoomed.X == 120, $"{zoomed} page {string.Join(",", moved)}");
+    w.WebContents.SetZoomFactor(1.0);
+    Eventually(() => Math.Abs(w.WebContents.GetZoomFactor() - 1.0) < 0.01, step);
+
+    // A new document's preload world starts with reporting off; the main process turns it on again.
+    await w.WebContents.LoadFile(page);
+    await Task.Delay(500);
+    seen.Clear();
+    w.WebContents.SendInputEvent(new MouseInputEvent(MouseInputEventType.MouseDown, 30, 30));
+    w.WebContents.SendInputEvent(new MouseInputEvent(MouseInputEventType.MouseUp, 30, 30));
+    Check("InputEvent: pointer events are still reported after a navigation", Eventually(() => Mice().Any(e => e.Type == InputEventType.MouseUp), step), Types(seen));
+    await Js(w, "document.getElementById('k').focus(); 1");
+
+    // Real input, through the X server as a user's.
+    if (OperatingSystem.IsLinux() && File.Exists("/usr/bin/xdotool"))
+    {
+        string X(string args)
+        {
+            var p = System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo("/usr/bin/timeout", "10 /usr/bin/xdotool " + args) { RedirectStandardOutput = true })!;
+            var output = p.StandardOutput.ReadToEnd();
+            p.WaitForExit();
+            return p.ExitCode == 0 ? output.Trim() : "";
+        }
+        var id = X("search --sync --name oriel-input-event").Split('\n')[0];
+        X($"windowactivate --sync {id}");
+        await Js(w, "document.getElementById('k').focus(); 1");
+        await Task.Delay(300);
+        seen.Clear();
+        X("key a");
+        Check("InputEvent: a real key arrives as rawKeyDown, char, keyUp", Eventually(() => Keys().Count >= 3, step) && Types(Keys()) == "rawKeyDown,char,keyUp", Types(Keys()));
+        var real = Keys().Cast<WebKeyboardEvent>().ToList();
+        Check("InputEvent: a real key's key and code", real.Count == 3 && real.All(k => k is { Key: "a", Code: "KeyA" }), string.Join(" ", real));
+
+        X($"mousemove --window {id} 100 120");
+        await Task.Delay(300);
+        seen.Clear();
+        X($"mousemove --window {id} 110 125 click 1");
+        Check("InputEvent: a real click arrives as mouseMove, mouseDown, mouseUp",
+            Eventually(() => Mice().Any(e => e.Type == InputEventType.MouseUp), step) && Types(Mice()).EndsWith("mouseMove,mouseDown,mouseUp", StringComparison.Ordinal), Types(Mice()));
+        var pointer = X("getmouselocation --shell").Split('\n').Select(l => l.Split('=')).Where(kv => kv.Length == 2).ToDictionary(kv => kv[0], kv => kv[1]);
+        var click = Mice().LastOrDefault(e => e.Type == InputEventType.MouseDown) as WebMouseEvent;
+        Check("InputEvent: a real click's button, count and screen position",
+            click is { Button: MouseButton.Left, ClickCount: 1 } && pointer.TryGetValue("X", out var px) && pointer.TryGetValue("Y", out var py)
+                && click.GlobalX == double.Parse(px) && click.GlobalY == double.Parse(py),
+            $"{click} pointer {string.Join(",", pointer)}");
+    }
+
+    w.WebContents.InputEvent -= onInput;
+    w.Destroy();
+    File.Delete(page);
+}
+
+async Task PreferredSizeAsync()
+{
+    var page = Path.Combine(Path.GetTempPath(), "oriel-preferred-size.html");
+    File.WriteAllText(page, "<!doctype html><style>@keyframes grow { to { height: 333px } }</style><body style='margin:0'><div id=d style='width:300px;height:150px'></div>");
+    async Task Run(BrowserWindow w, string code) => await w.WebContents.ExecuteJavaScriptAsync(code + "; 1");
+
+    var off = new BrowserWindow(new BrowserWindowOptions { Width = 500, Height = 400 });
+    var offSizes = new System.Collections.Concurrent.ConcurrentQueue<System.Drawing.Size>();
+    off.WebContents.PreferredSizeChanged += (_, s) => offSizes.Enqueue(s);
+    await off.WebContents.LoadFile(page);
+    await Run(off, "d.style.width = '320px'");
+    await Task.Delay(1000);
+    Check("PreferredSizeChanged is not raised without EnablePreferredSizeMode", offSizes.IsEmpty, string.Join(" ", offSizes));
+    off.Destroy();
+
+    var w = new BrowserWindow(new BrowserWindowOptions { Width = 500, Height = 400, WebPreferences = new WebPreferences { EnablePreferredSizeMode = true } });
+    var order = new System.Collections.Concurrent.ConcurrentQueue<string>();
+    var sizes = new System.Collections.Concurrent.ConcurrentQueue<System.Drawing.Size>();
+    w.WebContents.DidStopLoading += (_, _) => order.Enqueue("stop");
+    w.WebContents.PreferredSizeChanged += (_, s) => { sizes.Enqueue(s); order.Enqueue("size"); };
+    // An image answered late holds the load open well after the page has laid out, so a size sent before the stop shows.
+    var slow = new System.Net.Sockets.TcpListener(System.Net.IPAddress.Loopback, 0);
+    slow.Start();
+    var port = ((System.Net.IPEndPoint)slow.LocalEndpoint).Port;
+    _ = Task.Run(async () =>
+    {
+        using var client = await slow.AcceptTcpClientAsync();
+        var stream = client.GetStream();
+        _ = await stream.ReadAsync(new byte[4096]);
+        await Task.Delay(1500);
+        var png = Convert.FromBase64String("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==");
+        await stream.WriteAsync(System.Text.Encoding.ASCII.GetBytes($"HTTP/1.1 200 OK\r\nContent-Type: image/png\r\nContent-Length: {png.Length}\r\nConnection: close\r\n\r\n"));
+        await stream.WriteAsync(png);
+    });
+    var slowPage = Path.Combine(Path.GetTempPath(), "oriel-preferred-size-slow.html");
+    File.WriteAllText(slowPage, $"<!doctype html><style>@keyframes grow {{ to {{ height: 333px }} }}</style><body style='margin:0'><div id=d style='width:300px;height:150px'></div><img src='http://127.0.0.1:{port}/slow.png' style='position:absolute;left:0;top:0;width:1px;height:1px'>");
+    await w.WebContents.LoadFile(slowPage);
+    slow.Stop();
+    File.Delete(slowPage);
+    Check("PreferredSizeChanged: the content's size, once the load stops",
+        Eventually(() => !sizes.IsEmpty, step) && sizes.First() == new System.Drawing.Size(300, 150) && order.First() == "stop", $"{string.Join(" ", sizes)} order {string.Join(",", order)}");
+
+    sizes.Clear();
+    await Run(w, "d.style.width = '400px'; d.style.height = '250px'");
+    Check("PreferredSizeChanged follows the content", Eventually(() => sizes.LastOrDefault() == new System.Drawing.Size(400, 250), step), string.Join(" ", sizes));
+
+    sizes.Clear();
+    await Run(w, "d.title = 'unchanged'");
+    await Task.Delay(800);
+    Check("PreferredSizeChanged is not raised when the size stays", sizes.IsEmpty, string.Join(" ", sizes));
+
+    // The page's own box stays put; only its narrowest width changes.
+    await Run(w, "d.style.width = 'auto'; d.innerHTML = '<span id=s style=\"display:inline-block;width:200px;height:20px\"></span>'");
+    Eventually(() => sizes.LastOrDefault() == new System.Drawing.Size(200, 250), step);
+    await Run(w, "s.style.width = '260px'");
+    Check("PreferredSizeChanged follows a change to the narrowest width alone", Eventually(() => sizes.LastOrDefault() == new System.Drawing.Size(260, 250), step), string.Join(" ", sizes));
+
+    // An animation changes the size with no DOM change after it starts.
+    await Run(w, "d.innerHTML = ''; d.style.width = '300px'; d.style.animation = 'grow 0.3s forwards'");
+    Check("PreferredSizeChanged follows a size change no DOM change makes", Eventually(() => sizes.LastOrDefault() == new System.Drawing.Size(300, 333), step), string.Join(" ", sizes));
+    await Run(w, "d.style.animation = ''");
+
+    // Chromium's width is the minimum: content that wraps is measured at its narrowest.
+    await Run(w, "d.style.width = 'auto'; d.style.height = 'auto'; d.innerHTML = '<span style=\"display:inline-block;width:120px;height:20px\"></span> <span style=\"display:inline-block;width:90px;height:20px\"></span>'");
+    Check("PreferredSizeChanged: the width is the min-content width, the height the laid-out one",
+        Eventually(() => sizes.LastOrDefault().Width == 120, step) && sizes.Last().Height is > 0 and < 40, string.Join(" ", sizes));
+
+    // The root's box is the window's height here; its scroll height is the content's.
+    await Run(w, "document.documentElement.style.height = '100%'; document.body.style.height = '100%'; d.innerHTML = ''; d.style.width = '200px'; d.style.height = '1500px'");
+    Check("PreferredSizeChanged: taller than the window, the height is the scroll height", Eventually(() => sizes.LastOrDefault() == new System.Drawing.Size(200, 1500), step), string.Join(" ", sizes));
+
+    w.WebContents.SetZoomFactor(1.5);
+    Check("PreferredSizeChanged: DIPs scale with the zoom", Eventually(() => sizes.LastOrDefault() == new System.Drawing.Size(300, 2250), step), string.Join(" ", sizes));
     w.Destroy();
     File.Delete(page);
 }

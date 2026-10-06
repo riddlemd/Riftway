@@ -78,7 +78,11 @@ public sealed unsafe partial class WebContents
         Load = new LoadHandler
         {
             LoadStarted = isMain => { if (isMain) ApplyDefaultZoom(); },
-            LoadingStateChanged = loading => Raise(loading ? DidStartLoading : DidStopLoading),
+            LoadingStateChanged = loading =>
+            {
+                Raise(loading ? DidStartLoading : DidStopLoading);
+                if (!loading && _navigated) OnStoppedLoadingForPreferredSize();
+            },
             LoadEnded = (isMain, _) =>
             {
                 if (_navigated) DidFrameFinishLoad?.Invoke(this, isMain);
@@ -268,7 +272,16 @@ public sealed unsafe partial class WebContents
         if (isChar && inputEvent.KeyCode.Length != 1) throw new ArgumentException("A Char event takes exactly one character.", nameof(inputEvent));
         var key = isChar ? default : KeyMap.Resolve(inputEvent.KeyCode, inputEvent.Modifiers.HasFlag(InputModifiers.Shift));
         var modifiers = KeyMap.DevToolsModifiers(inputEvent.Modifiers);
-        CefThread.RunOnUi(() => _devTools.Send("Input.dispatchKeyEvent", w =>
+        CefThread.RunOnUi(() =>
+        {
+            if (isChar) ReportSentChar(inputEvent);
+            SendKeyEvent(inputEvent, isChar, key, modifiers);
+        });
+    }
+
+    private void SendKeyEvent(KeyboardInputEvent inputEvent, bool isChar, KeyMap.Key key, int modifiers)
+    {
+        _devTools.Send("Input.dispatchKeyEvent", w =>
         {
             // rawKeyDown: a press that types nothing; text arrives only through char events.
             w.WriteString("type", inputEvent.Type switch { KeyboardInputEventType.KeyDown => "rawKeyDown", KeyboardInputEventType.KeyUp => "keyUp", _ => "char" });
@@ -284,7 +297,7 @@ public sealed unsafe partial class WebContents
             w.WriteString("code", key.Code);
             w.WriteNumber("windowsVirtualKeyCode", key.VirtualKeyCode);
             w.WriteNumber("nativeVirtualKeyCode", key.VirtualKeyCode);
-        }));
+        });
     }
 
     /// <summary>Sends a mouse event to the page as if from the user: a right button press opens a context menu.
@@ -740,7 +753,9 @@ public sealed unsafe partial class WebContents
     // its own so one that fails, even to parse, is reported and the rest still run, as Electron's renderer init does.
     private string IsolatedScript()
     {
-        var script = new System.Text.StringBuilder("(() => {\nlet reportPreloadError;\n").Append(s_preloadRuntime);
+        var script = new System.Text.StringBuilder("(() => {\nlet reportPreloadError;\n")
+            .Append("const orielOptions = { preferredSizeMode: ").Append(_preferences.EnablePreferredSizeMode ? "true" : "false").Append(" };\n")
+            .Append(s_preloadRuntime);
         var paths = Session.GetPreloadScripts().Select(p => p.FilePath).ToList();
         if (_appPreloadPath is not null) paths.Add(_appPreloadPath);
         foreach (var path in paths) script.Append(PreloadWrapper(path, ReadPreload(path)));
@@ -986,6 +1001,7 @@ public sealed unsafe partial class WebContents
                     context.GetProperty("auxData").GetProperty("frameId").GetString() == _mainFrameId)
                 {
                     _isolatedContext = context.GetProperty("id").GetInt32();
+                    OnMainIsolatedContext(_isolatedContext.Value);
                     foreach (var pending in _pendingDeliveries) Deliver(_isolatedContext.Value, pending);
                     _pendingDeliveries.Clear();
                 }
@@ -1052,6 +1068,12 @@ public sealed unsafe partial class WebContents
 
             case "mousedown":
                 PageMouseDown?.Invoke();
+                break;
+            case "input" when context == _isolatedContext:
+                OnPagePointerEvent(args);
+                break;
+            case "psize" when context == _isolatedContext:
+                OnPagePreferredSize(args);
                 break;
             case "sync-hello":
                 SyncIpc.Register(args[0].GetString()!, this, context);
