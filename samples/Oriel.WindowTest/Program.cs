@@ -3746,6 +3746,10 @@ async Task TitleBarAsync(BrowserWindow win)
 
     // TitleBarOverlay: buttons at the top right in the colours asked for, over the page.
     var closed = false;
+    // Without an application menu the window has no menu bar, and Chromium's page window comes later and is re-created:
+    // the overlay's hit-test pass-through must still reach it.
+    var appMenu = Menu.GetApplicationMenu();
+    Menu.SetApplicationMenu(null);
     var overlaid = new BrowserWindow(new BrowserWindowOptions
     {
         Title = "Oriel window test: title bar overlay", X = 240, Y = 240, Width = 500, Height = 300, TitleBarStyle = TitleBarStyle.Hidden,
@@ -3873,6 +3877,7 @@ async Task TitleBarAsync(BrowserWindow win)
     await Task.Delay(1500);
     WindowsShell.Click(Button(2).X, Button(2).Y + 8);
     Check("the close button closes the window", Eventually(() => closed, step));
+    Menu.SetApplicationMenu(appMenu);
 
     // Defaults: the system's caption height and button colours.
     var plain = new BrowserWindow(new BrowserWindowOptions { Title = "Oriel window test: default overlay", X = 260, Y = 260, Width = 400, Height = 250, TitleBarStyle = TitleBarStyle.Hidden, TitleBarOverlay = new() { Color = "not a colour" } });

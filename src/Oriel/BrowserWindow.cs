@@ -1878,7 +1878,9 @@ public sealed unsafe partial class BrowserWindow
         if (OperatingSystem.IsWindows() && window->is_active(window) != 0) UpdateAccentColor(window, true);
 
         _lastBounds = ToRectangle(window->@base.@base.get_bounds_in_screen(&window->@base.@base));
-        if (_sizeState is null) CefThread.PostUiDelayed(PollState, s_statePoll);
+        // Also where WM_SIZE raises the state events: the poll re-subclasses Chromium's page windows for the overlay's
+        // HTMAXBUTTON, and they come and go.
+        CefThread.PostUiDelayed(PollState, s_statePoll);
     }
 
     private void OnBrowserCreated(cef_browser_t* browser)
