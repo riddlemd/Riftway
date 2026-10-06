@@ -166,9 +166,9 @@ Percentages are over the non-n/a items; the second counts a partial item as half
 | `stopFindInPage(action)` | `StopFindInPage` | partial | `activateSelection` keeps the selection (C18). |
 | `capturePage()` | `CapturePageAsync` | partial | `stayHidden`/`stayAwake` have no effect (C22). |
 | `isBeingCaptured()` | — | missing |  |
-| `getPrintersAsync()` | — | missing |  |
-| `print()` | — | missing |  |
-| `printToPDF()` | — | missing |  |
+| `getPrintersAsync()` | `GetPrintersAsync` | partial | Windows only, listed as Chromium lists them (Z4). |
+| `print()` | `Print` | partial | Electron's option checks and device-name errors; opens Chromium's print dialog without the settings; no silent printing or outcome callback (Z1-Z3). |
+| `printToPDF()` | `PrintToPDFAsync` | done | Page.printToPDF over DevTools with Electron's defaults, validation messages and per-page queue. |
 | `addWorkSpace()` | — | missing |  |
 | `removeWorkSpace()` | — | missing |  |
 | `setDevToolsWebContents()` | — | missing |  |

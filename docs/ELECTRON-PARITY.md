@@ -98,8 +98,8 @@ Detailed item-by-item status, including `navigationHistory` and `WebFrameMain`: 
 | `Cookies` | `Cookies` | CEF | M6 | partial: `get`, `set` (Electron's rejection messages), `remove`, `flushStore`, `changed` (read from the store, see DRIFT E4, E5) |
 | `WebRequest` | `WebRequest` | CEF | M6 | partial: all eight events with `urls`/`excludeUrls`/`types` filters, cancel and `redirectURL`, request header changes, `uploadData` (bytes and file paths), `frame`, `webContentsId`, custom-scheme requests, service and shared worker requests without a page; `onHeadersReceived` cannot change or cancel the response, no `fromCache`/`ip`/`initiatorOrigin`, a `net` module's requests unseen (see DRIFT.md E17-E19, E27) |
 | `DownloadItem` | `DownloadItem` | CEF | M6 | — |
-| `net` | `Net` | CEF | M6 | — |
-| `ClientRequest` / `IncomingMessage` | `ClientRequest` / `IncomingMessage` | CEF | M6 | — |
+| `net` | `Net` | CEF | M6 | partial _(branch `net-module`)_: `request`, `fetch` (and `Session.FetchAsync`, reaching the session's protocol handlers unless `bypassCustomProtocolHandlers`), `isOnline`/`online`, `resolveHost`; cookies follow credentials, no `Set-Cookie`, buffered chunked bodies, no `WebSocket` (DRIFT L1-L11) |
+| `ClientRequest` / `IncomingMessage` | `ClientRequest` / `IncomingMessage` | CEF | M6 | partial _(branch `net-module`)_: headers with Electron's rules and errors, write/end, abort, redirect modes with `followRedirect`, `login`, Electron's event order and `net::ERR_*` errors; gaps in DRIFT L1-L7 |
 | `WebSocket` (main process) | `WebSocket` | CEF or Patch (verify) | M6 | — |
 | `netLog` | `NetLog` | CEF | M6 | — |
 | `ServiceWorkers` / `ServiceWorkerMain` | `ServiceWorkers` / `ServiceWorkerMain` | CEF + Patch (verify) | M6 | — |

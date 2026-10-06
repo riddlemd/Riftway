@@ -278,6 +278,32 @@ Entries marked _(branch `x`)_ are on that branch and not yet in `main`.
 |---|---|---|---|---|
 | T1 | `Tray` on macOS and Linux, with the macOS-only events (`mouse-up`, `mouse-down`, drop) and setters (`setPressedImage`, `setTitle`, `setIgnoreDoubleClickEvents`) | Windows only: macOS and Linux throw `PlatformNotSupportedException` behind `ITrayBackend`; on Windows the macOS-only setters do nothing, as in Electron _(branch `tray`)_ | OS | macOS `NSStatusItem`; Linux StatusNotifierItem over D-Bus |
 
+## net / ClientRequest / IncomingMessage _(branch `net-module`)_
+
+| ID | Electron | Oriel | Why | Possible resolution |
+|---|---|---|---|---|
+| L1 | Without `credentials`, authentication data is sent but cookies are not, unless `useSessionCookies` | Cookies are sent and stored unless `credentials` is `Omit`; `UseSessionCookies` has no effect | CEF: `UR_FLAG_ALLOW_STORED_CREDENTIALS` covers both, and request context handlers (a cookie filter) are never asked about a `cef_urlrequest_t` (checked: a shared context's handler got no call) | Patch (Chromium's `kURLLoadOptionBlockAllCookies`) |
+| L2 | `Set-Cookie` is in `headers` (always a list), `rawHeaders` and fetch's `headers` | Never present | CEF: the response handed to a `cef_urlrequest_t` has no `Set-Cookie` lines | Patch |
+| L3 | `chunkedEncoding` streams the body (`Transfer-Encoding: chunked`) and the first write starts the request | The body is buffered and sent with `Content-Length` when `End` is called; the property and its errors behave as Electron's | CEF: `cef_post_data_t` has no streaming element | Patch |
+| L4 | `rawHeaders` in wire order; `httpVersion`, `httpVersionMajor`, `httpVersionMinor`; `response` at the response head | `RawHeaders` sorted by name (repeats kept in order); no HTTP version; `Response` raised at CEF's first progress or data callback, or at completion for an empty body | CEF: the header map is a sorted multimap, the version is not exposed, and the client has no response-started callback | Patch |
+| L5 | `origin` (request initiator, `Sec-Fetch-Site`), `Sec-Fetch-Mode`/`-Dest`/`-User` steering and the `sec-fetch-dest ... requires sec-fetch-mode 'navigate'` error, `priority`, `priorityIncremental`, `cache: 'no-cache'`/`'force-cache'` | Accepted and ignored, except that `credentials: SameOrigin` still requires `Origin`; Sec-Fetch-* headers are sent as given | CEF: `cef_request_t` has no initiator, priority, or validate/skip-validation load flags | Patch |
+| L6 | `write`/`end` take an optional callback | `Write(byte[])`, `Write(string, Encoding)`, `End(...)`; no callbacks (`upload-progress` and `getUploadProgress` match Electron: `UploadProgressChanged`, and `{active, started, current, total}` set from CEF's report, `active` never cleared) | Design: synchronous .NET writes | Add if needed |
+| L7 | Events on the JS thread; a stream is read with `on('data')`/`pipe` | .NET events on CEF's UI thread; the body is held until a `Data` handler is added or `Resume()` is called; `Abort()` method with an `Aborted` event (C# cannot name both `Abort`) | Design (S1) | None |
+| L8 | `net.resolveHost(host, { queryType, source, cacheUsage, secureDnsPolicy })`; rejects with `net::ERR_…` | No options; throws `HostResolutionException` (code in `ErrorCode`) | CEF: `resolve_host` takes only a URL | Patch |
+| L9 | `net.fetch(input, init)` with a `Request` or string resolving a WHATWG `Response` | `FetchAsync(string, FetchInit)`; `CancellationToken` for `signal`; `FetchResponse` with `Status`, `StatusText`, `Ok`, `Headers`, `Body`, `TextAsync`/`JsonAsync`/`ArrayBufferAsync`; no `Request` objects, `blob()`, `formData()`, `clone()`, `redirected`, `type`, `url` | Design: no WHATWG types in .NET | Add members as needed |
+| L10 | `net.isOnline()` from Chromium's NetworkChangeNotifier on every OS | Windows follows `NetworkChangeNotifierWin` (NLA query, then adapters as `ConnectionTypeFromInterfaces`); macOS and Linux use the adapter scan only; read live, not from a notifier | OS: SCNetworkReachability / netlink not wired | Per-OS code |
+| L11 | `net.WebSocket` | Missing | Todo | CEF has no WebSocket client; .NET `ClientWebSocket` would bypass the session's proxy and cookies |
+
+## Printing _(branch `net-module`)_
+
+| ID | Electron | Oriel | Why | Possible resolution |
+|---|---|---|---|---|
+| Z1 | `print(options)` applies `deviceName`, margins, `landscape`, `copies`, `collate`, `pageRanges`, `duplexMode`, `dpi`, `header`/`footer`, `color`, `scaleFactor`, `pagesPerSheet`, `pageSize` to the system dialog or a silent job | Validates the options as Electron does and checks `DeviceName` exists, then opens Chromium's print dialog with none of them applied | CEF: `cef_browser_host_t::print` takes no settings; `cef_print_handler_t` is Linux-only | Patch, or print `PrintToPDFAsync`'s output through the spooler (needs a PDF rasteriser) |
+| Z2 | `silent: true` prints without a dialog | `callback(false, "failed")` | CEF: no silent print except the process-wide `--kiosk-printing` switch | As Z1 |
+| Z3 | `callback(success, failureReason)` after the job (`cancelled`, `failed`) | Not called once the dialog opens; called only for `Invalid deviceName provided`, `Failed to enumerate printers`, `No printers available on the network` and Z2 | CEF: no print-finished notification | Patch |
+| Z4 | `getPrintersAsync()` on every OS | Windows only, as Chromium's `PrintBackendWin` (name, display name, comment, `printer-location`); macOS and Linux return an empty list | OS: CUPS / `NSPrinter` not wired | Per-OS code |
+| Z5 | Bad `printToPDF` options reject with `Error`/`TypeError` | The task faults with `ArgumentException` (option errors, "Invalid print parameters: …") or `InvalidOperationException` ("Failed to generate PDF: …"); same messages; `PageSize` and margins are typed, so Electron's type errors cannot occur | Design (S3) | None |
+
 ## IPC, contextBridge, protocol
 
 | ID | Electron | Oriel | Why | Possible resolution |
