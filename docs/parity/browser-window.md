@@ -233,7 +233,7 @@ Parameters in brackets are optional in Electron. `webContents` members are in [w
 | `hasShadow` | `HasShadow` | partial | Stored only, which is Electron's behaviour on Windows; macOS and Linux not yet (W31). |
 | `opacity` | `Opacity` | partial | Windows only for now (W30). |
 | `darkTheme` | — | missing |  |
-| `transparent` | `Transparent` | partial | Windows only (W24). |
+| `transparent` | `Transparent` | partial | Windows and macOS; not Linux (W24). |
 | `type` | `Type` | partial | Windows `toolbar` (`WS_EX_TOOLWINDOW`); Linux and macOS types not yet (W43). |
 | `visualEffectState` | — | missing |  |
 | `titleBarStyle` | `TitleBarStyle` | partial | Windows (and Linux, unchecked): anything but `Default` is frameless; macOS keeps its title bar (W37). |

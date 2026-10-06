@@ -217,6 +217,24 @@ public static unsafe class MacWindow
         }
     }
 
+    /// <summary>Makes the window see-through where nothing is painted, as Electron's NativeWindowMac does for
+    /// <c>transparent</c>: a clear background, which also drops the shadow, no opacity, and a hidden title bar.</summary>
+    public static void MakeTransparent(nint contentView, bool hideButtons)
+    {
+        var window = NSWindowOf(contentView);
+        if (window == 0) return;
+        SendObject(window, Sel("setBackgroundColor:"u8), Send(Class("NSColor"u8), Sel("clearColor"u8)));
+        SendBool(window, Sel("setOpaque:"u8), 0);
+        SendBool(window, Sel("setTitlebarAppearsTransparent:"u8), 1);
+        // NSWindowTitleHidden.
+        SendNUInt(window, Sel("setTitleVisibility:"u8), 1);
+        if (hideButtons) SetWindowButtonsHidden(contentView, true);
+    }
+
+    /// <summary>[NSWindow isOpaque].</summary>
+    public static bool IsOpaque(nint contentView)
+        => NSWindowOf(contentView) is var window && window != 0 && SendGetBool(window, Sel("isOpaque"u8)) != 0;
+
     /// <summary>Whether a collection behaviour flag (NSWindowCollectionBehavior) is set.</summary>
     public static bool HasCollectionBehavior(nint contentView, nuint flag)
         => NSWindowOf(contentView) is var window && window != 0 && ((nuint)Send(window, Sel("collectionBehavior"u8)) & flag) != 0;
