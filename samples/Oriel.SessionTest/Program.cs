@@ -1327,21 +1327,32 @@ async Task RunAsync()
     // app.getAppMetrics: this process and the Chromium children it started, as ps lists them.
     var busyWin = new BrowserWindow(new BrowserWindowOptions { Show = false });
     await busyWin.LoadUrl("data:text/html,<p>busy</p>");
+    // ps before and after the metrics: a short-lived utility process can start or exit between two snapshots.
+    var psBefore = OperatingSystem.IsLinux() || OperatingSystem.IsMacOS() ? Output("/bin/ps", "-eo", "pid=,ppid=,args=") : "";
     var firstMetrics = app.GetAppMetrics();
     Check("GetAppMetrics starts with this process as Browser, and every CPU reading starts at 0", firstMetrics[0] is { Type: "Browser" } browserMetric
         && browserMetric.Pid == Environment.ProcessId && Math.Abs(browserMetric.CreationTime - (OrielProcess.GetCreationTime() ?? 0)) < 1500
         && firstMetrics.All(m => m.Cpu.PercentCPUUsage == 0 && m.Cpu.CumulativeCPUUsage >= 0), string.Join(" ", firstMetrics.Select(m => $"{m.Pid}:{m.Type}:{m.Cpu.PercentCPUUsage}")));
     if (OperatingSystem.IsLinux() || OperatingSystem.IsMacOS())
     {
-        var table = Output("/bin/ps", "-eo", "pid=,ppid=,args=").Split('\n', StringSplitOptions.RemoveEmptyEntries)
+        static List<(int Pid, int Parent, string Args)> Rows(string ps) => ps.Split('\n', StringSplitOptions.RemoveEmptyEntries)
             .Select(l => l.Trim().Split(' ', 3, StringSplitOptions.RemoveEmptyEntries)).Where(p => p.Length == 3)
             .Select(p => (Pid: int.Parse(p[0], CultureInfo.InvariantCulture), Parent: int.Parse(p[1], CultureInfo.InvariantCulture), Args: p[2])).ToList();
-        bool Under(int pid) { for (var i = 0; i < 64; i++) { var row = table.FirstOrDefault(t => t.Pid == pid); if (row.Pid == 0) return false; if (row.Parent == Environment.ProcessId) return true; pid = row.Parent; } return false; }
-        string KindOf(string args) => args.Contains("--type=renderer") ? "Tab" : args.Contains("--type=gpu-process") ? "GPU" : args.Contains("--type=utility") ? "Utility" : "";
-        var expectedChildren = table.Where(t => Under(t.Pid) && KindOf(t.Args) != "").Select(t => $"{t.Pid}:{KindOf(t.Args)}").Order().ToList();
+        static string KindOf(string args) => args.Contains("--type=renderer") ? "Tab" : args.Contains("--type=gpu-process") ? "GPU" : args.Contains("--type=utility") ? "Utility" : "";
+        static List<string> ChildrenIn(List<(int Pid, int Parent, string Args)> rows)
+        {
+            bool Under(int pid) { for (var i = 0; i < 64; i++) { var row = rows.FirstOrDefault(t => t.Pid == pid); if (row.Pid == 0) return false; if (row.Parent == Environment.ProcessId) return true; pid = row.Parent; } return false; }
+            return [.. rows.Where(t => Under(t.Pid) && KindOf(t.Args) != "").Select(t => $"{t.Pid}:{KindOf(t.Args)}").Order()];
+        }
+        var table = Rows(Output("/bin/ps", "-eo", "pid=,ppid=,args="));
+        var before = ChildrenIn(Rows(psBefore));
+        var after = ChildrenIn(table);
+        // Every child in both snapshots is listed, and nothing listed is absent from both.
+        var expectedChildren = before.Intersect(after).ToList();
         var listedChildren = firstMetrics.Skip(1).Select(m => $"{m.Pid}:{m.Type}").Order().ToList();
+        var seenChildren = before.Union(after).ToHashSet();
         Check("the children are the renderers, GPU and utility processes ps shows under this one, with a utility's service",
-            expectedChildren.SequenceEqual(listedChildren) && listedChildren.Any(c => c.EndsWith(":Tab", StringComparison.Ordinal))
+            expectedChildren.All(listedChildren.Contains) && listedChildren.All(seenChildren.Contains) && listedChildren.Any(c => c.EndsWith(":Tab", StringComparison.Ordinal))
             && firstMetrics.Any(m => m.ServiceName == "network.mojom.NetworkService") && firstMetrics.All(m => m.Name is null)
             // Electron reports memory and sandboxing on macOS only; Oriel's macOS children are unsandboxed (drift A1).
             && firstMetrics.All(m => OperatingSystem.IsMacOS() ? m.Memory is { WorkingSetSize: > 0 } mem && mem.PeakWorkingSetSize >= mem.WorkingSetSize && m.Sandboxed == false : m.Memory is null),
