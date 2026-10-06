@@ -45,6 +45,12 @@ public sealed class ShellTests
     {
         // Chromium only requires the target to be given; an empty one goes to IShellLink::SetPath.
         var path = Path.Combine(Path.GetTempPath(), $"oriel-empty-target-{Guid.NewGuid():N}.lnk");
+        // Shortcut links are Windows-only in Electron; elsewhere the call reaches the unsupported backend.
+        if (!OperatingSystem.IsWindows())
+        {
+            Assert.Throws<PlatformNotSupportedException>(() => Shell.WriteShortcutLink(path, ShortcutLinkOperation.Replace, new ShortcutDetails { Target = "" }));
+            return;
+        }
         try { _ = Shell.WriteShortcutLink(path, ShortcutLinkOperation.Replace, new ShortcutDetails { Target = "" }); }
         finally { File.Delete(path); }
     }

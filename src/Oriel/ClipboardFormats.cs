@@ -4,9 +4,9 @@ using System.Text.Json;
 
 namespace Oriel;
 
-/// <summary>The byte formats of the Windows clipboard and Electron's MIME names for them, as Chromium's
-/// <c>ClipboardWin</c>, <c>clipboard_util_win</c> and Electron's <c>electron_api_clipboard</c> define them: pure code,
-/// no Win32.</summary>
+/// <summary>The byte formats of the Windows clipboard and the macOS pasteboard, and Electron's MIME names for them, as
+/// Chromium's <c>ClipboardWin</c>, <c>clipboard_util_win</c>, <c>ClipboardMac</c> and Electron's
+/// <c>electron_api_clipboard</c> define them: pure code, no Win32 or AppKit.</summary>
 internal static class ClipboardFormats
 {
     /// <summary>Electron's prefix for a raw platform format, <c>electron application/osclipboard;format="name"</c>.</summary>
