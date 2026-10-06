@@ -13,11 +13,12 @@ static class MessageBoxTest
             await MacMessageBoxTest.RunAsync(win, check, step);
             return;
         }
-        if (!OperatingSystem.IsWindows())
+        if (OperatingSystem.IsLinux())
         {
-            check("message boxes are not implemented here yet", Throws<PlatformNotSupportedException>(() => Dialog.ShowMessageBoxAsync(win, new MessageBoxOptions())), null);
+            await LinuxMessageBoxTest.RunAsync(win, check, step);
             return;
         }
+        if (!OperatingSystem.IsWindows()) return;
         var scenarios = new (string Name, Func<Task> Run)[]
         {
             ("owned box", () => OwnedAsync(win, check, step)),

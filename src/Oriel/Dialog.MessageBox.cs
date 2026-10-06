@@ -48,7 +48,8 @@ public sealed record MessageBoxOptions
     /// several buttons.</summary>
     public int? CancelId { get; init; }
 
-    /// <summary>The window title; empty uses the app's name.</summary>
+    /// <summary>The window title; empty uses the app's name on Windows and sets none on Linux, as Electron. macOS shows
+    /// none.</summary>
     public string Title { get; init; } = "";
 
     /// <summary>Extra text below the message, which then shows highlighted.</summary>
@@ -84,24 +85,27 @@ public sealed record MessageBoxOptions
 /// <param name="CheckboxChecked">The checkbox's state when the box closed.</param>
 public sealed record MessageBoxResult(int Response, bool CheckboxChecked);
 
-/// <summary>Message boxes, per Electron's <c>lib/browser/api/dialog.ts</c> and <c>shell/browser/ui/message_box_win.cc</c>.</summary>
+/// <summary>Message boxes, per Electron's <c>lib/browser/api/dialog.ts</c> and <c>shell/browser/ui/message_box_win.cc</c>,
+/// <c>message_box_mac.mm</c> and <c>message_box_gtk.cc</c>.</summary>
 public static partial class Dialog
 {
     /// <summary>Shows a message box and completes with the answer; other windows keep running. Electron's
     /// <c>dialog.showMessageBox()</c>.</summary>
     /// <remarks>With a window the box is modal to it and the window is disabled until it closes; without one it stands
     /// alone. A window that already shows a modal box is disabled, so a second box for it stands alone too, as in
-    /// Electron. Each box runs on its own thread.</remarks>
+    /// Electron. On Windows each box runs on its own thread; on macOS and Linux on the UI thread, which keeps running.
+    /// On Linux the window stays usable (drift MB4).</remarks>
     /// <exception cref="InvalidOperationException">Before <see cref="OrielApp.Ready"/>.</exception>
     /// <exception cref="ArgumentException">An option Electron rejects, such as <see cref="MessageBoxOptions.CheckboxChecked"/>
     /// without a label.</exception>
-    /// <exception cref="PlatformNotSupportedException">Not on Windows yet.</exception>
+    /// <exception cref="PlatformNotSupportedException">Linux: GTK 3 cannot be used (drift MB5); the task fails with it.</exception>
     public static Task<MessageBoxResult> ShowMessageBoxAsync(BrowserWindow? window, MessageBoxOptions options)
     {
         var settings = PrepareMessageBox(options);
         // Electron answers an already-aborted signal without a box.
         if (options.Signal.IsCancellationRequested) return Task.FromResult(new MessageBoxResult(settings.CancelId, settings.CheckboxChecked));
         if (OperatingSystem.IsMacOS()) return ShowAsyncOnMac(window, options, settings);
+        if (OperatingSystem.IsLinux()) return ShowAsyncOnLinux(window, options, settings);
         if (!OperatingSystem.IsWindows()) throw MessageBoxNotYet();
         return ShowAsyncOnWindows(window, options, settings);
     }
@@ -112,16 +116,17 @@ public static partial class Dialog
     /// <summary>Shows a message box and waits: the index of the button chosen, or the cancel id. Electron's
     /// <c>dialog.showMessageBoxSync()</c>.</summary>
     /// <remarks>As in Electron the box runs on the UI thread, which waits in it: windows still paint and the owner stays
-    /// disabled, but no other UI-thread work runs until it closes. From another thread the call waits for the UI
-    /// thread, so it must not come from a thread the UI thread is itself waiting on.</remarks>
+    /// disabled (not on Linux: drift MB4), but no other UI-thread work runs until it closes. From another thread the call
+    /// waits for the UI thread, so it must not come from a thread the UI thread is itself waiting on.</remarks>
     /// <exception cref="InvalidOperationException">Before <see cref="OrielApp.Ready"/>.</exception>
     /// <exception cref="ArgumentException">See <see cref="ShowMessageBoxAsync(BrowserWindow?, MessageBoxOptions)"/>.</exception>
-    /// <exception cref="PlatformNotSupportedException">Not on Windows yet.</exception>
+    /// <exception cref="PlatformNotSupportedException">Linux: GTK 3 cannot be used (drift MB5).</exception>
     public static int ShowMessageBoxSync(BrowserWindow? window, MessageBoxOptions options)
     {
         var settings = PrepareMessageBox(options);
         if (options.Signal.IsCancellationRequested) return settings.CancelId;
         if (OperatingSystem.IsMacOS()) return ShowSyncOnMac(window, options, settings);
+        if (OperatingSystem.IsLinux()) return ShowSyncOnLinux(window, options, settings);
         if (!OperatingSystem.IsWindows()) throw MessageBoxNotYet();
         return ShowSyncOnWindows(window, options, settings);
     }
@@ -129,17 +134,23 @@ public static partial class Dialog
     /// <inheritdoc cref="ShowMessageBoxSync(BrowserWindow?, MessageBoxOptions)"/>
     public static int ShowMessageBoxSync(MessageBoxOptions options) => ShowMessageBoxSync(null, options);
 
-    /// <summary>Shows an error box, owned by no window, and waits for it to close; usable before <see cref="OrielApp.Ready"/>.
+    /// <summary>Shows an error box, owned by no window, and waits for it to close; usable before <see cref="OrielApp.Ready"/>,
+    /// when Linux writes the title and content to stderr instead, as Electron does.
     /// Electron's <c>dialog.showErrorBox()</c>: the window title is "Error", <paramref name="title"/> the highlighted
     /// text and <paramref name="content"/> the text below it.</summary>
     /// <remarks>Once the app is ready the box runs on the UI thread, as Electron's main thread runs it; before then on
     /// the calling thread.</remarks>
-    /// <exception cref="PlatformNotSupportedException">Not on Windows yet.</exception>
+    /// <exception cref="PlatformNotSupportedException">Linux: GTK 3 cannot be used (drift MB5).</exception>
     public static void ShowErrorBox(string title, string content)
     {
         if (OperatingSystem.IsMacOS())
         {
             ShowErrorBoxOnMac(title ?? "", content ?? "");
+            return;
+        }
+        if (OperatingSystem.IsLinux())
+        {
+            ShowErrorBoxOnLinux(title ?? "", content ?? "");
             return;
         }
         if (!OperatingSystem.IsWindows()) throw MessageBoxNotYet();
@@ -157,6 +168,22 @@ public static partial class Dialog
             MacMessageBox.ShowError(title, content);
             return true;
         }
+    }
+
+    // Electron shows the GTK box once ready and before then writes to stderr.
+    [SupportedOSPlatform("linux")]
+    private static void ShowErrorBoxOnLinux(string title, string content)
+    {
+        if (OrielApp.CurrentOrNull is not { IsReady: true })
+        {
+            Console.Error.Write(LinuxMessageBox.ErrorBoxConsoleText(title, content));
+            return;
+        }
+        CefThread.InvokeOnUi(() =>
+        {
+            LinuxMessageBox.ShowError(title, content);
+            return true;
+        });
     }
 
     [SupportedOSPlatform("windows")]
@@ -358,5 +385,60 @@ public static partial class Dialog
         thread.SetApartmentState(ApartmentState.STA);
         thread.Start();
         return done.Task;
+    }
+
+    // Electron's GtkMessageBox settings: the parent's X11 window and the icon's 1x bitmap as straight RGBA.
+    [SupportedOSPlatform("linux")]
+    private static GtkMessageBoxSettings GtkSettingsOf(BrowserWindow? window, MessageBoxOptions options, WindowsMessageBoxSettings settings)
+        => new((int)settings.Type, settings.Buttons, settings.DefaultId, settings.CancelId, settings.Title, settings.Message, settings.Detail,
+            settings.CheckboxLabel, settings.CheckboxChecked, GtkIconOf(options.Icon), MessageBoxOwnerOf(window));
+
+    private static GtkIconBitmap? GtkIconOf(NativeImage? icon)
+    {
+        if (icon is null || icon.IsEmpty()) return null;
+        var bitmap = ImagePixels.Unpremultiply(icon.BitmapAt(1.0));
+        var rgba = bitmap.Bgra;
+        for (var i = 0; i < rgba.Length; i += 4) (rgba[i], rgba[i + 2]) = (rgba[i + 2], rgba[i]);
+        return new GtkIconBitmap(rgba, bitmap.Width, bitmap.Height);
+    }
+
+    // Electron's GTK ShowMessageBox: the box shows and the UI thread carries on. The abort goes through the GLib loop,
+    // which also turns while a Sync box holds the UI thread, where CEF tasks would wait.
+    [SupportedOSPlatform("linux")]
+    private static Task<MessageBoxResult> ShowAsyncOnLinux(BrowserWindow? window, MessageBoxOptions options, WindowsMessageBoxSettings settings)
+    {
+        var gtk = GtkSettingsOf(window, options, settings);
+        var done = new TaskCompletionSource<MessageBoxResult>(TaskCreationOptions.RunContinuationsAsynchronously);
+        CefThread.RunOnUi(() =>
+        {
+            LinuxMessageBox box;
+            try { box = new LinuxMessageBox(gtk); }
+            catch (PlatformNotSupportedException e)
+            {
+                done.TrySetException(e);
+                return;
+            }
+            var registration = options.Signal.Register(() => LinuxMessageBox.PostToMainLoop(box.Close));
+            box.RunAsynchronous((response, checkboxChecked) =>
+            {
+                registration.Dispose();
+                done.TrySetResult(new MessageBoxResult(response, checkboxChecked));
+            });
+        });
+        return done.Task;
+    }
+
+    // Electron's GTK ShowMessageBoxSync: gtk_dialog_run on the UI thread, whose nested GLib loop runs no CEF tasks.
+    // Cancelling Signal from another thread reaches it through that loop (drift MB2).
+    [SupportedOSPlatform("linux")]
+    private static int ShowSyncOnLinux(BrowserWindow? window, MessageBoxOptions options, WindowsMessageBoxSettings settings)
+    {
+        var gtk = GtkSettingsOf(window, options, settings);
+        return CefThread.InvokeOnUi(() =>
+        {
+            var box = new LinuxMessageBox(gtk);
+            using var registration = options.Signal.Register(() => LinuxMessageBox.PostToMainLoop(box.Close));
+            return box.RunSynchronous();
+        });
     }
 }
