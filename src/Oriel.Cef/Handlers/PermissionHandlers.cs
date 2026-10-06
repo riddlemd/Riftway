@@ -26,6 +26,9 @@ public sealed unsafe class PermissionHandler
     /// <summary>UI thread: decides a prompt; the task's result is whether it is accepted.</summary>
     public Func<PermissionPrompt, Task<bool>>? Prompt { get; init; }
 
+    /// <summary>UI thread: a prompt's answer has reached Chromium; the flag is whether it was accepted.</summary>
+    public Action<PermissionPrompt, bool>? PromptSettled { get; init; }
+
     /// <summary>UI thread: decides a media request; the task's result is the media allowed (CEF's mask), 0 for none.</summary>
     public Func<MediaAccessRequest, Task<uint>>? MediaAccess { get; init; }
 
@@ -48,6 +51,7 @@ public sealed unsafe class PermissionHandler
             var accepted = t.IsCompletedSuccessfully && t.Result;
             callback->cont(callback, accepted ? cef_permission_request_result_t.CEF_PERMISSION_RESULT_ACCEPT : cef_permission_request_result_t.CEF_PERMISSION_RESULT_DENY);
             NativeObject.Release(callback);
+            Guard.Run(() => owner.PromptSettled?.Invoke(request, accepted));
         }), TaskScheduler.Default);
         return 1;
     }

@@ -264,6 +264,14 @@ public sealed unsafe partial class OrielApp
         // Chrome style otherwise hands page auth challenges to Chrome's own login prompt and never calls
         // get_auth_credentials, so the login event would not fire.
         if (processType.Length == 0) AppendSwitch(commandLine, "disable-chrome-login-prompt");
+        if (processType.Length == 0 && s_current is { } app)
+        {
+            foreach (var (name, value) in app.CommandLine.Appended)
+            {
+                if (value is null) AppendSwitch(commandLine, name);
+                else AppendSwitch(commandLine, name, value);
+            }
+        }
     }
 
     private static void AppendSwitch(cef_command_line_t* commandLine, string name)
