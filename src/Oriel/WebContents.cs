@@ -14,8 +14,10 @@ public sealed unsafe partial class WebContents
     private const string IsolatedWorld = "oriel";
     private const string Binding = "__orielIpc";
 
-    private static readonly string s_preloadRuntime = ReadResource("Oriel.Ipc.preload.js");
-    private static readonly string s_mainWorldStub = ReadResource("Oriel.Ipc.main-world.js");
+    // Both worlds carry the same contextBridge end.
+    private static readonly string s_bridge = ReadResource("Oriel.Ipc.bridge.js");
+    private static readonly string s_preloadRuntime = ReadResource("Oriel.Ipc.preload.js").Replace("/*@bridge*/", s_bridge, StringComparison.Ordinal);
+    private static readonly string s_mainWorldStub = ReadResource("Oriel.Ipc.main-world.js").Replace("/*@bridge*/", s_bridge, StringComparison.Ordinal);
 
     private readonly string? _appPreloadPath;
     // DevTools' id for the registered isolated-world script, so a session preload change can replace it.

@@ -189,39 +189,28 @@
     },
   });
 
-  // Worlds share only the DOM. Exposures and calls cross as synchronous CustomEvents with string
-  // details (objects from another world arrive as null), so an exposure exists before page scripts run.
-  const exposed = new Map();
-  const fire = (type, data) => document.dispatchEvent(new CustomEvent(type, { detail: JSON.stringify(data) }));
+/*@bridge*/
+  const contextLink = bridgeEnd('oriel-bridge-to-isolated', 'oriel-bridge-to-main', {});
+  const roundTrip = (message) => {
+    const callId = Math.random();
+    contextLink.send({ ...message, callId });
+    const result = contextLink.results.get(callId);
+    contextLink.results.delete(callId);
+    if (!result) throw new Error('The main world did not answer the context bridge');
+    if (!result.ok) throw result.value;
+    return result.value;
+  };
 
-  document.addEventListener('oriel-bridge-call', (event) => {
-    const { callId, key, method, args } = JSON.parse(event.detail);
-    const target = exposed.get(key)?.[method];
-    const decoded = args.map((arg) =>
-      arg && typeof arg === 'object' && '__orielCallback' in arg
-        ? (...callbackArgs) => fire('oriel-bridge-callback', { id: arg.__orielCallback, args: callbackArgs })
-        : arg);
-
-    Promise.resolve()
-      .then(() => {
-        if (typeof target !== 'function') throw new Error(`${key}.${method} is not exposed`);
-        return target(...decoded);
-      })
-      .then(
-        (value) => fire('oriel-bridge-result', { callId, ok: true, value }),
-        (error) => fire('oriel-bridge-result', { callId, ok: false, error: String(error?.message ?? error) }));
-  });
-
+  // Electron's contextBridge: functions anywhere in the API are proxied and return synchronously; other values are
+  // copied and frozen.
   const contextBridge = Object.freeze({
     exposeInMainWorld(key, api) {
-      const methods = [];
-      const values = {};
-      for (const [name, value] of Object.entries(api)) {
-        if (typeof value === 'function') methods.push(name);
-        else values[name] = value;
-      }
-      exposed.set(key, api);
-      fire('oriel-bridge-expose', { key, methods, values });
+      if (typeof key !== 'string') throw new TypeError('Error processing argument at index 0, conversion failure from ' + key);
+      roundTrip({ op: 'expose', key, value: api });
+    },
+    executeInMainWorld({ func, args = [] } = {}) {
+      if (typeof func !== 'function') throw new TypeError('Error processing argument at index 0, conversion failure from ' + func);
+      return roundTrip({ op: 'exec', source: String(func), args });
     },
   });
 

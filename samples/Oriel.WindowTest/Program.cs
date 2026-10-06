@@ -2613,7 +2613,18 @@ async Task FramesAsync()
         "  listenOnce: () => ipcRenderer.once('count', () => document.title = 'once:' + (++onceCount)),",
         "  listenThenOff: () => { ipcRenderer.on('off-test', offListener); ipcRenderer.off('off-test', offListener); },",
         "  removeAll: () => ipcRenderer.removeAllListeners('to-frame'),",
-        "});"));
+        "});",
+        // Electron's contextBridge shapes: nested and returned functions, promises, cloneable types, nodes, errors.
+        "oriel.contextBridge.exposeInMainWorld('cb', {",
+        "  sync: (x) => x * 2, nested: { deeper: { fn: () => ({ returnData: 123 }) } }, flags: ['a', 'b'],",
+        "  asyncFn: async () => 123, rejecting: () => Promise.reject(new Error('whoops')), thrower: () => { throw new TypeError('bad'); },",
+        "  echo: (v) => v, callBack: (f) => f(20) + 1, makeAdder: (n) => (m) => n + m, tagOf: (el) => el.tagName, title: () => document.querySelector('title'),",
+        "});",
+        "oriel.contextBridge.exposeInMainWorld('bareFn', (v) => 'bare:' + v);",
+        "oriel.contextBridge.exposeInMainWorld('bareValue', 42);",
+        "let dupe = 'none'; try { oriel.contextBridge.exposeInMainWorld('cb', {}); } catch (e) { dupe = e.message; }",
+        "oriel.contextBridge.exposeInMainWorld('dupeError', dupe);",
+        "oriel.contextBridge.exposeInMainWorld('execResult', oriel.contextBridge.executeInMainWorld({ func: (a, b) => typeof window.cb + ':' + (a + b), args: [2, 3] }));"));
     var page = Path.Combine(dir, "frames.html");
     File.WriteAllText(page, "<!doctype html><title>top</title><iframe name=a srcdoc=\"<title>a</title><iframe name=b srcdoc='<title>b</title>'></iframe>\"></iframe>");
     var host = new BrowserWindow(new BrowserWindowOptions { Title = "Oriel window test: frames", Width = 400, Height = 300, WebPreferences = new WebPreferences { Preload = preload } });
@@ -2731,6 +2742,24 @@ async Task FramesAsync()
     answers.Add((await a.ExecuteJavaScriptAsync("bridge.ask()"))?.ToString());
     IpcMain.RemoveHandler("ask");
     Check("invoke is answered by the frame's handler, else the page's, else ipcMain's", answers.SequenceEqual(["frame", "contents", "ipcMain", "ipcMain"]), string.Join(",", answers));
+
+    // contextBridge, from the page's side, as Electron's.
+    async Task<string?> Page(string code) => (await main.ExecuteJavaScriptAsync(code))?.ToString();
+    Check("a bridged function returns its value at once, not a promise", await Page("typeof cb.sync(21) + ':' + cb.sync(21)") == "number:42", await Page("typeof cb.sync(21)"));
+    Check("functions nested anywhere in the API are proxied, and the API is copied and frozen",
+        await Page("cb.nested.deeper.fn().returnData === 123 && Object.isFrozen(cb) && Object.isFrozen(cb.nested.deeper) && Object.isFrozen(cb.flags) && cb.flags.join() === 'a,b'") == "true");
+    Check("promises cross both ways, resolved and rejected, with their Error", await Page("(async () => { const p = cb.asyncFn(); const v = await p; let m; try { await cb.rejecting(); } catch (e) { m = (e instanceof Error) + ':' + e.message; } return (p instanceof Promise) + ':' + v + ':' + m; })()") == "true:123:true:whoops",
+        await Page("(async () => { try { await cb.rejecting(); } catch (e) { return String(e); } })()"));
+    Check("a thrown error reaches the caller as an Error of its kind", await Page("(() => { try { cb.thrower(); } catch (e) { return e.name + ':' + e.message + ':' + (e instanceof Error); } })()") == "TypeError:bad:true",
+        await Page("(() => { try { cb.thrower(); } catch (e) { return String(e); } })()"));
+    Check("cloneable types cross as themselves; undefined values stay and symbols are dropped",
+        await Page("cb.echo(new Date(5)).getTime() === 5 && cb.echo(new Map([[1, 'a']])).get(1) === 'a' && cb.echo(new Uint8Array([1, 2]))[1] === 2 && 'u' in cb.echo({ u: undefined }) && Object.keys(cb.echo({ s: Symbol('x'), k: 1 })).join() === 'k'") == "true");
+    Check("functions cross as arguments and as return values, called synchronously", await Page("cb.callBack((x) => x * 2) + ':' + cb.makeAdder(2)(3)") == "41:5", await Page("cb.callBack((x) => x * 2) + ':' + cb.makeAdder(2)(3)"));
+    Check("DOM nodes cross as the same node", await Page("cb.tagOf(document.querySelector('iframe')) + ':' + (cb.title() === document.querySelector('title'))") == "IFRAME:true",
+        await Page("cb.tagOf(document.querySelector('iframe')) + ':' + (cb.title() === document.querySelector('title'))"));
+    Check("a bare function or value can be the API; an existing key refuses with Electron's error",
+        await Page("bareFn('x') + ':' + bareValue + ':' + dupeError") == "bare:x:42:Cannot bind an API on top of an existing property on the window object", await Page("bareFn('x') + ':' + bareValue + ':' + dupeError"));
+    Check("executeInMainWorld runs the function in the page's world and returns its result", await Page("execResult") == "object:5", await Page("execResult"));
 
     // sendSync: the page waits for returnValue; dispatch follows Electron's order; an unset reply errors once collected.
     WebFrameMain? syncSender = null;

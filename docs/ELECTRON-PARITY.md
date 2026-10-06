@@ -86,7 +86,7 @@ Detailed item-by-item status, including `navigationHistory` and `WebFrameMain`: 
 |---|---|---|---|---|
 | `ipcMain` | `IpcMain` | CEF | M2 | partial: handle, handleOnce, on, once, removeHandler, removeListener, removeAllListeners, event.reply, event.senderFrame; no `event.returnValue` (see DRIFT.md) |
 | `ipcRenderer` | `oriel.ipcRenderer` in the page | CEF | M2 | partial: invoke, send, sendSync (I9), on, once, off, removeListener, removeAllListeners, postMessage with ports; no `sendToHost` (see DRIFT.md) |
-| `contextBridge` | `oriel.contextBridge` (isolated world) | CEF | M2 | partial: exposeInMainWorld (methods return promises; function args one level deep); no `exposeInIsolatedWorld` (see DRIFT.md) |
+| `contextBridge` | `oriel.contextBridge` (isolated world) | CEF | M2 | partial: exposeInMainWorld and executeInMainWorld, with functions proxied at any depth and returning synchronously, promises, errors, cloneable types and DOM nodes; no `exposeInIsolatedWorld` (I4) |
 | `ipcMainServiceWorker` | `IpcMainServiceWorker` | CEF | M6 | — |
 
 ## Session and network
