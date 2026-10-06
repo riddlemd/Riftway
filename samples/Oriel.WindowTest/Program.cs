@@ -1573,6 +1573,24 @@ async Task WebContentsMethodsAsync()
     await forcedContents.ExecuteJavaScriptAsync("0", userGesture: true);
     forcedContents.Close();
     Check("Close without waiting skips beforeunload, even after user activation", Eventually(() => forcedContents.IsDestroyed(), step) && forcedPreventions == 0, $"preventions={forcedPreventions}");
+    // Electron's pending_unload_url_: a loadURL the page's beforeunload keeps from leaving fails with ERR_ABORTED.
+    var staying = new BrowserWindow(new BrowserWindowOptions { Show = false });
+    await staying.WebContents.LoadFile(page);
+    var stayingContents = staying.WebContents;
+    var stayFailures = new List<(int Code, string Url, bool Main)>();
+    stayingContents.DidFailLoad += (_, e) => { lock (stayFailures) stayFailures.Add((e.ErrorCode, e.ValidatedUrl, e.IsMainFrame)); };
+    // Chromium asks beforeunload only of a page the user has interacted with.
+    await stayingContents.ExecuteJavaScriptAsync("0", userGesture: true);
+    var blockedTarget = new Uri(Path.Combine(Path.GetTempPath(), "oriel-unload-target.html")).AbsoluteUri;
+    Exception? blockedLoad = null;
+    try { await stayingContents.LoadUrl(blockedTarget).WaitAsync(TimeSpan.FromSeconds(10)); }
+    catch (Exception e) { blockedLoad = e; }
+    string Failures() { lock (stayFailures) return string.Join(",", stayFailures); }
+    Check("a LoadUrl beforeunload refuses fails with ERR_ABORTED and raises DidFailLoad for its URL, as Electron's",
+        blockedLoad is LoadFailedException { ErrorCode: -3 } && Failures() == $"(-3, {blockedTarget}, True)" && stayingContents.GetUrl() == new Uri(page).AbsoluteUri,
+        $"{blockedLoad?.GetType().Name}:{(blockedLoad as LoadFailedException)?.ErrorCode} [{Failures()}] at {stayingContents.GetUrl()}");
+    stayingContents.WillPreventUnload += (_, e) => e.Cancel = true;
+    staying.Destroy();
 
     // zoom-changed: Ctrl+wheel the page leaves alone is reported, one per tick, and does not zoom; never on macOS.
     File.WriteAllText(page, "<!doctype html><div id=box style='height:3000px'>zoom</div>");

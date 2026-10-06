@@ -36,6 +36,7 @@ public sealed unsafe class RequestContextHandler
         var owner = NativeObject.Owner<RequestContextHandler>(self);
         var wants = browser is null && owner.Resource is not null
             && (owner.Wants is not { } predicate || Guard.Run(predicate, false));
+        if (wants) HeaderMap.NoteInitiator(request, requestInitiator, isNavigation != 0, browser is not null);
         NativeObject.Release(request);
         if (frame is not null) NativeObject.Release(frame);
         if (browser is not null) NativeObject.Release(browser);

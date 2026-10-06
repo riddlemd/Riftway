@@ -58,7 +58,7 @@ Percentages are over the non-n/a items; the second counts a partial item as half
 | `did-navigate` | `DidNavigate` | done |  |
 | `did-frame-navigate` | `DidFrameNavigate` | partial | `Frame` in place of process and routing ids (C12, F2). |
 | `did-navigate-in-page` | `DidNavigateInPage` | partial | `Frame` in place of process and routing ids (C12, F2). |
-| `will-prevent-unload` | `WillPreventUnload` | done | No `did-fail-load` when it keeps a `loadURL` from leaving (C31). |
+| `will-prevent-unload` | `WillPreventUnload` | done | A refused leave fails the pending `LoadUrl` with `did-fail-load` (C31: every load is remembered). |
 | `render-process-gone` | `RenderProcessGone` | partial | No `clean-exit` (C13). |
 | `unresponsive` | `Unresponsive` | partial | Real hang not reproduced in the harness (C14). |
 | `responsive` | `Responsive` | partial | Real hang not reproduced in the harness (C14). |

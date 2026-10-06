@@ -168,3 +168,16 @@ public sealed class WebRequestTests
     [InlineData("nocolon", false)]
     public void IsHidden_OnlyInternalSchemes(string url, bool hidden) => Assert.Equal(hidden, WebRequest.IsHidden(url));
 }
+
+public sealed class InitiatorOriginTests
+{
+    [Theory]
+    [InlineData("https://example.com/", "https://example.com")]
+    [InlineData("https://example.com", "https://example.com")]
+    [InlineData("http://127.0.0.1:8080/", "http://127.0.0.1:8080")]
+    [InlineData("https://example.com:443/", "https://example.com")]
+    [InlineData("null", "null")]
+    [InlineData("file://", "file://")]
+    [InlineData(null, null)]
+    public void OriginOf_SerializesLikeChromiumsOrigin(string? initiator, string? origin) => Assert.Equal(origin, WebRequest.OriginOf(initiator));
+}
