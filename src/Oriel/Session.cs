@@ -219,6 +219,7 @@ public sealed unsafe partial class Session
     /// <summary>Decides the permissions the session's pages ask for: the handler gets the page, Electron's permission name
     /// (<c>notifications</c>, <c>geolocation</c>, <c>media</c>, <c>clipboard-read</c>, ...) and details, and grants with
     /// true. With none, every permission is granted, as Electron. Electron's <c>ses.setPermissionRequestHandler()</c>.</summary>
+    /// <remarks>Chromium remembers a grant for the origin for the rest of the session (drift E29).</remarks>
     public void SetPermissionRequestHandler(Func<WebContents, string, PermissionRequestDetails, Task<bool>>? handler)
         => _permissionRequestHandler = handler;
 
@@ -248,6 +249,8 @@ public sealed unsafe partial class Session
         value->set_dictionary(value, CefNative.cef_dictionary_value_create());
         try { SetPreference(context, "partition.per_host_zoom_levels", value); }
         catch (ArgumentException e) { Console.Error.WriteLine($"[Oriel] Could not reset saved zoom levels: {e.Message}"); }
+
+        ForgetRememberedPermissions(context);
     }
 
     internal static string ProxyModeName(ProxyMode mode) => mode switch

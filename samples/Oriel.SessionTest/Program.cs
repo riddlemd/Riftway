@@ -207,34 +207,7 @@ async Task RunAsync()
     later.Destroy();
     agentWin.Destroy();
 
-    // Permissions: granted unless the session's handler says otherwise, as Electron.
-    // Geolocation: a refusal is error 1; a grant goes on to the (absent) location source, so any other outcome.
-    async Task<string?> AskLocation(string partition, Func<WebContents, string, PermissionRequestDetails, Task<bool>>? handler)
-    {
-        var session = Session.FromPartition(partition);
-        session.Protocol.Handle("https", _ => ProtocolResponse.Text(Page, "text/html"));
-        session.SetPermissionRequestHandler(handler);
-        var w = new BrowserWindow(new BrowserWindowOptions { Show = false, WebPreferences = new WebPreferences { Session = session } });
-        await w.LoadUrl(Site);
-        var answer = (await w.WebContents.ExecuteJavaScriptAsync(
-            "new Promise(r => navigator.geolocation.getCurrentPosition(() => r('ok'), e => r(e.code === 1 ? 'denied' : 'granted'), { timeout: 2000 }))")
-            .WaitAsync(TimeSpan.FromSeconds(10)))?.ToString();
-        w.Destroy();
-        return answer;
-    }
-    var byDefault = await AskLocation("perm-default", null);
-    Check("with no permission handler, a permission is granted, as Electron", byDefault is "granted" or "ok", byDefault);
-    var asked = new List<string>();
-    var denied = await AskLocation("perm-deny", (page, permission, details) =>
-    {
-        asked.Add($"{permission}|{details.RequestingUrl}|{page is not null}");
-        return Task.FromResult(false);
-    });
-    Check("a permission handler that refuses denies it, and is told what was asked", denied == "denied"
-        && asked.Count == 1 && asked[0].StartsWith("geolocation|https://oriel.test", StringComparison.Ordinal) && asked[0].EndsWith("|True"), $"{denied} {string.Join(";", asked)}");
-    var granted = await AskLocation("perm-grant", (_, _, _) => Task.FromResult(true));
-    Check("a permission handler that grants allows it", granted is "granted" or "ok", granted);
-
+    await PermissionChecks();
     // Downloads: Session.WillDownload and DownloadItem, as Electron.
     var downloads = Session.FromPartition("downloads");
     var report = Encoding.UTF8.GetBytes("report body " + new string('x', 4000));
@@ -1446,6 +1419,222 @@ static async Task Respond(Stream stream, int status, string reason, string heade
     await stream.WriteAsync(head);
     await stream.WriteAsync(bytes);
     await stream.FlushAsync();
+}
+
+// Permissions: Electron's request, check and display media handlers, driven by real page requests.
+async Task PermissionChecks()
+{
+    // Geolocation: a refusal is error 1; a grant goes on to the (absent) location source, so any other outcome.
+    const string Geolocation = "new Promise(r => navigator.geolocation.getCurrentPosition(() => r('ok'), e => r(e.code === 1 ? 'denied' : 'granted'), { timeout: 2000 }))";
+    const string Origin = "https://oriel.test/";
+    static string Query(string descriptor) => $"navigator.permissions.query({descriptor}).then(s => s.state, e => e.name)";
+    async Task<BrowserWindow> Open(Session session, bool show = false)
+    {
+        session.Protocol.Handle("https", r => ProtocolResponse.Text(r.Url.EndsWith("/frame", StringComparison.Ordinal) ? "<!doctype html><title>frame</title>" : Page, "text/html"));
+        var w = new BrowserWindow(new BrowserWindowOptions { Show = show, WebPreferences = new WebPreferences { Session = session } });
+        await w.LoadUrl(Site);
+        return w;
+    }
+    static async Task<string?> Run(BrowserWindow w, string code, bool gesture = false)
+    {
+        try { return (await w.WebContents.ExecuteJavaScriptAsync(code, gesture).WaitAsync(TimeSpan.FromSeconds(15)))?.ToString(); }
+        catch (TimeoutException) { return "timeout"; }
+    }
+    // Made first: a window opened at once in a new on-disk session can fail to get its browser.
+    var notifying = Session.FromPartition("persist:perm-notify");
+    var silencing = Session.FromPartition("persist:perm-notify-deny");
+    // A handler that records what it is asked and answers with allow().
+    static Func<WebContents, string, PermissionRequestDetails, Task<bool>> Recorder(List<(WebContents Page, string Permission, PermissionRequestDetails Details)> asked, Func<bool> allow)
+        => (page, permission, details) =>
+        {
+            lock (asked) asked.Add((page, permission, details));
+            return Task.FromResult(allow());
+        };
+    static string Seen(List<(WebContents Page, string Permission, PermissionRequestDetails Details)> asked)
+    {
+        lock (asked) return string.Join("; ", asked.Select(a => $"{a.Permission} {a.Details.RequestingUrl} main={a.Details.IsMainFrame} [{string.Join(",", a.Details.MediaTypes)}] {a.Details.SecurityOrigin}"));
+    }
+
+    var byDefault = await Open(Session.FromPartition("perm-default"));
+    var grantedByDefault = await Run(byDefault, Geolocation);
+    Check("with no permission handler, a permission is granted, as Electron", grantedByDefault is "granted" or "ok", grantedByDefault);
+    var queriedByDefault = await Run(byDefault, Query("{ name: 'camera' }"));
+    Check("with no check handler, navigator.permissions.query is granted, as Electron", queriedByDefault == "granted", queriedByDefault);
+    byDefault.Destroy();
+
+    var refusals = new List<(WebContents Page, string Permission, PermissionRequestDetails Details)>();
+    var refusing = Session.FromPartition("perm-deny");
+    refusing.SetPermissionRequestHandler(Recorder(refusals, () => false));
+    var refusingWin = await Open(refusing);
+    var denied = await Run(refusingWin, Geolocation);
+    Check("a permission handler that refuses denies it, and gets the page, the name, the frame's URL and isMainFrame", denied == "denied"
+        && refusals is [(var asker, "geolocation", { RequestingUrl: Site, IsMainFrame: true, MediaTypes: [], SecurityOrigin: null })] && ReferenceEquals(asker, refusingWin.WebContents),
+        $"{denied} {Seen(refusals)}");
+    var deniedAgain = await Run(refusingWin, Geolocation);
+    Check("a refused permission asks the handler again on the next request, as Electron", deniedAgain == "denied" && refusals.Count == 2, $"{deniedAgain} {Seen(refusals)}");
+    refusingWin.Destroy();
+
+    var grants = new List<(WebContents Page, string Permission, PermissionRequestDetails Details)>();
+    var granting = Session.FromPartition("perm-grant");
+    granting.SetPermissionRequestHandler(Recorder(grants, () => true));
+    var grantingWin = await Open(granting);
+    var granted = await Run(grantingWin, Geolocation);
+    var grantedAgain = await Run(grantingWin, Geolocation);
+    Check("a permission handler that grants allows it; Chromium then remembers the grant for the origin (drift E29)",
+        granted is "granted" or "ok" && grantedAgain is "granted" or "ok" && grants.Count == 1, $"{granted} {grantedAgain} {Seen(grants)}");
+    grantingWin.Destroy();
+
+    // Notifications: Chromium refuses them unasked in an in-memory profile, so these sessions are on disk. A grant from an
+    // earlier run would answer unasked unless the session forgot it at start-up.
+    var notifyAsked = new List<(WebContents Page, string Permission, PermissionRequestDetails Details)>();
+    notifying.SetPermissionRequestHandler(Recorder(notifyAsked, () => true));
+    var notifyWin = await Open(notifying);
+    var notifyGranted = await Run(notifyWin, "Notification.requestPermission()", gesture: true);
+    Check("Notification.requestPermission asks the handler for notifications, also after earlier runs granted it", notifyGranted == "granted"
+        && notifyAsked is [(_, "notifications", { RequestingUrl: Site, IsMainFrame: true })], $"{notifyGranted} {Seen(notifyAsked)}");
+    notifyWin.Destroy();
+    var silenced = new List<(WebContents Page, string Permission, PermissionRequestDetails Details)>();
+    silencing.SetPermissionRequestHandler(Recorder(silenced, () => false));
+    var silencingWin = await Open(silencing);
+    var notifyDenied = await Run(silencingWin, "Notification.requestPermission()", gesture: true);
+    var repeated = await Run(silencingWin, "Notification.requestPermission()", gesture: true);
+    var askedInDocument = silenced.Count;
+    await silencingWin.LoadUrl(Site);
+    var notifyDeniedAgain = await Run(silencingWin, "Notification.requestPermission()", gesture: true);
+    Check("a refused notification permission is denied, and the next document's request asks again; Chromium ignores a repeat in the same document (drift E29)",
+        notifyDenied == "denied" && repeated == "default" && askedInDocument == 1 && notifyDeniedAgain == "denied"
+        && silenced.Count == 2 && silenced.All(s => s.Permission == "notifications"), $"{notifyDenied} {repeated} {notifyDeniedAgain} {Seen(silenced)}");
+    silencingWin.Destroy();
+    var incognitoAsked = new List<(WebContents Page, string Permission, PermissionRequestDetails Details)>();
+    var incognito = Session.FromPartition("perm-notify-memory");
+    incognito.SetPermissionRequestHandler(Recorder(incognitoAsked, () => true));
+    var incognitoWin = await Open(incognito);
+    var incognitoNotify = await Run(incognitoWin, "Notification.requestPermission()", gesture: true);
+    Check("in an in-memory session Chromium refuses notifications without asking (drift E29)", incognitoNotify == "denied" && incognitoAsked.Count == 0,
+        $"{incognitoNotify} {Seen(incognitoAsked)}");
+    incognitoWin.Destroy();
+
+    // Clipboard reads need a focused document.
+    var clipAsked = new List<(WebContents Page, string Permission, PermissionRequestDetails Details)>();
+    var clipAllow = false;
+    var clipping = Session.FromPartition("perm-clipboard");
+    clipping.SetPermissionRequestHandler(Recorder(clipAsked, () => clipAllow));
+    var clipWin = await Open(clipping, show: true);
+    clipWin.Focus();
+    const string ReadClipboard = "navigator.clipboard.readText().then(() => 'read', e => e.name)";
+    var clipDenied = await Run(clipWin, ReadClipboard, gesture: true);
+    clipAllow = true;
+    var clipGranted = await Run(clipWin, ReadClipboard, gesture: true);
+    Check("navigator.clipboard.readText asks the handler for clipboard-read: refused is NotAllowedError, granted reads", clipDenied == "NotAllowedError" && clipGranted == "read"
+        && clipAsked.Count == 2 && clipAsked.All(c => c.Permission == "clipboard-read" && c.Details.RequestingUrl == Site), $"{clipDenied} {clipGranted} {Seen(clipAsked)}");
+    clipWin.Destroy();
+
+    // Media: the handler decides, not Chromium's prompt. Needs a microphone, or --use-fake-device-for-media-stream.
+    var mediaAsked = new List<(WebContents Page, string Permission, PermissionRequestDetails Details)>();
+    var mediaAllow = true;
+    var media = Session.FromPartition("perm-media");
+    media.SetPermissionRequestHandler(Recorder(mediaAsked, () => mediaAllow));
+    var mediaWin = await Open(media);
+    const string Microphone = "navigator.mediaDevices.getUserMedia({ audio: true }).then(s => { s.getTracks().forEach(t => t.stop()); return 'ok'; }, e => e.name)";
+    const string CameraAndMicrophone = "navigator.mediaDevices.getUserMedia({ audio: true, video: true }).then(s => { s.getTracks().forEach(t => t.stop()); return 'ok'; }, e => e.name)";
+    var devices = await Run(mediaWin, "navigator.mediaDevices.enumerateDevices().then(d => d.map(x => x.kind).join(','))") ?? "";
+    if (devices.Contains("audioinput", StringComparison.Ordinal))
+    {
+        var heard = await Run(mediaWin, Microphone);
+        Check("getUserMedia asks the handler for media: mediaTypes ['audio'], securityOrigin, the frame's URL and isMainFrame", heard != "NotAllowedError"
+            && mediaAsked is [(_, "media", { MediaTypes: ["audio"], SecurityOrigin: Origin, RequestingUrl: Site, IsMainFrame: true })], $"{heard} {Seen(mediaAsked)}");
+        if (devices.Contains("videoinput", StringComparison.Ordinal))
+        {
+            lock (mediaAsked) mediaAsked.Clear();
+            var both = await Run(mediaWin, CameraAndMicrophone);
+            Check("camera and microphone together are one media request, mediaTypes audio then video, as Electron lists them", both != "NotAllowedError"
+                && mediaAsked is [(_, "media", { MediaTypes: ["audio", "video"] })], $"{both} {Seen(mediaAsked)}");
+        }
+        else Console.WriteLine("SKIP  camera and microphone together: no camera");
+        lock (mediaAsked) mediaAsked.Clear();
+        mediaAllow = false;
+        var refusedMedia = await Run(mediaWin, Microphone);
+        var refusedMediaAgain = await Run(mediaWin, Microphone);
+        Check("a handler that refuses media fails getUserMedia with NotAllowedError, and is asked on every request", refusedMedia == "NotAllowedError"
+            && refusedMediaAgain == "NotAllowedError" && mediaAsked.Count == 2, $"{refusedMedia} {refusedMediaAgain} {Seen(mediaAsked)}");
+        mediaAllow = true;
+    }
+    else Console.WriteLine($"SKIP  getUserMedia checks: no microphone ({devices}); run with --use-fake-device-for-media-stream");
+
+    // Screen capture: the request handler's media first, then the display media handler, as Electron.
+    const string Screen = "navigator.mediaDevices.getDisplayMedia({ video: true, audio: true }).then(s => { const kinds = s.getTracks().map(t => t.kind).sort().join(','); s.getTracks().forEach(t => t.stop()); return kinds; }, e => e.name)";
+    lock (mediaAsked) mediaAsked.Clear();
+    var unhandled = await Run(mediaWin, Screen, gesture: true);
+    Check("getDisplayMedia asks the request handler for media, without mediaTypes, then is refused with no display media handler", unhandled == "NotAllowedError"
+        && mediaAsked is [(_, "media", { MediaTypes: [], SecurityOrigin: Origin, IsMainFrame: true })], $"{unhandled} {Seen(mediaAsked)}");
+    var displayRequests = new List<DisplayMediaRequest>();
+    DisplayMediaStreams? streams = new() { Video = new DisplayMediaSource("screen:0:0", "Entire screen") };
+    media.SetDisplayMediaRequestHandler(request =>
+    {
+        lock (displayRequests) displayRequests.Add(request);
+        return Task.FromResult<DisplayMediaStreams?>(streams);
+    });
+    var videoOnly = await Run(mediaWin, Screen, gesture: true);
+    Check("a display media handler gets the frame, origin and what was requested; its video is captured, and audio left out is not",
+        videoOnly == "video" && displayRequests is [{ VideoRequested: true, AudioRequested: true, SecurityOrigin: Origin, UserGesture: false, Frame: { } frame }] && frame.Url == Site,
+        $"{videoOnly} {string.Join("; ", displayRequests)}");
+    streams = new() { Video = new DisplayMediaSource("screen:0:0", "Entire screen"), Audio = "loopback" };
+    var withAudio = await Run(mediaWin, Screen, gesture: true);
+    Check("a display media handler's loopback audio is captured with the video", withAudio == "audio,video", withAudio);
+    streams = null;
+    var refusedScreen = await Run(mediaWin, Screen, gesture: true);
+    streams = new() { Audio = "loopback" };
+    var audioOnly = await Run(mediaWin, Screen, gesture: true);
+    Check("a display media handler's null, or no video for a video request, refuses the capture", refusedScreen == "NotAllowedError" && audioOnly == "NotAllowedError",
+        $"{refusedScreen} {audioOnly}");
+    lock (displayRequests) displayRequests.Clear();
+    mediaAllow = false;
+    var mediaRefused = await Run(mediaWin, Screen, gesture: true);
+    Check("a request handler that refuses media refuses the capture before the display media handler", mediaRefused == "NotAllowedError" && displayRequests.Count == 0,
+        $"{mediaRefused} {displayRequests.Count}");
+    mediaWin.Destroy();
+
+    // Checks: navigator.permissions.query answers from the check handler, which does not decide requests.
+    var checks = new List<(WebContents? Page, string Permission, string Origin, PermissionCheckDetails Details)>();
+    var checking = Session.FromPartition("perm-check");
+    checking.SetPermissionCheckHandler((page, permission, origin, details) =>
+    {
+        lock (checks) checks.Add((page, permission, origin, details));
+        return permission == "notifications";
+    });
+    var checkWin = await Open(checking);
+    string Checked()
+    {
+        lock (checks) return string.Join("; ", checks.Select(c => $"{c.Permission} {c.Origin} {c.Details}"));
+    }
+    var geolocationState = await Run(checkWin, Query("{ name: 'geolocation' }"));
+    Check("navigator.permissions.query asks the check handler with the page, the name, the origin, the frame's URL, isMainFrame and embeddingOrigin",
+        geolocationState == "denied" && checks is [(var checker, "geolocation", Origin, { RequestingUrl: Site, IsMainFrame: true, EmbeddingOrigin: Origin, MediaType: null })]
+        && ReferenceEquals(checker, checkWin.WebContents), $"{geolocationState} {Checked()}");
+    lock (checks) checks.Clear();
+    var notificationsState = await Run(checkWin, Query("{ name: 'notifications' }"));
+    Check("a check handler's true is granted", notificationsState == "granted" && checks is [(_, "notifications", _, _)], $"{notificationsState} {Checked()}");
+    lock (checks) checks.Clear();
+    var cameraState = await Run(checkWin, Query("{ name: 'camera' }"));
+    var microphoneState = await Run(checkWin, Query("{ name: 'microphone' }"));
+    var sysexState = await Run(checkWin, Query("{ name: 'midi', sysex: true }"));
+    Check("camera and microphone checks are media with mediaType video and audio; midi with sysex is midiSysex", cameraState == "denied" && microphoneState == "denied"
+        && sysexState == "denied" && checks is [(_, "media", _, { MediaType: "video" }), (_, "media", _, { MediaType: "audio" }), (_, "midiSysex", _, _)],
+        $"{cameraState} {microphoneState} {sysexState} {Checked()}");
+    lock (checks) checks.Clear();
+    var badQuery = await Run(checkWin, Query("{ name: 'teleportation' }"));
+    Check("a descriptor Chromium rejects still rejects, without a check", badQuery == "TypeError" && checks.Count == 0, $"{badQuery} {Checked()}");
+    var stillGranted = await Run(checkWin, Geolocation);
+    Check("the check handler does not decide requests, as Electron's", stillGranted is "granted" or "ok", stillGranted);
+    await Run(checkWin, "new Promise(r => { const f = document.createElement('iframe'); f.src = '/frame'; f.onload = () => r('loaded'); document.body.append(f); })");
+    lock (checks) checks.Clear();
+    var frameState = await Run(checkWin, "document.querySelector('iframe').contentWindow.navigator.permissions.query({ name: 'geolocation' }).then(s => s.state)");
+    Check("an iframe's check names that frame: its URL, not the main frame", frameState == "denied"
+        && checks is [(_, "geolocation", Origin, { RequestingUrl: Site + "frame", IsMainFrame: false, EmbeddingOrigin: Origin })], $"{frameState} {Checked()}");
+    checking.SetPermissionCheckHandler(null);
+    var cleared = await Run(checkWin, Query("{ name: 'geolocation' }"));
+    Check("SetPermissionCheckHandler(null) goes back to granting every check", cleared == "granted", cleared);
+    checkWin.Destroy();
 }
 
 // Two self-signed client certificates, imported into a fresh NSS store in the home directory.

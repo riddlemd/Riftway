@@ -43,7 +43,7 @@ public sealed unsafe partial class WebContents
 
     internal WebContents(string? appPreloadPath, WebPreferences preferences, Session session)
     {
-        Permissions = new PermissionHandler { Prompt = DecidePromptAsync, MediaAccess = DecideMediaAsync };
+        Permissions = new PermissionHandler { Prompt = DecidePromptAsync, PromptSettled = OnPromptSettled, MediaAccess = DecideMediaAsync };
         Downloads = new DownloadHandler
         {
             Before = (snapshot, before) => session.OnBeforeDownload(this, snapshot, before),
@@ -887,6 +887,7 @@ public sealed unsafe partial class WebContents
         });
         // Main world first: its listeners must exist when the isolated preload exposes APIs.
         _devTools.Send("Page.addScriptToEvaluateOnNewDocument", w => w.WriteString("source", s_mainWorldStub));
+        AddPermissionCheckScript();
         AddIsolatedScript();
         _devTools.Send("Page.getFrameTree", onResult: (result, _) =>
         {
