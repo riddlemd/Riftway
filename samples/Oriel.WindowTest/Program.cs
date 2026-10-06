@@ -272,6 +272,7 @@ async Task RunAsync(BrowserWindow win, BrowserWindow simple)
     await TaskbarAsync(win);
     await CommandLineAsync();
     await ProcessChildrenAsync();
+    await ThemeAsync(win);
     await WindowsApisAsync();
     await TransparencyAsync();
     await MacTransparencyAsync();
@@ -3353,6 +3354,83 @@ async Task DebuggerAsync()
         $"{reason} {hanging.Status}");
     File.Delete(page);
     await Task.Delay(300);
+}
+
+async Task ThemeAsync(BrowserWindow win)
+{
+    async Task<bool?> PageIsDark(BrowserWindow w)
+        => (await w.WebContents.ExecuteJavaScriptAsync("matchMedia('(prefers-color-scheme: dark)').matches"))?.GetValue<bool>();
+    async Task<bool> PageBecomes(BrowserWindow w, bool dark)
+    {
+        for (var i = 0; i < 30; i++)
+        {
+            if (await PageIsDark(w) == dark) return true;
+            await Task.Delay(100);
+        }
+        return false;
+    }
+    bool? AppIsDark() => OperatingSystem.IsMacOS() ? Oriel.Cef.CefThread.InvokeOnUi(Oriel.Cef.Platform.MacAppearance.IsDark) : null;
+
+    var updates = 0;
+    EventHandler counter = (_, _) => updates++;
+    NativeTheme.Updated += counter;
+
+    NativeTheme.ThemeSource = ThemeSource.Dark;
+    Check("NativeTheme: Dark reaches the page", await PageBecomes(win, true) && NativeTheme.ShouldUseDarkColors);
+    Check("NativeTheme: Dark reaches macOS's appearance", AppIsDark() is null or true, AppIsDark());
+    var partitioned = new BrowserWindow(new BrowserWindowOptions { Show = false, WebPreferences = new WebPreferences { Partition = "persist:theme" } });
+    var load = partitioned.WebContents.LoadUrl("about:blank");
+    var loaded = await Task.WhenAny(load, Task.Delay(TimeSpan.FromSeconds(15))) == load && load.IsCompletedSuccessfully;
+    Check("NativeTheme: a persistent session made later follows it", loaded && await PageBecomes(partitioned, true), $"loaded={loaded}");
+
+    NativeTheme.ThemeSource = ThemeSource.Light;
+    Check("NativeTheme: Light reaches the page", await PageBecomes(win, false) && !NativeTheme.ShouldUseDarkColors);
+    Check("NativeTheme: a session that already exists follows a change", loaded && await PageBecomes(partitioned, false));
+    partitioned.Destroy();
+    Check("NativeTheme: Light reaches macOS's appearance", AppIsDark() is null or false, AppIsDark());
+    Check("NativeTheme: setting ThemeSource raises Updated", updates >= 2, updates);
+
+    NativeTheme.ThemeSource = ThemeSource.System;
+    var systemDark = SystemIsDark();
+    Check("NativeTheme: System follows the operating system", NativeTheme.ShouldUseDarkColors == systemDark
+        && await PageBecomes(win, systemDark), $"system={systemDark}");
+    if (OperatingSystem.IsMacOS())
+    {
+        var idleChecks = NativeTheme.Checks;
+        await Task.Delay(2500);
+        Check("NativeTheme: macOS waits for the system's notification instead of polling", NativeTheme.Checks == idleChecks,
+            $"{idleChecks} -> {NativeTheme.Checks}");
+        Oriel.Cef.CefThread.RunOnUi(Oriel.Cef.Platform.MacAppearance.PostThemeChanged);
+        Check("NativeTheme: a system appearance change is checked at once", Eventually(() => NativeTheme.Checks > idleChecks, TimeSpan.FromSeconds(1)),
+            $"{idleChecks} -> {NativeTheme.Checks}");
+    }
+    else if (OperatingSystem.IsLinux())
+    {
+        // GTK_THEME is one of the settings Oriel reads on Linux, and a test can change it.
+        var (before, checks) = (updates, NativeTheme.Checks);
+        Environment.SetEnvironmentVariable("GTK_THEME", "Adwaita:dark");
+        Check("NativeTheme: Linux polls the system setting and raises Updated",
+            Eventually(() => updates > before, TimeSpan.FromSeconds(3)) && NativeTheme.ShouldUseDarkColors, $"{checks} -> {NativeTheme.Checks} checks");
+        Environment.SetEnvironmentVariable("GTK_THEME", null);
+        Eventually(() => updates > before + 1, TimeSpan.FromSeconds(3));
+    }
+    NativeTheme.Updated -= counter;
+}
+
+// The OS's own answer, read without Oriel.
+static bool SystemIsDark()
+{
+    if (OperatingSystem.IsMacOS())
+    {
+        using var defaults = System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo("defaults", "read -g AppleInterfaceStyle")
+        { RedirectStandardOutput = true, RedirectStandardError = true })!;
+        var output = defaults.StandardOutput.ReadToEnd();
+        defaults.WaitForExit();
+        return output.Trim() == "Dark";
+    }
+    if (OperatingSystem.IsWindows())
+        return Microsoft.Win32.Registry.GetValue(@"HKEY_CURRENT_USER\Software\Microsoft\Windows\CurrentVersion\Themes\Personalize", "AppsUseLightTheme", 1) is 0;
+    return false;
 }
 
 async Task FramesAsync()

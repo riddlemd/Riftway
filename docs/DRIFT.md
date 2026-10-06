@@ -250,6 +250,14 @@ Entries marked _(branch `x`)_ are on that branch and not yet in `main`.
 | I8 | Renderer `webFrame`: `setSpellCheckProvider`, `setIsolatedWorldInfo`, `getResourceUsage`, `clearCache`, the frame tree (`getFrameForSelector`, `findFrameByName`, `findFrameByToken`, `top`, `opener`, `parent`, `firstChild`, `nextSibling`), `routingId`; `getZoomFactor` follows every zoom change | Missing; `getZoomFactor`/`getZoomLevel` follow zoom set through Oriel (`webFrame` or `WebContents`), not keyboard or wheel zoom; `insertCSS` keeps the `user` origin as author (C25) | Design: `oriel.webFrame` runs in the preload world and works through the main process over DevTools, which reports no zoom changes and has no renderer frame objects | Patch |
 | I9 | `ipcRenderer.sendSync` blocks the renderer on a synchronous IPC reply | A synchronous XHR from Oriel's isolated world to its private `oriel-ipc:` scheme, answered when a listener sets `returnValue`: Chromium refuses it in `pagehide`, `unload` and `beforeunload` handlers, where Electron's still works; values are JSON (I1); an unset reply's "reply was never sent" comes on .NET's garbage collection rather than V8's | CEF: no synchronous channel from a page to the browser process | Patch: a sync Mojo message |
 
+## nativeTheme
+
+| ID | Electron | Oriel | Why | Possible resolution |
+|---|---|---|---|---|
+| Y1 | `updated` fires as soon as the system's theme or contrast changes | At once on macOS (the system's notifications); checked once a second on Windows and Linux while there are handlers | Todo: Windows and Linux notifications not wired | `WM_SETTINGCHANGE`; the XDG portal's `SettingChanged` |
+| Y2 | Linux: Chromium's reading of the desktop's dark preference | `org.gnome.desktop.interface color-scheme` through `gsettings`, or a `GTK_THEME` ending in `:dark`; no high contrast on Linux | Todo: Chromium reads the XDG desktop portal | Read the portal over D-Bus |
+| Y3 | Native window frames and menus follow `themeSource` on every OS | macOS: yes (the app's appearance); Windows and Linux: not checked | Unknown | Check on Windows (DWM's immersive dark mode) and Linux |
+
 ## Platform and runtime
 
 | ID | Electron | Oriel | Why | Possible resolution |

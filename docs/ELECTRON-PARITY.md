@@ -9,7 +9,7 @@ Recounted 2026-10-06 against `src/Oriel`. Update these figures when a row or che
 
 | Measure | Done | Partial | Not started | Total |
 |---|---|---|---|---|
-| Module rows below | 4 | 26 | 37 | 67 |
+| Module rows below | 4 | 27 | 36 | 67 |
 | M2 rows | 3 | 15 | 3 | 21 |
 
 The 67 rows include `BrowserView` (deprecated, never implemented; counted as not started).
@@ -119,7 +119,7 @@ Detailed item-by-item status, including `navigationHistory` and `WebFrameMain`: 
 | `clipboard` / `ClipboardItem` | `Clipboard` / `ClipboardItem` | OS | M5 | partial: Windows and macOS, Electron 44's W3C-style API (`read`/`write` with `ClipboardItem`, `readText`, `writeText`, `has`, `clear`; text, HTML, RTF, images, bookmark, files, raw `osclipboard` and `web` custom formats, Chromium's type list; on macOS the bookmark title and `electron application/findtext`); Linux throws; no `selection` (DRIFT K1-K11, branches `shell-clipboard`, `mac-clipboard`) |
 | `shell` | `Shell` | OS | M5 | partial: Windows, as Electron 44 does it (openExternal with `logUsage`, openPath, showItemInFolder, trashItem, beep, shortcut links); macOS and Linux throw (DRIFT H1, H3, H4, branch `shell-clipboard`) |
 | `nativeImage` | `NativeImage` | CEF + .NET | M5 | partial: PNG/JPEG through CEF, raw bitmaps, data URLs, `@Nx` files, crop, resize, representations; window icon, overlay and thumbar buttons take it; gaps in DRIFT B1-B5 (no `createThumbnailFromPath`, one resize filter, template images unused, no ICO) |
-| `nativeTheme` | `NativeTheme` | OS + CEF | M5 | — |
+| `nativeTheme` | `NativeTheme` | OS + CEF | M5 | partial: `themeSource` (pages, Chromium's UI, macOS appearance), `shouldUseDarkColors`, `shouldUseHighContrastColors`, `shouldUseInvertedColorScheme`, `inForcedColorsMode`, `prefersReducedTransparency`, `updated` (at once on macOS, polled elsewhere; DRIFT Y1-Y3) |
 | `powerMonitor` | `PowerMonitor` | OS | M5 | — |
 | `powerSaveBlocker` | `PowerSaveBlocker` | OS | M5 | — |
 | `safeStorage` | `SafeStorage` | OS | M5 | — |
