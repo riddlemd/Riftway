@@ -98,11 +98,11 @@ sealed partial class Pdf
     private void Walk(string content, string? resources, StringBuilder text, int depth)
     {
         var fonts = Fonts(resources);
-        var map = new Dictionary<int, string>();
+        var font = (Map: new Dictionary<int, string>(), Bytes: 2);
         foreach (Match token in ContentTokenRegex().Matches(content))
         {
-            if (token.Groups[1].Success) map = fonts.GetValueOrDefault(token.Groups[1].Value, []);
-            else if (token.Groups[2].Success) AppendRun(text, token.Groups[2].Value, map);
+            if (token.Groups[1].Success) font = fonts.GetValueOrDefault(token.Groups[1].Value, (new Dictionary<int, string>(), 2));
+            else if (token.Groups[2].Success) AppendRun(text, token.Groups[2].Value, font.Map, font.Bytes);
             else if (depth < 8 && FormXObject(resources, token.Groups[3].Value) is { } form)
                 Walk(form.Content, DictValue(form.Dict, "/Resources") ?? resources, text, depth + 1);
         }
@@ -119,16 +119,17 @@ sealed partial class Pdf
             ? (dict, content) : null;
     }
 
-    private static void AppendRun(StringBuilder text, string digits, Dictionary<int, string> map)
+    private static void AppendRun(StringBuilder text, string digits, Dictionary<int, string> map, int bytes)
     {
-        for (var i = 0; i + 4 <= digits.Length; i += 4)
-            text.Append(map.GetValueOrDefault(Hex(digits.Substring(i, 4)), ""));
+        var width = bytes * 2;
+        for (var i = 0; i + width <= digits.Length; i += width)
+            text.Append(map.GetValueOrDefault(Hex(digits.Substring(i, width)), ""));
     }
 
-    // The resource name of each font in a resource dictionary, mapped to that font's ToUnicode CMap.
-    private Dictionary<string, Dictionary<int, string>> Fonts(string? resources)
+    // The resource name of each font in a resource dictionary, mapped to its ToUnicode CMap and code length in bytes.
+    private Dictionary<string, (Dictionary<int, string> Map, int Bytes)> Fonts(string? resources)
     {
-        var fonts = new Dictionary<string, Dictionary<int, string>>();
+        var fonts = new Dictionary<string, (Dictionary<int, string> Map, int Bytes)>();
         if (resources is null) return fonts;
         var fontDict = DictValue(resources, "/Font");
         if (fontDict is null) return fonts;
@@ -137,7 +138,7 @@ sealed partial class Pdf
             var font = _objects.GetValueOrDefault(int.Parse(entry.Groups[2].Value, CultureInfo.InvariantCulture));
             var toUnicode = font is null ? null : ToUnicodeRegex().Match(font);
             if (toUnicode is { Success: true } && _streamOf.TryGetValue(int.Parse(toUnicode.Groups[1].Value, CultureInfo.InvariantCulture), out var cmap))
-                fonts[entry.Groups[1].Value] = ParseCMap(cmap);
+                fonts[entry.Groups[1].Value] = (ParseCMap(cmap), CodeBytes(cmap, font!));
         }
         return fonts;
     }
@@ -187,6 +188,15 @@ sealed partial class Pdf
             if (_streamOf.TryGetValue(int.Parse(r.Groups[1].Value, CultureInfo.InvariantCulture), out var content)) yield return content;
     }
 
+    // The CMap's codespace range gives the code length; without one, Type0 fonts use 2-byte codes and simple fonts
+    // (Type1, TrueType, Type3: Linux Chromium's header and footer) use 1.
+    private static int CodeBytes(string cmap, string font)
+    {
+        var range = CodespaceRegex().Match(cmap);
+        if (range.Success) return Math.Max(1, range.Groups[1].Value.Length / 2);
+        return Type0Regex().IsMatch(font) ? 2 : 1;
+    }
+
     private static Dictionary<int, string> ParseCMap(string cmap)
     {
         var map = new Dictionary<int, string>();
@@ -213,7 +223,7 @@ sealed partial class Pdf
         var text = new StringBuilder();
         foreach (var content in _streams.Where(s => s.Contains("Tj", StringComparison.Ordinal) || s.Contains("TJ", StringComparison.Ordinal)))
         {
-            foreach (Match hex in TextHexRegex().Matches(content)) AppendRun(text, hex.Groups[1].Value, map);
+            foreach (Match hex in TextHexRegex().Matches(content)) AppendRun(text, hex.Groups[1].Value, map, 2);
             text.Append('\n');
         }
         return text.ToString();
@@ -299,6 +309,12 @@ sealed partial class Pdf
     // A font selection ("/F1 12 Tf"), a hex string run, or an XObject drawn ("/X1 Do"), in content order.
     [GeneratedRegex(@"/([^\s/<>\[\]()]+)\s+[-\d.]+\s+Tf|<([0-9A-Fa-f]+)>|/([^\s/<>\[\]()]+)\s+Do\b")]
     private static partial Regex ContentTokenRegex();
+
+    [GeneratedRegex(@"begincodespacerange\s*<([0-9A-Fa-f]+)>")]
+    private static partial Regex CodespaceRegex();
+
+    [GeneratedRegex(@"/Subtype\s*/Type0\b")]
+    private static partial Regex Type0Regex();
 
     [GeneratedRegex(@"/Subtype\s*/Form\b")]
     private static partial Regex FormRegex();
