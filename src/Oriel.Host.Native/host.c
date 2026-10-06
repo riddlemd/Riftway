@@ -157,8 +157,9 @@ int RunWinMain(HINSTANCE instance, LPWSTR command_line, int show, void* sandbox_
   }
 
   if (is_child_process()) {
+    set_crash_keys(windows_switch(CRASH_KEYS_SWITCH));
     cef_main_args_t args = {instance};
-    return cef_execute_process(&args, app_for(windows_scheme_switch()), sandbox_info);
+    return cef_execute_process(&args, app_for(windows_switch(SCHEME_SWITCH)), sandbox_info);
   }
 
   g_sandbox_info = sandbox_info;
