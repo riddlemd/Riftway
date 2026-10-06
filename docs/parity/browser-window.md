@@ -42,8 +42,11 @@ Counted from the Checklist at the end: `BaseWindow` and `BrowserWindow` are one 
 - Windows only, as in Electron: `SetAppDetails` (`AppDetailsOptions`: the window property store's
   `PKEY_AppUserModel_*`), `SetThumbnailClip` and `SetThumbnailToolTip` (`ITaskbarList3`; clips run on an STA thread
   because the shell's proxy rejects the NULL clip that clears them), `BackgroundMaterial` option and
-  `SetBackgroundMaterial` (`DWMWA_SYSTEMBACKDROP_TYPE`, Windows 11 22H2+). The material is set but hidden behind CEF's
-  opaque painting (DRIFT W24); `titleBarOverlay` is missing (W25).
+  `SetBackgroundMaterial` (`DWMWA_SYSTEMBACKDROP_TYPE`, Windows 11 22H2+; a material clears the page background so
+  it shows, `none` makes it white, as Electron), and `Transparent`: the page's background through DevTools'
+  `Emulation.setDefaultBackgroundColorOverride` (CEF takes only opaque colours), the window's caption and sizing border
+  stripped and kept off, no backdrop, not resizable or maximizable by the user, `Maximize` filling the work area as
+  Electron emulates it. macOS and Linux transparency is missing (W24); `titleBarOverlay` is missing (W25).
 - `getNativeWindowHandle` (`W.get_window_handle`: the content `NSView`, `HWND` or X11 `Window`).
 - webContents: `LoadFile` (query, hash), `Reload`, `GetUrl`, `GetTitle`, `did-start-loading`, `did-stop-loading`,
   `did-finish-load`, `did-fail-load`.
@@ -190,7 +193,7 @@ Parameters in brackets are optional in Electron. `webContents` members are in [w
 | `hasShadow` | — | missing |  |
 | `opacity` | — | missing |  |
 | `darkTheme` | — | missing |  |
-| `transparent` | — | missing |  |
+| `transparent` | `Transparent` | partial | Windows only (W24). |
 | `type` | — | missing |  |
 | `visualEffectState` | — | missing |  |
 | `titleBarStyle` | — | missing |  |
@@ -200,7 +203,7 @@ Parameters in brackets are optional in Electron. `webContents` members are in [w
 | `roundedCorners` | — | missing |  |
 | `thickFrame` | — | missing |  |
 | `vibrancy` | — | missing |  |
-| `backgroundMaterial` | `BackgroundMaterial` | partial | Windows 11 22H2+ only; set but hidden behind CEF's opaque painting (W24). |
+| `backgroundMaterial` | `BackgroundMaterial` | done | Windows 11 22H2+ only. |
 | `zoomToPageWidth` | — | missing |  |
 | `tabbingIdentifier` | — | missing |  |
 | `webPreferences (BrowserWindow)` | `WebPreferences` | done | Per-option status in the next table. |
@@ -393,7 +396,7 @@ Parameters in brackets are optional in Electron. `webContents` members are in [w
 | `toggleTabBar()` | — | missing |  |
 | `addTabbedWindow(window)` | — | missing |  |
 | `setVibrancy(type, options)` | — | missing |  |
-| `setBackgroundMaterial(material)` | `SetBackgroundMaterial` | partial | Windows 11 22H2+ only; set but hidden (W24). |
+| `setBackgroundMaterial(material)` | `SetBackgroundMaterial` | done | Windows 11 22H2+ only. |
 | `setWindowButtonPosition(position)` | — | missing |  |
 | `getWindowButtonPosition()` | — | missing |  |
 | `setTouchBar(touchBar)` | — | missing |  |

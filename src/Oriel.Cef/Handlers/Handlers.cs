@@ -917,9 +917,21 @@ public sealed unsafe class BrowserViewDelegate
         Native->on_browser_destroyed = &OnBrowserDestroyed;
         Native->get_delegate_for_popup_browser_view = &GetDelegateForPopupBrowserView;
         Native->on_popup_browser_view_created = &OnPopupBrowserViewCreated;
+        Native->@base.on_theme_changed = &OnThemeChanged;
     }
 
     public cef_browser_view_delegate_t* Native { get; }
+
+    /// <summary>The view's theme was applied: CEF has just cleared any background colour set on it.</summary>
+    public Action? ThemeChanged { get; init; }
+
+    [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])]
+    private static void OnThemeChanged(cef_view_delegate_t* self, cef_view_t* view)
+    {
+        var owner = NativeObject.Owner<BrowserViewDelegate>(self);
+        if (owner.ThemeChanged is { } callback) Guard.Run(callback);
+        NativeObject.Release(view);
+    }
 
     /// <summary>The delegate for a page popup's view, by the client its <c>on_before_popup</c> chose; null for the
     /// same delegate as this view. Not asked for DevTools.</summary>
@@ -1012,9 +1024,21 @@ public sealed unsafe class WindowDelegate
         // The window delegate is also its root view's delegate, which owns size limits.
         Native->@base.@base.get_minimum_size = &GetMinimumSize;
         Native->@base.@base.get_maximum_size = &GetMaximumSize;
+        Native->@base.@base.on_theme_changed = &OnThemeChanged;
     }
 
     public cef_window_delegate_t* Native { get; }
+
+    /// <summary>The window's theme was applied: CEF has just cleared any background colour set on its root view.</summary>
+    public Action? ThemeChanged { get; init; }
+
+    [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])]
+    private static void OnThemeChanged(cef_view_delegate_t* self, cef_view_t* view)
+    {
+        var owner = NativeObject.Owner<WindowDelegate>(self);
+        if (owner.ThemeChanged is { } callback) Guard.Run(callback);
+        NativeObject.Release(view);
+    }
 
     public bool Resizable { get; set; } = true;
 

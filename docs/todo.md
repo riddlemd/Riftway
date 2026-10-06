@@ -19,7 +19,8 @@ Cross-platform work. Platform-specific items: [linux-todo.md](linux-todo.md), [w
   - [x] `setThumbarButtons`, `setIcon`/`setOverlayIcon` with `NativeImage`
   - [ ] Linux taskbar progress (desktop-specific)
   - [x] Windows: `setAppDetails`, `setThumbnailClip`, `setThumbnailToolTip`, `backgroundMaterial`/`setBackgroundMaterial`
-  - [ ] Make `backgroundMaterial` visible: CEF paints over it (DRIFT W24)
+  - [x] Make `backgroundMaterial` visible; `transparent` on Windows
+  - [ ] `transparent` on macOS and Linux (DRIFT W24)
   - [ ] `showInactive`
   - [x] `loadURL` options (userAgent, extraHeaders, httpReferrer, postData); `baseURLForDataURL` throws
   - [ ] Window state persistence (`getNormalBounds`, `persisted-state-restored`)

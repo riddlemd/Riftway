@@ -64,9 +64,15 @@ public sealed record BrowserWindowOptions
     /// <summary>Centres the window even when <see cref="X"/> and <see cref="Y"/> are set.</summary>
     public bool Center { get; init; }
 
-    /// <summary>The colour shown before the page paints, as <c>#RRGGBB</c> or <c>#AARRGGBB</c>.
-    /// Electron's <c>backgroundColor</c>.</summary>
+    /// <summary>The colour behind the page, as <c>#RRGGBB</c> or <c>#AARRGGBB</c>; the alpha shows the desktop through
+    /// on a <see cref="Transparent"/> window. Electron's <c>backgroundColor</c>.</summary>
     public string? BackgroundColor { get; init; }
+
+    /// <summary>Makes the window see-through wherever the page and <see cref="BackgroundColor"/> are (Windows; ignored
+    /// on macOS and Linux). As in Electron, such a window has no title bar or sizing border, cannot be resized by the
+    /// user or maximized from the system menu, and <see cref="BrowserWindow.Maximize"/> fills the work area instead.
+    /// Electron's <c>transparent</c>.</summary>
+    public bool Transparent { get; init; }
 
     /// <summary>A PNG or JPEG for the window and taskbar icon (Windows, Linux). Electron's <c>icon</c> as a path.</summary>
     public string? Icon { get; init; }
@@ -79,8 +85,10 @@ public sealed record BrowserWindowOptions
     /// Electron's <c>skipTaskbar</c>.</summary>
     public bool SkipTaskbar { get; init; }
 
-    /// <summary>What Windows 11 22H2 and later draws behind the window; null leaves the system default. Windows only:
-    /// ignored on macOS and Linux. Electron's <c>backgroundMaterial</c>.</summary>
+    /// <summary>What Windows 11 22H2 and later draws behind the window; null leaves the system default. Unless
+    /// <see cref="BackgroundColor"/> is set, any value but <see cref="Oriel.BackgroundMaterial.None"/> makes the page
+    /// background transparent so the material shows. Windows only: ignored on macOS and Linux. Electron's
+    /// <c>backgroundMaterial</c>.</summary>
     public BackgroundMaterial? BackgroundMaterial { get; init; }
 
     /// <summary>Whether the window stays above other windows.</summary>
@@ -241,6 +249,11 @@ public sealed unsafe partial class BrowserWindow
     private bool _closeFromCode;
     private bool _readyToShowRaised;
     private string? _backgroundColor;
+    // Transparent windows are Windows-only so far (DRIFT W24).
+    private readonly bool _transparent;
+    private bool _resizable;
+    // A transparent window's bounds before Maximize filled the work area.
+    private Rectangle? _restoreBounds;
     // macOS: the NSWindow whose full-screen toggle routes to simple full screen, or 0.
     private nint _routedNSWindow;
     // Touched only on the UI thread.
@@ -276,7 +289,10 @@ public sealed unsafe partial class BrowserWindow
         _closable = _options.Closable;
         _skipTaskbar = _options.SkipTaskbar;
         _icon = _options.IconImage ?? (_options.Icon is { } iconPath ? NativeImage.CreateFromBuffer(File.ReadAllBytes(iconPath)) : null);
-        _backgroundColor = _options.BackgroundColor;
+        _transparent = _options.Transparent && OperatingSystem.IsWindows();
+        _resizable = _options.Resizable;
+        _backgroundColor = WindowTransparency.InitialBackgroundColor(_options.BackgroundColor, _transparent,
+            OperatingSystem.IsWindows() ? _options.BackgroundMaterial : null);
         var session = _options.WebPreferences.Session ?? Session.FromPartition(_options.WebPreferences.Partition ?? "");
         // CEF gives a popup its opener's request context, whatever the options say.
         if (opener is not null && session != opener.WebContents.Session)
@@ -317,6 +333,7 @@ public sealed unsafe partial class BrowserWindow
             BrowserDestroyed = OnBrowserDestroyed,
             PopupDelegate = client => s_pendingPopups.TryGetValue(client, out var pending) ? (nint)pending.Window._viewDelegate.Native : 0,
             PopupViewCreated = OnPopupViewCreated,
+            ThemeChanged = () => Command(ApplyBackgroundColor),
         };
         _windowDelegate = new WindowDelegate
         {
@@ -326,9 +343,11 @@ public sealed unsafe partial class BrowserWindow
             ActivationChanged = OnActivationChanged,
             BoundsChanged = OnBoundsChanged,
             FullscreenTransition = OnFullscreenTransition,
-            Resizable = _options.Resizable,
+            // Otherwise Chromium offers resize edges and a maximize box, which Electron's transparent windows lack.
+            Resizable = _options.Resizable && !_transparent,
             Minimizable = _options.Minimizable,
-            Maximizable = _options.Maximizable,
+            Maximizable = _options.Maximizable && !_transparent,
+            ThemeChanged = () => Command(ApplyBackgroundColor),
             Frameless = !_options.Frame,
             MinimumSize = new cef_size_t { width = _options.MinWidth, height = _options.MinHeight },
             MaximumSize = new cef_size_t { width = _options.MaxWidth, height = _options.MaxHeight },
@@ -703,22 +722,55 @@ public sealed unsafe partial class BrowserWindow
     public bool IsFocused => Query(w => w->is_active(w) != 0, false);
 
     /// <summary>Maximizes the window. Electron's <c>win.maximize()</c>.</summary>
-    public void Maximize() => Command(w => w->maximize(w));
+    /// <remarks>A <see cref="BrowserWindowOptions.Transparent"/> window fills its display's work area instead, as in
+    /// Electron.</remarks>
+    public void Maximize() => Command(w =>
+    {
+        if (!_transparent)
+        {
+            w->maximize(w);
+            return;
+        }
+        if (IsMaximizedOn(w)) return;
+        _restoreBounds = ToRectangle(w->@base.@base.get_bounds_in_screen(&w->@base.@base));
+        ApplyOuterBounds(w, WorkAreaOf(w), animate: false);
+    });
 
     /// <summary>Leaves the maximized state. Electron's <c>win.unmaximize()</c>.</summary>
     public void Unmaximize() => Command(w =>
     {
-        if (w->is_maximized(w) != 0) w->restore(w);
+        if (IsMaximizedOn(w)) RestoreOn(w);
     });
 
     /// <summary>Whether the window is maximized. Electron's <c>win.isMaximized()</c>.</summary>
-    public bool IsMaximized => Query(w => w->is_maximized(w) != 0, false);
+    public bool IsMaximized => Query(IsMaximizedOn, false);
+
+    private bool IsMaximizedOn(cef_window_t* w)
+        => w->is_maximized(w) != 0 || (_transparent && WindowTransparency.FillsWorkArea(
+            ToRectangle(w->@base.@base.get_bounds_in_screen(&w->@base.@base)), WorkAreaOf(w), w->is_minimized(w) != 0));
+
+    // A transparent window leaves its emulated maximize by going back to the bounds it had.
+    private void RestoreOn(cef_window_t* w)
+    {
+        if (_transparent && _restoreBounds is { } bounds && w->is_maximized(w) == 0 && IsMaximizedOn(w)) ApplyOuterBounds(w, bounds, animate: false);
+        else w->restore(w);
+    }
+
+    private static Rectangle WorkAreaOf(cef_window_t* w)
+    {
+        var bounds = w->@base.@base.get_bounds_in_screen(&w->@base.@base);
+        var display = CefNative.cef_display_get_matching_bounds(&bounds, 0);
+        if (display is null) return default;
+        var area = ToRectangle(display->get_work_area(display));
+        NativeObject.Release(display);
+        return area;
+    }
 
     /// <summary>Minimizes the window. Electron's <c>win.minimize()</c>.</summary>
     public void Minimize() => Command(w => w->minimize(w));
 
     /// <summary>Restores the window from minimized. Electron's <c>win.restore()</c>.</summary>
-    public void Restore() => Command(w => w->restore(w));
+    public void Restore() => Command(RestoreOn);
 
     /// <summary>Whether the window is minimized. Electron's <c>win.isMinimized()</c>.</summary>
     public bool IsMinimized => Query(w => w->is_minimized(w) != 0, false);
@@ -900,10 +952,14 @@ public sealed unsafe partial class BrowserWindow
     });
 
     /// <summary>Lets the user resize the window, or stops. Electron's <c>win.setResizable()</c>.</summary>
-    public void SetResizable(bool flag) => Command(_ => _windowDelegate.Resizable = flag);
+    public void SetResizable(bool flag) => Command(_ =>
+    {
+        _resizable = flag;
+        _windowDelegate.Resizable = flag && !_transparent;
+    });
 
     /// <summary>Whether the user can resize the window. Electron's <c>win.isResizable()</c>.</summary>
-    public bool IsResizable => Query(_ => _windowDelegate.Resizable, false);
+    public bool IsResizable => Query(_ => WindowTransparency.ReportsResizable(_options.Frame, _transparent, _resizable), false);
 
     /// <summary>Lets the window be minimized, or stops. Electron's <c>win.setMinimizable()</c>.</summary>
     public void SetMinimizable(bool flag) => Command(_ => _windowDelegate.Minimizable = flag);
@@ -912,7 +968,7 @@ public sealed unsafe partial class BrowserWindow
     public bool IsMinimizable => Query(_ => _windowDelegate.Minimizable, false);
 
     /// <summary>Lets the window be maximized, or stops. Electron's <c>win.setMaximizable()</c>.</summary>
-    public void SetMaximizable(bool flag) => Command(_ => _windowDelegate.Maximizable = flag);
+    public void SetMaximizable(bool flag) => Command(_ => _windowDelegate.Maximizable = flag && !_transparent);
 
     /// <summary>Whether the window can be maximized. Electron's <c>win.isMaximizable()</c>.</summary>
     public bool IsMaximizable => Query(_ => _windowDelegate.Maximizable, false);
@@ -966,12 +1022,42 @@ public sealed unsafe partial class BrowserWindow
     /// <exception cref="FormatException">The colour is not <c>#RRGGBB</c> or <c>#AARRGGBB</c>.</exception>
     public void SetBackgroundColor(string color)
     {
-        var argb = ParseColor(color);
-        Command(w =>
+        ParseColor(color);
+        Command(w => SetBackgroundColorOn(w, color));
+    }
+
+    private void SetBackgroundColorOn(cef_window_t* w, string color)
+    {
+        _backgroundColor = color;
+        ApplyBackgroundColor(w);
+        ApplyPageBackground();
+    }
+
+    // CEF clears a view's background whenever its theme applies (CefViewView::OnThemeChanged), which includes the view
+    // joining its window, so on_theme_changed calls this again.
+    private void ApplyBackgroundColor(cef_window_t* w)
+    {
+        if (_backgroundColor is null) return;
+        var argb = ParseColor(_backgroundColor);
+        w->@base.@base.set_background_color(&w->@base.@base, argb);
+        if (_browserView is not null) _browserView->@base.set_background_color(&_browserView->@base, WindowTransparency.BrowserViewColor(argb));
+    }
+
+    // CEF takes only opaque colours for a windowed browser (GetColor in libcef/browser/context.cc) and cannot change the
+    // page's after creation; DevTools' default background override can, and lasts across navigations.
+    private void ApplyPageBackground()
+    {
+        if (_backgroundColor is null || WebContents.Browser is null) return;
+        var (r, g, b, a) = WindowTransparency.PageColor(ParseColor(_backgroundColor));
+        WebContents.DevTools.Send("Emulation.setDefaultBackgroundColorOverride", w =>
         {
-            _backgroundColor = color;
-            w->@base.@base.set_background_color(&w->@base.@base, argb);
-            if (_browserView is not null) _browserView->@base.set_background_color(&_browserView->@base, argb);
+            w.WritePropertyName("color");
+            w.WriteStartObject();
+            w.WriteNumber("r", r);
+            w.WriteNumber("g", g);
+            w.WriteNumber("b", b);
+            w.WriteNumber("a", a);
+            w.WriteEndObject();
         });
     }
 
@@ -1107,14 +1193,25 @@ public sealed unsafe partial class BrowserWindow
 
     /// <summary>Sets what Windows 11 22H2 and later draws behind the window. Windows only: does nothing on macOS and
     /// Linux. Electron's <c>win.setBackgroundMaterial()</c>.</summary>
-    /// <remarks>DWM holds the material, but CEF paints the whole window opaque, title bar included, so it does not
-    /// show yet, even under a transparent page and <see cref="BrowserWindowOptions.BackgroundColor"/>.</remarks>
-    public void SetBackgroundMaterial(BackgroundMaterial material) => Command(w => ApplyBackgroundMaterial(w, material));
-
-    private static void ApplyBackgroundMaterial(cef_window_t* w, BackgroundMaterial material)
+    /// <remarks>As in Electron, a material makes the background colour transparent so it shows behind the page, and
+    /// <see cref="BackgroundMaterial.None"/> makes it white; <see cref="BackgroundMaterial.Auto"/> leaves it.</remarks>
+    public void SetBackgroundMaterial(BackgroundMaterial material) => Command(w =>
     {
-        if (OperatingSystem.IsWindows() && !WindowsWindow.SetBackdrop(Hwnd(w), BackgroundMaterials.ToBackdrop(material)))
+        if (!OperatingSystem.IsWindows()) return;
+        ApplyBackgroundMaterial(w, material);
+        if (WindowTransparency.MaterialBackgroundColor(material) is { } color) SetBackgroundColorOn(w, color);
+    });
+
+    [System.Runtime.Versioning.SupportedOSPlatform("windows")]
+    private void ApplyBackgroundMaterial(cef_window_t* w, BackgroundMaterial material)
+    {
+        var hwnd = Hwnd(w);
+        if (!WindowsWindow.SetBackdrop(hwnd, BackgroundMaterials.ToBackdrop(material)))
+        {
             Console.Error.WriteLine("[Oriel] DWM did not take the background material (it needs Windows 11 22H2).");
+            return;
+        }
+        WindowsTranslucency.ActivateBackdrop(hwnd, _options.Frame);
     }
 
     [System.Runtime.Versioning.SupportedOSPlatform("windows")]
@@ -1268,13 +1365,12 @@ public sealed unsafe partial class BrowserWindow
             var content = ContentBoundsOn(window);
             SetContentBoundsOn(window, content with { Width = _options.Width, Height = _options.Height });
         }
-        if (_backgroundColor is not null)
+        ApplyBackgroundColor(window);
+        if (OperatingSystem.IsWindows())
         {
-            var argb = ParseColor(_backgroundColor);
-            window->@base.@base.set_background_color(&window->@base.@base, argb);
-            _browserView->@base.set_background_color(&_browserView->@base, argb);
+            if (_transparent) MakeSeeThrough(window);
+            if (_options.BackgroundMaterial is { } material) ApplyBackgroundMaterial(window, material);
         }
-        if (_options.BackgroundMaterial is { } material) ApplyBackgroundMaterial(window, material);
         if (_icon is not null) SetIconOn(window, _icon);
 
         if (UsesSimpleFullScreen && OperatingSystem.IsMacOS())
@@ -1297,7 +1393,20 @@ public sealed unsafe partial class BrowserWindow
         CefThread.PostUiDelayed(PollState, s_statePoll);
     }
 
-    private void OnBrowserCreated(cef_browser_t* browser) => WebContents.OnBrowserCreated(browser);
+    private void OnBrowserCreated(cef_browser_t* browser)
+    {
+        WebContents.OnBrowserCreated(browser);
+        ApplyPageBackground();
+    }
+
+    [System.Runtime.Versioning.SupportedOSPlatform("windows")]
+    private void MakeSeeThrough(cef_window_t* w)
+    {
+        var hwnd = Hwnd(w);
+        if (!WindowsTranslucency.MakeSeeThrough(hwnd)) Console.Error.WriteLine("[Oriel] The window could not be made transparent.");
+        // Chromium gives its windows Mica (DesktopWindowTreeHostWin::Init), which would fill what should be see-through.
+        if (_options.BackgroundMaterial is null) WindowsWindow.SetBackdrop(hwnd, WindowsBackdrop.None);
+    }
 
     private bool OnClosing(cef_window_t* window)
     {
@@ -1361,7 +1470,7 @@ public sealed unsafe partial class BrowserWindow
     private void RaiseStateChanges()
     {
         if (_window is null) return;
-        var maximized = _window->is_maximized(_window) != 0;
+        var maximized = IsMaximizedOn(_window);
         var minimized = _window->is_minimized(_window) != 0;
         if (maximized != _wasMaximized) (maximized ? Maximized : Unmaximized)?.Invoke(this, EventArgs.Empty);
         if (minimized != _wasMinimized) (minimized ? Minimized : Restored)?.Invoke(this, EventArgs.Empty);

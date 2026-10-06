@@ -176,6 +176,45 @@ static unsafe class WindowsShell
         public fixed uint Colors[256];
     }
 
+    /// <summary>The screen pixel at the centre of the window's client area, as composited by DWM.</summary>
+    internal static (byte R, byte G, byte B) ClientCentrePixel(nint hwnd)
+    {
+        // POINT packed in a long: x in the low half, y in the high.
+        long origin = 0;
+        var client = new int[4];
+        fixed (int* r = client) _ = GetClientRect(hwnd, r);
+        _ = ClientToScreen(hwnd, &origin);
+        var dc = GetDC(0);
+        var c = GetPixel(dc, (int)origin + client[2] / 2, (int)(origin >> 32) + client[3] / 2);
+        _ = ReleaseDC(0, dc);
+        return ((byte)c, (byte)(c >> 8), (byte)(c >> 16));
+    }
+
+    /// <summary>What the window answers <c>WM_NCHITTEST</c> two pixels inside its left edge, half way down
+    /// (<c>HTLEFT</c> is 10, <c>HTCLIENT</c> 1).</summary>
+    internal static nint LeftEdgeHitTest(nint hwnd)
+    {
+        var rect = new int[4];
+        fixed (int* r = rect) _ = GetWindowRect(hwnd, r);
+        var x = rect[0] + 2;
+        var y = (rect[1] + rect[3]) / 2;
+        nint result;
+        _ = SendMessageTimeoutW(hwnd, 0x84 /* WM_NCHITTEST */, 0, (nint)((y << 16) | (x & 0xFFFF)), 2 /* SMTO_ABORTIFHUNG */, 1000, &result);
+        return result;
+    }
+
+    /// <summary>The window's <c>GWL_STYLE</c>.</summary>
+    internal static uint Style(nint hwnd) => (uint)GetWindowLongPtrW(hwnd, -16);
+
+    /// <summary>Sets the window's <c>GWL_STYLE</c> as another party (Chromium) would.</summary>
+    internal static void SetStyle(nint hwnd, uint style) => SetWindowLongPtrW(hwnd, -16, (nint)style);
+
+    [DllImport("user32.dll")] private static extern int GetClientRect(nint hwnd, int* rect);
+    [DllImport("user32.dll")] private static extern int GetWindowRect(nint hwnd, int* rect);
+    [DllImport("user32.dll")] private static extern int ClientToScreen(nint hwnd, long* point);
+    [DllImport("gdi32.dll")] private static extern uint GetPixel(nint dc, int x, int y);
+    [DllImport("user32.dll")] private static extern nint GetWindowLongPtrW(nint hwnd, int index);
+    [DllImport("user32.dll")] private static extern nint SetWindowLongPtrW(nint hwnd, int index, nint value);
     [DllImport("user32.dll")] private static extern nint SendMessageTimeoutW(nint hwnd, uint message, nint wParam, nint lParam, uint flags, uint timeout, nint* result);
     [DllImport("user32.dll")] private static extern int GetIconInfo(nint icon, IconInfo* info);
     [DllImport("user32.dll")] private static extern nint GetDC(nint hwnd);

@@ -254,6 +254,7 @@ async Task RunAsync(BrowserWindow win, BrowserWindow simple)
     await FramesAsync();
     await TaskbarAsync(win);
     await WindowsApisAsync();
+    await TransparencyAsync();
     await NativeImageAsync();
     await WebContentsLifecycleAsync(win);
     await PageEventsAsync();
@@ -2438,6 +2439,99 @@ async Task WindowsApisAsync()
     Check("the shell takes the thumbnail clip and tooltip (weak: no read-back)", refusals.ToString().Length == 0, refusals.ToString().Trim());
     w.Destroy();
     await Task.Delay(300);
+}
+
+async Task TransparencyAsync()
+{
+    if (!OperatingSystem.IsWindows()) return;
+
+    // A red window underneath; what the test windows show of it is read off the composited screen. The display is
+    // colour-managed, so colours are told apart by their dominant channel.
+    var back = new BrowserWindow(new BrowserWindowOptions { Title = "Oriel window test: red backdrop", X = 60, Y = 60, Width = 800, Height = 600, AutoHideMenuBar = true, BackgroundColor = "#FF0000" });
+    await back.LoadUrl("data:text/html,<body style='background:red'></body>");
+    const string clear = "data:text/html,<html style='background:transparent'><body style='background:transparent'></body></html>";
+    static bool Red((byte R, byte G, byte B) c) => c.R > 150 && c.G < 90 && c.B < 90;
+    static bool White((byte R, byte G, byte B) c) => c.R > 200 && c.G > 200 && c.B > 200;
+    async Task<(BrowserWindow W, nint Hwnd)> Open(BrowserWindowOptions options)
+    {
+        var w = new BrowserWindow(options with { X = 200, Y = 150, Width = 400, Height = 300, AutoHideMenuBar = true });
+        await w.LoadUrl(clear);
+        await Task.Delay(1000);
+        return (w, w.GetNativeWindowHandle());
+    }
+    async Task Close(BrowserWindow w)
+    {
+        w.Destroy();
+        await Task.Delay(300);
+    }
+
+    var (plain, plainHwnd) = await Open(new BrowserWindowOptions { Title = "Oriel window test: opaque" });
+    var opaque = WindowsShell.ClientCentrePixel(plainHwnd);
+    Check("an ordinary window covers the one behind it (control)", White(opaque), opaque);
+    await Close(plain);
+
+    var (framed, framedHwnd) = await Open(new BrowserWindowOptions { Title = "Oriel window test: transparent", Transparent = true });
+    Check("Transparent shows the window behind through a transparent page (screen pixel)", Eventually(() => Red(WindowsShell.ClientCentrePixel(framedHwnd)), step), WindowsShell.ClientCentrePixel(framedHwnd));
+    Check("a transparent window has no caption or sizing border (GWL_STYLE)", (WindowsShell.Style(framedHwnd) & 0x00C40000) == 0, $"{WindowsShell.Style(framedHwnd):X8}");
+    Check("a transparent window has no backdrop to cover the see-through area (DWM read-back)", WindowsShell.Backdrop(framedHwnd) == WindowsBackdrop.None, WindowsShell.Backdrop(framedHwnd));
+    Check("a framed transparent window is neither resizable nor maximizable, as in Electron", !framed.IsResizable && !framed.IsMaximizable, $"{framed.IsResizable} {framed.IsMaximizable}");
+    WindowsShell.SetStyle(framedHwnd, WindowsShell.Style(framedHwnd) | 0x00C40000);
+    Check("a later style change cannot put the caption back, as Chromium tries to", (WindowsShell.Style(framedHwnd) & 0x00C40000) == 0, $"{WindowsShell.Style(framedHwnd):X8}");
+    var page = Path.Combine(Path.GetTempPath(), "oriel-transparent.html");
+    File.WriteAllText(page, "<html style='background:transparent'><body style='background:transparent'>file</body></html>");
+    await framed.LoadUrl(new Uri(page).AbsoluteUri);
+    Check("the page stays transparent after navigating to another origin", Eventually(() => Red(WindowsShell.ClientCentrePixel(framedHwnd)), step), WindowsShell.ClientCentrePixel(framedHwnd));
+    framed.SetBackgroundColor("#FFFFFF");
+    Check("SetBackgroundColor makes a transparent window's page opaque again", Eventually(() => White(WindowsShell.ClientCentrePixel(framedHwnd)), step), WindowsShell.ClientCentrePixel(framedHwnd));
+    await Close(framed);
+    File.Delete(page);
+
+    var (whitened, whitenedHwnd) = await Open(new BrowserWindowOptions { Title = "Oriel window test: transparent white", Transparent = true, BackgroundColor = "#FFFFFF" });
+    var opaqueColour = WindowsShell.ClientCentrePixel(whitenedHwnd);
+    whitened.SetBackgroundColor("#00000000");
+    Check("an opaque BackgroundColor covers a transparent window until SetBackgroundColor clears the page", White(opaqueColour) && Eventually(() => Red(WindowsShell.ClientCentrePixel(whitenedHwnd)), step),
+        $"{opaqueColour} -> {WindowsShell.ClientCentrePixel(whitenedHwnd)}");
+    await Close(whitened);
+
+    var (half, halfHwnd) = await Open(new BrowserWindowOptions { Title = "Oriel window test: half black", Transparent = true, Frame = false, BackgroundColor = "#80000000" });
+    // Half-black once over the red is a quarter of it after the window and the page each paint it.
+    bool Quarter() => WindowsShell.ClientCentrePixel(halfHwnd) is var c && c.R is > 40 and < 95 && c.G < 30 && c.B < 30;
+    Check("a translucent BackgroundColor is painted by the window and the page, the browser view adding none", Eventually(Quarter, step), WindowsShell.ClientCentrePixel(halfHwnd));
+    await Close(half);
+
+    var (ordinary, ordinaryHwnd) = await Open(new BrowserWindowOptions { Title = "Oriel window test: frameless", Frame = false });
+    Check("an ordinary frameless window has a resize border at its edge (control, WM_NCHITTEST)", WindowsShell.LeftEdgeHitTest(ordinaryHwnd) == 10, WindowsShell.LeftEdgeHitTest(ordinaryHwnd));
+    await Close(ordinary);
+
+    var (frameless, framelessHwnd) = await Open(new BrowserWindowOptions { Title = "Oriel window test: transparent frameless", Transparent = true, Frame = false });
+    Check("a frameless transparent window shows the window behind (screen pixel)", Eventually(() => Red(WindowsShell.ClientCentrePixel(framelessHwnd)), step), WindowsShell.ClientCentrePixel(framelessHwnd));
+    Check("a frameless transparent window reports Resizable as set, and not maximizable, as in Electron", frameless.IsResizable && !frameless.IsMaximizable, $"{frameless.IsResizable} {frameless.IsMaximizable}");
+    Check("the user cannot resize a transparent window: no sizing code at its edge (WM_NCHITTEST)", WindowsShell.LeftEdgeHitTest(framelessHwnd) is not (>= 10 and <= 17), WindowsShell.LeftEdgeHitTest(framelessHwnd));
+    var before = frameless.GetBounds();
+    var workArea = Screen.GetDisplayMatching(before).WorkArea;
+    frameless.Maximize();
+    Check("Maximize on a transparent window fills the work area and reports maximized", Eventually(() => frameless.GetBounds() == workArea && frameless.IsMaximized, step), $"{frameless.GetBounds()} vs {workArea}");
+    frameless.Unmaximize();
+    Check("Unmaximize puts a transparent window back", Eventually(() => frameless.GetBounds() == before && !frameless.IsMaximized, step), frameless.GetBounds());
+    await Close(frameless);
+
+    var (acrylic, acrylicHwnd) = await Open(new BrowserWindowOptions { Title = "Oriel window test: acrylic", BackgroundMaterial = BackgroundMaterial.Acrylic });
+    Check("BackgroundMaterial Acrylic shows the window behind, blurred, through the page (screen pixel)", Eventually(() => Red(WindowsShell.ClientCentrePixel(acrylicHwnd)), step), WindowsShell.ClientCentrePixel(acrylicHwnd));
+    Check("a material makes the background colour transparent, as in Electron", acrylic.GetBackgroundColor() == "#00000000", acrylic.GetBackgroundColor());
+    acrylic.SetBackgroundMaterial(BackgroundMaterial.None);
+    Check("SetBackgroundMaterial(None) makes the window opaque white again", Eventually(() => White(WindowsShell.ClientCentrePixel(acrylicHwnd)), step) && acrylic.GetBackgroundColor() == "#FFFFFFFF", $"{WindowsShell.ClientCentrePixel(acrylicHwnd)} {acrylic.GetBackgroundColor()}");
+    await Close(acrylic);
+
+    var (mica, micaHwnd) = await Open(new BrowserWindowOptions { Title = "Oriel window test: mica", Frame = false });
+    var micaWhite = WindowsShell.ClientCentrePixel(micaHwnd);
+    mica.SetBackgroundMaterial(BackgroundMaterial.Mica);
+    bool ShowsMica() => WindowsShell.ClientCentrePixel(micaHwnd) is var c && !White(c) && !Red(c);
+    Check("SetBackgroundMaterial(Mica) on a frameless window shows Mica, neither the page's white nor the window behind", Eventually(ShowsMica, step) && White(micaWhite),
+        $"{micaWhite} -> {WindowsShell.ClientCentrePixel(micaHwnd)}, backdrop {WindowsShell.Backdrop(micaHwnd)}");
+    mica.SetBackgroundMaterial(BackgroundMaterial.Acrylic);
+    Check("SetBackgroundMaterial(Acrylic) on a frameless window shows the window behind (screen pixel)", Eventually(() => Red(WindowsShell.ClientCentrePixel(micaHwnd)), step), WindowsShell.ClientCentrePixel(micaHwnd));
+    await Close(mica);
+    await Close(back);
 }
 
 async Task ShellAsync()
