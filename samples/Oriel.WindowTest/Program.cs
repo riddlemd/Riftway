@@ -138,10 +138,18 @@ async Task RunAsync(BrowserWindow win, BrowserWindow simple)
     Check("minimum size enforced", Eventually(() => win.GetBounds().Width >= 400, step), win.GetBounds());
     win.SetSize(700, 500);
 
+    // On Windows the HWND's WS_EX_TOPMOST must agree. A background test process meets the case where Windows ignores
+    // HWND_TOPMOST: the load above made the window active under the foreground window.
+    bool topmost()
+    {
+        var handle = win.GetNativeWindowHandle();
+        if (!OperatingSystem.IsWindows()) return win.IsAlwaysOnTop;
+        return Oriel.Cef.CefThread.InvokeOnUi(() => OperatingSystem.IsWindows() && WindowsWindow.IsTopmost(handle));
+    }
     win.SetAlwaysOnTop(true);
-    Check("always on top", Eventually(() => win.IsAlwaysOnTop, step), win.IsAlwaysOnTop);
+    Check("always on top", Eventually(() => win.IsAlwaysOnTop && topmost(), step), $"{win.IsAlwaysOnTop} topmost={topmost()}");
     win.SetAlwaysOnTop(false);
-    Check("always on top cleared", Eventually(() => !win.IsAlwaysOnTop, step), win.IsAlwaysOnTop);
+    Check("always on top cleared", Eventually(() => !win.IsAlwaysOnTop && !topmost(), step), $"{win.IsAlwaysOnTop} topmost={topmost()}");
 #pragma warning disable CA1416 // macOS only, inside the IsMacOS check
     if (OperatingSystem.IsMacOS())
     {

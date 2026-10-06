@@ -78,6 +78,12 @@ public static unsafe class Protocol
         lock (s_gate) return s_handlers.ContainsKey(scheme);
     }
 
+    /// <summary>Whether <paramref name="scheme"/> was registered as a standard scheme.</summary>
+    internal static bool IsStandardScheme(string scheme)
+    {
+        lock (s_gate) return s_privileged.Any(s => s.Privileges.Standard && string.Equals(s.Scheme, scheme, StringComparison.OrdinalIgnoreCase));
+    }
+
     /// <summary>The privileged schemes as CEF registration flags; closes registration.</summary>
     internal static IReadOnlyList<CustomScheme> TakePrivilegedSchemes()
     {

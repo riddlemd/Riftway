@@ -26,13 +26,13 @@ public sealed class DownloadStateEventArgs(DownloadState state) : EventArgs
 
 /// <summary>Arguments for <see cref="Session.WillDownload"/>; set <see cref="CancelEventArgs.Cancel"/> to cancel the
 /// download, Electron's <c>event.preventDefault()</c>.</summary>
-public sealed class WillDownloadEventArgs(DownloadItem item, WebContents webContents) : CancelEventArgs
+public sealed class WillDownloadEventArgs(DownloadItem item, WebContents? webContents) : CancelEventArgs
 {
     /// <summary>The download.</summary>
     public DownloadItem Item { get; } = item;
 
-    /// <summary>The page that started it.</summary>
-    public WebContents WebContents { get; } = webContents;
+    /// <summary>The page that started it; null for <see cref="Session.DownloadUrl"/>.</summary>
+    public WebContents? WebContents { get; } = webContents;
 }
 
 /// <summary>A download; Electron's <c>DownloadItem</c>. Its events are raised on the UI thread.</summary>

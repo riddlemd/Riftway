@@ -954,6 +954,7 @@ public sealed unsafe partial class BrowserWindow
             var onTop = flag && (level != "normal" || !OperatingSystem.IsMacOS());
             var changed = (w->is_always_on_top(w) != 0) != onTop;
             w->set_always_on_top(w, onTop ? 1 : 0);
+            if (onTop && OperatingSystem.IsWindows()) WindowsWindow.EnsureTopmost((nint)w->get_window_handle(w));
             if (OperatingSystem.IsMacOS()) MacWindow.SetLevel((nint)w->get_window_handle(w), onTop ? macLevel + relativeLevel : 0);
             ApplyAlwaysOnTopLevel(w, onTop, level);
             if (changed) AlwaysOnTopChanged?.Invoke(this, new AlwaysOnTopChangedEventArgs(onTop));

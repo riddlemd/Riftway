@@ -55,6 +55,11 @@ public static unsafe class WindowsWindow
     private const uint WindowCornerPreference = 33; // DWMWA_WINDOW_CORNER_PREFERENCE
     private const uint BorderColor = 34; // DWMWA_BORDER_COLOR
     private const uint CaptionColor = 35; // DWMWA_CAPTION_COLOR
+    private const int GwlExStyle = -20;
+    private const nint WsExTopmost = 0x00000008;
+    private const nint HwndTopmost = -1;
+    private const nint HwndNoTopmost = -2;
+    private const uint SwpZOrderOnly = 0x0001 | 0x0002 | 0x0010; // NOSIZE, NOMOVE, NOACTIVATE
 
     /// <summary>Writes each of <paramref name="values"/> to the window's property store and commits it, going on past a
     /// value the store refuses, as Chromium's <c>SetAppDetailsForWindow</c>. False if the store could not be opened or
@@ -188,6 +193,20 @@ public static unsafe class WindowsWindow
         public byte A, R, G, B;
     }
 
+    /// <summary>Whether the window has <c>WS_EX_TOPMOST</c>.</summary>
+    public static bool IsTopmost(nint hwnd) => (GetWindowLongPtrW(hwnd, GwlExStyle) & WsExTopmost) != 0;
+
+    /// <summary>Makes the window topmost where a plain <c>HWND_TOPMOST</c> did not take. True if it is topmost now.</summary>
+    public static bool EnsureTopmost(nint hwnd)
+    {
+        if (IsTopmost(hwnd)) return true;
+        // Windows ignores HWND_TOPMOST, while reporting success, for a background thread's active window that lies under
+        // the foreground window (CEF activates a window starting a load); HWND_NOTOPMOST is allowed and lifts it first.
+        _ = SetWindowPos(hwnd, HwndNoTopmost, 0, 0, 0, 0, SwpZOrderOnly);
+        _ = SetWindowPos(hwnd, HwndTopmost, 0, 0, 0, 0, SwpZOrderOnly);
+        return IsTopmost(hwnd);
+    }
+
     /// <summary>The window's DPI scale: 1 at 96 DPI.</summary>
     public static double ScaleFactor(nint hwnd) => GetDpiForWindow(hwnd) is var dpi and > 0 ? dpi / 96.0 : 1.0;
 
@@ -227,4 +246,6 @@ public static unsafe class WindowsWindow
     [DllImport("combase.dll")] private static extern int WindowsCreateString(char* source, uint length, nint* hstring);
     [DllImport("combase.dll")] private static extern int WindowsDeleteString(nint hstring);
     [DllImport("combase.dll")] private static extern int RoActivateInstance(nint classId, void** instance);
+    [DllImport("user32.dll")] private static extern nint GetWindowLongPtrW(nint hwnd, int index);
+    [DllImport("user32.dll")] private static extern int SetWindowPos(nint hwnd, nint after, int x, int y, int cx, int cy, uint flags);
 }

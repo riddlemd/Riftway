@@ -240,8 +240,10 @@ async Task RunAsync()
     var downloads = Session.FromPartition("downloads");
     var report = Encoding.UTF8.GetBytes("report body " + new string('x', 4000));
     const int SlowChunks = 40, SlowChunk = 64 * 1024;
+    string? downloadHeader = null;
     downloads.Protocol.Handle("https", request =>
     {
+        if (request.Headers.TryGetValue("X-Download", out var marked)) downloadHeader = marked;
         var attachment = new Dictionary<string, string> { ["Content-Disposition"] = "attachment; filename=\"report.txt\"" };
         if (request.Url.EndsWith("/report.txt", StringComparison.Ordinal))
             return new ProtocolResponse { ContentType = "text/plain", Headers = attachment, Body = new MemoryStream(report) };
@@ -348,8 +350,32 @@ async Task RunAsync()
         e.Item.Updated += (_, _) => e.Item.Cancel();
     });
     Check("Cancel during the download: Done says cancelled", midway.State == DownloadState.Cancelled && midway.DoneCount == 1, $"{midway.State} {midway.DoneCount}");
+    // Session.DownloadUrl: no page, through the session's hidden page, which no window list or event sees.
+    var windowsBefore = BrowserWindow.GetAllWindows().Count;
+    var pagesMade = 0;
+    EventHandler<WebContents> countPages = (_, _) => Interlocked.Increment(ref pagesMade);
+    app.WebContentsCreated += countPages;
+    var sessionPath = Path.Combine(downloadDir, "session.txt");
+    var bySession = await Download(() => downloads.DownloadUrl(Site + "report.txt"), e => e.Item.SetSavePath(sessionPath));
+    app.WebContentsCreated -= countPages;
+    Check("Session.DownloadUrl raises WillDownload with no page and saves the file", bySession.Item is not null && bySession.Page is null
+        && bySession.State == DownloadState.Completed && File.Exists(sessionPath) && File.ReadAllBytes(sessionPath).SequenceEqual(report),
+        $"{bySession.Item?.GetUrl()} page={bySession.Page is not null} {bySession.State}");
+    Check("Session.DownloadUrl's hidden page is no window and raises no WebContentsCreated",
+        BrowserWindow.GetAllWindows().Count == windowsBefore && pagesMade == 0, $"{BrowserWindow.GetAllWindows().Count} vs {windowsBefore}, {pagesMade}");
+    Check("Session.DownloadUrl sends no extra header unasked", downloadHeader is null, downloadHeader);
+    var headerPath = Path.Combine(downloadDir, "headers.txt");
+    var withHeaders = await Download(() => downloads.DownloadUrl(Site + "report.txt", new DownloadUrlOptions { Headers = new Dictionary<string, string> { ["X-Download"] = "yes" } }),
+        e => e.Item.SetSavePath(headerPath));
+    Check("Session.DownloadUrl's headers reach the server", withHeaders.State == DownloadState.Completed && downloadHeader == "yes" && File.Exists(headerPath),
+        $"{withHeaders.State} {downloadHeader}");
+    downloadHeader = null;
+    var afterHeaders = await Download(() => downloads.DownloadUrl(Site + "report.txt"), e => e.Item.SetSavePath(Path.Combine(downloadDir, "after.txt")));
+    Check("a later Session.DownloadUrl without headers sends none", afterHeaders.State == DownloadState.Completed && downloadHeader is null,
+        $"{afterHeaders.State} {downloadHeader}");
     downloadWin.Destroy();
     Directory.Delete(downloadDir, recursive: true);
+    await StorageChecks();
 
     // webRequest: the session's listeners see, cancel, redirect and change requests, as Electron's.
     var watched = Session.FromPartition("webrequest");
@@ -1387,6 +1413,182 @@ async Task RunAsync()
 }
 
 // cookies.on('changed') and set()'s rejection messages, in a session of their own while win keeps the app alive.
+// Session storage clearing: Electron's clearStorageData, clearData and getCacheSize, against data real pages stored.
+async Task StorageChecks()
+{
+    var store = Session.FromPartition("storage");
+    store.Protocol.Handle("https", request => new Uri(request.Url).AbsolutePath == "/sw.js"
+        ? ProtocolResponse.Text("self.addEventListener('install', () => self.skipWaiting());", "text/javascript")
+        : ProtocolResponse.Text(Page, "text/html"));
+    var storeWin = new BrowserWindow(new BrowserWindowOptions { Show = false, WebPreferences = new WebPreferences { Session = store } });
+    const string A = "https://a.oriel.test", B = "https://b.oriel.test";
+    async Task Fill(string origin)
+    {
+        await storeWin.LoadUrl(origin + "/");
+        await storeWin.WebContents.ExecuteJavaScriptAsync("""
+            (async () => {
+              localStorage.setItem('k', 'v');
+              await new Promise((ok, fail) => { const r = indexedDB.open('db', 1); r.onupgradeneeded = () => r.result.createObjectStore('s');
+                r.onsuccess = () => { r.result.close(); ok(); }; r.onerror = () => fail(r.error); });
+              await (await caches.open('c')).put('/cached', new Response('x'));
+              await navigator.serviceWorker.register('/sw.js');
+              await navigator.serviceWorker.ready;
+              document.cookie = 'page=1; path=/; max-age=3600';
+              return 1;
+            })()
+            """);
+    }
+    // What the origin still has, read by a fresh load of it.
+    async Task<string> Held(string origin)
+    {
+        await storeWin.LoadUrl(origin + "/");
+        return (await storeWin.WebContents.ExecuteJavaScriptAsync("""
+            (async () => [localStorage.getItem('k') ? 'ls' : '', (await indexedDB.databases()).some(d => d.name === 'db') ? 'idb' : '',
+              (await caches.keys()).includes('c') ? 'cache' : '', (await navigator.serviceWorker.getRegistrations()).length ? 'sw' : '',
+              document.cookie.includes('page=1') ? 'cookie' : ''].filter(Boolean).join(','))()
+            """))?.ToString() ?? "?";
+    }
+    const string Full = "ls,idb,cache,sw,cookie";
+    await Fill(A);
+    await Fill(B);
+    var filled = $"{await Held(A)} | {await Held(B)}";
+    Check("pages store localStorage, IndexedDB, Cache Storage, a service worker and a cookie", filled == $"{Full} | {Full}", filled);
+
+    await store.ClearStorageDataAsync(new ClearStorageDataOptions { Origin = A, Storages = ["LocalStorage"] });
+    var lsOnly = $"{await Held(A)} | {await Held(B)}";
+    Check("ClearStorageDataAsync with an origin and storages clears only those, there (names in any case)", lsOnly == $"idb,cache,sw,cookie | {Full}", lsOnly);
+    await store.ClearStorageDataAsync(new ClearStorageDataOptions { Origin = A });
+    var originOnly = $"{await Held(A)} | {await Held(B)}";
+    Check("ClearStorageDataAsync with an origin clears all its storage and cookies, not another origin's", originOnly == $" | {Full}", originOnly);
+    await Fill(A);
+    await store.ClearStorageDataAsync(new ClearStorageDataOptions { Storages = ["indexdb", "websql", "nope"] });
+    var idbEverywhere = $"{await Held(A)} | {await Held(B)}";
+    Check("ClearStorageDataAsync with storages and no origin clears them for every origin, ignoring unknown names",
+        idbEverywhere == "ls,cache,sw,cookie | ls,cache,sw,cookie", idbEverywhere);
+    var noneCleared = await Throws(() => store.ClearStorageDataAsync(new ClearStorageDataOptions { Storages = ["websql"] }));
+    var stillThere = await Held(B);
+    Check("ClearStorageDataAsync with no known storage completes and clears nothing", noneCleared is null && stillThere == "ls,cache,sw,cookie", $"{noneCleared?.Message} {stillThere}");
+    await store.ClearStorageDataAsync();
+    var allCleared = $"{await Held(A)} | {await Held(B)}";
+    Check("ClearStorageDataAsync with no options clears every origin", allCleared == " | ", allCleared);
+
+    // clearData.
+    await Fill(A);
+    await Fill(B);
+    await store.ClearDataAsync(new ClearDataOptions { DataTypes = ["localStorage"], Origins = [A] });
+    var dataLs = $"{await Held(A)} | {await Held(B)}";
+    Check("ClearDataAsync with data types and origins clears those types there only", dataLs == $"idb,cache,sw,cookie | {Full}", dataLs);
+    await store.ClearDataAsync(new ClearDataOptions { Origins = [] });
+    var emptyOrigins = await Held(B);
+    Check("ClearDataAsync with an empty origins list clears nothing", emptyOrigins == Full, emptyOrigins);
+    await store.ClearDataAsync(new ClearDataOptions { DataTypes = [] });
+    var emptyTypes = await Held(B);
+    Check("ClearDataAsync with an empty data type list clears nothing", emptyTypes == Full, emptyTypes);
+    await store.ClearDataAsync(new ClearDataOptions { Origins = [B] });
+    var allOfB = $"{await Held(A)} | {await Held(B)}";
+    // Cookies go by registrable domain: B's clears A's host cookie too, both being under oriel.test.
+    Check("ClearDataAsync with origins and no data types clears all of their data, and their site's cookies", allOfB == "idb,cache,sw | ", allOfB);
+
+    async Task SiteCookies()
+    {
+        foreach (var url in new[] { "https://sub.site1.test/", "https://other.site1.test/", "https://site2.test/" })
+            await store.Cookies.SetAsync(new CookieDetails(url) { Name = new Uri(url).Host.Replace(".", "_"), Value = "1" });
+    }
+    string SiteNames(IEnumerable<Cookie> cookies) => string.Join(",", cookies.Where(c => c.Domain.Contains("site")).Select(c => c.Name).Order());
+    await SiteCookies();
+    await store.ClearDataAsync(new ClearDataOptions { DataTypes = ["cookies"], Origins = ["https://sub.site1.test"] });
+    var byDomain = SiteNames(await store.Cookies.GetAsync());
+    Check("ClearDataAsync clears cookies by registrable domain", byDomain == "site2_test", byDomain);
+    await SiteCookies();
+    await store.ClearDataAsync(new ClearDataOptions { DataTypes = ["cookies"], ExcludeOrigins = ["https://site2.test"] });
+    var kept = SiteNames(await store.Cookies.GetAsync());
+    var pageCookie = (await store.Cookies.GetAsync(new CookieFilter { Name = "page" })).Count;
+    Check("ClearDataAsync with excludeOrigins keeps only their cookies", kept == "site2_test" && pageCookie == 0, $"{kept} page={pageCookie}");
+
+    var both = await Throws(() => store.ClearDataAsync(new ClearDataOptions { Origins = [A], ExcludeOrigins = [B] }));
+    Check("ClearDataAsync refuses origins with excludeOrigins, as Electron", both is ArgumentException { Message: "Cannot provide both 'origins' and 'excludeOrigins'" }, both?.Message);
+    var opaque = await Throws(() => store.ClearDataAsync(new ClearDataOptions { Origins = ["data:text/plain,x"] }));
+    Check("ClearDataAsync refuses an opaque origin, as Electron", opaque is ArgumentException { Message: "Invalid origin: 'data:text/plain,x'" }, opaque?.Message);
+    var keepStorage = await Throws(() => store.ClearDataAsync(new ClearDataOptions { DataTypes = ["localStorage"], ExcludeOrigins = [B] }));
+    Check("ClearDataAsync cannot keep some origins' storage", keepStorage is NotSupportedException, keepStorage?.GetType().Name);
+    await Fill(A);
+    await Fill(B);
+    await store.ClearDataAsync();
+    var dataAll = $"{await Held(A)} | {await Held(B)}";
+    Check("ClearDataAsync with no options clears everything", dataAll == " | " && SiteNames(await store.Cookies.GetAsync()) == "", dataAll);
+    storeWin.Destroy();
+
+    // getCacheSize: an HTTP server's cacheable script lands in the session's cache on disk.
+    var cached = Session.FromPartition("persist:cache");
+    var listener = new TcpListener(IPAddress.Loopback, 0);
+    listener.Start();
+    var port = ((IPEndPoint)listener.LocalEndpoint).Port;
+    var script = Encoding.ASCII.GetBytes("//" + new string('x', 600_000));
+    _ = Task.Run(async () =>
+    {
+        while (true)
+        {
+            TcpClient client;
+            try { client = await listener.AcceptTcpClientAsync(); }
+            catch (Exception) { return; }
+            _ = Task.Run(async () =>
+            {
+                using var _ = client;
+                var stream = client.GetStream();
+                var reader = new StreamReader(stream, Encoding.ASCII);
+                var first = await reader.ReadLineAsync() ?? "";
+                while (!string.IsNullOrEmpty(await reader.ReadLineAsync())) { }
+                var big = first.Contains("/big.js");
+                var body = big ? script : Encoding.ASCII.GetBytes("<!doctype html><script src=/big.js></script>");
+                var head = $"HTTP/1.1 200 OK\r\nContent-Type: {(big ? "text/javascript" : "text/html")}\r\nContent-Length: {body.Length}\r\n"
+                    + $"{(big ? "Cache-Control: max-age=3600\r\n" : "Cache-Control: no-store\r\n")}Connection: close\r\n\r\n";
+                await stream.WriteAsync(Encoding.ASCII.GetBytes(head));
+                await stream.WriteAsync(body);
+            });
+        }
+    });
+    await cached.ClearCacheAsync();
+    var empty = await cached.GetCacheSizeAsync();
+    var cacheWin = new BrowserWindow(new BrowserWindowOptions { Show = false, WebPreferences = new WebPreferences { Session = cached } });
+    await cacheWin.LoadUrl($"http://127.0.0.1:{port}/");
+    long grown = 0;
+    for (var i = 0; i < 50 && grown < empty + script.Length; i++)
+    {
+        grown = await cached.GetCacheSizeAsync();
+        if (grown < empty + script.Length) await Task.Delay(100);
+    }
+    Check("GetCacheSizeAsync grows by a cached response", grown >= empty + script.Length, $"{empty} -> {grown}");
+    await cached.ClearCacheAsync();
+    long shrunk = grown;
+    for (var i = 0; i < 50 && shrunk >= script.Length; i++)
+    {
+        shrunk = await cached.GetCacheSizeAsync();
+        if (shrunk >= script.Length) await Task.Delay(100);
+    }
+    Check("GetCacheSizeAsync shrinks after ClearCacheAsync", shrunk < script.Length, $"{grown} -> {shrunk}");
+    // clearData's cache type empties the HTTP cache too.
+    // A new URL: the page's own memory cache would answer the old one without the HTTP cache.
+    await cacheWin.LoadUrl($"http://127.0.0.1:{port}/big.js?again");
+    long refilled = 0;
+    for (var i = 0; i < 50 && refilled < script.Length; i++)
+    {
+        refilled = await cached.GetCacheSizeAsync();
+        if (refilled < script.Length) await Task.Delay(100);
+    }
+    await cached.ClearDataAsync(new ClearDataOptions { DataTypes = ["cache"] });
+    long dataCleared = refilled;
+    for (var i = 0; i < 50 && dataCleared >= script.Length; i++)
+    {
+        dataCleared = await cached.GetCacheSizeAsync();
+        if (dataCleared >= script.Length) await Task.Delay(100);
+    }
+    Check("ClearDataAsync with the cache type empties the HTTP cache", refilled >= script.Length && dataCleared < script.Length, $"{refilled} -> {dataCleared}");
+    cacheWin.Destroy();
+    listener.Stop();
+    var inMemory = await Throws(() => store.GetCacheSizeAsync());
+    Check("GetCacheSizeAsync refuses an in-memory session", inMemory is NotSupportedException, inMemory?.GetType().Name);
+}
+
 async Task CookieChangeChecks()
 {
     var watched = Session.FromPartition("cookie-events");
@@ -1924,7 +2126,7 @@ var staleDisk = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder
 if (!mediaChild)
 {
     if (Directory.Exists(staleDisk)) Directory.Delete(staleDisk, recursive: true);
-    foreach (var name in new[] { "fresh", "fresh-object" })
+    foreach (var name in new[] { "fresh", "fresh-object", "cache" })
     {
         var freshDir = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "Oriel.SessionTest", "Partition " + name);
         if (Directory.Exists(freshDir)) Directory.Delete(freshDir, recursive: true);
