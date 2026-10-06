@@ -12,7 +12,7 @@ namespace Oriel;
 public sealed record FileFilter(string Name, params IReadOnlyList<string> Extensions);
 
 /// <summary>What an open dialog may choose; Electron's <c>properties</c> for <c>showOpenDialog</c>.</summary>
-/// <remarks>macOS honours every property Electron honours there; elsewhere CEF's dialog takes only
+/// <remarks>macOS and Windows honour every property Electron honours there; on Linux CEF's dialog takes only
 /// <see cref="OpenFile"/>, <see cref="OpenDirectory"/> and <see cref="MultiSelections"/>, and the others throw.</remarks>
 [Flags]
 public enum OpenDialogProperties
@@ -30,27 +30,29 @@ public enum OpenDialogProperties
     /// <summary>Several files can be chosen.</summary>
     MultiSelections = 1 << 2,
 
-    /// <summary>Hidden files are shown. macOS only (throws elsewhere: CEF's dialog has no option for it).</summary>
+    /// <summary>Hidden files are shown (macOS and Windows). Throws on Linux: CEF's dialog has no option for it.</summary>
     ShowHiddenFiles = 1 << 3,
 
-    /// <summary>The dialog can create directories (macOS). Throws elsewhere: CEF's dialog has no option for it.</summary>
+    /// <summary>The dialog can create directories (macOS). Ignored on Windows, as in Electron. Throws on Linux: CEF's
+    /// dialog has no option for it.</summary>
     CreateDirectory = 1 << 4,
 
-    /// <summary>Windows only in Electron: ignored on macOS; throws elsewhere.</summary>
+    /// <summary>Windows: offers to create a file name that does not exist (the path is returned, the file is not
+    /// created). Ignored on macOS; throws on Linux.</summary>
     PromptToCreate = 1 << 5,
 
-    /// <summary>Aliases are returned as themselves, not resolved (macOS). Throws elsewhere.</summary>
+    /// <summary>Aliases are returned as themselves, not resolved (macOS). Ignored on Windows, as in Electron; throws on Linux.</summary>
     NoResolveAliases = 1 << 6,
 
-    /// <summary>Packages such as <c>.app</c> are browsed as directories (macOS). Throws elsewhere.</summary>
+    /// <summary>Packages such as <c>.app</c> are browsed as directories (macOS). Ignored on Windows, as in Electron; throws on Linux.</summary>
     TreatPackageAsDirectory = 1 << 7,
 
-    /// <summary>Windows only in Electron: ignored on macOS; throws elsewhere.</summary>
+    /// <summary>Windows: the chosen item is not added to recent documents. Ignored on macOS; throws on Linux.</summary>
     DontAddToRecent = 1 << 8,
 }
 
 /// <summary>Save dialog options; Electron's <c>properties</c> for <c>showSaveDialog</c>.</summary>
-/// <remarks>macOS honours the macOS ones; elsewhere CEF's dialog takes none, and any set throws.</remarks>
+/// <remarks>macOS honours the macOS ones and Windows the Windows ones; on Linux CEF's dialog takes none, and any set throws.</remarks>
 [Flags]
 public enum SaveDialogProperties
 {
@@ -60,16 +62,16 @@ public enum SaveDialogProperties
     /// <summary>The dialog can create directories (macOS).</summary>
     CreateDirectory = 1 << 0,
 
-    /// <summary>Hidden files are shown.</summary>
+    /// <summary>Hidden files are shown (macOS and Windows).</summary>
     ShowHiddenFiles = 1 << 1,
 
     /// <summary>Packages such as <c>.app</c> are browsed as directories (macOS).</summary>
     TreatPackageAsDirectory = 1 << 2,
 
-    /// <summary>Linux only in Electron: ignored on macOS.</summary>
+    /// <summary>Linux only in Electron: ignored on macOS and on Windows, which always confirms an overwrite.</summary>
     ShowOverwriteConfirmation = 1 << 3,
 
-    /// <summary>Windows only in Electron: ignored on macOS.</summary>
+    /// <summary>Windows: the chosen item is not added to recent documents. Ignored on macOS.</summary>
     DontAddToRecent = 1 << 4,
 }
 
@@ -90,11 +92,11 @@ public sealed record OpenDialogOptions
     /// <summary>What may be chosen.</summary>
     public OpenDialogProperties Properties { get; init; } = OpenDialogProperties.OpenFile;
 
-    /// <summary>The accept button's label (the panel's prompt on macOS). Not supported (setting it throws) off macOS:
-    /// CEF's dialog has no custom button label.</summary>
+    /// <summary>The accept button's label (the panel's prompt on macOS). Windows: the dialog's
+    /// OK button. Not supported (setting it throws) on Linux: CEF's dialog has no custom button label.</summary>
     public string? ButtonLabel { get; init; }
 
-    /// <summary>A message above the panel (macOS). Not supported (setting it throws) elsewhere.</summary>
+    /// <summary>A message above the panel (macOS). Ignored on Windows, as in Electron; not supported (setting it throws) on Linux.</summary>
     public string? Message { get; init; }
 
     /// <summary>Also return a security-scoped bookmark per path, for a sandboxed app (macOS). Electron returns them in
@@ -119,14 +121,15 @@ public sealed record SaveDialogOptions
     /// <summary>Electron's save <c>properties</c>.</summary>
     public SaveDialogProperties Properties { get; init; }
 
-    /// <summary>The accept button's label (the panel's prompt on macOS). Not supported (setting it throws) off macOS:
-    /// CEF's dialog has no custom button label.</summary>
+    /// <summary>The accept button's label (the panel's prompt on macOS). Windows: the dialog's
+    /// OK button. Not supported (setting it throws) on Linux: CEF's dialog has no custom button label.</summary>
     public string? ButtonLabel { get; init; }
 
-    /// <summary>A message above the panel (macOS). Not supported (setting it throws) elsewhere.</summary>
+    /// <summary>A message above the panel (macOS). Ignored on Windows, as in Electron; not supported (setting it throws) on Linux.</summary>
     public string? Message { get; init; }
 
-    /// <summary>The label in front of the file name field (macOS). Not supported (setting it throws) elsewhere.</summary>
+    /// <summary>The label in front of the file name field (macOS). Ignored on Windows, as in Electron; not supported
+    /// (setting it throws) on Linux.</summary>
     public string? NameFieldLabel { get; init; }
 
     /// <summary>Whether the panel shows its tags field (macOS); true by default, as Electron. Ignored elsewhere.</summary>
@@ -159,19 +162,21 @@ public sealed record SaveDialogReturnValue(bool Canceled, string FilePath)
 
 /// <summary>File open and save dialogs; Electron's <c>dialog</c> (message boxes come later).</summary>
 /// <remarks>On macOS these are AppKit's NSOpenPanel and NSSavePanel, set up as Electron's: a sheet on the window
-/// given, else a free-standing panel. Elsewhere CEF shows its dialogs through a window's browser, so a dialog needs an
+/// given, else a free-standing panel. Windows shows the shell's file dialog on a thread of its own, owned by the window
+/// given or by none, as Electron does. On Linux CEF shows its dialogs through a window's browser, so a dialog needs an
 /// open window: the one given, else the focused window, else any. Use after <see cref="OrielApp.Ready"/>, from any thread.</remarks>
 public static unsafe partial class Dialog
 {
     /// <summary>Asks the user for files or a directory. Electron's <c>dialog.showOpenDialog()</c>.</summary>
-    /// <exception cref="InvalidOperationException">Before <see cref="OrielApp.Ready"/>; or, off macOS, no window is open.</exception>
-    /// <exception cref="NotSupportedException">Off macOS, an option CEF's dialog cannot honour, such as
+    /// <exception cref="InvalidOperationException">Before <see cref="OrielApp.Ready"/>; or, on Linux, no window is open.</exception>
+    /// <exception cref="NotSupportedException">On Linux, an option CEF's dialog cannot honour, such as
     /// <see cref="OpenDialogOptions.ButtonLabel"/>, or directories with <see cref="OpenDialogProperties.MultiSelections"/>
     /// or with <see cref="OpenDialogProperties.OpenFile"/>.</exception>
     public static Task<OpenDialogReturnValue> ShowOpenDialogAsync(BrowserWindow? window, OpenDialogOptions options)
     {
         ArgumentNullException.ThrowIfNull(options);
         if (OperatingSystem.IsMacOS()) return MacOpenAsync(window, options);
+        if (OperatingSystem.IsWindows()) return ShowOpenOnWindows(window, options);
         var mode = OpenModeOf(options);
         return Run(window, mode, options.Title, options.DefaultPath, options.Filters)
             .ContinueWith(t => new OpenDialogReturnValue(t.Result.Count == 0, t.Result), TaskScheduler.Default);
@@ -181,13 +186,14 @@ public static unsafe partial class Dialog
     public static Task<OpenDialogReturnValue> ShowOpenDialogAsync(OpenDialogOptions options) => ShowOpenDialogAsync(null, options);
 
     /// <summary>Asks the user where to save a file. Electron's <c>dialog.showSaveDialog()</c>.</summary>
-    /// <exception cref="InvalidOperationException">Before <see cref="OrielApp.Ready"/>; or, off macOS, no window is open.</exception>
-    /// <exception cref="NotSupportedException">Off macOS, an option CEF's dialog cannot honour, such as
+    /// <exception cref="InvalidOperationException">Before <see cref="OrielApp.Ready"/>; or, on Linux, no window is open.</exception>
+    /// <exception cref="NotSupportedException">On Linux, an option CEF's dialog cannot honour, such as
     /// <see cref="SaveDialogOptions.ButtonLabel"/>.</exception>
     public static Task<SaveDialogReturnValue> ShowSaveDialogAsync(BrowserWindow? window, SaveDialogOptions options)
     {
         ArgumentNullException.ThrowIfNull(options);
         if (OperatingSystem.IsMacOS()) return MacSaveAsync(window, options);
+        if (OperatingSystem.IsWindows()) return ShowSaveOnWindows(window, options);
         RejectCefUnsupported(options);
         return Run(window, cef_file_dialog_mode_t.FILE_DIALOG_SAVE, options.Title, options.DefaultPath, options.Filters)
             .ContinueWith(t => new SaveDialogReturnValue(t.Result.Count == 0, t.Result.Count == 0 ? string.Empty : t.Result[0]), TaskScheduler.Default);
@@ -200,29 +206,32 @@ public static unsafe partial class Dialog
     /// Electron's <c>dialog.showOpenDialogSync()</c>.</summary>
     /// <remarks>On macOS it runs modally on the main (UI) thread, as Electron: a sheet with its window run modally,
     /// else an app-modal panel; CEF's own UI tasks wait until it closes, as Chromium's do under Electron. Called from
-    /// another thread, that thread waits.</remarks>
-    /// <exception cref="InvalidOperationException">Before <see cref="OrielApp.Ready"/>; or, off macOS, called on the
+    /// another thread, that thread waits. On Windows, window messages keep being dispatched on the UI thread while the dialog
+    /// is up, as in a modal dialog's loop.</remarks>
+    /// <exception cref="InvalidOperationException">Before <see cref="OrielApp.Ready"/>; or, on Linux, called on the
     /// UI thread, which must stay free to run the dialog, or no window is open.</exception>
     /// <exception cref="NotSupportedException">See <see cref="ShowOpenDialogAsync(BrowserWindow?, OpenDialogOptions)"/>.</exception>
     public static IReadOnlyList<string>? ShowOpenDialogSync(BrowserWindow? window, OpenDialogOptions options)
     {
         if (OperatingSystem.IsMacOS()) return MacOpenSync(window, options);
-        RequireOffUiThread();
-        var result = ShowOpenDialogAsync(window, options).GetAwaiter().GetResult();
+        if (!OperatingSystem.IsWindows()) RequireOffUiThread();
+        var dialog = ShowOpenDialogAsync(window, options);
+        var result = OperatingSystem.IsWindows() ? WaitOnWindows(dialog) : dialog.GetAwaiter().GetResult();
         return result.Canceled ? null : result.FilePaths;
     }
 
     /// <summary>Asks where to save and waits for the answer: the path, or null when cancelled.
     /// Electron's <c>dialog.showSaveDialogSync()</c>.</summary>
     /// <remarks>See <see cref="ShowOpenDialogSync(BrowserWindow?, OpenDialogOptions)"/>.</remarks>
-    /// <exception cref="InvalidOperationException">Before <see cref="OrielApp.Ready"/>; or, off macOS, called on the
+    /// <exception cref="InvalidOperationException">Before <see cref="OrielApp.Ready"/>; or, on Linux, called on the
     /// UI thread, which must stay free to run the dialog, or no window is open.</exception>
     /// <exception cref="NotSupportedException">See <see cref="ShowSaveDialogAsync(BrowserWindow?, SaveDialogOptions)"/>.</exception>
     public static string? ShowSaveDialogSync(BrowserWindow? window, SaveDialogOptions options)
     {
         if (OperatingSystem.IsMacOS()) return MacSaveSync(window, options);
-        RequireOffUiThread();
-        var result = ShowSaveDialogAsync(window, options).GetAwaiter().GetResult();
+        if (!OperatingSystem.IsWindows()) RequireOffUiThread();
+        var dialog = ShowSaveDialogAsync(window, options);
+        var result = OperatingSystem.IsWindows() ? WaitOnWindows(dialog) : dialog.GetAwaiter().GetResult();
         return result.Canceled ? null : result.FilePath;
     }
 

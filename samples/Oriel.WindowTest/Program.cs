@@ -899,19 +899,16 @@ async Task DialogsAsync(BrowserWindow win)
             X($"windowactivate --sync {id} mousemove --window {id} {geometry["WIDTH"] - 50} {geometry["HEIGHT"] - 28} click 1");
             return true;
         }
-        if (OperatingSystem.IsWindows())
-        {
-            // IFileDialog is a top-level #32770 titled by Title; IDOK presses its default button (Save / Open / Select Folder).
-            var hwnd = (nint)0;
-            if (!Eventually(() => (hwnd = WinDialog.FindWindowW("#32770", title)) != 0 && WinDialog.IsWindowVisible(hwnd), step)) return false;
-            // Its shell view fills in after the window shows; IDOK before that can be dropped.
-            Thread.Sleep(1000);
-            return WinDialog.PostMessageW(hwnd, 0x0111 /* WM_COMMAND */, accept ? 1 /* IDOK */ : 2 /* IDCANCEL */, 0);
-        }
         return false;
     }
 
-    if (!OperatingSystem.IsMacOS() && !OperatingSystem.IsLinux() && !OperatingSystem.IsWindows()) return;
+    if (OperatingSystem.IsWindows())
+    {
+        await WindowsDialogsAsync(win, dir);
+        Directory.Delete(dir, recursive: true);
+        return;
+    }
+    if (!OperatingSystem.IsMacOS() && !OperatingSystem.IsLinux()) return;
 
     var saveOptions = new SaveDialogOptions { Title = "Oriel save test", DefaultPath = target, Filters = [new("Text", "txt")] };
     if (OperatingSystem.IsMacOS())
@@ -2228,6 +2225,176 @@ async Task PreferredSizeAsync()
     File.Delete(page);
 }
 
+// Windows: the shell's IFileDialog, read and answered through its own controls, as a user would.
+async Task WindowsDialogsAsync(BrowserWindow win, string dir)
+{
+    var real = Path.Combine(dir, "real.txt");
+    File.WriteAllText(real, "");
+    File.WriteAllText(Path.Combine(dir, "a.txt"), "");
+    File.WriteAllText(Path.Combine(dir, "b.dat"), "");
+    var secret = Path.Combine(dir, "secret.txt");
+    File.WriteAllText(secret, "");
+    File.SetAttributes(secret, FileAttributes.Hidden);
+    Directory.CreateDirectory(Path.Combine(dir, "sub1"));
+    Directory.CreateDirectory(Path.Combine(dir, "sub2"));
+    var winHwnd = win.GetNativeWindowHandle();
+    static bool Same(string? a, string? b) => a is not null && b is not null
+        && string.Equals(Path.GetFullPath(a).TrimEnd('\\'), Path.GetFullPath(b).TrimEnd('\\'), StringComparison.OrdinalIgnoreCase);
+    static bool Listed(List<string> names, string file) => names.Contains(file) || names.Contains(Path.GetFileNameWithoutExtension(file));
+
+    // Waits for the dialog and for its shell view to fill in: commands before that can be dropped.
+    nint Find(string title)
+    {
+        var hwnd = (nint)0;
+        if (!Eventually(() => (hwnd = WindowsShell.FileDialog(title)) != 0, step)) return 0;
+        Thread.Sleep(1000);
+        return hwnd;
+    }
+    static void Press(nint dialog, bool accept) => WinDialog.PostMessageW(dialog, 0x0111 /* WM_COMMAND */, accept ? 1 /* IDOK */ : 2 /* IDCANCEL */, 0);
+    void Type(nint dialog, string text) => WindowsShell.SetText(WindowsShell.NameBox(dialog), text);
+    async Task<T?> Result<T>(Task<T> dialog) where T : class => await Task.WhenAny(dialog, Task.Delay(step)) == dialog ? dialog.Result : null;
+    static string Paths(OpenDialogReturnValue? r) => r is null ? "none" : $"{r.Canceled}: {string.Join(",", r.FilePaths)}";
+
+    // Window-less: no owner, as Electron passes none; defaultPath names a file, so the name box and folder follow it.
+    var loose = Dialog.ShowOpenDialogAsync(new OpenDialogOptions { Title = "Oriel windowless open", DefaultPath = real });
+    var d = Find("Oriel windowless open");
+    Check("window-less open dialog shows", d != 0);
+    Check("window-less open dialog has no owner", d != 0 && WindowsShell.Owner(d) == 0, WindowsShell.Owner(d));
+    Check("defaultPath file: the name box shows its name", WindowsShell.Text(WindowsShell.NameBox(d)) == "real.txt", WindowsShell.Text(WindowsShell.NameBox(d)));
+    Check("defaultPath file: the dialog opens in its directory", Same(WindowsShell.Address(d), dir), WindowsShell.Address(d));
+    Press(d, accept: true);
+    var looseResult = await Result(loose);
+    Check("window-less open accepts and returns the file", looseResult is { Canceled: false, FilePaths: [var p] } && Same(p, real), Paths(looseResult));
+
+    // With a window: owned by it and modal to it; buttonLabel on the accept button; defaultPath a directory.
+    var owned = Dialog.ShowOpenDialogAsync(win, new OpenDialogOptions { Title = "Oriel owned open", DefaultPath = dir, ButtonLabel = "Pick it" });
+    d = Find("Oriel owned open");
+    Check("an open dialog with a window is owned by it", d != 0 && WindowsShell.Owner(d) == winHwnd, $"{WindowsShell.Owner(d)} vs {winHwnd}");
+    Check("the owner is disabled while the dialog is up", d != 0 && !WindowsShell.IsEnabled(winHwnd));
+    Check("buttonLabel is the accept button's text", WindowsShell.DialogItemText(d, 1) == "Pick it", WindowsShell.DialogItemText(d, 1));
+    Check("defaultPath directory: the dialog opens in it with an empty name box",
+        Same(WindowsShell.Address(d), dir) && WindowsShell.Text(WindowsShell.NameBox(d)) == "", $"{WindowsShell.Address(d)} | {WindowsShell.Text(WindowsShell.NameBox(d))}");
+    Press(d, accept: false);
+    var cancelled = await Result(owned);
+    Check("a cancelled open dialog reports Canceled and no paths", cancelled is { Canceled: true, FilePaths.Count: 0 }, Paths(cancelled));
+    Check("the owner is enabled again after the dialog", Eventually(() => WindowsShell.IsEnabled(winHwnd), step));
+
+    // Each dialog has a dedicated STA thread of its own, as Electron's dialog_thread: two open at once run on two threads.
+    var first = Dialog.ShowOpenDialogAsync(new OpenDialogOptions { Title = "Oriel pair one", DefaultPath = dir });
+    var second = Dialog.ShowOpenDialogAsync(new OpenDialogOptions { Title = "Oriel pair two", DefaultPath = dir });
+    var one = Find("Oriel pair one");
+    var two = Find("Oriel pair two");
+    Check("two dialogs open at once run on two threads", one != 0 && two != 0 && WindowsShell.ThreadOf(one) != WindowsShell.ThreadOf(two),
+        $"{WindowsShell.ThreadOf(one)} {WindowsShell.ThreadOf(two)}");
+    Press(one, accept: false);
+    Press(two, accept: false);
+    Check("both cancel", Task.WaitAll([first, second], step));
+    // multiSelections: several quoted names in the name box.
+    var multi = Dialog.ShowOpenDialogAsync(win, new OpenDialogOptions { Title = "Oriel multi open", DefaultPath = dir, Properties = OpenDialogProperties.OpenFile | OpenDialogProperties.MultiSelections });
+    d = Find("Oriel multi open");
+    Type(d, "\"a.txt\" \"b.dat\"");
+    Press(d, accept: true);
+    var multiResult = await Result(multi);
+    Check("MultiSelections returns several files", multiResult is { Canceled: false, FilePaths.Count: 2 }
+        && multiResult.FilePaths.Any(f => Same(f, Path.Combine(dir, "a.txt"))) && multiResult.FilePaths.Any(f => Same(f, Path.Combine(dir, "b.dat"))), Paths(multiResult));
+
+    // openDirectory + multiSelections: FOS_PICKFOLDERS | FOS_ALLOWMULTISELECT.
+    // A folder picker ignores quoted names typed in its box, so the folders are selected in the view, as Ctrl+clicks would.
+    var folders = Dialog.ShowOpenDialogAsync(win, new OpenDialogOptions { Title = "Oriel folders open", DefaultPath = dir, Properties = OpenDialogProperties.OpenDirectory | OpenDialogProperties.MultiSelections });
+    d = Find("Oriel folders open");
+    var picked = await Task.Run(() => WindowsShell.SelectItems(d, ["sub1", "sub2"]));
+    Thread.Sleep(500);
+    Press(d, accept: true);
+    var foldersResult = await Result(folders);
+    Check("OpenDirectory with MultiSelections returns several directories", foldersResult is { Canceled: false, FilePaths.Count: 2 }
+        && foldersResult.FilePaths.Any(f => Same(f, Path.Combine(dir, "sub1"))) && foldersResult.FilePaths.Any(f => Same(f, Path.Combine(dir, "sub2"))), $"selected {picked}; {Paths(foldersResult)}");
+
+    // One folder: accepting with an empty name box chooses the folder shown.
+    var folder = Dialog.ShowOpenDialogAsync(win, new OpenDialogOptions { Title = "Oriel folder open", DefaultPath = dir, Properties = OpenDialogProperties.OpenDirectory });
+    d = Find("Oriel folder open");
+    Press(d, accept: true);
+    var folderResult = await Result(folder);
+    Check("OpenDirectory returns the directory it started in", folderResult is { Canceled: false, FilePaths: [var only] } && Same(only, dir), Paths(folderResult));
+
+    // showHiddenFiles: a hidden file is listed only with it, which shows only while Explorer hides hidden files
+    // (FOS_FORCESHOWHIDDEN does not reveal protected system files either).
+    List<string> NamesIn(OpenDialogOptions options)
+    {
+        var t = Dialog.ShowOpenDialogAsync(win, options);
+        var h = Find(options.Title!);
+        var names = WindowsShell.ElementNames(h);
+        Press(h, accept: false);
+        t.Wait(step);
+        return names;
+    }
+    var plain = NamesIn(new OpenDialogOptions { Title = "Oriel plain list", DefaultPath = dir });
+    var hidden = NamesIn(new OpenDialogOptions { Title = "Oriel hidden list", DefaultPath = dir, Properties = OpenDialogProperties.ShowHiddenFiles });
+    Check("the item view lists the folder's files", Listed(plain, "a.txt") && Listed(hidden, "a.txt"));
+    var explorerHides = OperatingSystem.IsWindows() && Microsoft.Win32.Registry.GetValue(@"HKEY_CURRENT_USER\Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced", "Hidden", 2) is 2;
+    if (explorerHides)
+    {
+        Check("without ShowHiddenFiles a hidden file is not listed", !Listed(plain, "secret.txt"));
+        Check("ShowHiddenFiles lists a hidden file", Listed(hidden, "secret.txt"));
+    }
+    else Console.WriteLine($"SKIP  ShowHiddenFiles lists a hidden file  [Explorer shows hidden files on this machine, so the flag has no visible effect; listed without it: {Listed(plain, "secret.txt")}]");
+
+    // Filters: '*' is "*.*", so every file is listed; an extension filter narrows the list; the combo shows the name.
+    var anyTask = Dialog.ShowOpenDialogAsync(win, new OpenDialogOptions { Title = "Oriel any filter", DefaultPath = dir, Filters = [new("Everything", "*")] });
+    d = Find("Oriel any filter");
+    var anyType = WindowsShell.FileType(d);
+    var any = WindowsShell.ElementNames(d);
+    Press(d, accept: false);
+    anyTask.Wait(step);
+    var textOnly = NamesIn(new OpenDialogOptions { Title = "Oriel text filter", DefaultPath = dir, Filters = [new("Text", "txt")] });
+    Check("a '*' filter is offered as *.*", anyType == "Everything (*.*)", anyType);
+    Check("a '*' filter lists every file", Listed(any, "a.txt") && Listed(any, "b.dat"));
+    Check("an extension filter lists only its files", Listed(textOnly, "a.txt") && !Listed(textOnly, "b.dat"));
+
+    // Save: a typed name gets the first filter's extension (SetDefaultExtension).
+    var save = Dialog.ShowSaveDialogAsync(win, new SaveDialogOptions { Title = "Oriel save", DefaultPath = dir, Filters = [new("Text", "txt")] });
+    d = Find("Oriel save");
+    Type(d, "named");
+    Press(d, accept: true);
+    var saved = await Result(save);
+    Check("save dialog accepts a typed name and adds the filter's extension", saved is { Canceled: false } && Same(saved.FilePath, Path.Combine(dir, "named.txt")), saved);
+
+    // Save with defaultPath naming a new file: the name box shows it and accepting returns it.
+    var target = Path.Combine(dir, "saved.txt");
+    save = Dialog.ShowSaveDialogAsync(win, new SaveDialogOptions { Title = "Oriel save path", DefaultPath = target });
+    d = Find("Oriel save path");
+    Check("save defaultPath: the name box shows the file name", WindowsShell.Text(WindowsShell.NameBox(d)) == "saved.txt", WindowsShell.Text(WindowsShell.NameBox(d)));
+    Press(d, accept: true);
+    saved = await Result(save);
+    Check("ShowSaveDialogAsync returns the chosen path", saved is { Canceled: false } && Same(saved.FilePath, target), saved);
+
+    // Sync on the UI thread: the dialog runs on its own thread while the UI thread dispatches the owner's messages.
+    string? syncPath = null;
+    using (var syncDone = new ManualResetEventSlim())
+    {
+        Oriel.Cef.CefThread.PostUi(() =>
+        {
+            try { syncPath = Dialog.ShowSaveDialogSync(win, new SaveDialogOptions { Title = "Oriel sync save", DefaultPath = Path.Combine(dir, "sync.txt") }); }
+            catch (Exception e) { syncPath = e.GetType().Name; }
+            finally { syncDone.Set(); }
+        });
+        d = Find("Oriel sync save");
+        Check("ShowSaveDialogSync on the UI thread shows a dialog owned by the window", d != 0 && WindowsShell.Owner(d) == winHwnd, WindowsShell.Owner(d));
+        Check("the owner is disabled while the Sync dialog is up", d != 0 && !WindowsShell.IsEnabled(winHwnd));
+        Press(d, accept: true);
+        Check("ShowSaveDialogSync on the UI thread returns the path", syncDone.Wait(step) && Same(syncPath, Path.Combine(dir, "sync.txt")), syncPath);
+    }
+
+    // Sync off the UI thread, window-less, cancelled: null.
+    var worker = Task.Run(() => Dialog.ShowOpenDialogSync(null, new OpenDialogOptions { Title = "Oriel sync worker", DefaultPath = dir }));
+    d = Find("Oriel sync worker");
+    Press(d, accept: false);
+    Check("ShowOpenDialogSync off the UI thread returns null when cancelled", await Task.WhenAny(worker, Task.Delay(step)) == worker && worker.Result is null);
+
+    // Nothing left open.
+    foreach (var title in new[] { "Oriel windowless open", "Oriel pair one", "Oriel pair two", "Oriel owned open", "Oriel multi open", "Oriel folders open", "Oriel folder open", "Oriel plain list", "Oriel hidden list", "Oriel any filter", "Oriel text filter", "Oriel save", "Oriel save path", "Oriel sync save", "Oriel sync worker" })
+        if (WindowsShell.FileDialog(title) is var left and not 0) Press(left, accept: false);
+    File.SetAttributes(secret, FileAttributes.Normal);
+}
 async Task ContextMenusAsync(BrowserWindow win)
 {
     win.Focus();
