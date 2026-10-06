@@ -193,7 +193,7 @@ Parameters in brackets are optional in Electron. `webContents` members are in [w
 | `hasShadow` | — | missing |  |
 | `opacity` | — | missing |  |
 | `darkTheme` | — | missing |  |
-| `transparent` | `Transparent` | partial | Windows only (W24). |
+| `transparent` | `Transparent` | partial | Windows and macOS; not Linux (W24). |
 | `type` | — | missing |  |
 | `visualEffectState` | — | missing |  |
 | `titleBarStyle` | — | missing |  |

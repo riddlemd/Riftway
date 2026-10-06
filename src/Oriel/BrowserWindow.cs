@@ -255,6 +255,9 @@ public sealed unsafe partial class BrowserWindow
     private string? _backgroundColor;
     // Transparent windows are Windows-only so far (DRIFT W24).
     private readonly bool _transparent;
+
+    // macOS keeps resizing and maximizing for a transparent window, as Electron's NativeWindowMac does.
+    private readonly bool _macTransparent;
     private bool _resizable;
     // A transparent window's bounds before Maximize filled the work area.
     private Rectangle? _restoreBounds;
@@ -294,8 +297,9 @@ public sealed unsafe partial class BrowserWindow
         _skipTaskbar = _options.SkipTaskbar;
         _icon = _options.IconImage ?? (_options.Icon is { } iconPath ? NativeImage.CreateFromBuffer(File.ReadAllBytes(iconPath)) : null);
         _transparent = _options.Transparent && OperatingSystem.IsWindows();
+        _macTransparent = _options.Transparent && OperatingSystem.IsMacOS();
         _resizable = _options.Resizable;
-        _backgroundColor = WindowTransparency.InitialBackgroundColor(_options.BackgroundColor, _transparent,
+        _backgroundColor = WindowTransparency.InitialBackgroundColor(_options.BackgroundColor, _transparent || _macTransparent,
             OperatingSystem.IsWindows() ? _options.BackgroundMaterial : null);
         var session = _options.WebPreferences.Session ?? Session.FromPartition(_options.WebPreferences.Partition ?? "");
         // CEF gives a popup its opener's request context, whatever the options say.
@@ -1370,6 +1374,9 @@ public sealed unsafe partial class BrowserWindow
             SetContentBoundsOn(window, content with { Width = _options.Width, Height = _options.Height });
         }
         ApplyBackgroundColor(window);
+        if (_macTransparent && OperatingSystem.IsMacOS())
+            // Electron hides the traffic lights of a transparent window with the normal title bar style, the only one here.
+            MacWindow.MakeTransparent((nint)window->get_window_handle(window), hideButtons: true);
         if (OperatingSystem.IsWindows())
         {
             if (_transparent) MakeSeeThrough(window);
