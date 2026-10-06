@@ -615,6 +615,17 @@ static unsafe class WindowsShell
     /// <summary>Sets the window's <c>GWL_STYLE</c> as another party (Chromium) would.</summary>
     internal static void SetStyle(nint hwnd, uint style) => SetWindowLongPtrW(hwnd, -16, (nint)style);
 
+    /// <summary>Puts the window in or out of the topmost band as another program would; true if <c>WS_EX_TOPMOST</c> agrees.</summary>
+    internal static bool SetTopmost(nint hwnd, bool topmost)
+    {
+        const uint zOrderOnly = 0x0001 | 0x0002 | 0x0010; // SWP_NOSIZE | SWP_NOMOVE | SWP_NOACTIVATE
+        // HWND_TOPMOST alone can be ignored for a window under the foreground one; HWND_NOTOPMOST first lifts it.
+        _ = SetWindowPos(hwnd, -2 /* HWND_NOTOPMOST */, 0, 0, 0, 0, zOrderOnly);
+        if (topmost) _ = SetWindowPos(hwnd, -1 /* HWND_TOPMOST */, 0, 0, 0, 0, zOrderOnly);
+        return ((GetWindowLongPtrW(hwnd, -20) & 0x8 /* WS_EX_TOPMOST */) != 0) == topmost;
+    }
+
+    [DllImport("user32.dll")] private static extern int SetWindowPos(nint hwnd, nint after, int x, int y, int cx, int cy, uint flags);
     [DllImport("user32.dll")] private static extern int GetClientRect(nint hwnd, int* rect);
     [DllImport("user32.dll")] private static extern int GetWindowRect(nint hwnd, int* rect);
     [DllImport("user32.dll")] private static extern int ClientToScreen(nint hwnd, long* point);

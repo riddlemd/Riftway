@@ -362,7 +362,7 @@ Parameters in brackets are optional in Electron. `webContents` members are in [w
 | `isClosable()` | `IsClosable` | done |  |
 | `setHiddenInMissionControl(hidden)` | `SetHiddenInMissionControl` | done |  |
 | `isHiddenInMissionControl()` | `IsHiddenInMissionControl` | done |  |
-| `setAlwaysOnTop(flag, level, relativeLevel)` | `SetAlwaysOnTop` | done | macOS window levels; Windows: levels below `pop-up-menu` go under the taskbar (again on each activation); an unknown level throws (W48). |
+| `setAlwaysOnTop(flag, level, relativeLevel)` | `SetAlwaysOnTop` | done | macOS window levels; Windows: levels below `pop-up-menu` go under the taskbar (again on each activation); `level` `normal` with no `relativeLevel` leaves the window off top on macOS only, as Electron; an unknown level throws (W48). |
 | `isAlwaysOnTop()` | `IsAlwaysOnTop` | done |  |
 | `moveAbove(mediaSourceId)` | `MoveAbove` | partial | Windows, Chromium's id parsing and Electron's error; macOS and Linux not yet (W43). |
 | `moveTop()` | `MoveTop` | partial | Windows only (W43). |
@@ -507,7 +507,7 @@ Parameters in brackets are optional in Electron. `webContents` members are in [w
 | `leave-full-screen` | `LeftFullScreen` | done |  |
 | `enter-html-full-screen` | `EnterHtmlFullScreen` | done |  |
 | `leave-html-full-screen` | `LeaveHtmlFullScreen` | done |  |
-| `always-on-top-changed` | `AlwaysOnTopChanged` | done | From `SetAlwaysOnTop`, when the state changes. |
+| `always-on-top-changed` | `AlwaysOnTopChanged` | done | `AlwaysOnTopChangedEventArgs.IsAlwaysOnTop`. Raised by `SetAlwaysOnTop` only when the state changes, not for z-order changes made by other programs, as Electron. |
 | `app-command` | `AppCommand` | partial | Windows `WM_APPCOMMAND` with Electron's names; Linux mouse buttons not yet (W43). |
 | `swipe` | — | missing |  |
 | `rotate-gesture` | — | missing |  |

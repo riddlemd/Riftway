@@ -9,6 +9,13 @@ namespace Oriel;
 /// <summary>A rectangle in screen device-independent pixels; Electron's <c>Rectangle</c>.</summary>
 public readonly record struct Rectangle(int X, int Y, int Width, int Height);
 
+/// <summary>Arguments for <see cref="BrowserWindow.AlwaysOnTopChanged"/>.</summary>
+public sealed class AlwaysOnTopChangedEventArgs(bool isAlwaysOnTop) : EventArgs
+{
+    /// <summary>Whether the window now stays above others.</summary>
+    public bool IsAlwaysOnTop { get; } = isAlwaysOnTop;
+}
+
 /// <summary>Options for a new <see cref="BrowserWindow"/>; Electron's <c>BrowserWindowConstructorOptions</c>.</summary>
 public sealed partial record BrowserWindowOptions
 {
@@ -772,6 +779,10 @@ public sealed unsafe partial class BrowserWindow
     /// <summary>The window finished leaving full screen. Electron's <c>leave-full-screen</c>.</summary>
     public event EventHandler? LeftFullScreen;
 
+    /// <summary><see cref="SetAlwaysOnTop"/> turned always-on-top on or off; not raised when the state is unchanged,
+    /// nor when another program changes the window's z-order, as Electron. Electron's <c>always-on-top-changed</c>.</summary>
+    public event EventHandler<AlwaysOnTopChangedEventArgs>? AlwaysOnTopChanged;
+
     /// <summary>Whether the window has closed. Electron's <c>win.isDestroyed()</c>.</summary>
     public bool IsDestroyed => Query(_ => false, true);
 
@@ -950,16 +961,20 @@ public sealed unsafe partial class BrowserWindow
         var macLevel = MacWindowLevel(level) ?? throw new ArgumentException($"Unknown level '{level}'.", nameof(level));
         Command(w =>
         {
-            // Only AppKit has a normal level; elsewhere any level with flag set is on top, as in Electron.
-            var onTop = flag && (level != "normal" || !OperatingSystem.IsMacOS());
-            var changed = (w->is_always_on_top(w) != 0) != onTop;
+            var onTop = StaysOnTop(flag, macLevel + relativeLevel, OperatingSystem.IsMacOS());
+            // The widget's z-order level, which Electron compares against too; z-order changes made elsewhere raise nothing.
+            var wasOnTop = w->is_always_on_top(w) != 0;
             w->set_always_on_top(w, onTop ? 1 : 0);
             if (onTop && OperatingSystem.IsWindows()) WindowsWindow.EnsureTopmost((nint)w->get_window_handle(w));
             if (OperatingSystem.IsMacOS()) MacWindow.SetLevel((nint)w->get_window_handle(w), onTop ? macLevel + relativeLevel : 0);
             ApplyAlwaysOnTopLevel(w, onTop, level);
-            if (changed) AlwaysOnTopChanged?.Invoke(this, new AlwaysOnTopChangedEventArgs(onTop));
+            if (wasOnTop != onTop) AlwaysOnTopChanged?.Invoke(this, new AlwaysOnTopChangedEventArgs(onTop));
         });
     }
+
+    /// <summary>Whether <see cref="SetAlwaysOnTop"/> leaves the window on top: on macOS only if the resulting level is
+    /// not the normal one, so <c>normal</c> with no <c>relativeLevel</c> is off; elsewhere <paramref name="flag"/> alone, as Electron.</summary>
+    internal static bool StaysOnTop(bool flag, long macLevel, bool mac) => flag && (!mac || macLevel != 0);
 
     /// <summary>Electron's level names as AppKit window levels (NSWindowLevel).</summary>
     internal static long? MacWindowLevel(string level) => level switch

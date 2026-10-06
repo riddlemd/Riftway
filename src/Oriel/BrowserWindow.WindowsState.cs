@@ -53,13 +53,6 @@ public sealed class AppCommandEventArgs(string command) : EventArgs
     public string Command { get; } = command;
 }
 
-/// <summary>Arguments for <see cref="BrowserWindow.AlwaysOnTopChanged"/>.</summary>
-public sealed class AlwaysOnTopChangedEventArgs(bool isAlwaysOnTop) : EventArgs
-{
-    /// <summary>Whether the window now stays above others.</summary>
-    public bool IsAlwaysOnTop { get; } = isAlwaysOnTop;
-}
-
 public sealed unsafe partial class BrowserWindow
 {
     // Windows: Electron's NativeWindowViews state that PreHandleMSG reads, kept in a subclass of the HWND.
@@ -88,10 +81,6 @@ public sealed unsafe partial class BrowserWindow
     /// <summary>A command from a keyboard key or mouse button, such as Back or Play (<c>WM_APPCOMMAND</c>, Windows).
     /// Electron's <c>app-command</c>.</summary>
     public event EventHandler<AppCommandEventArgs>? AppCommand;
-
-    /// <summary>The window started or stopped staying above others through <see cref="SetAlwaysOnTop"/>.
-    /// Electron's <c>always-on-top-changed</c>.</summary>
-    public event EventHandler<AlwaysOnTopChangedEventArgs>? AlwaysOnTopChanged;
 
     /// <summary>Lets the window be focused, or stops. On Windows this sets <c>WS_EX_NOACTIVATE</c>, removes or restores
     /// the taskbar button (<see cref="SetSkipTaskbar"/>), and unfocuses the window when turned off. Electron's

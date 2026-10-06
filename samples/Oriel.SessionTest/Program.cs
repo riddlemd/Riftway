@@ -231,6 +231,20 @@ async Task RunAsync()
     await later.LoadUrl(Site);
     var laterAgent = await Nav(later);
     Check("a page opened later in the session starts with its user agent", laterAgent == "SessionAgent/1.0|fr-FR", laterAgent);
+    // Electron overrides with Chromium's default client hints, so navigator.userAgentData keeps its brands (C3).
+    const string Hints = "navigator.userAgentData.getHighEntropyValues(['architecture', 'bitness', 'fullVersionList', 'model', 'platformVersion', 'wow64', 'formFactors']).then(v => JSON.stringify(v))";
+    var plainHints = new BrowserWindow(new BrowserWindowOptions { Show = false, WebPreferences = new WebPreferences { Partition = "memory" } });
+    await plainHints.LoadUrl(Site);
+    var defaultHints = (await plainHints.WebContents.ExecuteJavaScriptAsync(Hints))?.ToString();
+    plainHints.Destroy();
+    var sessionHints = (await later.WebContents.ExecuteJavaScriptAsync(Hints))?.ToString();
+    later.WebContents.SetUserAgent("PageAgent/2.0");
+    await later.LoadUrl(Site + "hints");
+    var pageHints = (await later.WebContents.ExecuteJavaScriptAsync(Hints))?.ToString();
+    Check("every page has Chromium's full client hints, a session or page user agent included, as Electron's",
+        defaultHints is { Length: > 20 } && defaultHints.Contains("\"fullVersionList\":[{") && defaultHints.Contains("\"architecture\":\"") && !defaultHints.Contains("\"architecture\":\"\"")
+        && sessionHints == defaultHints && pageHints == defaultHints,
+        $"{defaultHints} | {sessionHints} | {pageHints}");
     Check("other sessions keep the app's", defaultSession.GetUserAgent() == app.UserAgentFallback && memory.GetUserAgent() == app.UserAgentFallback);
     later.Destroy();
     agentWin.Destroy();
