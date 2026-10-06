@@ -12,7 +12,8 @@ public sealed partial class Session
     /// or cancel. Electron's <c>will-download</c> event.</summary>
     public event EventHandler<WillDownloadEventArgs>? WillDownload;
 
-    internal void OnBeforeDownload(WebContents page, DownloadSnapshot snapshot, BeforeDownload before)
+    // A null page is a download the session started itself (DownloadUrl), as Electron's will-download without webContents.
+    internal void OnBeforeDownload(WebContents? page, DownloadSnapshot snapshot, BeforeDownload before)
     {
         var item = new DownloadItem(snapshot, before) { Finished = done => _downloads.Remove(done.Id) };
         _downloads[snapshot.Id] = item;
@@ -20,7 +21,7 @@ public sealed partial class Session
         var args = new WillDownloadEventArgs(item, page);
         try { WillDownload?.Invoke(this, args); }
         catch (Exception e) { Console.Error.WriteLine($"[Oriel] A will-download handler failed: {e}"); }
-        item.Start(args.Cancel, BrowserWindow.FromWebContents(page));
+        item.Start(args.Cancel, page is null ? null : BrowserWindow.FromWebContents(page));
     }
 
     internal void OnDownloadUpdated(DownloadSnapshot snapshot, DownloadControl control)
