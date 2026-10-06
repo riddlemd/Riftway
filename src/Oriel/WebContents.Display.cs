@@ -74,6 +74,7 @@ public sealed unsafe partial class WebContents
 {
     // UI thread.
     private bool _hasFocus;
+    private bool _devToolsShown;
     private string? _themeColor;
     private bool _ignoreMenuShortcuts;
     private bool _closingWithoutUnload;
@@ -125,6 +126,38 @@ public sealed unsafe partial class WebContents
         if (color == _themeColor) return;
         _themeColor = color;
         Raise(DidChangeThemeColor, color, "did-change-theme-color");
+    }
+
+    /// <summary>DevTools opened, by <see cref="OpenDevTools"/> or the user. Electron's <c>devtools-opened</c>; seen
+    /// within a quarter second (drift C36).</summary>
+    public event EventHandler? DevToolsOpened;
+
+    /// <summary>DevTools closed. Electron's <c>devtools-closed</c>; seen within a quarter second (drift C36).</summary>
+    public event EventHandler? DevToolsClosed;
+
+    /// <summary>Opens DevTools, if closed, and inspects the element at (<paramref name="x"/>, <paramref name="y"/>) in
+    /// the page; does nothing when <see cref="WebPreferences.DevTools"/> is false. Electron's
+    /// <c>webContents.inspectElement()</c>.</summary>
+    public void InspectElement(int x, int y) => WithHost(host =>
+    {
+        if (!_preferences.DevTools) return;
+        var windowInfo = cef_window_info_native_t.Empty();
+        var settings = new cef_browser_settings_t { size = (nuint)sizeof(cef_browser_settings_t) };
+        var point = new cef_point_t { x = x, y = y };
+        host->show_dev_tools(host, (cef_window_info_t*)&windowInfo, null, &settings, &point);
+    });
+
+    // UI thread. Chrome style gives no DevTools callbacks, so the page asks CEF until it is destroyed.
+    private void WatchDevTools()
+    {
+        if (IsDestroyed()) return;
+        var shown = QueryHost(host => host->has_dev_tools(host) != 0, false);
+        if (shown != _devToolsShown)
+        {
+            _devToolsShown = shown;
+            Raise(shown ? DevToolsOpened : DevToolsClosed, EventArgs.Empty, shown ? "devtools-opened" : "devtools-closed");
+        }
+        CefThread.PostUiDelayed(WatchDevTools, TimeSpan.FromMilliseconds(250));
     }
 
     /// <summary>The page logged a message. Electron's <c>console-message</c>.</summary>

@@ -1564,6 +1564,33 @@ async Task WebContentsMethodsAsync()
     closing.Destroy();
     Check("WebContents.FromFrame finds a frame's page, and null once the page is gone", framePage && Eventually(() => WebContents.FromFrame(goneFrame) is null, step));
 
+    // devtools-opened and devtools-closed; inspectElement opens DevTools at a point; nothing when devTools is off.
+    var inspected = new BrowserWindow(new BrowserWindowOptions { Width = 300, Height = 200 });
+    await inspected.WebContents.LoadFile(page);
+    var devtoolsLog = new List<string>();
+    inspected.WebContents.DevToolsOpened += (_, _) => { lock (devtoolsLog) devtoolsLog.Add("opened"); };
+    inspected.WebContents.DevToolsClosed += (_, _) => { lock (devtoolsLog) devtoolsLog.Add("closed"); };
+    string DevToolsLog() { lock (devtoolsLog) return string.Join(",", devtoolsLog); }
+    inspected.WebContents.OpenDevTools();
+    var openedSeen = Eventually(() => DevToolsLog() == "opened" && inspected.WebContents.IsDevToolsOpened(), step);
+    inspected.WebContents.CloseDevTools();
+    var closedSeen = Eventually(() => DevToolsLog() == "opened,closed" && !inspected.WebContents.IsDevToolsOpened(), step);
+    inspected.WebContents.InspectElement(10, 10);
+    var inspectOpened = Eventually(() => DevToolsLog() == "opened,closed,opened", step);
+    inspected.WebContents.CloseDevTools();
+    Eventually(() => DevToolsLog() == "opened,closed,opened,closed", step);
+    Check("devtools-opened and devtools-closed follow OpenDevTools and CloseDevTools", openedSeen && closedSeen, DevToolsLog());
+    Check("InspectElement opens DevTools", inspectOpened, DevToolsLog());
+    inspected.Destroy();
+    var locked = new BrowserWindow(new BrowserWindowOptions { Show = false, WebPreferences = new WebPreferences { DevTools = false } });
+    await locked.WebContents.LoadFile(page);
+    var lockedOpened = 0;
+    locked.WebContents.DevToolsOpened += (_, _) => Interlocked.Increment(ref lockedOpened);
+    locked.WebContents.InspectElement(10, 10);
+    await Task.Delay(1000);
+    Check("InspectElement does nothing when devTools is off", lockedOpened == 0 && !locked.WebContents.IsDevToolsOpened(), lockedOpened);
+    locked.Destroy();
+
     // content-bounds-updated: the page's moveTo and resizeTo move its window unless prevented.
     var mover = new BrowserWindow(new BrowserWindowOptions { Width = 320, Height = 240, X = 60, Y = 80 });
     File.WriteAllText(page, "<!doctype html><p>mover</p>");
