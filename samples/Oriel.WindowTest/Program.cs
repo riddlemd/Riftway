@@ -274,6 +274,7 @@ async Task RunAsync(BrowserWindow win, BrowserWindow simple)
     await ProcessChildrenAsync();
     await WindowsApisAsync();
     await TransparencyAsync();
+    await MacTransparencyAsync();
     await NativeImageAsync();
     await WebContentsLifecycleAsync(win);
     await PageEventsAsync();
@@ -2706,6 +2707,54 @@ async Task WindowsApisAsync()
     Console.SetError(stderr);
     Check("the shell takes the thumbnail clip and tooltip (weak: no read-back)", refusals.ToString().Length == 0, refusals.ToString().Trim());
     w.Destroy();
+    await Task.Delay(300);
+}
+
+async Task MacTransparencyAsync()
+{
+    if (!OperatingSystem.IsMacOS()) return;
+
+    // A red window underneath, read back off the composited screen; colours are told apart by their dominant channel.
+    var back = new BrowserWindow(new BrowserWindowOptions { Title = "Oriel window test: red backdrop", X = 60, Y = 60, Width = 800, Height = 600, BackgroundColor = "#FF0000" });
+    await back.LoadUrl("data:text/html,<body style='background:red'></body>");
+    const string clear = "data:text/html,<html style='background:transparent'><body style='background:transparent'></body></html>";
+    static bool Red((byte R, byte G, byte B) c) => c.R > 150 && c.G < 90 && c.B < 90;
+    static bool White((byte R, byte G, byte B) c) => c.R > 200 && c.G > 200 && c.B > 200;
+    // screencapture reads what the window server composited, which is what a user sees.
+    (byte R, byte G, byte B) CentrePixel(BrowserWindow w)
+    {
+        var bounds = w.GetContentBounds();
+        var file = Path.Combine(Path.GetTempPath(), $"oriel-pixel-{Guid.NewGuid():N}.png");
+        using (var capture = System.Diagnostics.Process.Start("screencapture", ["-x", "-R", $"{bounds.X + bounds.Width / 2},{bounds.Y + bounds.Height / 2},1,1", file])!)
+            capture.WaitForExit();
+        if (!File.Exists(file)) return default;
+        var bgra = NativeImage.CreateFromBuffer(File.ReadAllBytes(file)).ToBitmap();
+        File.Delete(file);
+        return bgra.Length < 4 ? default : (bgra[2], bgra[1], bgra[0]);
+    }
+    async Task<BrowserWindow> Open(BrowserWindowOptions options)
+    {
+        var w = new BrowserWindow(options with { X = 200, Y = 150, Width = 400, Height = 300 });
+        await w.LoadUrl(clear);
+        await Task.Delay(1000);
+        return w;
+    }
+
+    var plain = await Open(new BrowserWindowOptions { Title = "Oriel window test: opaque" });
+    var opaque = CentrePixel(plain);
+    Check("macOS: an ordinary window covers the one behind it (control)", White(opaque), opaque);
+    plain.Destroy();
+    await Task.Delay(300);
+
+    var framed = await Open(new BrowserWindowOptions { Title = "Oriel window test: transparent", Transparent = true });
+    var handle = framed.GetNativeWindowHandle();
+    Check("macOS: Transparent shows the window behind through a transparent page (screen pixel)", Eventually(() => Red(CentrePixel(framed)), step), CentrePixel(framed));
+    Check("macOS: a transparent window is not opaque, as Electron's NSWindow", !Oriel.Cef.CefThread.InvokeOnUi(() => OperatingSystem.IsMacOS() && MacWindow.IsOpaque(handle)));
+    Check("macOS: a transparent window stays resizable and maximizable, unlike Windows'", framed.IsResizable && framed.IsMaximizable, $"{framed.IsResizable} {framed.IsMaximizable}");
+    framed.SetBackgroundColor("#FFFFFF");
+    Check("macOS: SetBackgroundColor makes a transparent window's page opaque again", Eventually(() => White(CentrePixel(framed)), step), CentrePixel(framed));
+    framed.Destroy();
+    back.Destroy();
     await Task.Delay(300);
 }
 
