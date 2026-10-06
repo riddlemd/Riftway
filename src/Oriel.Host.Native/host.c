@@ -56,8 +56,9 @@ static void __cdecl collect_hostfxr_error(const wchar_t* message) {
            used ? L"\n" : L"", message);
 }
 
-// The managed entry assembly: the one *.runtimeconfig.json a self-contained publish has. Its name cannot be
-// the exe's, which this DLL's name has to match.
+// The managed entry assembly: the one *.runtimeconfig.json beside the exe whose apphost the layout removed. Other
+// .NET apps published alongside (a utility process's child) keep their <name>.exe, through which they are started.
+// Its name cannot be the exe's, which this DLL's name has to match.
 static int find_managed_app(const wchar_t* dir, wchar_t* app, size_t capacity) {
   wchar_t pattern[MAX_PATH];
   swprintf(pattern, MAX_PATH, L"%ls\\*.runtimeconfig.json", dir);
@@ -66,8 +67,11 @@ static int find_managed_app(const wchar_t* dir, wchar_t* app, size_t capacity) {
   if (search == INVALID_HANDLE_VALUE) return 0;
   int count = 0;
   do {
-    if (++count > 1) break;
     size_t stem = wcslen(found.cFileName) - wcslen(L".runtimeconfig.json");
+    wchar_t apphost[MAX_PATH];
+    swprintf(apphost, MAX_PATH, L"%ls\\%.*ls.exe", dir, (int)stem, found.cFileName);
+    if (GetFileAttributesW(apphost) != INVALID_FILE_ATTRIBUTES) continue;
+    if (++count > 1) break;
     swprintf(app, capacity, L"%ls\\%.*ls.dll", dir, (int)stem, found.cFileName);
   } while (FindNextFileW(search, &found));
   FindClose(search);
@@ -84,7 +88,7 @@ static int run_dotnet(void) {
   int apps = find_managed_app(dir, app, MAX_PATH);
   if (apps != 1) {
     report_error(apps == 0 ? L"No <app>.runtimeconfig.json beside the exe: publish the app self-contained."
-                           : L"More than one *.runtimeconfig.json beside the exe; keep only the app's.");
+                           : L"More than one *.runtimeconfig.json without its own apphost beside the exe; keep only the app's.");
     return 1;
   }
 

@@ -4,7 +4,9 @@
 # holds Chromium's sandbox broker and runs every process; the DLL starts .NET (the app's managed Main) in the browser
 # process and runs CEF natively in the others. The .NET apphost is removed, so <ExeName> must differ from the app's
 # assembly name, whose .dll stays beside it.
-#   eng/layout-windows.ps1 <app-publish-dir> <Oriel.Host.dll> <ExeName> [-Platform windows64]
+#   eng/layout-windows.ps1 <app-publish-dir> <Oriel.Host.dll> <ExeName> [-App <AssemblyName>] [-Platform windows64]
+# -App names the app's assembly when other .NET apps (a utility process's child) are published beside it; they keep
+# their apphosts, and the host DLL starts the one assembly whose apphost was removed.
 #
 # Unsandboxed fallback: the .NET apphost stays the exe and Oriel.Subprocess.exe runs the children.
 #   eng/layout-windows.ps1 <app-publish-dir> -Subprocess <Oriel.Subprocess.exe> [-Platform windows64]
@@ -14,6 +16,7 @@ param(
     [Parameter(Mandatory, Position = 1, ParameterSetName = 'Bootstrap')] [string] $HostDll,
     [Parameter(Mandatory, Position = 2, ParameterSetName = 'Bootstrap')] [string] $ExeName,
     [Parameter(Mandatory, ParameterSetName = 'Apphost')] [string] $Subprocess,
+    [Parameter(ParameterSetName = 'Bootstrap')] [string] $App,
     [string] $Platform = 'windows64'
 )
 $ErrorActionPreference = 'Stop'
@@ -36,10 +39,14 @@ if ($PSCmdlet.ParameterSetName -eq 'Apphost') {
     return $Publish
 }
 
-# The host DLL finds the managed app the same way: the one runtimeconfig a self-contained publish has.
-$configs = @(Get-ChildItem $Publish -Filter '*.runtimeconfig.json')
-if ($configs.Count -ne 1) { throw "Expected one *.runtimeconfig.json in $Publish, found $($configs.Count)." }
-$managed = $configs[0].Name -replace '\.runtimeconfig\.json$', ''
+# The host DLL finds the managed app as the one runtimeconfig whose apphost is gone once this script removes it.
+$configs = @(Get-ChildItem $Publish -Filter '*.runtimeconfig.json' | ForEach-Object { $_.Name -replace '\.runtimeconfig\.json$', '' })
+if ($App) {
+    if ($configs -notcontains $App) { throw "No $App.runtimeconfig.json in $Publish." }
+    $managed = $App
+}
+elseif ($configs.Count -eq 1) { $managed = $configs[0] }
+else { throw "Expected one *.runtimeconfig.json in $Publish, found $($configs.Count): name the app with -App." }
 if (-not (Test-Path (Join-Path $Publish 'hostfxr.dll'))) { throw "$Publish is not a self-contained publish (no hostfxr.dll)." }
 if ($ExeName -ieq $managed) { throw "ExeName '$ExeName' is the managed assembly's name; <ExeName>.dll must be the host DLL." }
 
