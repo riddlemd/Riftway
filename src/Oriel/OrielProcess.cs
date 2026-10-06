@@ -1,0 +1,184 @@
+using System.Diagnostics;
+using Oriel.Cef.Platform;
+
+// Each platform call sits behind an OperatingSystem check the analyzer follows; the samplers' callbacks it cannot.
+#pragma warning disable CA1416
+
+namespace Oriel;
+
+/// <summary>The process's CPU use; Electron's <c>CPUUsage</c>.</summary>
+/// <param name="PercentCPUUsage">Percent of all CPUs used since the previous call; 0 on the first.</param>
+/// <param name="CumulativeCPUUsage">Seconds of CPU time used since the process started.</param>
+/// <param name="IdleWakeupsPerSecond">Wakeups from idle per second since the previous call; 0 on the first, and always 0
+/// on Windows, as Chromium.</param>
+public sealed record CpuUsage(double PercentCPUUsage, double? CumulativeCPUUsage, int IdleWakeupsPerSecond);
+
+/// <summary>The system's memory in kilobytes; Electron's <c>process.getSystemMemoryInfo()</c> result. A field is null on
+/// the OSes Electron leaves it out of.</summary>
+/// <param name="Total">Physical memory.</param>
+/// <param name="Free">Memory not in use (Windows: available physical memory).</param>
+/// <param name="Available">Linux's MemAvailable.</param>
+/// <param name="SwapTotal">Swap (Windows: the page file), Windows and Linux.</param>
+/// <param name="SwapFree">Free swap, Windows and Linux.</param>
+/// <param name="FileBacked">File-backed pages, macOS.</param>
+/// <param name="Purgeable">Purgeable pages, macOS.</param>
+public sealed record SystemMemoryInfo(long Total, long Free, long? Available, long? SwapTotal, long? SwapFree, long? FileBacked, long? Purgeable);
+
+/// <summary>Versions of the parts of this process; Electron's <c>process.versions</c>.</summary>
+/// <param name="Chrome">Chromium's version.</param>
+/// <param name="Oriel">Oriel's version, where Electron has <c>electron</c>.</param>
+public sealed record ProcessVersions(string Chrome, string Oriel);
+
+/// <summary>The main process; Electron's <c>process</c> object, for what a .NET main process has.</summary>
+public static class OrielProcess
+{
+    private static readonly CpuSampler s_cpu = new(() => Process.GetCurrentProcess().TotalProcessorTime, Stopwatch.GetElapsedTime);
+    private static readonly EventRate s_wakeups = new(Stopwatch.GetElapsedTime);
+
+    /// <summary>Always <c>browser</c>, Electron's name for the main process. Electron's <c>process.type</c>.</summary>
+    public static string Type => "browser";
+
+    /// <summary>Electron's <c>process.versions</c>.</summary>
+    public static ProcessVersions Versions => new(OrielApp.ChromeVersion(), OrielApp.OrielVersion());
+
+    /// <summary>When the process started, in milliseconds since the Unix epoch, or null if unknown. Electron's
+    /// <c>process.getCreationTime()</c>.</summary>
+    public static double? GetCreationTime()
+    {
+        try { return (Process.GetCurrentProcess().StartTime.ToUniversalTime() - DateTime.UnixEpoch).TotalMilliseconds; }
+        catch (InvalidOperationException) { return null; }
+    }
+
+    /// <summary>The process's CPU use since the previous call, shared by every caller as in Electron. Electron's
+    /// <c>process.getCPUUsage()</c>.</summary>
+    public static CpuUsage GetCPUUsage()
+    {
+        var (percent, cumulative) = s_cpu.Sample();
+        var wakeups = OperatingSystem.IsLinux() ? LinuxVoluntarySwitches() : OperatingSystem.IsMacOS() ? ProcessInfo.MacInterruptWakeups() : null;
+        return new CpuUsage(percent / Environment.ProcessorCount, cumulative, wakeups is { } count ? s_wakeups.PerSecond(count) : 0);
+    }
+
+    /// <summary>The system's memory, as Chromium reads it. Electron's <c>process.getSystemMemoryInfo()</c>.</summary>
+    /// <exception cref="InvalidOperationException">The OS did not say, with Electron's message.</exception>
+    public static SystemMemoryInfo GetSystemMemoryInfo()
+    {
+        var memory = OperatingSystem.IsLinux() ? ParseMeminfo(SafeRead("/proc/meminfo"))
+            : OperatingSystem.IsMacOS() ? ProcessInfo.MacSystemMemory()
+            : OperatingSystem.IsWindows() ? ProcessInfo.WindowsSystemMemory() : null;
+        if (memory is null) throw new InvalidOperationException("Unable to retrieve system memory information");
+        static long Kib(ulong bytes) => (long)(bytes / 1024);
+        static long? OptionalKib(ulong? bytes) => bytes is { } b ? Kib(b) : null;
+        return new SystemMemoryInfo(Kib(memory.Total), Kib(memory.Free), OptionalKib(memory.Available), OptionalKib(memory.SwapTotal),
+            OptionalKib(memory.SwapFree), OptionalKib(memory.FileBacked), OptionalKib(memory.Purgeable));
+    }
+
+    /// <summary>The OS's version: macOS's own (e.g. <c>26.0.1</c>), Windows' major.minor.build, Linux's kernel release.
+    /// Electron's <c>process.getSystemVersion()</c>.</summary>
+    public static string GetSystemVersion()
+    {
+        if (OperatingSystem.IsMacOS()) return ProcessInfo.MacOperatingSystemVersion();
+        if (OperatingSystem.IsLinux()) return ProcessInfo.LinuxKernelRelease();
+        var version = Environment.OSVersion.Version;
+        return $"{version.Major}.{version.Minor}.{version.Build}";
+    }
+
+    /// <summary>Raises the soft limit on open files to <paramref name="maxDescriptors"/> or the hard limit, whichever is
+    /// lower (macOS, Linux); does nothing on Windows, where Electron has no such method. Electron's
+    /// <c>process.setFdLimit()</c>.</summary>
+    public static void SetFdLimit(int maxDescriptors)
+    {
+        if ((OperatingSystem.IsLinux() || OperatingSystem.IsMacOS()) && maxDescriptors > 0) ProcessInfo.IncreaseFdLimitTo((ulong)maxDescriptors);
+    }
+
+    private static string SafeRead(string path)
+    {
+        try { return File.ReadAllText(path); }
+        catch (IOException) { return ""; }
+    }
+
+    private static ulong? LinuxVoluntarySwitches()
+    {
+        foreach (var line in SafeRead("/proc/self/status").Split('\n'))
+            if (line.StartsWith("voluntary_ctxt_switches:", StringComparison.Ordinal)
+                && ulong.TryParse(line["voluntary_ctxt_switches:".Length..].Trim(), out var count)) return count;
+        return null;
+    }
+
+    // Chromium's ParseProcMeminfo: "Name: value kB" lines in any order; null without a MemTotal.
+    internal static ProcessInfo.SystemMemory? ParseMeminfo(string meminfo)
+    {
+        ulong total = 0, free = 0, available = 0, swapTotal = 0, swapFree = 0;
+        foreach (var line in meminfo.Split('\n', StringSplitOptions.RemoveEmptyEntries))
+        {
+            var tokens = line.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries);
+            if (tokens.Length <= 1 || !ulong.TryParse(tokens[1], out var kib)) continue;
+            var bytes = kib * 1024;
+            switch (tokens[0])
+            {
+                case "MemTotal:": total = bytes; break;
+                case "MemFree:": free = bytes; break;
+                case "MemAvailable:": available = bytes; break;
+                case "SwapTotal:": swapTotal = bytes; break;
+                case "SwapFree:": swapFree = bytes; break;
+            }
+        }
+        return total == 0 ? null : new ProcessInfo.SystemMemory(total, free, available, swapTotal, swapFree, null, null);
+    }
+
+    // Chromium's ProcessMetrics::GetPlatformIndependentCPUUsage: percent of one CPU since the last call, 0 on the first.
+    internal sealed class CpuSampler(Func<TimeSpan> cumulativeCpu, Func<long, TimeSpan> elapsedSince)
+    {
+        private readonly Lock _gate = new();
+        private readonly long _start = Stopwatch.GetTimestamp();
+        private TimeSpan _lastCpu;
+        private TimeSpan _lastTime;
+
+        public (double Percent, double Cumulative) Sample()
+        {
+            var cpu = cumulativeCpu();
+            var time = elapsedSince(_start);
+            lock (_gate)
+            {
+                if (_lastCpu == TimeSpan.Zero)
+                {
+                    _lastCpu = cpu;
+                    _lastTime = time;
+                    return (0, cpu.TotalSeconds);
+                }
+                var timeDelta = time - _lastTime;
+                if (timeDelta == TimeSpan.Zero) return (0, cpu.TotalSeconds);
+                var cpuDelta = cpu - _lastCpu;
+                _lastCpu = cpu;
+                _lastTime = time;
+                return (100.0 * cpuDelta / timeDelta, cpu.TotalSeconds);
+            }
+        }
+    }
+
+    // Chromium's CalculateEventsPerSecond: events per second since the last count, 0 the first time.
+    internal sealed class EventRate(Func<long, TimeSpan> elapsedSince)
+    {
+        private readonly Lock _gate = new();
+        private readonly long _start = Stopwatch.GetTimestamp();
+        private ulong _lastCount;
+        private TimeSpan _lastTime;
+
+        public int PerSecond(ulong count)
+        {
+            var time = elapsedSince(_start);
+            lock (_gate)
+            {
+                var perSecond = 0;
+                if (_lastCount != 0)
+                {
+                    var timeDelta = time - _lastTime;
+                    if (timeDelta == TimeSpan.Zero) return 0;
+                    perSecond = (int)Math.Clamp(Math.Round((count - _lastCount) / timeDelta.TotalSeconds, MidpointRounding.AwayFromZero), int.MinValue, int.MaxValue);
+                }
+                _lastTime = time;
+                _lastCount = count;
+                return perSecond;
+            }
+        }
+    }
+}

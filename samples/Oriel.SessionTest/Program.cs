@@ -1036,6 +1036,52 @@ async Task RunAsync()
         stateWin.Destroy();
     }
 
+    // process: what the OS says, read back through other tools.
+    var sysMemory = OrielProcess.GetSystemMemoryInfo();
+    var processCreated = OrielProcess.GetCreationTime();
+    var startedAgo = DateTime.UtcNow - DateTime.UnixEpoch - TimeSpan.FromMilliseconds(processCreated ?? 0);
+    Check("GetCreationTime is when this process started", processCreated is not null && startedAgo > TimeSpan.Zero && startedAgo < TimeSpan.FromMinutes(15), startedAgo);
+    if (OperatingSystem.IsLinux())
+    {
+        var freeLine = Output("/usr/bin/free", "-k").Split('\n').First(l => l.StartsWith("Mem:", StringComparison.Ordinal)).Split(' ', StringSplitOptions.RemoveEmptyEntries);
+        Check("GetSystemMemoryInfo's total and available match free(1), with Linux's fields", sysMemory.Total == long.Parse(freeLine[1], CultureInfo.InvariantCulture)
+            && sysMemory.Available is { } available && Math.Abs(available - long.Parse(freeLine[6], CultureInfo.InvariantCulture)) < 65536
+            && sysMemory.SwapTotal is not null && sysMemory.SwapFree is not null && sysMemory.FileBacked is null && sysMemory.Purgeable is null && sysMemory.Free <= sysMemory.Total,
+            $"{sysMemory} vs {string.Join(' ', freeLine)}");
+        Check("GetSystemVersion is the kernel release, as uname -r", OrielProcess.GetSystemVersion() == Output("/bin/uname", "-r"), OrielProcess.GetSystemVersion());
+        string SoftFiles() => File.ReadAllLines("/proc/self/limits").First(l => l.StartsWith("Max open files", StringComparison.Ordinal)).Split(' ', StringSplitOptions.RemoveEmptyEntries)[3];
+        string HardFiles() => File.ReadAllLines("/proc/self/limits").First(l => l.StartsWith("Max open files", StringComparison.Ordinal)).Split(' ', StringSplitOptions.RemoveEmptyEntries)[4];
+        // .NET raises the soft limit to the hard one at start-up, so lower it first.
+        var lowered = FdLimit.LowerSoft(1024);
+        var soft = long.Parse(SoftFiles(), CultureInfo.InvariantCulture);
+        var hard = HardFiles() == "unlimited" ? long.MaxValue : long.Parse(HardFiles(), CultureInfo.InvariantCulture);
+        OrielProcess.SetFdLimit((int)Math.Max(1, soft / 2));
+        var notLowered = SoftFiles();
+        var target = (int)Math.Min(hard, soft + 16);
+        OrielProcess.SetFdLimit(target);
+        var raised = SoftFiles();
+        if (hard < int.MaxValue / 2) OrielProcess.SetFdLimit((int)hard * 2);
+        Check("SetFdLimit raises the soft open-files limit up to the hard limit, never lowers it", lowered && soft == 1024 && soft < hard && notLowered == soft.ToString(CultureInfo.InvariantCulture)
+            && raised == target.ToString(CultureInfo.InvariantCulture) && SoftFiles() == hard.ToString(CultureInfo.InvariantCulture), $"soft {soft} hard {hard}: {notLowered}, {raised}, then {SoftFiles()}");
+    }
+    if (OperatingSystem.IsMacOS())
+    {
+        var product = Output("/usr/bin/sw_vers", "-productVersion").Split('.');
+        var expectedVersion = $"{product[0]}.{(product.Length > 1 ? product[1] : "0")}.{(product.Length > 2 ? product[2] : "0")}";
+        Check("GetSystemVersion is macOS's own version, as sw_vers", OrielProcess.GetSystemVersion() == expectedVersion, $"{OrielProcess.GetSystemVersion()} vs {expectedVersion}");
+        Check("GetSystemMemoryInfo's total is hw.memsize, with macOS's fields", sysMemory.Total == long.Parse(Output("/usr/sbin/sysctl", "-n", "hw.memsize"), CultureInfo.InvariantCulture) / 1024
+            && sysMemory.FileBacked is not null && sysMemory.Purgeable is not null && sysMemory.Available is null && sysMemory.SwapTotal is null && sysMemory.Free <= sysMemory.Total, sysMemory);
+    }
+    OrielProcess.GetCPUUsage();
+    // Every CPU busy: the percent is of all of them, so it nears 100 only when divided by their count.
+    var spinUntil = DateTime.UtcNow + TimeSpan.FromMilliseconds(400);
+    var spins = 0L;
+    Parallel.For(0, Environment.ProcessorCount, _ => { while (DateTime.UtcNow < spinUntil) Interlocked.Increment(ref spins); });
+    var usage = OrielProcess.GetCPUUsage();
+    Check("GetCPUUsage measures since the previous call, across all CPUs, with the running total", usage.PercentCPUUsage > 50
+        && usage.PercentCPUUsage <= 110 && usage.CumulativeCPUUsage > 0.3 && (OperatingSystem.IsWindows() ? usage.IdleWakeupsPerSecond == 0 : usage.IdleWakeupsPerSecond > 0), $"{usage} spins={spins}");
+    Check("process type and versions are Electron's shape", OrielProcess.Type == "browser" && OrielProcess.Versions.Chrome.Split('.').Length == 4, OrielProcess.Versions);
+
     // Proxy: requests go to a local listener posing as the proxy.
     var proxied = Session.FromPartition("proxied");
     using var listener = new TcpListener(IPAddress.Loopback, 0);
@@ -1227,4 +1273,26 @@ sealed class SlowStream(int chunks, int chunkSize) : Stream
     public override long Seek(long offset, SeekOrigin origin) => throw new NotSupportedException();
     public override void SetLength(long value) => throw new NotSupportedException();
     public override void Write(byte[] buffer, int offset, int count) => throw new NotSupportedException();
+}
+
+// Lowers this process's soft open-files limit, so a test can watch SetFdLimit raise it.
+static class FdLimit
+{
+    [System.Runtime.InteropServices.StructLayout(System.Runtime.InteropServices.LayoutKind.Sequential)]
+    private struct RLimit
+    {
+        public ulong Current, Maximum;
+    }
+
+    [System.Runtime.InteropServices.DllImport("libc", EntryPoint = "getrlimit")] private static extern int GetRLimit(int resource, ref RLimit limit);
+    [System.Runtime.InteropServices.DllImport("libc", EntryPoint = "setrlimit")] private static extern int SetRLimit(int resource, ref RLimit limit);
+
+    public static bool LowerSoft(ulong soft)
+    {
+        var limit = new RLimit();
+        var resource = OperatingSystem.IsMacOS() ? 8 : 7;
+        if (GetRLimit(resource, ref limit) != 0) return false;
+        limit.Current = soft;
+        return SetRLimit(resource, ref limit) == 0;
+    }
 }

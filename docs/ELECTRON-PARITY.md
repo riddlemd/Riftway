@@ -9,8 +9,8 @@ Recounted 2026-10-05 against `src/Oriel`. Update these figures when a row or che
 
 | Measure | Done | Partial | Not started | Total |
 |---|---|---|---|---|
-| Module rows below | 2 | 19 | 46 | 67 |
-| M2 rows | 1 | 12 | 8 | 21 |
+| Module rows below | 2 | 20 | 45 | 67 |
+| M2 rows | 1 | 13 | 7 | 21 |
 
 The 67 rows include `BrowserView` (deprecated, never implemented; counted as not started).
 
@@ -36,7 +36,7 @@ Where an implemented module differs from Electron, the difference and its reason
 | Electron | Oriel | Source | Wave | Status |
 |---|---|---|---|---|
 | `app` | `OrielApp` | CEF + OS | M2 | partial: `ready`, `window-all-closed`, `second-instance`, `before-quit`, `will-quit`, `quit()`, `exit()`, `enableSandbox`, `isReady`, `name`, `quit` (as `Exited`), `userAgentFallback`, `browser-window-created`, `web-contents-created`, `session-created`, `browser-window-focus`, `browser-window-blur`, `getVersion` (as `Version`), `hide`, `show`, `isHidden`, `focus`, `setBadgeCount`, `getBadgeCount`, `getPath`, `setPath`, `getPreferredSystemLanguages`, `getSystemLocale`, `getLocaleCountryCode`, `certificate-error`, `login`, `select-client-certificate` (see DRIFT.md) |
-| `process` | `OrielProcess` | .NET + CEF | M2 | — |
+| `process` | `OrielProcess` | .NET + CEF | M2 | partial: `type`, `versions` (`chrome`, `oriel`), `getCreationTime`, `getCPUUsage`, `getSystemMemoryInfo`, `getSystemVersion`, `setFdLimit`; no `getProcessMemoryInfo`, `crash`, `hang`, `mas`, `windowsStore`, `resourcesPath`; V8/Blink-only members are P7 |
 | `CommandLine` (`app.commandLine`) | `OrielApp.CommandLine` | CEF | M2 | — |
 | Command-line switches | same switches | CEF | M2 | — |
 | Environment variables | same variables | .NET | M2 | — |

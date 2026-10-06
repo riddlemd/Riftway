@@ -60,11 +60,11 @@ public sealed unsafe partial class OrielApp
         return ThreePart(assembly?.GetName().Version);
     }
 
-    private static string OrielVersion() => ThreePart(typeof(OrielApp).Assembly.GetName().Version);
+    internal static string OrielVersion() => ThreePart(typeof(OrielApp).Assembly.GetName().Version);
 
     private static string ThreePart(Version? version) => version is null ? "0.0.0" : $"{version.Major}.{version.Minor}.{Math.Max(version.Build, 0)}";
 
-    private static string ChromeVersion()
+    internal static string ChromeVersion()
     {
         CefRuntime.Load(CefLayout.MainProcessLibrary());
         return string.Join('.', Enumerable.Range(4, 4).Select(CefNative.cef_version_info));
