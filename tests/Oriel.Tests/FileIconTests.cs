@@ -32,7 +32,8 @@ public sealed class FileIconGroupTests
         if (OperatingSystem.IsWindows()) Assert.Equal(@"C:\a\b.txt", OrielApp.NormalizeIconPath("C:/a/b.txt"));
     }
 
-    [Theory]
+    // Windows path semantics (/ becomes \); getFileIcon has a backend on Windows only.
+    [WindowsOnlyTheory]
     [InlineData(FileIconSize.Small, 16)]
     [InlineData(FileIconSize.Normal, 32)]
     [InlineData(FileIconSize.Large, 48)]
@@ -93,7 +94,8 @@ public sealed class GetFileIconTests : IDisposable
         Assert.Equal(["type::Normal"], _backend.Calls);
     }
 
-    [Theory]
+    // Windows path semantics (/ becomes \); getFileIcon has a backend on Windows only.
+    [WindowsOnlyTheory]
     [InlineData(FileIconSize.Small, 16)]
     [InlineData(FileIconSize.Normal, 32)]
     [InlineData(FileIconSize.Large, 48)]
@@ -149,7 +151,8 @@ public sealed class GetFileIconTests : IDisposable
         Assert.Equal(2, _backend.Calls.Count);
     }
 
-    [Fact]
+    // getApplicationInfoForProtocol is Windows-only (DRIFT A12), with Windows path normalization.
+    [WindowsOnlyFact]
     public async Task ApplicationInfoUsesTheLargeIconOfTheNormalizedPath()
     {
         var info = await OrielApp.ApplicationInfoFor("C:/apps/x.exe", "X");

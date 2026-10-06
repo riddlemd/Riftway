@@ -53,7 +53,8 @@ public sealed class PowerAndShortcutTests
         Assert.Equal(0x78u, key.VirtualKey);
         Assert.Equal(key, GlobalShortcuts.Key("Shift+Control+Alt+F9"));
         Assert.NotEqual(key, GlobalShortcuts.Key("Ctrl+Alt+F9"));
-        Assert.Equal(new HotKey(0x2, 0x41), GlobalShortcuts.Key("CmdOrCtrl+A"));
+        // CmdOrCtrl is Command (MOD_WIN's bit) on macOS and Control elsewhere, as in Electron.
+        Assert.Equal(new HotKey(OperatingSystem.IsMacOS() ? 0x8u : 0x2u, 0x41), GlobalShortcuts.Key("CmdOrCtrl+A"));
         Assert.Throws<ArgumentException>(() => GlobalShortcuts.Key("Ctrl+Nope"));
     }
 
