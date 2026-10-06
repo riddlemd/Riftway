@@ -69,6 +69,81 @@
     });
   }
 
+  // Electron's input-event for the pointer: Chromium reports what it sends the main frame's widget, so only the main
+  // frame reports, and only while the main process listens. Captured, and registered before any page script.
+  let inputReporting = false;
+  if (globalThis === globalThis.top) {
+    const pressed = ['left', 'middle', 'right', 'back', 'forward'];
+    const held = (buttons) => (buttons & 1 ? 'left' : buttons & 4 ? 'middle' : buttons & 2 ? 'right'
+      : buttons & 8 ? 'back' : buttons & 16 ? 'forward' : 'none');
+    const pointer = (type, e, button, clickCount) => {
+      if (!inputReporting) return;
+      post(JSON.stringify({ t: 'input', ch: '', args: [type, e.clientX, e.clientY, e.screenX, e.screenY, e.movementX, e.movementY, button, clickCount] }));
+    };
+    globalThis.addEventListener('mousedown', (e) => pointer('mouseDown', e, pressed[e.button] ?? 'none', e.detail), true);
+    globalThis.addEventListener('mouseup', (e) => pointer('mouseUp', e, pressed[e.button] ?? 'none', e.detail), true);
+    globalThis.addEventListener('mousemove', (e) => pointer('mouseMove', e, held(e.buttons), 0), true);
+    // Leaving the view, not moving between elements or into an iframe.
+    globalThis.addEventListener('mouseout', (e) => { if (!e.relatedTarget) pointer('mouseLeave', e, held(e.buttons), 0); }, true);
+    // A wheel event is not one of Blink's mouse event types, so Electron reports only its type and modifiers.
+    globalThis.addEventListener('wheel', (e) => {
+      if (!inputReporting) return;
+      const modifiers = [
+        e.altKey && 'alt', e.getModifierState('CapsLock') && 'capslock', e.ctrlKey && 'control', (e.buttons & 1) && 'leftbuttondown',
+        e.metaKey && 'meta', (e.buttons & 4) && 'middlebuttondown', e.getModifierState('NumLock') && 'numlock',
+        (e.buttons & 2) && 'rightbuttondown', e.shiftKey && 'shift',
+      ].filter(Boolean);
+      post(JSON.stringify({ t: 'input', ch: '', args: ['mouseWheel', modifiers] }));
+    }, { capture: true, passive: true });
+  }
+
+  // Chromium's preferred size (WebViewImpl::ContentsPreferredMinimumSize): the root's min-content width with its margins,
+  // and the root element's scroll height. Measured after anything that can change layout; the main process decides
+  // when to report it.
+  if (orielOptions.preferredSizeMode && globalThis === globalThis.top) {
+    // An adopted sheet leaves no DOM mutation for the page to observe, and is gone before the next rendering.
+    const minContent = new CSSStyleSheet();
+    minContent.replaceSync('html { width: min-content !important; }');
+    let queued = false;
+    const measure = () => {
+      queued = false;
+      const root = document.documentElement;
+      if (!root) return;
+      const style = getComputedStyle(root);
+      const margins = (a, b) => parseFloat(style[a]) + parseFloat(style[b]);
+      const viewport = document.scrollingElement ?? root;
+      // The viewport's scroll height is never less than the viewport; the root's own is, when the page is short.
+      const height = viewport.scrollHeight > viewport.clientHeight
+        ? viewport.scrollHeight - margins('marginTop', 'marginBottom')
+        : root.getBoundingClientRect().height;
+      const sheets = document.adoptedStyleSheets;
+      sheets.push(minContent);
+      let width;
+      try {
+        width = root.getBoundingClientRect().width + margins('marginLeft', 'marginRight');
+      } finally {
+        const at = sheets.lastIndexOf(minContent);
+        if (at >= 0) sheets.splice(at, 1);
+      }
+      post(JSON.stringify({ t: 'psize', ch: '', args: [width, height, devicePixelRatio] }));
+    };
+    const queue = () => {
+      if (queued) return;
+      queued = true;
+      setTimeout(measure, 0);
+    };
+    const resized = new ResizeObserver(queue);
+    const watchRoot = () => { if (document.documentElement) resized.observe(document.documentElement); };
+    new MutationObserver(queue).observe(document, { subtree: true, childList: true, characterData: true, attributes: true });
+    watchRoot();
+    document.addEventListener('DOMContentLoaded', () => { watchRoot(); queue(); });
+    // Captured: images and other subresources change layout as they load, and their load events do not bubble.
+    globalThis.addEventListener('load', queue, true);
+    globalThis.addEventListener('resize', queue);
+    document.fonts?.addEventListener('loadingdone', queue);
+    queue();
+  }
+
   // A player that reaches its end fires pause before ended, so pause alone is each stop once.
   globalThis.addEventListener('pause', () => post(JSON.stringify({ t: 'media', ch: '', args: [false] })), true);
 
@@ -115,6 +190,8 @@
       } else if (message.t === 'frame') {
         frameToken = message.token;
         zoomLevel = message.zoomLevel;
+      } else if (message.t === 'input') {
+        inputReporting = message.on;
       } else if (message.t === 'zoom') {
         zoomLevel = message.level;
       } else if (message.t === 'port-msg') {

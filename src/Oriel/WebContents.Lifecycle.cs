@@ -126,11 +126,21 @@ public sealed unsafe partial class WebContents
     /// <summary>A key on its way to the page; true when a <see cref="BeforeInputEvent"/> listener cancelled it.</summary>
     internal bool OnPreKeyEvent(cef_key_event_t* key)
     {
-        if (BeforeInputEvent is not { } handler) return false;
-        if (KeyInputMapper.Map(key->type, key->modifiers, key->windows_key_code, key->character, key->unmodified_character) is not { } input) return false;
-        var args = new BeforeInputEventArgs(input);
-        handler(this, args);
-        return args.Cancel;
+        if (BeforeInputEvent is { } handler
+            && KeyInputMapper.Map(key->type, key->modifiers, key->windows_key_code, key->character, key->unmodified_character) is { } input)
+        {
+            var args = new BeforeInputEventArgs(input);
+            handler(this, args);
+            // Chromium forwards nothing for a key its delegate handled, so input-event never sees it.
+            if (args.Cancel) return true;
+        }
+        if (_inputEvent is { } observer)
+        {
+            var keyboard = KeyInputMapper.Keyboard(key->type, key->modifiers, key->windows_key_code, key->character, key->unmodified_character);
+            try { observer(this, keyboard); }
+            catch (Exception e) { Console.Error.WriteLine($"[Oriel] A input-event handler failed: {e}"); }
+        }
+        return false;
     }
 }
 
@@ -187,22 +197,54 @@ internal static class KeyInputMapper
             _ => (KeyboardInputEventType?)null,
         };
         if (kind is not { } eventType) return null;
+        var e = Keyboard(type, cefModifiers, vk, character, unmodified);
+        return new KeyInput(eventType, e.Key, e.Code, e.IsAutoRepeat, false, e.Location, e.Modifiers);
+    }
 
+    /// <summary>Electron's modifier flags from CEF's, which carry the same Blink bits.</summary>
+    internal static InputModifiers ModifiersOf(uint cef)
+    {
         var modifiers = InputModifiers.None;
-        if ((cefModifiers & (uint)cef_event_flags_t.EVENTFLAG_SHIFT_DOWN) != 0) modifiers |= InputModifiers.Shift;
-        if ((cefModifiers & (uint)cef_event_flags_t.EVENTFLAG_CONTROL_DOWN) != 0) modifiers |= InputModifiers.Control;
-        if ((cefModifiers & (uint)cef_event_flags_t.EVENTFLAG_ALT_DOWN) != 0) modifiers |= InputModifiers.Alt;
-        if ((cefModifiers & (uint)cef_event_flags_t.EVENTFLAG_COMMAND_DOWN) != 0) modifiers |= InputModifiers.Meta;
-        if ((cefModifiers & (uint)cef_event_flags_t.EVENTFLAG_IS_KEY_PAD) != 0) modifiers |= InputModifiers.IsKeypad;
-        var right = (cefModifiers & (uint)cef_event_flags_t.EVENTFLAG_IS_RIGHT) != 0;
-        var left = (cefModifiers & (uint)cef_event_flags_t.EVENTFLAG_IS_LEFT) != 0;
-        var repeat = (cefModifiers & (uint)cef_event_flags_t.EVENTFLAG_IS_REPEAT) != 0;
-        if (repeat) modifiers |= InputModifiers.IsAutoRepeat;
+        foreach (var (flag, mapped) in s_flags)
+            if ((cef & (uint)flag) != 0) modifiers |= mapped;
+        return modifiers;
+    }
+
+    private static readonly (cef_event_flags_t, InputModifiers)[] s_flags =
+    [
+        (cef_event_flags_t.EVENTFLAG_SHIFT_DOWN, InputModifiers.Shift), (cef_event_flags_t.EVENTFLAG_CONTROL_DOWN, InputModifiers.Control),
+        (cef_event_flags_t.EVENTFLAG_ALT_DOWN, InputModifiers.Alt), (cef_event_flags_t.EVENTFLAG_COMMAND_DOWN, InputModifiers.Meta),
+        (cef_event_flags_t.EVENTFLAG_IS_KEY_PAD, InputModifiers.IsKeypad), (cef_event_flags_t.EVENTFLAG_IS_REPEAT, InputModifiers.IsAutoRepeat),
+        (cef_event_flags_t.EVENTFLAG_CAPS_LOCK_ON, InputModifiers.CapsLock), (cef_event_flags_t.EVENTFLAG_NUM_LOCK_ON, InputModifiers.NumLock),
+        (cef_event_flags_t.EVENTFLAG_IS_LEFT, InputModifiers.Left), (cef_event_flags_t.EVENTFLAG_IS_RIGHT, InputModifiers.Right),
+        (cef_event_flags_t.EVENTFLAG_LEFT_MOUSE_BUTTON, InputModifiers.LeftButtonDown),
+        (cef_event_flags_t.EVENTFLAG_MIDDLE_MOUSE_BUTTON, InputModifiers.MiddleButtonDown),
+        (cef_event_flags_t.EVENTFLAG_RIGHT_MOUSE_BUTTON, InputModifiers.RightButtonDown),
+    ];
+
+    /// <summary>Electron's keyboard <c>InputEvent</c> for any of CEF's four key event types.</summary>
+    internal static WebKeyboardEvent Keyboard(cef_key_event_type_t type, uint cefModifiers, int vk, char character, char unmodified)
+    {
+        var eventType = type switch
+        {
+            cef_key_event_type_t.KEYEVENT_RAWKEYDOWN => InputEventType.RawKeyDown,
+            cef_key_event_type_t.KEYEVENT_KEYDOWN => InputEventType.KeyDown,
+            cef_key_event_type_t.KEYEVENT_KEYUP => InputEventType.KeyUp,
+            _ => InputEventType.Char,
+        };
+        var modifiers = ModifiersOf(cefModifiers);
+        var right = modifiers.HasFlag(InputModifiers.Right);
+        var left = modifiers.HasFlag(InputModifiers.Left);
         var keypad = modifiers.HasFlag(InputModifiers.IsKeypad);
         var shift = modifiers.HasFlag(InputModifiers.Shift);
 
         string key, code;
-        if (vk is >= 'A' and <= 'Z')
+        // A char event's key code is its character, not the key's.
+        if (eventType == InputEventType.Char)
+        {
+            (key, code) = CharKeyAndCode(character, unmodified, keypad);
+        }
+        else if (vk is >= 'A' and <= 'Z')
         {
             key = ((char)(shift ? vk : vk + 32)).ToString();
             code = $"Key{(char)vk}";
@@ -242,9 +284,59 @@ internal static class KeyInputMapper
         var location = keypad ? 3
             : right ? 2
             : left ? 1
+            : eventType == InputEventType.Char ? 0
             : vk is 160 or 162 or 164 or 16 or 17 or 18 or 91 ? 1
             : vk is 161 or 163 or 165 or 92 ? 2
             : 0;
-        return new KeyInput(eventType, key, code, repeat, false, location, modifiers);
+        return new WebKeyboardEvent(eventType, key, code, location) { Modifiers = modifiers };
+    }
+
+    private static readonly Dictionary<char, string> s_controlKeys = new()
+    {
+        ['\r'] = "Enter", ['\t'] = "Tab", ['\b'] = "Backspace", ['\u001b'] = "Escape",
+    };
+
+    // US layout, unshifted and shifted, as the virtual-key mapping above assumes.
+    private static readonly Dictionary<char, string> s_characterCodes = new()
+    {
+        [' '] = "Space", [';'] = "Semicolon", [':'] = "Semicolon", ['='] = "Equal", ['+'] = "Equal", [','] = "Comma", ['<'] = "Comma",
+        ['-'] = "Minus", ['_'] = "Minus", ['.'] = "Period", ['>'] = "Period", ['/'] = "Slash", ['?'] = "Slash", ['`'] = "Backquote",
+        ['~'] = "Backquote", ['['] = "BracketLeft", ['{'] = "BracketLeft", ['\\'] = "Backslash", ['|'] = "Backslash",
+        [']'] = "BracketRight", ['}'] = "BracketRight", ['\''] = "Quote", ['"'] = "Quote", ['!'] = "Digit1", ['@'] = "Digit2",
+        ['#'] = "Digit3", ['$'] = "Digit4", ['%'] = "Digit5", ['^'] = "Digit6", ['&'] = "Digit7", ['*'] = "Digit8", ['('] = "Digit9",
+        [')'] = "Digit0", ['\r'] = "Enter", ['\t'] = "Tab", ['\b'] = "Backspace", ['\u001b'] = "Escape",
+    };
+
+    private static readonly Dictionary<char, string> s_keypadCharacters = new()
+    {
+        ['*'] = "NumpadMultiply", ['+'] = "NumpadAdd", ['-'] = "NumpadSubtract", ['.'] = "NumpadDecimal", ['/'] = "NumpadDivide", ['\r'] = "NumpadEnter",
+    };
+
+    /// <summary>A typed character's DOM key, and the US-layout code of the key that types it.</summary>
+    internal static (string Key, string Code) CharKeyAndCode(char character, char unmodified, bool keypad)
+    {
+        var key = character >= ' ' ? character.ToString()
+            : s_controlKeys.TryGetValue(character, out var control) ? control
+            : unmodified >= ' ' ? unmodified.ToString()
+            : "Unidentified";
+        // Control combinations type control characters; the unmodified one names the key.
+        var source = unmodified >= ' ' || s_controlKeys.ContainsKey(unmodified) ? unmodified : character;
+        var code = keypad && char.IsAsciiDigit(source) ? $"Numpad{source}"
+            : keypad && s_keypadCharacters.TryGetValue(source, out var pad) ? pad
+            : char.IsAsciiLetter(source) ? $"Key{char.ToUpperInvariant(source)}"
+            : char.IsAsciiDigit(source) ? $"Digit{source}"
+            : s_characterCodes.GetValueOrDefault(source, "");
+        return (key, code);
+    }
+
+    /// <summary>The char event <see cref="WebContents.SendInputEvent(KeyboardInputEvent)"/> sends, as Electron's
+    /// converter builds it from the key name: a letter's case follows Shift, and a shifted symbol adds Shift.</summary>
+    internal static WebKeyboardEvent SentChar(KeyboardInputEvent sent)
+    {
+        var modifiers = sent.Modifiers;
+        if ("~!@#$%^&*()_+{}|:\"<>?".Contains(sent.KeyCode[0], StringComparison.Ordinal)) modifiers |= InputModifiers.Shift;
+        var (key, code) = CharKeyAndCode(sent.KeyCode[0], sent.KeyCode[0], modifiers.HasFlag(InputModifiers.IsKeypad));
+        if (char.IsAsciiLetter(key[0])) key = modifiers.HasFlag(InputModifiers.Shift) ? key.ToUpperInvariant() : key.ToLowerInvariant();
+        return new WebKeyboardEvent(InputEventType.Char, key, code, modifiers.HasFlag(InputModifiers.IsKeypad) ? 3 : 0) { Modifiers = modifiers };
     }
 }

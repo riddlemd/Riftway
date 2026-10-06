@@ -5,7 +5,7 @@ electron/electron). When Electron adds or changes a module, this table changes w
 
 ## Progress
 
-Recounted 2026-10-05 against `src/Oriel`. Update these figures when a row or checklist item changes.
+Recounted 2026-10-06 against `src/Oriel`. Update these figures when a row or checklist item changes.
 
 | Measure | Done | Partial | Not started | Total |
 |---|---|---|---|---|
@@ -16,8 +16,8 @@ The 67 rows include `BrowserView` (deprecated, never implemented; counted as not
 
 | Checklist | Applicable items | Done | Partial | Missing | % done | % done + partial/2 |
 |---|---|---|---|---|---|---|
-| [BrowserWindow](parity/browser-window.md) (with `BaseWindow`) | 294 | 126 | 18 | 150 | 42.9% | 45.9% |
-| [webContents](parity/web-contents.md) (with `navigationHistory`, `WebFrameMain`) | 230 | 59 | 9 | 162 | 25.7% | 27.6% |
+| [BrowserWindow](parity/browser-window.md) (with `BaseWindow`) | 294 | 138 | 19 | 137 | 46.9% | 50.2% |
+| [webContents](parity/web-contents.md) (with `navigationHistory`, `WebFrameMain`) | 230 | 104 | 47 | 79 | 45.2% | 55.4% |
 
 **Source** — where the implementation comes from:
 

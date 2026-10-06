@@ -158,6 +158,10 @@ public sealed record WebPreferences
     /// <remarks>Not supported (setting it throws): CEF applies the profile's value to every window.</remarks>
     public string? DefaultEncoding { get; init; }
 
+    /// <summary>Raises <see cref="WebContents.PreferredSizeChanged"/> when the page's preferred size changes. Electron's
+    /// <c>enablePreferredSizeMode</c>.</summary>
+    public bool EnablePreferredSizeMode { get; init; }
+
     /// <summary>Suppresses the page's <c>alert</c>, <c>confirm</c> and <c>prompt</c>: they return at once
     /// (<c>confirm</c> false, <c>prompt</c> null). Electron's <c>disableDialogs</c>.</summary>
     public bool DisableDialogs { get; init; }

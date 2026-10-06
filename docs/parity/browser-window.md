@@ -18,12 +18,12 @@ Counted from the Checklist at the end: `BaseWindow` and `BrowserWindow` are one 
 | Area | Items | Done | Partial | Missing | n/a | % done | % done + partial/2 |
 |---|---|---|---|---|---|---|---|
 | BaseWindow + BrowserWindow options | 54 | 27 | 2 | 25 | 0 | 50.0% | 51.9% |
-| webPreferences | 46 | 11 | 3 | 25 | 7 | 28.2% | 32.1% |
+| webPreferences | 46 | 11 | 4 | 24 | 7 | 28.2% | 33.3% |
 | Instance methods | 143 | 71 | 9 | 57 | 6 | 51.8% | 55.1% |
 | Instance properties | 24 | 11 | 0 | 13 | 0 | 45.8% | 45.8% |
 | Events | 35 | 14 | 4 | 17 | 0 | 40.0% | 45.7% |
 | Static methods | 6 | 4 | 0 | 1 | 1 | 80.0% | 80.0% |
-| **Total** | 308 | 138 | 18 | 138 | 14 | 46.9% | 50.0% |
+| **Total** | 308 | 138 | 19 | 137 | 14 | 46.9% | 50.2% |
 
 ## Done since the audit
 
@@ -111,7 +111,7 @@ Counted from the Checklist at the end: `BaseWindow` and `BrowserWindow` are one 
    - Profile-wide in Chrome style, so they throw `NotSupportedException`: `minimumFontSize`, `defaultEncoding`.
    - Not yet investigated: `backgroundThrottling`, `navigateOnDragDrop`, `safeDialogs`/`safeDialogsMessage`,
      `accessibleTitle`, `scrollBounce`, `imageAnimationPolicy`, `zoomMode`, `focusOnNavigation`,
-     `enablePreferredSizeMode`, `disableHtmlFullscreenWindowResize`, `additionalArguments`.
+     `disableHtmlFullscreenWindowResize`, `additionalArguments`.
    - `contextIsolation` is always on; `false` is not offered.
 2. `setParentWindow` — CEF Views sets the parent only at creation, so this needs OS code (`addChildWindow:`, an owner
    `HWND`, `XSetTransientForHint`).
@@ -252,7 +252,7 @@ Parameters in brackets are optional in Electron. `webContents` members are in [w
 | `spellcheck` | — | missing | No per-page switch in CEF (E22); the session's `SetSpellCheckerEnabled` covers every page. |
 | `enableWebSQL` | — | n/a | Not applicable (listed in "Not applicable"). |
 | `v8CacheOptions` | — | n/a | Node/V8 option. |
-| `enablePreferredSizeMode` | — | missing |  |
+| `enablePreferredSizeMode` | `EnablePreferredSizeMode` | partial | Turns on `PreferredSizeChanged`, measured in the page (C42). |
 | `transparent` | — | missing |  |
 | `enableDeprecatedPaste` | — | n/a | Deprecated. |
 | `focusOnNavigation` | — | missing |  |
