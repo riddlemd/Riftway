@@ -1148,6 +1148,9 @@ public sealed unsafe partial class WebContents
             case "theme":
                 OnThemeColor(args[0].ValueKind == JsonValueKind.Null ? null : args[0].GetString());
                 break;
+            case "vis":
+                _visibilityState = args[0].GetString() == "visible" ? "visible" : "hidden";
+                break;
             case "media":
                 Raise(args[0].GetBoolean() ? MediaStartedPlaying : MediaPaused, EventArgs.Empty, args[0].GetBoolean() ? "media-started-playing" : "media-paused");
                 break;
