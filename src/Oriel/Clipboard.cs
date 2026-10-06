@@ -83,7 +83,8 @@ public sealed class ClipboardItem
 /// on the clipboard. A clipboard another process holds reads as empty and drops a write, as in Chromium.</remarks>
 public static class Clipboard
 {
-    private static readonly IClipboardBackend s_backend = OperatingSystem.IsWindows() ? new WindowsClipboardBackend() : new UnsupportedClipboardBackend();
+    private static readonly IClipboardBackend s_backend =
+        OperatingSystem.IsWindows() ? new WindowsClipboardBackend() : OperatingSystem.IsMacOS() ? new MacClipboardBackend() : new UnsupportedClipboardBackend();
 
     /// <summary>The plain text, or "". Electron's <c>clipboard.readText()</c>.</summary>
     public static Task<string> ReadTextAsync() => Task.Run(() => ClipboardReader.ReadText(s_backend));
@@ -117,7 +118,7 @@ public static class Clipboard
             natives.Add(await item.ToNativeAsync().ConfigureAwait(false));
         }
         var writer = new ClipboardWriter();
-        foreach (var native in natives) ClipboardPayloads.WriteTo(writer, native, Decode);
+        foreach (var native in natives) ClipboardPayloads.WriteTo(writer, native, Decode, s_backend.WriteFindText);
         Commit(writer);
     }
 
@@ -134,10 +135,7 @@ public static class Clipboard
 
     internal static Task<object> ReadTypeAsync(string mime) => Task.Run(() => ClipboardReader.ReadType(s_backend, mime, () => OrielApp.CurrentOrNull is { IsReady: true }));
 
-    private static void Commit(ClipboardWriter writer)
-    {
-        if (writer.Commit(ImageCodec.EncodePng) is { } blocks) s_backend.Write(blocks);
-    }
+    private static void Commit(ClipboardWriter writer) => s_backend.Write(writer);
 
     private static ImageBitmap? Decode(byte[] bytes) => ImageCodec.Decode(bytes);
 }
@@ -180,21 +178,22 @@ internal static class ClipboardPayloads
     }
 
     /// <summary>Electron's <c>ClipboardItem::WriteTo</c>: each payload, in byte order of its MIME type, to the writer
-    /// call for its type.</summary>
-    internal static void WriteTo(ClipboardWriter writer, IReadOnlyList<(string Mime, object Payload)> payloads, Func<byte[], ImageBitmap?> decode)
+    /// call for its type. The find pasteboard is written at once, outside the writer, as in Electron.</summary>
+    internal static void WriteTo(ClipboardWriter writer, IReadOnlyList<(string Mime, object Payload)> payloads, Func<byte[], ImageBitmap?> decode, Action<string>? writeFindText = null)
     {
         foreach (var (mime, payload) in payloads.OrderBy(p => Encoding.UTF8.GetBytes(p.Mime), Utf8Order.Instance))
         {
             switch (payload)
             {
                 case ClipboardBookmark bookmark:
-                    writer.WriteUrl(bookmark.Url ?? "");
+                    writer.WriteUrl(bookmark.Url ?? "", bookmark.Title ?? "");
                     break;
                 case string text when mime == "text/plain": writer.WriteText(text); break;
                 case string text when mime == "text/html": writer.WriteHtml(text); break;
                 case string text when mime == "text/rtf": writer.WriteRtf(text); break;
-                case string:
-                    // The macOS find pasteboard; nothing on Windows.
+                case string text:
+                    // ToNative leaves only the find pasteboard type as a string here.
+                    writeFindText?.Invoke(text);
                     break;
                 case byte[] bytes when mime.StartsWith(ClipboardFormats.WebPrefix, StringComparison.Ordinal):
                     writer.WriteData(mime[ClipboardFormats.WebPrefix.Length..], bytes);
@@ -249,9 +248,12 @@ internal static class ClipboardReader
             case "text/rtf":
                 return backend.ReadRtf();
             case ClipboardFormats.BookmarkMime:
-                return new ClipboardBookmark("", Gurl.Spec(backend.ReadUrl()));
+                var bookmark = backend.ReadBookmark();
+                return new ClipboardBookmark(bookmark.Title, Gurl.Spec(bookmark.Url));
             case "text/uri-list":
-                return Encoding.UTF8.GetBytes(ClipboardFormats.PathsToUriList(backend.ReadFilenames()));
+                return Encoding.UTF8.GetBytes(ClipboardFormats.PathsToUriList(backend.ReadFilenames(), backend.PosixPaths));
+            case ClipboardFormats.FindTextMime when backend.ReadFindText() is { } findText:
+                return Encoding.UTF8.GetBytes(findText);
         }
         if (mime.StartsWith("image/", StringComparison.Ordinal))
         {
@@ -275,7 +277,7 @@ internal interface IClipboardBackend
     /// <summary>Electron's <c>EnumerateAvailableTypes</c>.</summary>
     IReadOnlyList<string> AvailableTypes();
 
-    /// <summary>Unicode text before its NUL, or "".</summary>
+    /// <summary>Unicode text (on Windows, before its NUL), or "".</summary>
     string ReadText();
 
     /// <summary>ANSI text bytes before their NUL, or empty.</summary>
@@ -296,11 +298,21 @@ internal interface IClipboardBackend
     /// <summary>A JPEG at quality 100, or empty.</summary>
     byte[] EncodeJpeg(ImageBitmap bitmap);
 
-    /// <summary>The bookmark URL text, or "".</summary>
-    string ReadUrl();
+    /// <summary>The bookmark's title and URL text as stored, each "" if missing.</summary>
+    ClipboardBookmark ReadBookmark();
 
     /// <summary>The copied files' paths.</summary>
     IReadOnlyList<string> ReadFilenames();
+
+    /// <summary>Whether <see cref="ReadFilenames"/> gives POSIX paths, which <c>FileInfosToURIList</c> escapes
+    /// differently.</summary>
+    bool PosixPaths { get; }
+
+    /// <summary>The find pasteboard's text, or null on an OS without one.</summary>
+    string? ReadFindText();
+
+    /// <summary>Puts <paramref name="text"/> on the find pasteboard; nothing on an OS without one.</summary>
+    void WriteFindText(string text);
 
     /// <summary>The W3C custom format map: <c>web type/subtype</c> to platform format name.</summary>
     IReadOnlyDictionary<string, string> CustomFormatNames();
@@ -308,8 +320,9 @@ internal interface IClipboardBackend
     /// <summary>The whole block of the registered format <paramref name="name"/>, or empty.</summary>
     byte[] ReadData(string name);
 
-    /// <summary>Empties the clipboard and puts the blocks on it.</summary>
-    void Write(IReadOnlyList<(ClipboardFormat Format, byte[] Data)> blocks);
+    /// <summary>Commits <paramref name="writer"/>: empties the clipboard and puts its parts on it, or leaves the
+    /// clipboard alone when nothing was written.</summary>
+    void Write(ClipboardWriter writer);
 
     /// <summary>Empties the clipboard.</summary>
     void Clear();
@@ -326,11 +339,14 @@ internal sealed class UnsupportedClipboardBackend : IClipboardBackend
     public byte[] ReadPng() => throw Unsupported();
     public ImageBitmap? DecodePng(byte[] png) => throw Unsupported();
     public byte[] EncodeJpeg(ImageBitmap bitmap) => throw Unsupported();
-    public string ReadUrl() => throw Unsupported();
+    public ClipboardBookmark ReadBookmark() => throw Unsupported();
     public IReadOnlyList<string> ReadFilenames() => throw Unsupported();
+    public bool PosixPaths => true;
+    public string? ReadFindText() => throw Unsupported();
+    public void WriteFindText(string text) => throw Unsupported();
     public IReadOnlyDictionary<string, string> CustomFormatNames() => throw Unsupported();
     public byte[] ReadData(string name) => throw Unsupported();
-    public void Write(IReadOnlyList<(ClipboardFormat Format, byte[] Data)> blocks) => throw Unsupported();
+    public void Write(ClipboardWriter writer) => throw Unsupported();
     public void Clear() => throw Unsupported();
 
     private static PlatformNotSupportedException Unsupported() => new("The clipboard is not implemented on this OS yet.");
@@ -346,7 +362,7 @@ internal sealed class WindowsClipboardBackend : IClipboardBackend
             WindowsClipboard.IsAvailable(WindowsClipboard.CfText), Available(ClipboardFormats.HtmlName), Available(ClipboardFormats.SvgName),
             Available(ClipboardFormats.RtfName), WindowsClipboard.IsAvailable(WindowsClipboard.CfDib), FilenamesAvailable());
         var formats = WindowsClipboard.Formats().Select(id => (id, id >= 0xC000 ? WindowsClipboard.FormatName(id) : null)).ToList();
-        return ClipboardFormats.AvailableTypes(CustomFormatNames().Keys, standard, formats, ReadUrl().Trim(Controls).Length > 0);
+        return ClipboardFormats.AvailableTypes(CustomFormatNames().Keys, standard, formats, ReadBookmark().Url.Trim(Controls).Length > 0);
     }
 
     public string ReadText() => WindowsClipboard.Read(WindowsClipboard.CfUnicodeText) is { } bytes ? ClipboardFormats.Utf16Text(bytes) : "";
@@ -368,7 +384,13 @@ internal sealed class WindowsClipboardBackend : IClipboardBackend
 
     public byte[] EncodeJpeg(ImageBitmap bitmap) => ImageCodec.EncodeJpeg(bitmap, 100);
 
-    public string ReadUrl() => Read(ClipboardFormats.UrlName) is { } bytes ? ClipboardFormats.Utf16Text(bytes) : "";
+    public ClipboardBookmark ReadBookmark() => new("", Read(ClipboardFormats.UrlName) is { } bytes ? ClipboardFormats.Utf16Text(bytes) : "");
+
+    public bool PosixPaths => false;
+
+    public string? ReadFindText() => null;
+
+    public void WriteFindText(string text) { }
 
     public IReadOnlyList<string> ReadFilenames()
     {
@@ -388,8 +410,9 @@ internal sealed class WindowsClipboardBackend : IClipboardBackend
 
     public byte[] ReadData(string name) => Read(name) ?? [];
 
-    public void Write(IReadOnlyList<(ClipboardFormat Format, byte[] Data)> blocks)
+    public void Write(ClipboardWriter writer)
     {
+        if (writer.Commit(ImageCodec.EncodePng) is not { } blocks) return;
         var items = blocks.Select(b => (b.Format.Name is { } name ? WindowsClipboard.RegisterFormat(name) : b.Format.Id, b.Data)).ToArray();
         AsOwner(owner => WindowsClipboard.Write(items, owner));
     }
@@ -430,4 +453,101 @@ internal sealed class WindowsClipboardBackend : IClipboardBackend
         Encoding.RegisterProvider(CodePagesEncodingProvider.Instance);
         return Encoding.GetEncoding(0).GetString(bytes);
     }
+}
+
+/// <summary>The macOS clipboard: Chromium's <c>ClipboardMac</c> and Electron's find pasteboard on top of
+/// <see cref="MacPasteboard"/>.</summary>
+/// <remarks>Chromium calls the pasteboard on the browser UI thread, so once the app is ready every call goes there;
+/// before that, on the caller's thread. Only the NSImage-to-PNG encode of <see cref="ReadPng"/> runs off it, on the
+/// caller's pool thread, as Chromium runs it on its thread pool.</remarks>
+[SupportedOSPlatform("macos")]
+internal sealed class MacClipboardBackend : IClipboardBackend
+{
+    private static readonly char[] Controls = [.. Enumerable.Range(0, 33).Select(c => (char)c)];
+
+    public IReadOnlyList<string> AvailableTypes() => OnUi(() =>
+    {
+        var formats = ClipboardFormats.Mac.AllFormats(MacPasteboard.Types());
+        var standard = ClipboardFormats.Mac.StandardTypes(formats, MacPasteboard.CanReadImage);
+        var bookmark = ReadBookmarkHere();
+        // GURL::is_empty: an invalid URL keeps its text, so only blank text is empty.
+        var hasBookmark = bookmark.Title.Length > 0 || bookmark.Url.Trim(Controls).Length > 0;
+        return (IReadOnlyList<string>)ClipboardFormats.Mac.AvailableTypes(CustomFormatNamesHere(formats).Keys, standard, MacPasteboard.FindText(Ready).Length > 0, formats, hasBookmark);
+    });
+
+    public string ReadText() => OnUi(() => MacPasteboard.String(ClipboardFormats.Mac.Text) ?? "");
+
+    // Electron reads ASCII text on Windows only; ReadText already gave "" when this is reached.
+    public byte[] ReadAsciiText() => [];
+
+    public string ReadHtmlFragment() => OnUi(() => MacPasteboard.AvailableType(ClipboardFormats.Mac.Html, ClipboardFormats.Mac.Rtf, ClipboardFormats.Mac.Text) switch
+    {
+        null => "",
+        ClipboardFormats.Mac.Rtf => MacPasteboard.HtmlFromRtf() ?? "",
+        var best => MacPasteboard.String(best) ?? "",
+    });
+
+    public byte[] ReadRtf() => ReadData(ClipboardFormats.Mac.Rtf);
+
+    public byte[] ReadPng()
+    {
+        if (OnUi(() => MacPasteboard.Data(ClipboardFormats.Mac.Png)) is { Length: > 0 } png) return png;
+        var image = OnUi(MacPasteboard.CopyImage);
+        if (image == 0) return [];
+        try { return MacPasteboard.ImagePng(image); }
+        finally { OnUi(() => { MacPasteboard.Release(image); return true; }); }
+    }
+
+    public ImageBitmap? DecodePng(byte[] png) => png is [0x89, 0x50, 0x4E, 0x47, ..] ? ImageCodec.Decode(png) : null;
+
+    public byte[] EncodeJpeg(ImageBitmap bitmap) => ImageCodec.EncodeJpeg(bitmap, 100);
+
+    public ClipboardBookmark ReadBookmark() => OnUi(ReadBookmarkHere);
+
+    public IReadOnlyList<string> ReadFilenames() => OnUi(MacPasteboard.FilePaths);
+
+    public bool PosixPaths => true;
+
+    public string? ReadFindText() => OnUi(() => MacPasteboard.FindText(Ready));
+
+    public void WriteFindText(string text) => OnUi(() => { MacPasteboard.SetFindText(text, Ready); return true; });
+
+    public IReadOnlyDictionary<string, string> CustomFormatNames() => OnUi(() => CustomFormatNamesHere(ClipboardFormats.Mac.AllFormats(MacPasteboard.Types())));
+
+    public byte[] ReadData(string name) => OnUi(() => MacPasteboard.Data(name) ?? []);
+
+    public void Write(ClipboardWriter writer)
+    {
+        if (writer.CommitMac() is not { } writes) return;
+        OnUi(() =>
+        {
+            MacPasteboard.BeginWrite();
+            foreach (var write in writes)
+            {
+                switch (write)
+                {
+                    case MacPasteboardWrite.Data data: MacPasteboard.SetData(data.Type, data.Bytes); break;
+                    case MacPasteboardWrite.Text text: MacPasteboard.SetString(text.Type, text.Value); break;
+                    case MacPasteboardWrite.Image image: MacPasteboard.WriteBitmap(image.Bitmap.Width, image.Bitmap.Height, image.Bitmap.Bgra); break;
+                    case MacPasteboardWrite.Url url: MacPasteboard.WriteUrl(url.Spec, url.Title); break;
+                    case MacPasteboardWrite.Files files: MacPasteboard.WriteFiles(files.Paths); break;
+                }
+            }
+            return true;
+        });
+    }
+
+    public void Clear() => OnUi(() => { MacPasteboard.Clear(); return true; });
+
+    private static ClipboardBookmark ReadBookmarkHere()
+        => new(MacPasteboard.String(ClipboardFormats.Mac.UrlName) ?? "", MacPasteboard.String(ClipboardFormats.Mac.Url) ?? "");
+
+    private static SortedDictionary<string, string> CustomFormatNamesHere(ISet<string> formats)
+        => formats.Contains(ClipboardFormats.Mac.WebCustomFormatMap)
+            ? ClipboardFormats.ParseWebCustomFormatMap(MacPasteboard.Data(ClipboardFormats.Mac.WebCustomFormatMap) ?? [])
+            : new SortedDictionary<string, string>(StringComparer.Ordinal);
+
+    private static bool Ready => OrielApp.CurrentOrNull is { IsReady: true };
+
+    private static T OnUi<T>(Func<T> body) => Ready ? CefThread.InvokeOnUi(body) : body();
 }

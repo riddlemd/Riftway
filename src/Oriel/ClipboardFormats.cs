@@ -330,8 +330,9 @@ internal static class ClipboardFormats
     }
 
     /// <summary>Chromium's <c>URIListToFileInfos</c>: the paths of the <c>file://</c> lines of an RFC 2483 list
-    /// (CRLF-separated, trimmed, empty lines dropped), unescaped as UTF-8 with backslash separators.</summary>
-    internal static List<string> UriListToPaths(string uriList)
+    /// (CRLF-separated, trimmed, empty lines dropped), unescaped as UTF-8, with backslash separators on Windows and
+    /// as they are on POSIX.</summary>
+    internal static List<string> UriListToPaths(string uriList, bool posix = false)
     {
         var paths = new List<string>();
         foreach (var raw in uriList.Split("\r\n"))
@@ -344,14 +345,14 @@ internal static class ClipboardFormats
                 // file:///C:/path is the Windows path C:/path; file:///path stays /path.
                 start = 7;
                 var rest = line.AsSpan(8);
-                if (rest.Length > 2 && char.IsAsciiLetter(rest[0]) && rest[1] == ':' && rest[2] is '/' or '\\') start = 8;
+                if (rest.Length > 2 && char.IsAsciiLetter(rest[0]) && rest[1] == ':' && (rest[2] == '/' || (!posix && rest[2] == '\\'))) start = 8;
             }
             else
             {
                 start = 5; // file://host/path is //host/path.
             }
             var path = UnescapeBinary(line[start..]);
-            if (path.Length > 0) paths.Add(path.Replace('/', '\\'));
+            if (path.Length > 0) paths.Add(posix ? path : path.Replace('/', '\\'));
         }
         return paths;
     }
@@ -372,25 +373,97 @@ internal static class ClipboardFormats
         return Encoding.UTF8.GetString(output.ToArray());
     }
 
-    /// <summary>Chromium's <c>FileInfosToURIList</c> on Windows: a <c>file:</c> URL per path, joined by CRLF. <c>%;#?</c>,
-    /// space, controls and every non-ASCII UTF-8 byte (a negative <c>char</c>) are percent-encoded; backslashes become
-    /// slashes.</summary>
-    internal static string PathsToUriList(IEnumerable<string> paths) => string.Join("\r\n", paths.Select(FilePathToFileUrl));
+    /// <summary>Chromium's <c>FileInfosToURIList</c>: a <c>file:</c> URL per path, joined by CRLF. <c>%;#?</c>, space,
+    /// controls and every non-ASCII UTF-8 byte (a negative <c>char</c>) are percent-encoded; backslashes become slashes
+    /// on Windows and are percent-encoded on POSIX, where only <c>/</c> separates.</summary>
+    internal static string PathsToUriList(IEnumerable<string> paths, bool posix = false)
+        => string.Join("\r\n", paths.Select(p => FilePathToFileUrl(p, posix)));
 
-    private static string FilePathToFileUrl(string path)
+    private static string FilePathToFileUrl(string path, bool posix)
     {
         var url = new StringBuilder("file:");
-        static bool Separator(char c) => c is '\\' or '/';
+        bool Separator(char c) => c == '/' || (!posix && c == '\\');
         if (path.Length > 1 && Separator(path[0]) && Separator(path[1])) { }
         else if (path.Length > 0 && Separator(path[0])) url.Append("//");
         else url.Append("///");
         foreach (var b in Encoding.UTF8.GetBytes(path))
         {
-            if (b is (byte)'%' or (byte)';' or (byte)'#' or (byte)'?' or <= (byte)' ' or >= 0x80) url.Append('%').Append(b.ToString("X2"));
+            if (b is (byte)'%' or (byte)';' or (byte)'#' or (byte)'?' or <= (byte)' ' or >= 0x80 || (posix && b == '\\')) url.Append('%').Append(b.ToString("X2"));
             else if (b == '\\') url.Append('/');
             else url.Append((char)b);
         }
         return url.ToString();
+    }
+
+    /// <summary>Chromium's mac pasteboard types: <c>NSPasteboardType*</c>, <c>UTTypeSVG</c> and the WebKit and W3C
+    /// types <c>ClipboardMac</c> and <c>clipboard_util_mac</c> write.</summary>
+    internal static class Mac
+    {
+        internal const string Text = "public.utf8-plain-text";
+        internal const string Html = "public.html";
+        internal const string Rtf = "public.rtf";
+        internal const string Svg = "public.svg-image";
+        internal const string Png = "public.png";
+        internal const string Tiff = "public.tiff";
+        internal const string Url = "public.url";
+        internal const string UrlName = "public.url-name";
+        internal const string FileUrl = "public.file-url";
+        internal const string WebUrlsWithTitles = "dyn.ah62d4rv4gu8zs3pcnzme2641rf4guzdmsv0gn64uqm10c6xenv61a3k";
+        internal const string WebCustomFormatMap = "org.w3.web-custom-format.map";
+        internal const string WebCustomFormatPrefix = "org.w3.web-custom-format.type-";
+
+        // ClipboardMac::WriteHTML marks the fragment as UTF-8 (crbug.com/40759159).
+        internal const string HtmlCharsetPrefix = "<meta charset='utf-8'>";
+
+        // Formats Electron's IsStandardClipboardFormat skips on macOS: listed under a MIME already.
+        private static readonly string[] s_standard = [Text, Html, Svg, Rtf, Png, Tiff, FileUrl];
+
+        /// <summary>Chromium's <c>ClipboardMac::GetAllAvailableFormats</c>: the ASCII pasteboard types, plus HTML when
+        /// RTF is there and PNG and TIFF when either is, in <c>NSString compare:</c> order.</summary>
+        internal static SortedSet<string> AllFormats(IEnumerable<string> pasteboardTypes)
+        {
+            var types = pasteboardTypes.ToList();
+            var formats = new SortedSet<string>(types.Where(t => t.All(char.IsAscii)), StringComparer.Ordinal);
+            if (types.Contains(Html) || types.Contains(Rtf)) formats.Add(Html);
+            if (types.Contains(Png) || types.Contains(Tiff))
+            {
+                formats.Add(Png);
+                formats.Add(Tiff);
+            }
+            return formats;
+        }
+
+        /// <summary>Chromium's <c>ClipboardMac::GetStandardFormats</c>: the MIME types in its order. Copied files hide an
+        /// image, as Finder puts an icon beside them.</summary>
+        internal static List<string> StandardTypes(ISet<string> formats, Func<bool> canInitImage)
+        {
+            var types = new List<string>();
+            if (formats.Contains(Text)) types.Add("text/plain");
+            if (formats.Contains(Html)) types.Add("text/html");
+            if (formats.Contains(Svg)) types.Add("image/svg+xml");
+            if (formats.Contains(Rtf)) types.Add("text/rtf");
+            if (formats.Contains(FileUrl)) types.Add("text/uri-list");
+            else if (canInitImage()) types.Add("image/png");
+            return types;
+        }
+
+        /// <summary>What <c>clipboard.read()[0].types</c> holds on macOS: the W3C custom formats, the standard MIME types,
+        /// the find pasteboard type, each other pasteboard type as <c>electron application/osclipboard</c>, then the
+        /// bookmark type.</summary>
+        internal static List<string> AvailableTypes(IEnumerable<string> customFormats, IEnumerable<string> standard, bool findText, ISet<string> formats, bool bookmark)
+        {
+            var types = customFormats.OrderBy(name => name, StringComparer.Ordinal).ToList();
+            types.AddRange(standard);
+            if (findText) types.Add(FindTextMime);
+            foreach (var name in formats)
+            {
+                if (Array.IndexOf(s_standard, name) >= 0 || name.Length == 0) continue;
+                var mime = name.StartsWith(WebPrefix, StringComparison.Ordinal) ? name : WrapOsFormat(name);
+                if (!types.Contains(mime)) types.Add(mime);
+            }
+            if (bookmark) types.Add(BookmarkMime);
+            return types;
+        }
     }
 
     /// <summary>Chromium's <c>CreateStorageForFileNames</c>: a 20-byte <c>DROPFILES</c> (wide) then each path and its NUL,

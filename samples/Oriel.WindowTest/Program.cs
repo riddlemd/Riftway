@@ -2548,9 +2548,14 @@ async Task ShellAsync()
 
 async Task ClipboardAsync()
 {
+    if (OperatingSystem.IsMacOS())
+    {
+        await MacClipboardTest.RunAsync(Check);
+        return;
+    }
     if (!OperatingSystem.IsWindows())
     {
-        Check("Clipboard throws PlatformNotSupportedException off Windows", Throws<PlatformNotSupportedException>(Clipboard.Clear));
+        Check("Clipboard throws PlatformNotSupportedException off Windows and macOS", Throws<PlatformNotSupportedException>(Clipboard.Clear));
         return;
     }
 

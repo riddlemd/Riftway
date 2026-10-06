@@ -122,6 +122,66 @@ public sealed class ClipboardTests
     }
 
     [Fact]
+    public void CommitMac_writes_platform_types_then_the_object_map_in_chromiums_order()
+    {
+        var w = new ClipboardWriter();
+        w.WriteText("t");
+        w.WriteFilenames("file:///a%20b\r\nhttps://x/\r\nfile://host/c");
+        w.WriteUrl("HTTPS://Example.com", "Ex");
+        w.WriteRtf("{é}");
+        w.WriteHtml("<b>");
+        w.WriteImage(s_pixel);
+        w.WriteData("x/y", [1]);
+        w.WriteUnsafeRawData("com.oriel.raw", [2]);
+        MacPasteboardWrite[] expected =
+        [
+            new MacPasteboardWrite.Data("org.w3.web-custom-format.type-0", [1]),
+            new MacPasteboardWrite.Data("com.oriel.raw", [2]),
+            new MacPasteboardWrite.Image(s_pixel),
+            new MacPasteboardWrite.Text("public.html", "<meta charset='utf-8'><b>"),
+            new MacPasteboardWrite.Data("public.rtf", Encoding.UTF8.GetBytes("{é}")),
+            new MacPasteboardWrite.Url("https://example.com/", "Ex"),
+            new MacPasteboardWrite.Text("public.utf8-plain-text", "t"),
+            new MacPasteboardWrite.Files(["/a b", "//host/c"]),
+            new MacPasteboardWrite.Data("org.w3.web-custom-format.map", Encoding.UTF8.GetBytes("{\"x/y\":\"org.w3.web-custom-format.type-0\"}")),
+        ];
+        var writes = w.CommitMac()!;
+        Assert.Equal(expected.Length, writes.Count);
+        for (var i = 0; i < expected.Length; i++) Assert.Equal(Describe(expected[i]), Describe(writes[i]));
+    }
+
+    private static string Describe(MacPasteboardWrite write) => write switch
+    {
+        MacPasteboardWrite.Data d => $"data {d.Type} {Convert.ToHexString(d.Bytes)}",
+        MacPasteboardWrite.Image i => $"image {i.Bitmap.Width}x{i.Bitmap.Height} {Convert.ToHexString(i.Bitmap.Bgra)}",
+        MacPasteboardWrite.Files f => $"files {string.Join("|", f.Paths)}",
+        _ => write.ToString(),
+    };
+
+    [Fact]
+    public void CommitMac_is_null_when_nothing_was_written_and_empty_parts_only_clear()
+    {
+        Assert.Null(new ClipboardWriter().CommitMac());
+        var w = new ClipboardWriter();
+        w.WriteUrl("not a url", "title");
+        Assert.Null(w.CommitMac());
+        var empty = new ClipboardWriter();
+        empty.WriteText("");
+        empty.WriteHtml("");
+        empty.WriteRtf("");
+        empty.WriteFilenames("https://not-a-file/");
+        Assert.Empty(empty.CommitMac()!);
+    }
+
+    [Fact]
+    public void CommitMac_keeps_an_untitled_bookmark()
+    {
+        var w = new ClipboardWriter();
+        w.WriteUrl("https://e.com/");
+        Assert.Equal([new MacPasteboardWrite.Url("https://e.com/", "")], w.CommitMac()!);
+    }
+
+    [Fact]
     public void Raw_and_custom_writes_share_a_limit_of_100()
     {
         var w = new ClipboardWriter();
@@ -254,6 +314,31 @@ public sealed class ClipboardTests
         Assert.Empty((byte[])Read(new FakeBackend { Png = [7] }, "image/png"));
     }
 
+    [Fact]
+    public void ReadType_keeps_the_bookmark_title_and_escapes_posix_paths()
+    {
+        var b = new FakeBackend { Title = "Tï", Url = "HTTPS://E.com", Files = [@"/a b/\é", "//host/x"], Posix = true };
+        Assert.Equal(new ClipboardBookmark("Tï", "https://e.com/"), ClipboardReader.ReadType(b, "electron application/bookmark", () => true));
+        Assert.Equal(Encoding.UTF8.GetBytes("file:///a%20b/%5C%C3%A9\r\nfile://host/x"), Read(b, "text/uri-list"));
+    }
+
+    [Fact]
+    public void ReadType_reads_the_find_pasteboard_where_there_is_one_and_raw_data_elsewhere()
+    {
+        Assert.Equal(Encoding.UTF8.GetBytes("fïnd"), Read(new FakeBackend { FindText = "fïnd" }, "electron application/findtext"));
+        Assert.Equal(Encoding.UTF8.GetBytes("electron application/findtext"), Read(new FakeBackend(), "electron application/findtext"));
+    }
+
+    [Fact]
+    public void WriteTo_writes_find_text_at_once_and_passes_the_bookmark_title()
+    {
+        var w = new ClipboardWriter();
+        var found = new List<string>();
+        ClipboardPayloads.WriteTo(w, [("electron application/findtext", "needle"), ("electron application/bookmark", new ClipboardBookmark("Title", "https://e.com/"))], _ => null, found.Add);
+        Assert.Equal(["needle"], found);
+        Assert.Equal([new MacPasteboardWrite.Url("https://e.com/", "Title")], w.CommitMac()!);
+    }
+
     private static object Read(FakeBackend b, string mime) => ClipboardReader.ReadType(b, mime, () => true);
 
     [Theory]
@@ -271,7 +356,9 @@ public sealed class ClipboardTests
 
     private sealed class FakeBackend : IClipboardBackend
     {
-        public string Text = "", Html = "", Url = "";
+        public string Text = "", Html = "", Url = "", Title = "";
+        public string? FindText;
+        public bool Posix;
         public byte[] Ascii = [], Rtf = [], Png = [];
         public bool Decodes;
         public string[] Files = [];
@@ -285,11 +372,14 @@ public sealed class ClipboardTests
         public byte[] ReadPng() => Png;
         public ImageBitmap? DecodePng(byte[] png) => Decodes ? s_pixel : null;
         public byte[] EncodeJpeg(ImageBitmap bitmap) => [8];
-        public string ReadUrl() => Url;
+        public ClipboardBookmark ReadBookmark() => new(Title, Url);
+        public bool PosixPaths => Posix;
+        public string? ReadFindText() => FindText;
+        public void WriteFindText(string text) => throw new InvalidOperationException("unit tests never write");
         public IReadOnlyList<string> ReadFilenames() => Files;
         public IReadOnlyDictionary<string, string> CustomFormatNames() => Custom;
         public byte[] ReadData(string name) => Encoding.UTF8.GetBytes(name);
-        public void Write(IReadOnlyList<(ClipboardFormat Format, byte[] Data)> blocks) => throw new InvalidOperationException("unit tests never write");
+        public void Write(ClipboardWriter writer) => throw new InvalidOperationException("unit tests never write");
         public void Clear() => throw new InvalidOperationException("unit tests never clear");
     }
 }

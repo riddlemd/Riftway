@@ -237,6 +237,59 @@ public sealed class ClipboardFormatsTests
             ClipboardFormats.PathsToUriList([@"C:\a b\é;#?%.txt", @"\\host\x", @"\x"]));
 
     [Fact]
+    public void UriListToPaths_keeps_posix_paths_as_they_are()
+    {
+        var list = "file:///a%20b/c\\d\r\nfile://host/f\r\nfile:///C:/x\r\nfile:///C:\\y";
+        Assert.Equal(["/a b/c\\d", "//host/f", "C:/x", "/C:\\y"], ClipboardFormats.UriListToPaths(list, posix: true));
+    }
+
+    [Fact]
+    public void PathsToUriList_escapes_like_chromium_on_posix()
+        => Assert.Equal("file:///a%20b/%5Cc%C3%A9%3B\r\nfile://host/x\r\nfile:///rel\r\nfile:///%5C%5Cx",
+            ClipboardFormats.PathsToUriList(["/a b/\\cé;", "//host/x", "rel", "\\\\x"], posix: true));
+
+    [Fact]
+    public void Mac_AllFormats_keeps_ascii_types_and_adds_html_for_rtf_and_both_image_types()
+    {
+        Assert.Equal(["a.z", "public.html", "public.rtf"], ClipboardFormats.Mac.AllFormats(["public.rtf", "a.z", "ünicode"]));
+        Assert.Equal(["public.png", "public.tiff"], ClipboardFormats.Mac.AllFormats(["public.tiff"]));
+        Assert.Equal(["public.png", "public.tiff"], ClipboardFormats.Mac.AllFormats(["public.png"]));
+        Assert.Equal(["B", "a"], ClipboardFormats.Mac.AllFormats(["a", "B"]));
+    }
+
+    [Fact]
+    public void Mac_StandardTypes_follow_chromiums_order_and_files_hide_an_image()
+    {
+        var formats = new HashSet<string> { "public.utf8-plain-text", "public.html", "public.svg-image", "public.rtf", "public.file-url" };
+        Assert.Equal(["text/plain", "text/html", "image/svg+xml", "text/rtf", "text/uri-list"], ClipboardFormats.Mac.StandardTypes(formats, () => true));
+        Assert.Equal(["image/png"], ClipboardFormats.Mac.StandardTypes(new HashSet<string>(), () => true));
+        Assert.Empty(ClipboardFormats.Mac.StandardTypes(new HashSet<string>(), () => false));
+    }
+
+    [Theory]
+    [InlineData("public.utf8-plain-text", "text/plain")]
+    [InlineData("public.html", "text/html")]
+    [InlineData("public.svg-image", "image/svg+xml")]
+    [InlineData("public.rtf", "text/rtf")]
+    [InlineData("public.file-url", "text/uri-list")]
+    public void Mac_StandardTypes_lists_each_type_only_when_its_format_is_there(string format, string mime)
+        => Assert.Equal([mime], ClipboardFormats.Mac.StandardTypes(new HashSet<string> { format }, () => false));
+
+    [Fact]
+    public void Mac_AvailableTypes_lists_custom_standard_findtext_raw_then_bookmark()
+    {
+        var formats = ClipboardFormats.Mac.AllFormats(
+            ["public.utf8-plain-text", "public.url", "org.w3.web-custom-format.map", "web x/y", "web a/y", "public.tiff", "public.file-url", "", "Zed", "public.svg-image"]);
+        var types = ClipboardFormats.Mac.AvailableTypes(["web b/x", "web a/y"], ["text/plain"], findText: true, formats, bookmark: true);
+        Assert.Equal(
+            ["web a/y", "web b/x", "text/plain", "electron application/findtext", "electron application/osclipboard;format=\"Zed\"",
+                "electron application/osclipboard;format=\"org.w3.web-custom-format.map\"", "electron application/osclipboard;format=\"public.url\"", "web x/y",
+                "electron application/bookmark"],
+            types);
+        Assert.Equal(["text/plain"], ClipboardFormats.Mac.AvailableTypes([], ["text/plain"], findText: false, new SortedSet<string> { "public.html" }, bookmark: false));
+    }
+
+    [Fact]
     public void BuildDropFiles_is_a_wide_dropfiles_block()
     {
         var block = ClipboardFormats.BuildDropFiles([@"C:\a", "b"])!;
