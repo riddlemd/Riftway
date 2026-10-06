@@ -25,6 +25,47 @@ public sealed class AppMetricsTests
     }
 }
 
+public sealed class AppMetricsWindowsTests
+{
+    [Theory]
+    [InlineData(0u, "untrusted")]
+    [InlineData(0xFFFu, "untrusted")]
+    [InlineData(0x1000u, "low")]
+    [InlineData(0x1FFFu, "low")]
+    [InlineData(0x2000u, "medium")]
+    [InlineData(0x2FFFu, "medium")]
+    [InlineData(0x3000u, "high")]
+    [InlineData(0x3FFFu, "high")]
+    [InlineData(0x4000u, "unknown")]
+    [InlineData(0x5000u, "unknown")]
+    public void IntegrityLevelName_BandsTheRidAsElectronDoes(uint rid, string expected) => Assert.Equal(expected, OrielApp.IntegrityLevelName(rid));
+
+    [Theory]
+    [InlineData("untrusted", true)]
+    [InlineData("low", true)]
+    [InlineData("medium", false)]
+    [InlineData("high", false)]
+    [InlineData("unknown", false)]
+    public void IsSandboxedLevel_IsBelowMediumAndAboveUnknown(string level, bool expected) => Assert.Equal(expected, OrielApp.IsSandboxedLevel(level));
+
+    [Fact]
+    public void KiB_ShiftsBytesRightTen_Truncating() => Assert.Equal((0L, 1L, 1L, 4096L), (OrielApp.KiB(1023), OrielApp.KiB(1024), OrielApp.KiB(2047), OrielApp.KiB(4096UL * 1024)));
+
+    [Fact]
+    public void FileTimeToUnixMilliseconds_CountsFrom1970In100nsTicks()
+    {
+        Assert.Equal(0, OrielApp.FileTimeToUnixMilliseconds(116444736000000000UL));
+        Assert.Equal(1500.5, OrielApp.FileTimeToUnixMilliseconds(116444736000000000UL + 15005000UL));
+    }
+
+    [Fact]
+    public void Descendants_FollowsParentChainsToTheRoot_InPidOrder_AndSurvivesCycles()
+    {
+        var parents = new Dictionary<int, int> { [10] = 1, [11] = 10, [12] = 11, [20] = 2, [30] = 31, [31] = 30, [5] = 1 };
+        Assert.Equal([5, 10, 11, 12], OrielApp.Descendants(parents, 1));
+    }
+}
+
 public sealed class AppMetricsLinuxTests
 {
     [Fact]
