@@ -71,8 +71,10 @@ public sealed class OrielProcessTests
     [Fact]
     public void ResourcesPathFor_IsTheBundlesResourcesOnMacOS_ElseResourcesBesideTheExecutable()
     {
-        Assert.Equal(Path.Combine("/A.app", "Contents", "Resources"), OrielProcess.ResourcesPathFor(Path.Combine("/A.app", "Contents", "MacOS", "A"), macOS: true));
-        Assert.Equal(Path.Combine("/opt/app", "resources"), OrielProcess.ResourcesPathFor(Path.Combine("/opt/app", "a"), macOS: false));
+        // A native root: on Windows Path.GetDirectoryName turns each slash into a backslash.
+        var root = Path.GetPathRoot(Path.GetTempPath())!;
+        Assert.Equal(Path.Combine(root, "A.app", "Contents", "Resources"), OrielProcess.ResourcesPathFor(Path.Combine(root, "A.app", "Contents", "MacOS", "A"), macOS: true));
+        Assert.Equal(Path.Combine(root, "opt", "app", "resources"), OrielProcess.ResourcesPathFor(Path.Combine(root, "opt", "app", "a"), macOS: false));
     }
 }
 

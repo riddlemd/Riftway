@@ -3607,16 +3607,29 @@ async Task ProcessChildrenAsync()
             }
         }
         catch (TimeoutException) { }
-        Check("Process: Hang stops the UI thread for good", lines.Contains("UI-HUNG") && !child.HasExited, string.Join(",", lines));
-        var log = Path.Combine(userData, "oriel_debug.log");
-        var text = File.Exists(log) ? File.ReadAllText(log) : null;
-        Check("Logging: ELECTRON_ENABLE_LOGGING=file logs to oriel_debug.log in userData", text is not null, text?.Length);
-        // Electron's line prefix: [pid:MMDD/HHMMSS.micros:SEVERITY:...]; Chromium's default adds the thread id.
-        var first = text?.Split('\n').FirstOrDefault(l => l.StartsWith('[')) ?? "";
-        Check("Logging: lines carry the process id and a timestamp only, as Electron's",
-            System.Text.RegularExpressions.Regex.IsMatch(first, @"^\[\d+:\d{4}/\d{6}\.\d+:[A-Z]+:"), first);
-        child.Kill(entireProcessTree: true);
-        await child.WaitForExitAsync();
+        try
+        {
+            Check("Process: Hang stops the UI thread for good", lines.Contains("UI-HUNG") && !child.HasExited, string.Join(",", lines));
+            var log = Path.Combine(userData, "oriel_debug.log");
+            // The hung child still has its log open for writing, which Windows refuses File.ReadAllText beside.
+            string? text = null;
+            if (File.Exists(log))
+            {
+                using var stream = new FileStream(log, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete);
+                text = new StreamReader(stream).ReadToEnd();
+            }
+            Check("Logging: ELECTRON_ENABLE_LOGGING=file logs to oriel_debug.log in userData", text is not null, text?.Length);
+            // Electron's line prefix: [pid:MMDD/HHMMSS.micros:SEVERITY:...]; Chromium's default adds the thread id.
+            var first = text?.Split('\n').FirstOrDefault(l => l.StartsWith('[')) ?? "";
+            Check("Logging: lines carry the process id and a timestamp only, as Electron's",
+                System.Text.RegularExpressions.Regex.IsMatch(first, @"^\[\d+:\d{4}/\d{6}\.\d+:[A-Z]+:"), first);
+        }
+        finally
+        {
+            // Whatever the checks did, the hung child and its subprocesses must not outlive the run.
+            child.Kill(entireProcessTree: true);
+            await child.WaitForExitAsync();
+        }
     }
     for (var attempt = 0; attempt < 40 && Directory.Exists(userData); attempt++)
     {
