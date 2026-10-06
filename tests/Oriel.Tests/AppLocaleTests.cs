@@ -1,3 +1,5 @@
+using Oriel.Cef.Platform;
+
 namespace Oriel.Tests;
 
 public sealed class AppLocaleTests
@@ -38,4 +40,35 @@ public sealed class AppLocaleTests
         Assert.Equal("", OrielApp.LinuxRegion(Env(("LANG", "C"))));
         Assert.Equal("", OrielApp.LinuxRegion(Env(("LANG", "en_"))));
     }
+
+    [Fact]
+    public void CountryCodeOrEmpty_NeedsExactlyTwoCharacters()
+    {
+        Assert.Equal("US", OrielApp.CountryCodeOrEmpty("US"));
+        Assert.Equal("", OrielApp.CountryCodeOrEmpty(""));
+        Assert.Equal("", OrielApp.CountryCodeOrEmpty("U"));
+        Assert.Equal("", OrielApp.CountryCodeOrEmpty("USA"));
+    }
+
+    [Fact]
+    public void ParseMultiString_SplitsOnNulAndDropsTheTerminator()
+    {
+        Assert.Equal(["en-US", "de-DE"], WindowsLocale.ParseMultiString("en-US\0de-DE\0\0"));
+        Assert.Equal(["fr"], WindowsLocale.ParseMultiString("fr\0\0"));
+        Assert.Empty(WindowsLocale.ParseMultiString("\0\0"));
+    }
+
+    [Theory]
+    [InlineData("en-US", "en-US")]
+    [InlineData("zh-CN", "zh-CN")]
+    [InlineData("sr-Latn-RS", "sr-Latn-RS")]
+    [InlineData("SR-latn-rs", "sr-Latn-RS")]
+    [InlineData("es-419", "es-419")]
+    [InlineData("de-DE_phoneb", "de-DE@phoneb")]
+    [InlineData("de-DE_PHONEB", "de-DE@phoneb")]
+    [InlineData("ca-ES-valencia", "ca-ES@valencia")]
+    [InlineData("fr", "fr")]
+    [InlineData("", "en-US")]
+    public void IcuLocale_PrintsLanguageScriptRegionVariant(string windows, string expected)
+        => Assert.Equal(expected, WindowsLocale.IcuLocale(windows));
 }

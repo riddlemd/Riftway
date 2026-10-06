@@ -1103,6 +1103,24 @@ async Task RunAsync()
             $"{languages}|{systemLocale}|{countryCode} vs LC_MESSAGES={messages} LC_TIME={time}");
     }
 
+    if (OperatingSystem.IsWindows())
+    {
+        // The same Win32 calls from Windows PowerShell, a process with its own COM setup.
+        const string script = """
+            Add-Type -Namespace L -Name N -MemberDefinition '[DllImport("kernel32.dll", CharSet=CharSet.Unicode)] public static extern int GetLocaleInfoEx(string n, uint t, System.Text.StringBuilder b, int c);'
+            function Info($n, $t) { if ($null -eq $n) { $n = [NullString]::Value }; $b = New-Object System.Text.StringBuilder 85; if ([L.N]::GetLocaleInfoEx($n, $t, $b, 85) -gt 0) { $b.ToString() } else { '' } }
+            $null = [Windows.System.UserProfile.GlobalizationPreferences, Windows.System.UserProfile, ContentType=WindowsRuntime]
+            $c = Info $null 0x5A
+            if ($c.Length -eq 0) { $c = Info '!x-sys-default-locale' 0x5A }
+            ([Windows.System.UserProfile.GlobalizationPreferences]::Languages -join ',') + '|' + (Info $null 0x5C) + '|' + $c
+            """;
+        var raw = Output("powershell.exe", "-NoProfile", "-Command", script).Split('|');
+        // ICU prints an ordinary Windows locale name unchanged; a sort-order suffix or legacy alias would differ.
+        Check("The locale getters answer as the Win32 locale APIs do on Windows",
+            raw.Length == 3 && languages == raw[0] && systemLocale == raw[1] && countryCode == (raw[2].Length == 2 ? raw[2] : ""),
+            $"{languages}|{systemLocale}|{countryCode} vs {string.Join('|', raw)}");
+    }
+
     // app.hide / show / isHidden / focus, setBadgeCount and app.dock, read back by another process (macOS).
     if (OperatingSystem.IsMacOS())
     {

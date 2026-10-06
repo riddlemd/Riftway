@@ -1,4 +1,3 @@
-using System.Globalization;
 using Oriel.Cef.Platform;
 
 namespace Oriel;
@@ -10,7 +9,7 @@ public sealed unsafe partial class OrielApp
     {
         if (OperatingSystem.IsMacOS()) return MacLocale.PreferredLanguages();
         if (OperatingSystem.IsLinux()) return LinuxLanguages(Environment.GetEnvironmentVariable);
-        return [CultureInfo.CurrentUICulture.Name];
+        return OperatingSystem.IsWindows() ? WindowsLocale.PreferredLanguages() : [];
     }
 
     /// <summary>The locale the OS is set to, e.g. <c>en-US</c>. Electron's <c>app.getSystemLocale()</c>.</summary>
@@ -20,7 +19,7 @@ public sealed unsafe partial class OrielApp
         if (!IsReady) throw new InvalidOperationException("app.getSystemLocale() can only be called after app is ready");
         if (OperatingSystem.IsMacOS()) return MacLocale.CurrentIdentifier().Replace('_', '-');
         if (OperatingSystem.IsLinux()) return LinuxConfiguredLocale(Environment.GetEnvironmentVariable);
-        return CultureInfo.CurrentCulture.Name;
+        return OperatingSystem.IsWindows() ? WindowsLocale.ConfiguredLocale() : "en-US";
     }
 
     /// <summary>The two-letter country code of the user's locale, or empty. Electron's <c>app.getLocaleCountryCode()</c>.</summary>
@@ -28,9 +27,12 @@ public sealed unsafe partial class OrielApp
     {
         var region = OperatingSystem.IsMacOS() ? MacLocale.CountryCode()
             : OperatingSystem.IsLinux() ? LinuxRegion(Environment.GetEnvironmentVariable)
-            : RegionInfo.CurrentRegion.TwoLetterISORegionName;
-        return region.Length == 2 ? region : "";
+            : OperatingSystem.IsWindows() ? WindowsLocale.IsoCountryName() : "";
+        return CountryCodeOrEmpty(region);
     }
+
+    // Electron returns the region only when it is exactly two characters, on every OS.
+    internal static string CountryCodeOrEmpty(string region) => region.Length == 2 ? region : "";
 
     // GLib's g_get_language_names: LANGUAGE (a list), else LC_ALL, LC_MESSAGES, LANG; each locale with its variants,
     // longest first; "C" dropped and each canonicalised, as Electron's language_util_linux.cc does.
