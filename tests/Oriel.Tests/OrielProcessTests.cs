@@ -68,3 +68,39 @@ public sealed class OrielProcessTests
         Assert.Equal(0, rate.PerSecond(0));
     }
 }
+
+public sealed class ProcessMemoryInfoTests
+{
+    [Fact]
+    public void ParseProcStatus_ReadsChromiumsFields_AndFallsBackToStatm()
+    {
+        const string status = "Name:\toriel\nVmRSS:\t   2048 kB\nRssAnon:\t    512 kB\nRssFile:\t 1536 kB\nVmSwap:\t     64 kB\n";
+        Assert.Equal((2048UL * 1024, 512UL * 1024, 64UL * 1024), OrielProcess.ParseProcStatus(status, "", 4096));
+        const string old = "Name:\toriel\nVmRSS:\t   2048 kB\nVmSwap:\t      0 kB\n";
+        Assert.Equal((2048UL * 1024, 300UL * 4096, 0UL), OrielProcess.ParseProcStatus(old, "9000 500 200 1 0 400 0", 4096));
+        Assert.Null(OrielProcess.ParseProcStatus(old, "", 4096));
+        Assert.Equal((2048UL * 1024, 300UL * 4096, 0UL), OrielProcess.ParseProcStatus("VmRSS:\t 2048 kB\nRssAnon:\t 0 kB\n", "9000 500 200", 4096));
+    }
+
+    [Fact]
+    public void LinuxAndMacInfo_FollowChromiumsOsDumps()
+    {
+        Assert.Equal(new ProcessMemoryInfo(2048, 576, 0), OrielProcess.LinuxProcessMemoryInfo((2048UL * 1024, 512UL * 1024, 64UL * 1024)));
+        Assert.Equal(new ProcessMemoryInfo(uint.MaxValue, 1, 0), OrielProcess.LinuxProcessMemoryInfo((ulong.MaxValue, 1024, 0)));
+        Assert.Equal(new ProcessMemoryInfo(null, 3000, 0), OrielProcess.MacProcessMemoryInfo(3000UL * 1024));
+        Assert.Equal(new ProcessMemoryInfo(null, int.MaxValue, 0), OrielProcess.MacProcessMemoryInfo(ulong.MaxValue));
+    }
+}
+
+public sealed class ProcArgsTests
+{
+    [Fact]
+    public void ParseProcArgs_SkipsTheExecutablePathAndItsPadding_AndStopsAtArgc()
+    {
+        var bytes = new List<byte>(BitConverter.GetBytes(3));
+        bytes.AddRange("/x/Helper\0\0\0\0helper\0--type=renderer\0--lang=en\0PATH=/bin\0"u8.ToArray());
+        Assert.Equal(["helper", "--type=renderer", "--lang=en"], Oriel.Cef.Platform.ProcessInfo.ParseProcArgs(bytes.ToArray()));
+        Assert.Equal(["a", "b"], Oriel.Cef.Platform.ProcessInfo.ParseProcArgs([2, 0, 0, 0, (byte)'/', 0, (byte)'a', 0, (byte)'b']));
+        Assert.Empty(Oriel.Cef.Platform.ProcessInfo.ParseProcArgs([1, 0]));
+    }
+}

@@ -428,10 +428,14 @@ async Task RunAsync()
     var refused = await Fetch("/echo", "{ headers: { 'X-Cancel': '1' } }");
     Check("cancel in onBeforeSendHeaders stops the request", refused == "failed", refused);
     var failedLoads = new List<int>();
-    requestWin.WebContents.DidFailLoad += (_, e) => failedLoads.Add(e.ErrorCode);
-    var blockedLoad = await Throws(() => requestWin.LoadUrl(Site + "blocked").WaitAsync(TimeSpan.FromSeconds(10)));
+    Task? blockedTask = null;
+    var settledBeforeEvent = false;
+    // Electron rejects loadURL from its own did-fail-load listener, so the app's earlier listener runs first.
+    requestWin.WebContents.DidFailLoad += (_, e) => { failedLoads.Add(e.ErrorCode); settledBeforeEvent |= blockedTask?.IsCompleted == true; };
+    var blockedLoad = await Throws(() => (blockedTask = requestWin.LoadUrl(Site + "blocked")).WaitAsync(TimeSpan.FromSeconds(10)));
     Check("a navigation a listener cancels fails LoadUrl and DidFailLoad with ERR_BLOCKED_BY_CLIENT, as Electron's",
-        blockedLoad is LoadFailedException { ErrorCode: -20 } && failedLoads.SequenceEqual([-20]), $"{blockedLoad?.Message} [{string.Join(",", failedLoads)}]");
+        blockedLoad is LoadFailedException { ErrorCode: -20 } && failedLoads.SequenceEqual([-20]) && !settledBeforeEvent,
+        $"{blockedLoad?.Message} [{string.Join(",", failedLoads)}] settled before the event: {settledBeforeEvent}");
     var unfiltered = await Fetch("/unfiltered");
     Check("onBeforeRequest follows its filter", unfiltered == Page && Saw("before", "unfiltered") is null && await WaitFor(() => Saw("completed", "unfiltered")) is not null);
 
@@ -1101,8 +1105,31 @@ async Task RunAsync()
         var psRead = Output("powershell.exe", "-NoProfile", "-Command", $"$p = Get-Process -Id {Environment.ProcessId}; $p.WorkingSet64 / 1024; $p.PrivateMemorySize64 / 1024")
             .Split('\n', StringSplitOptions.RemoveEmptyEntries).Select(l => (long)double.Parse(l.Trim(), CultureInfo.InvariantCulture)).ToArray();
         Check("GetProcessMemoryInfo's resident set and private are this process's working set and private bytes, shared 0",
-            ownMemory.ResidentSet > 10 * 1024 && Math.Abs(ownMemory.ResidentSet - psRead[0]) < 0.2 * psRead[0] && ownMemory.Private > 10 * 1024 && Math.Abs(ownMemory.Private - psRead[1]) < 0.2 * psRead[1] && ownMemory.Shared == 0, $"{ownMemory} vs {string.Join(' ', psRead)}");
+            ownMemory.ResidentSet > 10 * 1024 && Math.Abs(ownMemory.ResidentSet!.Value - psRead[0]) < 0.2 * psRead[0] && ownMemory.Private > 10 * 1024 && Math.Abs(ownMemory.Private - psRead[1]) < 0.2 * psRead[1] && ownMemory.Shared == 0, $"{ownMemory} vs {string.Join(' ', psRead)}");
         Check("WindowsStore is false outside an MSIX package", !OrielProcess.WindowsStore);
+    }
+    if (OperatingSystem.IsLinux())
+    {
+        // ps reads VmRSS; RssAnon and VmSwap straight from the status file, through awk rather than Oriel's parser.
+        var linuxMemory = await OrielProcess.GetProcessMemoryInfoAsync();
+        var pid = Environment.ProcessId.ToString(CultureInfo.InvariantCulture);
+        var rss = long.Parse(Output("/bin/ps", "-o", "rss=", "-p", pid), CultureInfo.InvariantCulture);
+        var anonSwap = long.Parse(Output("/usr/bin/awk", "/^(RssAnon|VmSwap):/ { s += $2 } END { print s }", $"/proc/{pid}/status"), CultureInfo.InvariantCulture);
+        Check("on Linux, GetProcessMemoryInfo's resident set is VmRSS and private is RssAnon plus swap, as Chromium's; shared 0",
+            linuxMemory.ResidentSet is { } resident && Math.Abs(resident - rss) < 0.2 * rss && Math.Abs(linuxMemory.Private - anonSwap) < 0.2 * anonSwap && linuxMemory.Shared == 0,
+            $"{linuxMemory} vs rss {rss}, anon+swap {anonSwap}");
+    }
+    if (OperatingSystem.IsMacOS())
+    {
+        // vmmap reports the physical footprint independently; Electron leaves residentSet out on macOS.
+        var macMemory = await OrielProcess.GetProcessMemoryInfoAsync();
+        var summary = Output("/usr/bin/vmmap", "--summary", Environment.ProcessId.ToString(CultureInfo.InvariantCulture));
+        var footprintLine = summary.Split('\n').FirstOrDefault(l => l.StartsWith("Physical footprint:", StringComparison.Ordinal)) ?? "";
+        var parts = footprintLine["Physical footprint:".Length..].Trim();
+        var number = double.TryParse(parts[..^1], CultureInfo.InvariantCulture, out var n) ? n : -1;
+        var footprintKb = parts.EndsWith('G') ? number * 1024 * 1024 : parts.EndsWith('M') ? number * 1024 : parts.EndsWith('K') ? number : -1;
+        Check("on macOS, GetProcessMemoryInfo's private is the physical footprint, with no resident set, as Electron's",
+            macMemory.ResidentSet is null && footprintKb > 0 && Math.Abs(macMemory.Private - footprintKb) < 0.25 * footprintKb && macMemory.Shared == 0, $"{macMemory} vs {footprintLine}");
     }
     OrielProcess.GetCPUUsage();
     // Every CPU busy: the percent is of all of them, so it nears 100 only when divided by their count.
@@ -1121,7 +1148,7 @@ async Task RunAsync()
     Check("GetAppMetrics starts with this process as Browser, and every CPU reading starts at 0", firstMetrics[0] is { Type: "Browser" } browserMetric
         && browserMetric.Pid == Environment.ProcessId && Math.Abs(browserMetric.CreationTime - (OrielProcess.GetCreationTime() ?? 0)) < 1500
         && firstMetrics.All(m => m.Cpu.PercentCPUUsage == 0 && m.Cpu.CumulativeCPUUsage >= 0), string.Join(" ", firstMetrics.Select(m => $"{m.Pid}:{m.Type}:{m.Cpu.PercentCPUUsage}")));
-    if (OperatingSystem.IsLinux())
+    if (OperatingSystem.IsLinux() || OperatingSystem.IsMacOS())
     {
         var table = Output("/bin/ps", "-eo", "pid=,ppid=,args=").Split('\n', StringSplitOptions.RemoveEmptyEntries)
             .Select(l => l.Trim().Split(' ', 3, StringSplitOptions.RemoveEmptyEntries)).Where(p => p.Length == 3)
@@ -1130,11 +1157,20 @@ async Task RunAsync()
         string KindOf(string args) => args.Contains("--type=renderer") ? "Tab" : args.Contains("--type=gpu-process") ? "GPU" : args.Contains("--type=utility") ? "Utility" : "";
         var expectedChildren = table.Where(t => Under(t.Pid) && KindOf(t.Args) != "").Select(t => $"{t.Pid}:{KindOf(t.Args)}").Order().ToList();
         var listedChildren = firstMetrics.Skip(1).Select(m => $"{m.Pid}:{m.Type}").Order().ToList();
-        Check("on Linux, the children are the renderers, GPU and utility processes ps shows under this one, with a utility's service",
+        Check("the children are the renderers, GPU and utility processes ps shows under this one, with a utility's service",
             expectedChildren.SequenceEqual(listedChildren) && listedChildren.Any(c => c.EndsWith(":Tab", StringComparison.Ordinal))
-            && firstMetrics.Any(m => m.ServiceName == "network.mojom.NetworkService") && firstMetrics.All(m => m.Memory is null && m.Name is null),
+            && firstMetrics.Any(m => m.ServiceName == "network.mojom.NetworkService") && firstMetrics.All(m => m.Name is null)
+            // Electron reports memory and sandboxing on macOS only; Oriel's macOS children are unsandboxed (drift A1).
+            && firstMetrics.All(m => OperatingSystem.IsMacOS() ? m.Memory is { WorkingSetSize: > 0 } mem && mem.PeakWorkingSetSize >= mem.WorkingSetSize && m.Sandboxed == false : m.Memory is null),
             $"{string.Join(",", expectedChildren)} vs {string.Join(",", listedChildren)}");
-        var etimes = firstMetrics.Skip(1).Select(m => (m, Seconds: double.Parse(Output("/bin/ps", "-o", "etimes=", "-p", m.Pid.ToString(CultureInfo.InvariantCulture)), CultureInfo.InvariantCulture))).ToList();
+        // etime, [[dd-]hh:]mm:ss, is what both Linux and macOS ps print.
+        static double Elapsed(string etime)
+        {
+            var days = etime.Contains('-') ? double.Parse(etime[..etime.IndexOf('-')], CultureInfo.InvariantCulture) : 0;
+            var parts = etime[(etime.IndexOf('-') + 1)..].Split(':').Select(p => double.Parse(p, CultureInfo.InvariantCulture)).Reverse().ToArray();
+            return days * 86400 + parts[0] + (parts.Length > 1 ? parts[1] * 60 : 0) + (parts.Length > 2 ? parts[2] * 3600 : 0);
+        }
+        var etimes = firstMetrics.Skip(1).Select(m => (m, Seconds: Elapsed(Output("/bin/ps", "-o", "etime=", "-p", m.Pid.ToString(CultureInfo.InvariantCulture))))).ToList();
         var nowMs = (DateTime.UtcNow - DateTime.UnixEpoch).TotalMilliseconds;
         Check("each child's creation time is when ps says it started", etimes.All(e => Math.Abs(nowMs - e.Seconds * 1000 - e.m.CreationTime) < 2500),
             string.Join(",", etimes.Select(e => $"{e.m.Pid}:{nowMs - e.Seconds * 1000 - e.m.CreationTime:F0}")));

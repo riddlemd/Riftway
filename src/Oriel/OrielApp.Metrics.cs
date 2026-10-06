@@ -26,6 +26,7 @@ public sealed partial class OrielApp
 {
     private readonly Lock _metricsGate = new();
     private readonly Dictionary<int, (OrielProcess.CpuSampler Cpu, OrielProcess.EventRate Wakeups)> _samplers = [];
+    private readonly Dictionary<int, ulong> _peakResident = [];
 
     /// <summary>The app's processes: this one and the Chromium processes it started, each with its CPU use since the
     /// previous call. Electron's <c>app.getAppMetrics()</c>; child processes are listed on Linux and Windows only so far (drift A18).</summary>
@@ -35,6 +36,7 @@ public sealed partial class OrielApp
         var processes = new List<(int Pid, string Type, string? Service)> { (self, "Browser", null) };
         if (OperatingSystem.IsLinux()) processes.AddRange(LinuxChildren(self));
         else if (OperatingSystem.IsWindows()) processes.AddRange(WindowsChildren(self));
+        else if (OperatingSystem.IsMacOS()) processes.AddRange(MacChildren(self));
         var metrics = new List<ProcessMetric>();
         lock (_metricsGate)
         {
@@ -51,31 +53,41 @@ public sealed partial class OrielApp
                 var wakeups = OperatingSystem.IsWindows() || info.Wakeups is not { } count ? 0 : samplers.Wakeups.PerSecond(count);
                 var level = info.IntegrityRid is { } rid ? IntegrityLevelName(rid) : "unknown";
                 metrics.Add(new ProcessMetric(pid, type, new CpuUsage(percent / Environment.ProcessorCount, cumulative, wakeups), info.CreationTime, service, null, info.Memory,
-                    OperatingSystem.IsWindows() ? level : null, OperatingSystem.IsWindows() ? IsSandboxedLevel(level) : null));
+                    OperatingSystem.IsWindows() ? level : null, OperatingSystem.IsWindows() ? IsSandboxedLevel(level) : info.MacSandboxed));
             }
         }
         return metrics;
     }
 
     // A process's cumulative CPU time, start time and voluntary context switches; null once it is gone.
-    private static (TimeSpan Cpu, double CreationTime, ulong? Wakeups, MemoryInfo? Memory, uint? IntegrityRid)? ReadProcess(int pid)
+    private (TimeSpan Cpu, double CreationTime, ulong? Wakeups, MemoryInfo? Memory, uint? IntegrityRid, bool? MacSandboxed)? ReadProcess(int pid)
     {
+        if (OperatingSystem.IsMacOS())
+        {
+            if (ProcessInfo.MacProcessInfo(pid) is not { } mac) return null;
+            // Electron reads resident size and its maximum from each task port, which CEF keeps to itself for children;
+            // a child's peak is the highest Oriel has seen (drift A18).
+            var memory = pid == Environment.ProcessId && ProcessInfo.MacSelfMemory() is var (resident, residentMax)
+                ? new MemoryInfo(KiB(resident), KiB(residentMax), null)
+                : new MemoryInfo(KiB(mac.ResidentBytes), KiB(_peakResident[pid] = Math.Max(_peakResident.GetValueOrDefault(pid), mac.ResidentBytes)), null);
+            return (mac.Cpu, mac.CreationTime, mac.InterruptWakeups, memory, null, mac.Sandboxed);
+        }
         if (OperatingSystem.IsWindows())
         {
             if (ProcessInfo.WindowsDetails(pid) is not { } d) return null;
             return (d.CpuTime, FileTimeToUnixMilliseconds(d.CreationFileTime), null,
-                new MemoryInfo(KiB(d.WorkingSet), KiB(d.PeakWorkingSet), KiB(d.PrivateBytes)), d.IntegrityRid);
+                new MemoryInfo(KiB(d.WorkingSet), KiB(d.PeakWorkingSet), KiB(d.PrivateBytes)), d.IntegrityRid, null);
         }
         if (OperatingSystem.IsLinux())
         {
             if (ParseLinuxStat(TryRead($"/proc/{pid}/stat")) is not { } stat || LinuxBootTime() is not { } boot) return null;
             var ticks = LinuxClockTicks;
             return (TimeSpan.FromSeconds((double)(stat.UserTicks + stat.SystemTicks) / ticks), (boot + (double)stat.StartTicks / ticks) * 1000,
-                LinuxVoluntarySwitches(TryRead($"/proc/{pid}/status")), null, null);
+                LinuxVoluntarySwitches(TryRead($"/proc/{pid}/status")), null, null, null);
         }
         if (pid != Environment.ProcessId) return null;
         using var current = System.Diagnostics.Process.GetCurrentProcess();
-        return (current.TotalProcessorTime, OrielProcess.GetCreationTime() ?? 0, null, null, null);
+        return (current.TotalProcessorTime, OrielProcess.GetCreationTime() ?? 0, null, null, null, null);
     }
 
     // Every descendant whose --type is one Chromium tracks as a child process: renderers, the GPU process, utilities.
@@ -93,6 +105,14 @@ public sealed partial class OrielApp
         foreach (var dir in Directory.EnumerateDirectories("/proc"))
             if (int.TryParse(Path.GetFileName(dir), out var pid) && ParseLinuxStat(TryRead(Path.Combine(dir, "stat"))) is { } stat) parents[pid] = stat.ParentPid;
         return Descendants(parents, root);
+    }
+
+    // The same filter as Linux, over libproc's process table and each child's arguments.
+    [System.Runtime.Versioning.SupportedOSPlatform("macos")]
+    private static IEnumerable<(int Pid, string Type, string? Service)> MacChildren(int root)
+    {
+        foreach (var pid in Descendants(ProcessInfo.MacProcessTree().ToDictionary(p => p.Pid, p => p.ParentPid), root))
+            if (ChildKind(ProcessInfo.MacProcessArguments(pid)) is { } kind) yield return (pid, kind.Type, kind.Service);
     }
 
     // The same filter as Linux, over Toolhelp's process table: CEF's children hang directly off the browser.

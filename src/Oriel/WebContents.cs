@@ -96,13 +96,14 @@ public sealed unsafe partial class WebContents
                 // CEF aborts a navigation a webRequest listener cancelled; Electron reports it blocked.
                 if (isMain && code == AbortedError && Interlocked.Exchange(ref _blockedNavigation, null) == url)
                     (code, text) = (BlockedByClientError, "ERR_BLOCKED_BY_CLIENT");
-                // An aborted load was superseded by a newer one, whose task stays pending; LoadUrl already failed the old one.
-                if (isMain && _navigated && code != AbortedError) CompleteLoad(new LoadFailedException(code, text, url));
                 if (!_navigated) return;
                 var failure = new LoadFailedEventArgs(code, text, url, isMain);
                 DidFailProvisionalLoad?.Invoke(this, failure);
                 // Electron's did-fail-load leaves out cancelled loads.
                 if (code != AbortedError) DidFailLoad?.Invoke(this, failure);
+                // After the events, as Electron's loadURL rejects from its own did-fail-load listener, added after the app's.
+                // An aborted load was superseded by a newer one, whose task stays pending; LoadUrl already failed the old one.
+                if (isMain && code != AbortedError) CompleteLoad(new LoadFailedException(code, text, url));
             },
         };
         var webRequest = session.WebRequest;

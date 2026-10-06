@@ -29,7 +29,7 @@ public sealed record SystemMemoryInfo(long Total, long Free, long? Available, lo
 /// <param name="Private">Memory only this process uses: private commit on Windows.</param>
 /// <param name="Shared">Memory shared with other processes. Always 0 here: Chromium sums it from tracing's shared-memory graph,
 /// which Oriel does not build.</param>
-public sealed record ProcessMemoryInfo(long ResidentSet, long Private, long Shared);
+public sealed record ProcessMemoryInfo(long? ResidentSet, long Private, long Shared);
 
 /// <summary>Versions of the parts of this process; Electron's <c>process.versions</c>.</summary>
 /// <param name="Chrome">Chromium's version.</param>
@@ -95,11 +95,12 @@ public static class OrielProcess
     /// <exception cref="PlatformNotSupportedException">Not on Windows.</exception>
     public static Task<ProcessMemoryInfo> GetProcessMemoryInfoAsync()
     {
-        if (!OperatingSystem.IsWindows()) throw new PlatformNotSupportedException("getProcessMemoryInfo is implemented on Windows only.");
         if (!OrielApp.Current.IsReady) return Task.FromException<ProcessMemoryInfo>(new InvalidOperationException("Memory Info is available only after app ready"));
-        return ProcessInfo.WindowsProcessMemory() is var (workingSet, privateBytes)
-            ? Task.FromResult(ToProcessMemoryInfo(workingSet, privateBytes))
-            : Task.FromException<ProcessMemoryInfo>(new InvalidOperationException("Failed to create memory dump"));
+        var info = OperatingSystem.IsWindows() ? ProcessInfo.WindowsProcessMemory() is var (workingSet, privateBytes) ? ToProcessMemoryInfo(workingSet, privateBytes) : null
+            : OperatingSystem.IsLinux() ? ParseProcStatus(SafeRead("/proc/self/status"), SafeRead("/proc/self/statm"), Environment.SystemPageSize) is { } status ? LinuxProcessMemoryInfo(status) : null
+            : OperatingSystem.IsMacOS() ? ProcessInfo.MacPhysicalFootprint() is { } footprint ? MacProcessMemoryInfo(footprint) : null
+            : null;
+        return info is null ? Task.FromException<ProcessMemoryInfo>(new InvalidOperationException("Failed to create memory dump")) : Task.FromResult(info);
     }
 
     /// <summary>The OS's version: macOS's own (e.g. <c>26.0.1</c>), Windows' major.minor.build, Linux's kernel release.
@@ -126,6 +127,32 @@ public static class OrielProcess
     // Chromium saturates the OS dump's kilobytes: the resident set to uint32, private footprint to int32.
     internal static ProcessMemoryInfo ToProcessMemoryInfo(ulong workingSetBytes, ulong privateBytes) =>
         new((long)Math.Min(workingSetBytes / 1024, uint.MaxValue), (long)Math.Min(privateBytes / 1024, int.MaxValue), 0);
+
+    // Chromium's Linux OS dump: resident set from VmRSS; the private footprint is anonymous resident memory plus swap.
+    internal static ProcessMemoryInfo LinuxProcessMemoryInfo((ulong Resident, ulong RssAnon, ulong Swap) status)
+        => new((long)Math.Min(status.Resident / 1024, uint.MaxValue), (long)((status.RssAnon + status.Swap) / 1024), 0);
+
+    // Chromium's mac OS dump: no resident set in Electron's answer, and the private footprint is the physical footprint
+    // less shared memory, which is 0 without tracing's shared-memory graph (drift P8).
+    internal static ProcessMemoryInfo MacProcessMemoryInfo(ulong physicalFootprint)
+        => new(null, (long)Math.Min(physicalFootprint / 1024, int.MaxValue), 0);
+
+    // VmRSS, RssAnon and VmSwap from /proc/<pid>/status, in bytes. Before Linux 4.5 there is no RssAnon, and Chromium
+    // takes resident less shared pages from statm instead.
+    internal static (ulong Resident, ulong RssAnon, ulong Swap)? ParseProcStatus(string status, string statm, int pageSize)
+    {
+        ulong? Field(string name)
+        {
+            foreach (var line in status.Split('\n'))
+                if (line.StartsWith(name + ":", StringComparison.Ordinal)
+                    && ulong.TryParse(line[(name.Length + 1)..].Trim().Split(' ')[0], out var kib)) return kib * 1024;
+            return null;
+        }
+        if (Field("RssAnon") is { } anon and not 0) return (Field("VmRSS") ?? 0, anon, Field("VmSwap") ?? 0);
+        var pages = statm.Split(' ', StringSplitOptions.RemoveEmptyEntries);
+        if (pages.Length < 3 || !ulong.TryParse(pages[1], out var resident) || !ulong.TryParse(pages[2], out var shared)) return null;
+        return (Field("VmRSS") ?? 0, (resident - shared) * (ulong)pageSize, Field("VmSwap") ?? 0);
+    }
 
     private static string SafeRead(string path)
     {

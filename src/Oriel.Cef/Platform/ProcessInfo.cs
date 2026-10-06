@@ -172,6 +172,17 @@ public static unsafe class ProcessInfo
         return GetPackageFamilyName(-1, &length, name) == 0;
     }
 
+    /// <summary>This process's physical footprint, from TASK_VM_INFO, as Chromium's mac ProcessMetrics::GetMemoryInfo.</summary>
+    [SupportedOSPlatform("macos")]
+    public static ulong? MacPhysicalFootprint()
+    {
+        // task_vm_info: phys_footprint is the 64-bit field at byte 144; the kernel fills as much as count asks for.
+        var info = stackalloc ulong[64];
+        var count = 128u;
+        if (task_info(mach_task_self(), 22, info, &count) != 0 || count < 38) return null;
+        return info[144 / 8];
+    }
+
     /// <summary>The task's interrupt wakeups, which Chromium's mac <c>GetIdleWakeupsPerSecond</c> counts.</summary>
     [SupportedOSPlatform("macos")]
     public static ulong? MacInterruptWakeups()
@@ -203,6 +214,99 @@ public static unsafe class ProcessInfo
     {
         RLimit limit;
         return getrlimit(OperatingSystem.IsMacOS() ? 8 : 7, &limit) == 0 ? (limit.Current, limit.Maximum) : (0, 0);
+    }
+
+    /// <summary>A process as libproc describes it, for app.getAppMetrics on macOS.</summary>
+    public sealed record MacProcess(int Pid, int ParentPid, double CreationTime, TimeSpan Cpu, ulong ResidentBytes, ulong InterruptWakeups, bool Sandboxed);
+
+    /// <summary>This process's resident size and its maximum, from MACH_TASK_BASIC_INFO, as Electron reads its own.</summary>
+    [SupportedOSPlatform("macos")]
+    public static (ulong Resident, ulong ResidentMax)? MacSelfMemory()
+    {
+        // mach_task_basic_info: virtual size, resident size, resident size max, then times; twelve 32-bit words.
+        var info = stackalloc ulong[6];
+        var count = 12u;
+        if (task_info(mach_task_self(), 20, info, &count) != 0) return null;
+        return (info[1], info[2]);
+    }
+
+    /// <summary>Every process's pid and parent, from libproc.</summary>
+    [SupportedOSPlatform("macos")]
+    public static IReadOnlyList<(int Pid, int ParentPid)> MacProcessTree()
+    {
+        var count = proc_listallpids(null, 0);
+        if (count <= 0) return [];
+        var pids = new int[count + 64];
+        fixed (int* buffer = pids) count = proc_listallpids(buffer, pids.Length * sizeof(int));
+        var tree = new List<(int, int)>();
+        for (var i = 0; i < count; i++)
+            if (BsdInfo(pids[i]) is { } info) tree.Add((pids[i], info.ParentPid));
+        return tree;
+    }
+
+    /// <summary>One process's metrics; null once it is gone.</summary>
+    [SupportedOSPlatform("macos")]
+    public static MacProcess? MacProcessInfo(int pid)
+    {
+        if (BsdInfo(pid) is not { } bsd) return null;
+        // proc_taskinfo: resident size at 8, total user and system time at 16 and 24, in Mach absolute time units.
+        var task = stackalloc byte[96];
+        if (proc_pidinfo(pid, 4, 0, task, 96) != 96) return null;
+        var timebase = new MachTimebase();
+        mach_timebase_info(&timebase);
+        var ticks = *(ulong*)(task + 16) + *(ulong*)(task + 24);
+        var cpu = TimeSpan.FromTicks((long)(ticks * timebase.Numer / timebase.Denom / 100));
+        // rusage_info_v4: interrupt wakeups at 40, as Chromium counts task_interrupt_wakeups.
+        var usage = stackalloc byte[512];
+        var hasUsage = proc_pid_rusage(pid, 4, usage) == 0;
+        return new MacProcess(pid, bsd.ParentPid, bsd.StartSeconds * 1000 + bsd.StartMicroseconds / 1000.0, cpu, *(ulong*)(task + 8),
+            hasUsage ? *(ulong*)(usage + 40) : 0, sandbox_check(pid, null, 0) != 0);
+    }
+
+    /// <summary>A process's arguments, from KERN_PROCARGS2: argc, the executable path, then argv.</summary>
+    [SupportedOSPlatform("macos")]
+    public static IReadOnlyList<string> MacProcessArguments(int pid)
+    {
+        var mib = stackalloc int[] { 1, 49, pid };
+        nuint size = 0;
+        if (sysctl(mib, 3, null, &size, null, 0) != 0 || size < 4) return [];
+        var buffer = new byte[size];
+        fixed (byte* p = buffer) if (sysctl(mib, 3, p, &size, null, 0) != 0) return [];
+        return ParseProcArgs(buffer.AsSpan(0, (int)size));
+    }
+
+    // KERN_PROCARGS2's layout: argc, the executable path, NUL padding, then argc NUL-terminated arguments.
+    internal static IReadOnlyList<string> ParseProcArgs(ReadOnlySpan<byte> buffer)
+    {
+        if (buffer.Length < 4) return [];
+        var argc = BitConverter.ToInt32(buffer);
+        var at = 4;
+        while (at < buffer.Length && buffer[at] != 0) at++;
+        while (at < buffer.Length && buffer[at] == 0) at++;
+        var arguments = new List<string>();
+        while (arguments.Count < argc && at < buffer.Length)
+        {
+            var end = buffer[at..].IndexOf((byte)0);
+            end = end < 0 ? buffer.Length : at + end;
+            arguments.Add(System.Text.Encoding.UTF8.GetString(buffer[at..end]));
+            at = end + 1;
+        }
+        return arguments;
+    }
+
+    // proc_bsdinfo: ppid at 16, start seconds and microseconds at 120 and 128.
+    [SupportedOSPlatform("macos")]
+    private static (int ParentPid, ulong StartSeconds, ulong StartMicroseconds)? BsdInfo(int pid)
+    {
+        var info = stackalloc byte[136];
+        if (proc_pidinfo(pid, 3, 0, info, 136) != 136) return null;
+        return (*(int*)(info + 16), *(ulong*)(info + 120), *(ulong*)(info + 128));
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct MachTimebase
+    {
+        public uint Numer, Denom;
     }
 
     private const int HostVmInfo64 = 4;
@@ -293,6 +397,12 @@ public static unsafe class ProcessInfo
     [DllImport(LibSystem)] private static extern int host_page_size(uint host, nuint* pageSize);
     [DllImport(LibSystem)] private static extern int host_statistics64(uint host, int flavor, byte* info, uint* count);
     [DllImport(LibSystem)] private static extern int task_info(uint task, int flavor, ulong* info, uint* count);
+    [DllImport(LibSystem)] private static extern int proc_listallpids(int* buffer, int bufferSize);
+    [DllImport(LibSystem)] private static extern int proc_pidinfo(int pid, int flavor, ulong arg, void* buffer, int bufferSize);
+    [DllImport(LibSystem)] private static extern int proc_pid_rusage(int pid, int flavor, void* buffer);
+    [DllImport(LibSystem)] private static extern int mach_timebase_info(MachTimebase* info);
+    [DllImport(LibSystem)] private static extern int sysctl(int* name, uint length, void* oldValue, nuint* oldLength, void* newValue, nuint newLength);
+    [DllImport(LibSystem)] private static extern int sandbox_check(int pid, byte* operation, int type);
     [DllImport(LibSystem)] private static extern int sysctlbyname(byte* name, void* oldValue, nuint* oldLength, void* newValue, nuint newLength);
     [DllImport("libc", EntryPoint = "uname")] private static extern int uname(byte* buffer);
     [DllImport("libc", EntryPoint = "getrlimit")] private static extern int getrlimit(int resource, RLimit* limit);
