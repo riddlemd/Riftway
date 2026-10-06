@@ -17,13 +17,13 @@ Counted from the Checklist at the end: `BaseWindow` and `BrowserWindow` are one 
 
 | Area | Items | Done | Partial | Missing | n/a | % done | % done + partial/2 |
 |---|---|---|---|---|---|---|---|
-| BaseWindow + BrowserWindow options | 54 | 27 | 2 | 25 | 0 | 50.0% | 51.9% |
+| BaseWindow + BrowserWindow options | 54 | 28 | 2 | 24 | 0 | 51.9% | 53.7% |
 | webPreferences | 46 | 11 | 4 | 24 | 7 | 28.2% | 33.3% |
-| Instance methods | 143 | 71 | 9 | 57 | 6 | 51.8% | 55.1% |
+| Instance methods | 143 | 72 | 8 | 57 | 6 | 52.6% | 55.5% |
 | Instance properties | 24 | 11 | 0 | 13 | 0 | 45.8% | 45.8% |
 | Events | 35 | 14 | 4 | 17 | 0 | 40.0% | 45.7% |
 | Static methods | 6 | 4 | 0 | 1 | 1 | 80.0% | 80.0% |
-| **Total** | 308 | 138 | 19 | 137 | 14 | 46.9% | 50.2% |
+| **Total** | 308 | 140 | 18 | 136 | 14 | 47.6% | 50.7% |
 
 ## Done since the audit
 

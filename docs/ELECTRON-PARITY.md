@@ -9,15 +9,15 @@ Recounted 2026-10-06 against `src/Oriel`. Update these figures when a row or che
 
 | Measure | Done | Partial | Not started | Total |
 |---|---|---|---|---|
-| Module rows below | 3 | 22 | 42 | 67 |
-| M2 rows | 2 | 14 | 5 | 21 |
+| Module rows below | 4 | 26 | 37 | 67 |
+| M2 rows | 3 | 15 | 3 | 21 |
 
 The 67 rows include `BrowserView` (deprecated, never implemented; counted as not started).
 
 | Checklist | Applicable items | Done | Partial | Missing | % done | % done + partial/2 |
 |---|---|---|---|---|---|---|
-| [BrowserWindow](parity/browser-window.md) (with `BaseWindow`) | 294 | 138 | 19 | 137 | 46.9% | 50.2% |
-| [webContents](parity/web-contents.md) (with `navigationHistory`, `WebFrameMain`) | 230 | 104 | 47 | 79 | 45.2% | 55.4% |
+| [BrowserWindow](parity/browser-window.md) (with `BaseWindow`) | 294 | 140 | 18 | 136 | 47.6% | 50.7% |
+| [webContents](parity/web-contents.md) (with `navigationHistory`, `WebFrameMain`) | 230 | 105 | 48 | 77 | 45.7% | 56.1% |
 
 **Source** — where the implementation comes from:
 
@@ -55,7 +55,7 @@ Detailed item-by-item status: [parity/browser-window.md](parity/browser-window.m
 | Electron | Oriel | Source | Wave | Status |
 |---|---|---|---|---|
 | `BaseWindow` | `BaseWindow` | CEF (Views) | M2 | — |
-| `BrowserWindow` | `BrowserWindow` | CEF (Views) | M2 | partial: 138 of 294 applicable items done (46.9%), see parity/browser-window.md |
+| `BrowserWindow` | `BrowserWindow` | CEF (Views) | M2 | partial: 140 of 294 applicable items done (47.6%), see parity/browser-window.md |
 | `View` | `View` | CEF (Views panel) | M2 | — |
 | `WebContentsView` | `WebContentsView` | CEF (Views browser view) | M2 | — |
 | `ImageView` | `ImageView` | CEF + .NET | M5 | — |
@@ -72,10 +72,10 @@ Detailed item-by-item status, including `navigationHistory` and `WebFrameMain`: 
 
 | Electron | Oriel | Source | Wave | Status |
 |---|---|---|---|---|
-| `webContents` | `WebContents` | CEF | M2 | partial: 104 of 230 applicable items done (45.2%) across `webContents`, `navigationHistory` and `WebFrameMain`, see parity/web-contents.md; `loadURL`/`loadFile`/`reload`, `send`, IPC, window-open handler, context menu, input events, zoom, user agent, DevTools |
+| `webContents` | `WebContents` | CEF | M2 | partial: 105 of 230 applicable items done (45.7%) across `webContents`, `navigationHistory` and `WebFrameMain`, see parity/web-contents.md; `loadURL`/`loadFile`/`reload`, `send`, IPC, window-open handler, context menu, input events, zoom, user agent, DevTools |
 | `webFrameMain` | `WebFrameMain` | CEF | M2 | partial: frame tree, url/origin/name, `executeJavaScript`, `reload`, `send`, IPC `senderFrame`; in-process frames only (see DRIFT.md) |
 | `NavigationHistory` | `NavigationHistory` | CEF | M2 | partial: back/forward, index/offset moves, entries, clear; no `removeEntryAtIndex` or `restore` (see DRIFT.md) |
-| `Debugger` (`webContents.debugger`) | `Debugger` (DevTools protocol) | CEF | M2 | — |
+| `Debugger` (`webContents.debugger`) | `Debugger` (DevTools protocol) | CEF | M2 | done: `attach` (protocol version check), `isAttached`, `detach`, `sendCommand` (with `sessionId`), `message` and `detach` events; shares Oriel's protocol session (DRIFT C43) |
 | `webFrame` (renderer) | `oriel.webFrame` in the preload | CEF (DevTools protocol) | M6 | partial: zoom (factor and level), `insertCSS`/`removeInsertedCSS`, `insertText`, `executeJavaScript`, `executeJavaScriptInIsolatedWorld`, `frameToken`, for the frame that calls (I8) |
 | `webUtils` (renderer) | `oriel.webUtils` | CEF | M6 | — |
 | `sharedTexture` | `SharedTexture` | Patch | M7 | — |
@@ -94,7 +94,7 @@ Detailed item-by-item status, including `navigationHistory` and `WebFrameMain`: 
 | Electron | Oriel | Source | Wave | Status |
 |---|---|---|---|---|
 | `session` | `Session` | CEF | M2 core, M6 rest | partial: core done (`setUserAgent`/`getUserAgent`, `defaultSession`, `fromPartition`, `fromPath`, `persist:` partitions, `WebPreferences.Session`/`Partition`, `WebContents.Session`, per-session `protocol`, `flushStorageData`, `webRequest`, `setPermissionRequestHandler`, `setPermissionCheckHandler` (`navigator.permissions.query` only, E28), `setDisplayMediaRequestHandler` (whole desktop, E30), `clearCache`, `clearAuthCache`, `closeAllConnections`, `setProxy`, `resolveHost` (no options, E38), `clearStorageData`, `clearData` (E35), `getCacheSize` (sessions on disk, E34), `downloadURL` with `headers` (hidden page, E37), `will-download`); no device permission handlers (E31), `clearHostResolverCache`, `resolveProxy`, `clearCodeCaches` (E8), `createInterruptedDownload` (E16) (see DRIFT.md E1-E38) |
-| `protocol` | `Protocol` | CEF | M2 | partial: `handle`, `unhandle`, `isProtocolHandled`, `registerSchemesAsPrivileged`; global, not per session; no `intercept*` or legacy `register*Protocol` (see DRIFT.md) |
+| `protocol` | `Protocol` | CEF | M2 | partial: `handle`, `unhandle`, `isProtocolHandled`, `registerSchemesAsPrivileged`; per session through `Session.Protocol`; no `intercept*` or legacy `register*Protocol` (see DRIFT.md) |
 | `Cookies` | `Cookies` | CEF | M6 | partial: `get`, `set` (Electron's rejection messages), `remove`, `flushStore`, `changed` (read from the store, see DRIFT E4, E5) |
 | `WebRequest` | `WebRequest` | CEF | M6 | partial: all eight events with `urls`/`excludeUrls`/`types` filters, cancel and `redirectURL`, request header changes, `uploadData` (bytes and file paths), `frame`, `webContentsId`, custom-scheme requests, service and shared worker requests without a page; `onHeadersReceived` cannot change or cancel the response, no `fromCache`/`ip`/`initiatorOrigin`, a `net` module's requests unseen (see DRIFT.md E17-E19, E27) |
 | `DownloadItem` | `DownloadItem` | CEF | M6 | — |

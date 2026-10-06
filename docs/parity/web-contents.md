@@ -12,13 +12,13 @@ Percentages are over the non-n/a items; the second counts a partial item as half
 |---|---|---|---|---|---|---|---|
 | Static methods | 5 | 2 | 2 | 1 | 0 | 40.0% | 60.0% |
 | Instance events | 59 | 31 | 18 | 8 | 2 | 54.4% | 70.2% |
-| Instance methods | 118 | 38 | 22 | 50 | 8 | 34.5% | 44.5% |
-| Instance properties | 18 | 9 | 1 | 7 | 1 | 52.9% | 55.9% |
+| Instance methods | 118 | 38 | 23 | 49 | 8 | 34.5% | 45.0% |
+| Instance properties | 18 | 10 | 1 | 6 | 1 | 58.8% | 61.8% |
 | navigationHistory | 14 | 12 | 0 | 2 | 0 | 85.7% | 85.7% |
 | WebFrameMain events and statics | 3 | 1 | 0 | 2 | 0 | 33.3% | 33.3% |
 | WebFrameMain methods | 9 | 1 | 4 | 4 | 0 | 11.1% | 33.3% |
 | WebFrameMain properties | 15 | 10 | 0 | 5 | 0 | 66.7% | 66.7% |
-| **Total** | 241 | 104 | 47 | 79 | 11 | 45.2% | 55.4% |
+| **Total** | 241 | 105 | 48 | 77 | 11 | 45.7% | 56.1% |
 
 ## Checklist
 
@@ -237,7 +237,7 @@ Percentages are over the non-n/a items; the second counts a partial item as half
 | `id` | `Id` | done |  |
 | `session` | `Session` | done | See DRIFT E1-E11 for the session gaps. |
 | `devToolsWebContents` | — | missing |  |
-| `debugger` | — | missing |  |
+| `debugger` | `Debugger` | done | Shares Oriel's protocol session (DRIFT C43) |
 | `backgroundThrottling` | — | missing |  |
 | `opener` | — | missing |  |
 | `zoomMode` | — | missing |  |
