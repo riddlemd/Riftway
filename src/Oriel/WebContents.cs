@@ -803,9 +803,17 @@ public sealed unsafe partial class WebContents
     }
 
     // The page's override, else its session's, else the app's fallback; CEF started with the fallback.
+    // The user agent last sent to DevTools for this page.
+    private string? _sentUserAgent;
+
     private void SendUserAgent()
     {
         var userAgent = _userAgent is { Length: > 0 } own ? own : _defaultUserAgent is { Length: > 0 } fallback ? fallback : OrielApp.ProcessUserAgent;
+        // The renderer keeps an earlier override's string when the next one is Chromium's own default; clearing first
+        // resets it (ProtocolTest: setUserAgent("") restores the default).
+        if (userAgent == OrielApp.ProcessUserAgent && _sentUserAgent is { } sent && sent != userAgent)
+            _devTools.Send("Emulation.setUserAgentOverride", w => w.WriteString("userAgent", ""));
+        _sentUserAgent = userAgent;
         // Emulation's override stays for the DevTools session, across navigations and renderer swaps. Every page gets one:
         // CEF starts Chromium with --user-agent, which leaves only the low-entropy hints unless metadata is passed in.
         _devTools.Send("Emulation.setUserAgentOverride", w =>
