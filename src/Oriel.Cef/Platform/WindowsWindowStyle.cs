@@ -4,7 +4,7 @@ using System.Runtime.Versioning;
 namespace Oriel.Cef.Platform;
 
 /// <summary>Win32 window styles behind Electron's Windows window options: opacity,
-/// click-through, capture exclusion and the restored ("normal") bounds.</summary>
+/// click-through, capture exclusion, frame styles and the restored ("normal") bounds.</summary>
 /// <remarks>UI thread only. Rectangles are screen pixels.</remarks>
 [SupportedOSPlatform("windows")]
 public static unsafe class WindowsWindowStyle
@@ -146,6 +146,26 @@ public static unsafe class WindowsWindowStyle
 
     /// <summary>The top-level window that contains <paramref name="hwnd"/>.</summary>
     public static nint Root(nint hwnd) => GetAncestor(hwnd, 2 /* GA_ROOT */);
+
+    /// <summary>The window's <c>GWL_STYLE</c>.</summary>
+    public static uint GetStyle(nint hwnd) => (uint)(long)GetWindowLongPtrW(hwnd, GwlStyle);
+
+    /// <summary>Replaces the window's <c>GWL_STYLE</c> outright, as Electron does for a frameless window before it is
+    /// first shown; the frame is recomputed on the next size change.</summary>
+    public static void SetStyle(nint hwnd, uint style) => SetWindowLongPtrW(hwnd, GwlStyle, (nint)style);
+
+    /// <summary>Turns <paramref name="flag"/> on or off in the window's <c>GWL_STYLE</c> and has Windows recompute the
+    /// frame; Electron's <c>FlipWindowStyle</c>.</summary>
+    public static void FlipStyle(nint hwnd, bool on, uint flag)
+    {
+        var style = GetStyle(hwnd);
+        SetStyle(hwnd, on ? style | flag : style & ~flag);
+        // Windows caches the frame styles until SWP_FRAMECHANGED.
+        SetWindowPos(hwnd, 0, 0, 0, 0, 0, 0x20 /* SWP_FRAMECHANGED */ | 0x2 /* SWP_NOMOVE */ | 0x1 /* SWP_NOSIZE */
+            | 0x4 /* SWP_NOZORDER */ | 0x10 /* SWP_NOACTIVATE */ | 0x200 /* SWP_NOOWNERZORDER */);
+    }
+
+    private const int GwlStyle = -16;
 
     private static uint ExStyle(nint hwnd) => (uint)(long)GetWindowLongPtrW(hwnd, GwlExStyle);
 

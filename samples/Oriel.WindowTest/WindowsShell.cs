@@ -503,6 +503,47 @@ static unsafe class WindowsShell
     [DllImport("user32.dll")] private static extern int SetCursorPos(int x, int y);
     [DllImport("user32.dll")] private static extern void mouse_event(uint flags, int dx, int dy, int data, nint extra);
 
+    /// <summary>Sends <paramref name="message"/> and waits for the window procedure to return.</summary>
+    internal static void Send(nint hwnd, uint message, nint wParam, nint lParam)
+    {
+        nint result;
+        _ = SendMessageTimeoutW(hwnd, message, wParam, lParam, 2, 2000, &result);
+    }
+
+    /// <summary>The window text, through <c>WM_GETTEXT</c>.</summary>
+    internal static string GetText(nint hwnd)
+    {
+        var buffer = stackalloc char[256];
+        nint length;
+        _ = SendMessageTimeoutW(hwnd, 0x000D /* WM_GETTEXT */, 256, (nint)buffer, 2, 2000, &length);
+        return new string(buffer, 0, (int)length);
+    }
+
+    /// <summary>The NUL-terminated UTF-16 string at <paramref name="pointer"/>.</summary>
+    internal static string? ReadString(nint pointer) => pointer == 0 ? null : new string((char*)pointer);
+
+    /// <summary>Whether the calling thread is the one that owns <paramref name="hwnd"/>.</summary>
+    internal static bool OnWindowThread(nint hwnd) => GetWindowThreadProcessId(hwnd, null) == GetCurrentThreadId();
+
+    /// <summary>The window's <c>GWL_STYLE</c>.</summary>
+    internal static uint Style(nint hwnd) => (uint)(long)GetWindowLongPtrW(hwnd, -16 /* GWL_STYLE */);
+
+    /// <summary>A 32-bit DWM window attribute, or null if DWM would not say.</summary>
+    internal static uint? Dwm(nint hwnd, uint attribute) => OperatingSystem.IsWindows() ? Oriel.Cef.Platform.WindowsWindow.GetDwmAttribute(hwnd, attribute) : null;
+
+    /// <summary>A screen pixel of the window's visible frame (<c>DWMWA_EXTENDED_FRAME_BOUNDS</c>): the caption's middle,
+    /// clear of the title and the buttons, or the 1px border at the middle of the bottom edge.</summary>
+    internal static (byte R, byte G, byte B) FramePixel(nint hwnd, bool caption)
+    {
+        RectNative r;
+        if (DwmGetWindowAttribute(hwnd, 9 /* DWMWA_EXTENDED_FRAME_BOUNDS */, &r, (uint)sizeof(RectNative)) < 0) return default;
+        return caption ? ScreenPixel(r.Left + (r.Right - r.Left) * 45 / 100, r.Top + 10) : ScreenPixel((r.Left + r.Right) / 2, r.Bottom - 1);
+    }
+
+    [DllImport("dwmapi.dll")] private static extern int DwmGetWindowAttribute(nint hwnd, uint attribute, void* value, uint size);
+    [DllImport("kernel32.dll")] private static extern uint GetCurrentThreadId();
+    [DllImport("user32.dll")] private static extern nint GetWindowLongPtrW(nint hwnd, int index);
+
     /// <summary>Sends the window the <c>WM_COMMAND</c> a click on thumbnail button <paramref name="id"/> sends.</summary>
     internal static void ClickThumbButton(nint hwnd, int id)
     {
@@ -577,9 +618,6 @@ static unsafe class WindowsShell
         return result;
     }
 
-    /// <summary>The window's <c>GWL_STYLE</c>.</summary>
-    internal static uint Style(nint hwnd) => (uint)GetWindowLongPtrW(hwnd, -16);
-
     /// <summary>Sets the window's <c>GWL_STYLE</c> as another party (Chromium) would.</summary>
     internal static void SetStyle(nint hwnd, uint style) => SetWindowLongPtrW(hwnd, -16, (nint)style);
 
@@ -587,7 +625,6 @@ static unsafe class WindowsShell
     [DllImport("user32.dll")] private static extern int GetWindowRect(nint hwnd, int* rect);
     [DllImport("user32.dll")] private static extern int ClientToScreen(nint hwnd, long* point);
     [DllImport("gdi32.dll")] private static extern uint GetPixel(nint dc, int x, int y);
-    [DllImport("user32.dll")] private static extern nint GetWindowLongPtrW(nint hwnd, int index);
     [DllImport("user32.dll")] private static extern nint SetWindowLongPtrW(nint hwnd, int index, nint value);
     [DllImport("user32.dll")] private static extern nint SendMessageTimeoutW(nint hwnd, uint message, nint wParam, nint lParam, uint flags, uint timeout, nint* result);
     [DllImport("user32.dll")] private static extern int GetIconInfo(nint icon, IconInfo* info);
