@@ -131,10 +131,10 @@ Counted from the Checklist at the end: `BaseWindow` and `BrowserWindow` are one 
   `moveAbove` and `getMediaSourceId` (Chromium's `DesktopMediaID` strings), `isTabletMode` (`UIViewSettings`),
   `isSnapped`/`snapped` (`IsWindowArranged`), `setShape` (window region), `setAspectRatio`
   (Chromium's `SizeRectToAspectRatio` on `WM_SIZING`), and the events `moved`/`resized` (`WM_EXITSIZEMOVE`),
-  `query-session-end`/`session-end`, `system-context-menu` (framed windows), `app-command` and
+  `query-session-end`/`session-end`, `system-context-menu` (also from a frameless window's drag region), `app-command` and
   `always-on-top-changed`. `setAlwaysOnTop` levels below `pop-up-menu` keep the window under the taskbar, as Electron.
   Routes: a subclass of the HWND of its own (`WindowsWindowMessages`), so other subclasses keep working. Gaps: macOS and
-  Linux (W43), a non-focusable window is still activated when shown (W44), no aura id in media source ids (W45).
+  Linux (W43), no aura id in media source ids (W45). A non-focusable window shows without activating, through `ShowInactive`'s route.
 
 ## Next, by importance
 
@@ -202,7 +202,7 @@ Parameters in brackets are optional in Electron. `webContents` members are in [w
 | `minimizable` | `Minimizable` | done |  |
 | `maximizable` | `Maximizable` | done |  |
 | `closable` | `Closable` | done | Honoured on Linux too (W10, superset). |
-| `focusable` | `Focusable` | partial | Windows `WS_EX_NOACTIVATE`; still activated when shown (W44); stored only elsewhere (W43). |
+| `focusable` | `Focusable` | partial | Windows `WS_EX_NOACTIVATE`, shown without activation; stored only elsewhere (W43). |
 | `alwaysOnTop` | `AlwaysOnTop` | done |  |
 | `fullscreen` | `FullScreen` | done |  |
 | `fullscreenable` | — | missing |  |
@@ -452,7 +452,7 @@ Parameters in brackets are optional in Electron. `webContents` members are in [w
 | `autoHideMenuBar` | `AutoHideMenuBar` | done |  |
 | `simpleFullScreen` | `SetSimpleFullScreen / IsSimpleFullScreen` | done |  |
 | `fullScreen` | `SetFullScreen / IsFullScreen` | done |  |
-| `focusable` | `SetFocusable / IsFocusable` | partial | Windows; stored only elsewhere (W43, W44). |
+| `focusable` | `SetFocusable / IsFocusable` | partial | Windows; stored only elsewhere (W43). |
 | `visibleOnAllWorkspaces` | — | missing |  |
 | `shadow` | `SetHasShadow / GetHasShadow` | partial | Stored only, as Electron on Windows (W31). |
 | `menuBarVisible` | `SetMenuBarVisibility / IsMenuBarVisible` | done |  |
@@ -507,7 +507,7 @@ Parameters in brackets are optional in Electron. `webContents` members are in [w
 | `sheet-begin` | — | missing |  |
 | `sheet-end` | — | missing |  |
 | `new-window-for-tab` | — | missing |  |
-| `system-context-menu` | `SystemContextMenu` | partial | Windows framed windows (`WM_CONTEXTMENU`); frameless drag regions not yet (W47). |
+| `system-context-menu` | `SystemContextMenu` | partial | Windows: framed windows (`WM_CONTEXTMENU`) and a right click on a frameless window's drag region, as Electron. |
 | `persisted-state-restored` | — | missing |  |
 
 ### Static methods

@@ -43,6 +43,11 @@ static partial class WindowsStateChecks
         await Task.Delay(1200);
         var uh = unfocusable.GetNativeWindowHandle();
         check("the Focusable = false option creates the window with WS_EX_NOACTIVATE", Has(uh, ExNoActivate) && !unfocusable.IsFocusable, ExStyle(uh).ToString("X"));
+        check("a non-focusable window is not activated when it first shows, as Electron's widget cannot activate", GetForegroundWindow() != uh, GetForegroundWindow());
+        unfocusable.Hide();
+        unfocusable.Show();
+        await Task.Delay(800);
+        check("Show() does not activate a non-focusable window either", unfocusable.IsVisible && GetForegroundWindow() != uh, GetForegroundWindow());
         check("Type = toolbar gives WS_EX_TOOLWINDOW; a default window has none", Has(uh, ExToolWindow) && !Has(hwnd, ExToolWindow), $"{ExStyle(uh):X} {ExStyle(hwnd):X}");
 
         // movable, moved, resized
@@ -52,9 +57,14 @@ static partial class WindowsStateChecks
         w.ResizeFinished += (_, _) => resizedCount++;
         var start = WindowRect(hwnd);
         var drag = start with { Left = start.Left + 50, Right = start.Right + 50 };
+        var willMoves = 0;
+        void CountWillMove(object? _, WillMoveEventArgs e) => willMoves++;
+        w.WillMove += CountWillMove;
         w.SetMovable(false);
         var blocked = Send(hwnd, WmMoving, 0, drag);
         check("SetMovable(false): WM_MOVING keeps the window where it is", blocked == WindowRect(hwnd) && !w.IsMovable, $"{blocked} vs {WindowRect(hwnd)}");
+        w.WillMove -= CountWillMove;
+        check("WillMove fires before a window that is not movable blocks the move, as Electron's PreHandleMSG", willMoves == 1, willMoves);
         w.SetMovable(true);
         var allowed = Send(hwnd, WmMoving, 0, drag);
         check("SetMovable(true): WM_MOVING goes through untouched", allowed == drag && w.IsMovable, allowed);
@@ -148,7 +158,13 @@ static partial class WindowsStateChecks
         w.SetAspectRatio(2.0);
         check("SetAspectRatio(2) resizes the window to twice as wide as high", Eventually(() => WindowRect(hwnd) is var r && Math.Abs(r.Width - 2 * r.Height) <= 1, step), WindowRect(hwnd));
         var now = WindowRect(hwnd);
+        Rectangle? seen = null;
+        void SeeWillResize(object? _, WillResizeEventArgs e) => seen ??= e.NewBounds;
+        w.WillResize += SeeWillResize;
         var dragged = Send(hwnd, WmSizing, 2 /* WMSZ_RIGHT */, now with { Right = now.Left + 900, Bottom = now.Top + 300 });
+        w.WillResize -= SeeWillResize;
+        check("WillResize sees the dragged rectangle before the aspect ratio fits it, as Chromium fits it after Electron's PreHandleMSG",
+            seen is { } s && Math.Abs(s.Width * 300 - s.Height * 900) <= Math.Max(s.Width, s.Height) * 2, seen);
         check("a WM_SIZING from the right edge keeps the ratio from the width", dragged == now with { Right = now.Left + 900, Bottom = now.Top + 450 }, dragged);
         var fromTop = Send(hwnd, WmSizing, 3 /* WMSZ_TOP */, new Rect(now.Left, now.Top, now.Left + 500, now.Top + 400));
         check("a WM_SIZING from the top edge keeps the ratio from the height", fromTop == new Rect(now.Left, now.Top, now.Left + 800, now.Top + 400), fromTop);
@@ -202,6 +218,15 @@ static partial class WindowsStateChecks
         var fc = ClientOrigin(frh);
         _ = SendMessageW(frh, WmContextMenu, frh, MakeLParam(fc.X + 10, fc.Y + 10));
         check("a frameless window raises no SystemContextMenu from WM_CONTEXTMENU, as Electron", framelessMenus == 0, framelessMenus);
+        // A right click on a drag region is a caption click: Chromium captures the press and shows the system menu on release.
+        await frameless.LoadUrl("data:text/html,<body style='margin:0;height:100vh;-webkit-app-region:drag'></body>");
+        var fb = WindowRect(frh);
+        var (dx, dy) = (fb.Left + fb.Width / 2, fb.Top + fb.Height / 2);
+        Eventually(() => SendMessageW(frh, 0x0084 /* WM_NCHITTEST */, 0, MakeLParam(dx, dy)) == 2, step);
+        var dragHit = SendMessageW(frh, 0x0084, 0, MakeLParam(dx, dy));
+        var dragMenu = CaptionRightClickShowsMenu(frh, dx, dy);
+        check("a right click on a frameless window's drag region raises SystemContextMenu, and cancelling it keeps the menu hidden, as Electron",
+            dragHit == 2 && framelessMenus == 1 && !dragMenu, $"hit={dragHit} raised={framelessMenus} menu={dragMenu}");
         frameless.Destroy();
 
         // app commands
@@ -309,6 +334,22 @@ static unsafe partial class WindowsStateChecks
     }
 
     // Sends WM_CONTEXTMENU and reports whether a menu loop held the window's thread; the menu is then dismissed.
+    // WM_NCRBUTTONDOWN on the caption, then the WM_RBUTTONUP the capture turns the release into; true if a menu showed.
+    private static bool CaptionRightClickShowsMenu(nint hwnd, int x, int y)
+    {
+        _ = SendMessageW(hwnd, 0x00A4 /* WM_NCRBUTTONDOWN */, 2 /* HTCAPTION */, MakeLParam(x, y));
+        var c = ClientOrigin(hwnd);
+        var answered = SendMessageTimeoutW(hwnd, 0x0205 /* WM_RBUTTONUP */, 0, MakeLParam(x - c.X, y - c.Y), 0x2, 1500, out _) != 0;
+        var shown = !answered || FindWindowW("#32768", null) != 0;
+        for (var i = 0; i < 20 && FindWindowW("#32768", null) is var menu && menu != 0; i++)
+        {
+            _ = PostMessageW(menu, 0x0100 /* WM_KEYDOWN */, 0x1B, 0);
+            _ = PostMessageW(hwnd, 0x001F /* WM_CANCELMODE */, 0, 0);
+            Thread.Sleep(150);
+        }
+        return shown;
+    }
+
     private static bool MenuShows(nint hwnd, nint lParam)
     {
         var answered = SendMessageTimeoutW(hwnd, WmContextMenu, hwnd, lParam, 0x2 /* SMTO_ABORTIFHUNG */, 1500, out _) != 0;

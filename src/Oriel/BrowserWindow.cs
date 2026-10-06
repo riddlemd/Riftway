@@ -762,7 +762,7 @@ public sealed unsafe partial class BrowserWindow
     {
         var wasVisible = w->@base.@base.is_visible(&w->@base.@base) != 0;
         _meantVisible = true;
-        w->show(w);
+        ShowThroughCef(w, activate: _focusable ?? _options.Focusable);
         ApplySkipTaskbar(w);
         if (!wasVisible) Shown?.Invoke(this, EventArgs.Empty);
     });
@@ -1036,13 +1036,19 @@ public sealed unsafe partial class BrowserWindow
     {
         var wasVisible = w->@base.@base.is_visible(&w->@base.@base) != 0;
         _meantVisible = true;
-        // Through CEF, so Views knows the window is shown; the position changes it makes are kept from activating it.
-        if (!OperatingSystem.IsWindows() || !WindowsSubclass.WithoutActivation(Hwnd(w), () => w->show(w))) w->show(w);
-        // Handing the foreground back raised the previous window; an inactive show still comes out in front.
-        else WindowsWindowStyle.BringToTopInactive(Hwnd(w));
+        ShowThroughCef(w, activate: false);
         ApplySkipTaskbar(w);
         if (!wasVisible) Shown?.Invoke(this, EventArgs.Empty);
     });
+
+    // Through CEF, so Views knows the window is shown; without activation the position changes it makes are kept from
+    // activating it (Electron's ShowInactive, and every show of a window that cannot activate).
+    private void ShowThroughCef(cef_window_t* w, bool activate)
+    {
+        if (activate || !OperatingSystem.IsWindows() || !WindowsSubclass.WithoutActivation(Hwnd(w), () => w->show(w))) w->show(w);
+        // Handing the foreground back raised the previous window; an inactive show still comes out in front.
+        else WindowsWindowStyle.BringToTopInactive(Hwnd(w));
+    }
 
     /// <summary>Sets the window's opacity, clamped to 0–1. Windows only for now: stored but not shown on macOS and
     /// Linux. Electron's <c>win.setOpacity()</c>.</summary>
@@ -1679,7 +1685,7 @@ public sealed unsafe partial class BrowserWindow
         AttachWindowsState(window);
         if (_options.Show)
         {
-            window->show(window);
+            ShowThroughCef(window, activate: _options.Focusable);
             ApplySkipTaskbar(window);
         }
         if (_options.HiddenInMissionControl && OperatingSystem.IsMacOS())

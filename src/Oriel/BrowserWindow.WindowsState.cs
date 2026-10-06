@@ -11,7 +11,7 @@ public sealed partial record BrowserWindowOptions
 {
     /// <summary>Whether the window can be focused. On Windows false gives it <c>WS_EX_NOACTIVATE</c>, which also keeps it
     /// off the taskbar. Electron's <c>focusable</c>.</summary>
-    /// <remarks>Stored only on macOS and Linux. CEF still activates a non-focusable window when showing it.</remarks>
+    /// <remarks>Stored only on macOS and Linux. On Windows a non-focusable window is shown without activating it.</remarks>
     public bool Focusable { get; init; } = true;
 
     /// <summary>Whether the user can move the window (Windows; ignored elsewhere, as on Linux in Electron).
@@ -81,8 +81,8 @@ public sealed unsafe partial class BrowserWindow
     /// <see cref="OrielApp.Quit"/>, the process then ends at once, as in Electron. Electron's <c>session-end</c>.</summary>
     public event EventHandler<SessionEndEventArgs>? SessionEnded;
 
-    /// <summary>The system context menu is about to show, from a right click on the title bar (Windows; framed windows
-    /// only for now); cancel to keep it hidden. Electron's <c>system-context-menu</c>.</summary>
+    /// <summary>The system context menu is about to show, from a right click on the title bar, or on a drag region of a
+    /// frameless window (Windows); cancel to keep it hidden. Electron's <c>system-context-menu</c>.</summary>
     public event EventHandler<SystemContextMenuEventArgs>? SystemContextMenu;
 
     /// <summary>A command from a keyboard key or mouse button, such as Back or Play (<c>WM_APPCOMMAND</c>, Windows).
@@ -246,14 +246,15 @@ public sealed unsafe partial class BrowserWindow
             QuerySessionEnd?.Invoke(this, args);
             return args.Cancel;
         };
-        // Electron raises it for frameless windows from its own drag-region hit test instead.
-        _windowsHooks.SystemContextMenu = (x, y) =>
+        bool RaiseSystemContextMenu(int x, int y)
         {
-            if (_windowDelegate.Frameless) return false;
             var args = new SystemContextMenuEventArgs(new Point(x, y));
             SystemContextMenu?.Invoke(this, args);
             return args.Cancel;
-        };
+        }
+        // Electron raises it for frameless windows from a right click on a drag region (the caption) instead.
+        _windowsHooks.SystemContextMenu = (x, y) => !_windowDelegate.Frameless && RaiseSystemContextMenu(x, y);
+        _windowsHooks.CaptionRightClick = _windowDelegate.Frameless ? RaiseSystemContextMenu : null;
         _windowsHooks.AppCommand = lParam => AppCommand?.Invoke(this, new AppCommandEventArgs(AppCommands.Name(AppCommands.FromLParam(lParam))));
         WindowsWindowMessages.SessionEnded ??= OnSessionEnded;
         if (!WindowsWindowMessages.Attach(hwnd, _windowsHooks)) Console.Error.WriteLine("[Oriel] The window's messages could not be routed.");

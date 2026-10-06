@@ -33,10 +33,15 @@ public sealed class WindowsMessageHooks
     /// <summary><c>WM_CONTEXTMENU</c> with its screen point in pixels; true keeps the system menu from showing.</summary>
     public Func<int, int, bool>? SystemContextMenu { get; set; }
 
+    /// <summary>A frameless window's right click on its caption (a drag region), with the screen point in pixels; true
+    /// keeps the system menu from showing. Null for a framed window, whose menu comes through <see cref="SystemContextMenu"/>.</summary>
+    public Func<int, int, bool>? CaptionRightClick { get; set; }
+
     /// <summary><c>WM_APPCOMMAND</c> with its lParam.</summary>
     public Action<nint>? AppCommand { get; set; }
 
     internal bool Moving;
+    internal bool RightOnCaption;
     internal bool Resizing;
 }
 
@@ -48,6 +53,8 @@ public static unsafe class WindowsWindowMessages
 {
     private const uint WmActivate = 0x0006, WmEnable = 0x000A, WmQueryEndSession = 0x0011, WmEndSession = 0x0016;
     private const uint WmContextMenu = 0x007B, WmExitSizeMove = 0x0232, WmAppCommand = 0x0319;
+    private const uint WmNcHitTest = 0x0084, WmNcRButtonDown = 0x00A4, WmNcRButtonUp = 0x00A5, WmRButtonUp = 0x0205;
+    private const nint HtCaption = 2, HtSysMenu = 3;
     private static int s_sessionEnded;
 
     /// <summary>Called once per process, with the lParam, for the first <c>WM_ENDSESSION</c> that ends the session.</summary>
@@ -83,10 +90,28 @@ public static unsafe class WindowsWindowMessages
 
     /// <summary>The messages handled before the window procedure, past <c>WM_SIZING</c>/<c>WM_MOVING</c> (handled by
     /// <see cref="WindowsSubclass"/>); a value is the message's result, null passes it on.</summary>
-    internal static nint? PreHandle(WindowsMessageHooks hooks, uint message, nint wParam, nint lParam)
+    internal static nint? PreHandle(WindowsMessageHooks hooks, nint hwnd, uint message, nint wParam, nint lParam)
     {
         switch (message)
         {
+            // Chromium captures the mouse on a caption right press, so the release comes as WM_RBUTTONUP, and shows the
+            // system menu if it is still over the caption; Electron raises system-context-menu for frameless windows there.
+            case WmNcRButtonDown when hooks.CaptionRightClick is not null && wParam is HtCaption or HtSysMenu:
+                hooks.RightOnCaption = true;
+                break;
+            case WmRButtonUp or WmNcRButtonUp when hooks.RightOnCaption:
+                hooks.RightOnCaption = false;
+                var x = (short)(lParam & 0xFFFF);
+                var y = (short)((lParam >> 16) & 0xFFFF);
+                var point = new Point { X = x, Y = y };
+                if (message == WmRButtonUp) ClientToScreen(hwnd, &point);
+                var hit = SendMessageW(hwnd, WmNcHitTest, 0, (nint)(uint)((point.X & 0xFFFF) | ((point.Y & 0xFFFF) << 16)));
+                if (hit is HtCaption or HtSysMenu && hooks.CaptionRightClick?.Invoke(point.X, point.Y) == true)
+                {
+                    ReleaseCapture();
+                    return 0;
+                }
+                break;
             case WmExitSizeMove:
                 if (hooks.Resizing)
                 {
@@ -120,6 +145,15 @@ public static unsafe class WindowsWindowMessages
         if (message == WmEnable && wParam != 0 && hooks.KeepDisabled) WindowsWindowOps.Enable(hwnd, false);
     }
 
+    [StructLayout(LayoutKind.Sequential)]
+    private struct Point
+    {
+        public int X, Y;
+    }
+
+    [DllImport("user32.dll")] private static extern int ClientToScreen(nint hwnd, Point* point);
+    [DllImport("user32.dll")] private static extern nint SendMessageW(nint hwnd, uint message, nint wParam, nint lParam);
+    [DllImport("user32.dll")] private static extern int ReleaseCapture();
     [DllImport("user32.dll")] private static extern int SetWindowRgn(nint hwnd, nint region, int redraw);
     [DllImport("user32.dll")] private static extern int GetWindowRgn(nint hwnd, nint region);
     [DllImport("gdi32.dll")] private static extern nint CreateRectRgn(int left, int top, int right, int bottom);

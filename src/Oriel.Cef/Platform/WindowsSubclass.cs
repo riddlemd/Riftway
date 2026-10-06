@@ -278,7 +278,7 @@ public static unsafe class WindowsSubclass
                         return 1;
                     }
                 }
-                if (hooks.Messages is { } messages && WindowsWindowMessages.PreHandle(messages, message, wParam, lParam) is { } handled)
+                if (hooks.Messages is { } messages && WindowsWindowMessages.PreHandle(messages, hwnd, message, wParam, lParam) is { } handled)
                     return handled;
             }
             catch (Exception e) { Console.Error.WriteLine($"[Oriel] A window message handler threw: {e}"); }
