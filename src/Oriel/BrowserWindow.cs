@@ -857,7 +857,11 @@ public sealed unsafe partial class BrowserWindow
     public void SetFullScreen(bool flag)
     {
         if (UsesSimpleFullScreen) SetSimpleFullScreen(flag);
-        else Command(w => w->set_fullscreen(w, flag ? 1 : 0));
+        else Command(w =>
+        {
+            _sizeState?.SetFullScreen(flag);
+            w->set_fullscreen(w, flag ? 1 : 0);
+        });
     }
 
     /// <summary>Whether the window is in native full screen; false in simple full screen, as Electron (which reads the
@@ -876,7 +880,11 @@ public sealed unsafe partial class BrowserWindow
     {
         if (!OperatingSystem.IsMacOS())
         {
-            Command(w => w->set_fullscreen(w, flag ? 1 : 0));
+            Command(w =>
+            {
+                _sizeState?.SetFullScreen(flag);
+                w->set_fullscreen(w, flag ? 1 : 0);
+            });
             return;
         }
 
@@ -1624,6 +1632,7 @@ public sealed unsafe partial class BrowserWindow
     {
         _meantVisible = _options.Show;
         if (OperatingSystem.IsWindows()) WindowsSubclass.RefuseActivationWhileHidden(Hwnd(window), () => !_meantVisible);
+        RouteSizeEvents(window);
         if (_menuBar is not null)
         {
             _menuBar.Attach(window, _browserView);
@@ -1697,7 +1706,7 @@ public sealed unsafe partial class BrowserWindow
         }
 
         _lastBounds = ToRectangle(window->@base.@base.get_bounds_in_screen(&window->@base.@base));
-        CefThread.PostUiDelayed(PollState, s_statePoll);
+        if (_sizeState is null) CefThread.PostUiDelayed(PollState, s_statePoll);
     }
 
     private void OnBrowserCreated(cef_browser_t* browser)
@@ -1791,7 +1800,7 @@ public sealed unsafe partial class BrowserWindow
 
     private void RaiseStateChanges()
     {
-        if (_window is null) return;
+        if (_window is null || _sizeState is not null) return;
         var maximized = IsMaximizedOn(_window);
         var minimized = _window->is_minimized(_window) != 0;
         if (maximized != _wasMaximized) (maximized ? Maximized : Unmaximized)?.Invoke(this, EventArgs.Empty);
@@ -1805,6 +1814,7 @@ public sealed unsafe partial class BrowserWindow
     {
         if (!completed || _window is null) return;
         var fullscreen = _window->is_fullscreen(_window) != 0;
+        if (fullscreen) _sizeState?.SetFullScreen(true);
         _titleBarOverlay?.SetVisible(!fullscreen);
         (fullscreen ? EnteredFullScreen : LeftFullScreen)?.Invoke(this, EventArgs.Empty);
     }

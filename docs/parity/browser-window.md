@@ -170,8 +170,10 @@ verified blocked; Chrome's default context menu, with its Inspect item, is no lo
   runtime subclass overriding `toggleFullScreen:`, as Electron's NSWindow subclass does. Page-initiated full
   screen (`requestFullscreen`) also goes through `toggleFullScreen:`, so it becomes simple full screen as well
   (untested).
-- **Minimize/restore events** are polled (250 ms) on top of bounds callbacks: CEF reports neither, and on
-  macOS minimizing changes no bounds.
+- **Minimize/restore/maximize/unmaximize events**: on Windows they come from `WM_SIZE` through a window subclass,
+  in Electron's order and conditions (`HandleSizeEvent`: a minimized window coming back maximized raises `restore`,
+  then `maximize`; entering or leaving full screen while maximized raises `maximize`). On macOS and Linux they are
+  polled (250 ms) on top of bounds callbacks: CEF reports neither, and on macOS minimizing changes no bounds.
 
 ## Not applicable
 
@@ -488,8 +490,8 @@ Parameters in brackets are optional in Electron. `webContents` members are in [w
 | `ready-to-show` | `ReadyToShow` | done |  |
 | `maximize` | `Maximized` | done |  |
 | `unmaximize` | `Unmaximized` | done |  |
-| `minimize` | `Minimized` | partial | Polled every 250 ms (W2). |
-| `restore` | `Restored` | partial | Polled every 250 ms (W2). |
+| `minimize` | `Minimized` | partial | From `WM_SIZE` on Windows; polled every 250 ms on macOS/Linux (W2). |
+| `restore` | `Restored` | partial | From `WM_SIZE` on Windows; polled every 250 ms on macOS/Linux (W2). |
 | `will-resize` | `WillResize` | partial | Windows only for now (W30). |
 | `resize` | `Resized` | done |  |
 | `resized` | `ResizeFinished` | partial | Windows (`WM_EXITSIZEMOVE`); macOS not yet (W43). |
