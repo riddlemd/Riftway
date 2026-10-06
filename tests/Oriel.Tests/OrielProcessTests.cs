@@ -12,6 +12,30 @@ public sealed class OrielProcessTests
     }
 
     [Fact]
+    public void FormatWindowsVersion_IsMajorMinorBuildWithoutThePatchNumber()
+    {
+        Assert.Equal("10.0.26200", OrielProcess.FormatWindowsVersion(10, 0, 26200));
+        Assert.Equal("6.1.7601", OrielProcess.FormatWindowsVersion(6, 1, 7601));
+    }
+
+    [Fact]
+    public void ToSystemMemoryInfo_TruncatesBytesToKiB_AndKeepsAbsentFieldsNull()
+    {
+        var info = OrielProcess.ToSystemMemoryInfo(new Oriel.Cef.Platform.ProcessInfo.SystemMemory(8192 * 1024 + 1023, 2048 * 1024 + 1024, null, 4096UL * 1024, 1023, null, null));
+        Assert.Equal((8192L, 2049L, 4096L, 0L), (info.Total, info.Free, info.SwapTotal, info.SwapFree));
+        Assert.Null(info.Available);
+        Assert.Null(info.FileBacked);
+    }
+
+    [Fact]
+    public void ToProcessMemoryInfo_ConvertsToKiB_SharedIsZero_AndSaturatesLikeChromium()
+    {
+        Assert.Equal(new ProcessMemoryInfo(100, 50, 0), OrielProcess.ToProcessMemoryInfo(100 * 1024 + 1023, 50 * 1024));
+        var huge = OrielProcess.ToProcessMemoryInfo(ulong.MaxValue, ulong.MaxValue);
+        Assert.Equal((uint.MaxValue, int.MaxValue), (huge.ResidentSet, huge.Private));
+    }
+
+    [Fact]
     public void CpuSampler_ReportsZeroFirst_ThenPercentOfOneCpuSinceTheLastCall()
     {
         var cpu = TimeSpan.FromSeconds(2);

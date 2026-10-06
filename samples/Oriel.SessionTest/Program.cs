@@ -1085,6 +1085,25 @@ async Task RunAsync()
         Check("GetSystemMemoryInfo's total is hw.memsize, with macOS's fields", sysMemory.Total == long.Parse(Output("/usr/sbin/sysctl", "-n", "hw.memsize"), CultureInfo.InvariantCulture) / 1024
             && sysMemory.FileBacked is not null && sysMemory.Purgeable is not null && sysMemory.Available is null && sysMemory.SwapTotal is null && sysMemory.Free <= sysMemory.Total, sysMemory);
     }
+    if (OperatingSystem.IsWindows())
+    {
+        static long[] Cim(string expression) => Output("powershell.exe", "-NoProfile", "-Command", $"$o = Get-CimInstance Win32_OperatingSystem; {expression}")
+            .Split('\n', StringSplitOptions.RemoveEmptyEntries).Select(l => long.Parse(l.Trim(), CultureInfo.InvariantCulture)).ToArray();
+        // Win32_OperatingSystem is GlobalMemoryStatusEx in KiB: physical total and free, then the commit limit and what is left of it.
+        var cim = Cim("$o.TotalVisibleMemorySize; $o.FreePhysicalMemory; $o.TotalVirtualMemorySize; $o.FreeVirtualMemory");
+        var after = OrielProcess.GetSystemMemoryInfo();
+        Check("GetSystemMemoryInfo's total and free match Win32_OperatingSystem, with Windows' fields", sysMemory.Total == cim[0] && Math.Abs(after.Free - cim[1]) < 512 * 1024
+            && Math.Abs(sysMemory.SwapTotal!.Value - cim[2]) < 1024 && Math.Abs(after.SwapFree!.Value - cim[3]) < 512 * 1024
+            && sysMemory.Available is null && sysMemory.FileBacked is null && sysMemory.Purgeable is null && sysMemory.Free <= sysMemory.Total, $"{after} vs {string.Join(' ', cim)}");
+        var registry = Output("powershell.exe", "-NoProfile", "-Command", "$k = Get-ItemProperty 'HKLM:\\SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion'; \"$($k.CurrentMajorVersionNumber).$($k.CurrentMinorVersionNumber).$($k.CurrentBuildNumber)\"");
+        Check("GetSystemVersion is major.minor.build, without the UBR, as the registry says", OrielProcess.GetSystemVersion() == registry && OrielProcess.GetSystemVersion().Split('.').Length == 3, $"{OrielProcess.GetSystemVersion()} vs {registry}");
+        var ownMemory = await OrielProcess.GetProcessMemoryInfoAsync();
+        var psRead = Output("powershell.exe", "-NoProfile", "-Command", $"$p = Get-Process -Id {Environment.ProcessId}; $p.WorkingSet64 / 1024; $p.PrivateMemorySize64 / 1024")
+            .Split('\n', StringSplitOptions.RemoveEmptyEntries).Select(l => (long)double.Parse(l.Trim(), CultureInfo.InvariantCulture)).ToArray();
+        Check("GetProcessMemoryInfo's resident set and private are this process's working set and private bytes, shared 0",
+            ownMemory.ResidentSet > 10 * 1024 && Math.Abs(ownMemory.ResidentSet - psRead[0]) < 0.2 * psRead[0] && ownMemory.Private > 10 * 1024 && Math.Abs(ownMemory.Private - psRead[1]) < 0.2 * psRead[1] && ownMemory.Shared == 0, $"{ownMemory} vs {string.Join(' ', psRead)}");
+        Check("WindowsStore is false outside an MSIX package", !OrielProcess.WindowsStore);
+    }
     OrielProcess.GetCPUUsage();
     // Every CPU busy: the percent is of all of them, so it nears 100 only when divided by their count.
     var spinUntil = DateTime.UtcNow + TimeSpan.FromMilliseconds(400);

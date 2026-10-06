@@ -24,6 +24,13 @@ public sealed record CpuUsage(double PercentCPUUsage, double? CumulativeCPUUsage
 /// <param name="Purgeable">Purgeable pages, macOS.</param>
 public sealed record SystemMemoryInfo(long Total, long Free, long? Available, long? SwapTotal, long? SwapFree, long? FileBacked, long? Purgeable);
 
+/// <summary>This process's memory in kilobytes; Electron's <c>process.getProcessMemoryInfo()</c> result.</summary>
+/// <param name="ResidentSet">The working set (Windows, Linux).</param>
+/// <param name="Private">Memory only this process uses: private commit on Windows.</param>
+/// <param name="Shared">Memory shared with other processes. Always 0 here: Chromium sums it from tracing's shared-memory graph,
+/// which Oriel does not build.</param>
+public sealed record ProcessMemoryInfo(long ResidentSet, long Private, long Shared);
+
 /// <summary>Versions of the parts of this process; Electron's <c>process.versions</c>.</summary>
 /// <param name="Chrome">Chromium's version.</param>
 /// <param name="Oriel">Oriel's version, where Electron has <c>electron</c>.</param>
@@ -40,6 +47,10 @@ public static class OrielProcess
 
     /// <summary>Electron's <c>process.versions</c>.</summary>
     public static ProcessVersions Versions => new(OrielApp.ChromeVersion(), OrielApp.OrielVersion());
+
+    /// <summary>Whether the process runs with package identity (MSIX / Desktop Bridge); Electron's Windows-only
+    /// <c>process.windowsStore</c>, which Electron leaves undefined rather than false.</summary>
+    public static bool WindowsStore { get; } = OperatingSystem.IsWindows() && ProcessInfo.WindowsIsPackaged();
 
     /// <summary>When the process started, in milliseconds since the Unix epoch, or null if unknown. Electron's
     /// <c>process.getCreationTime()</c>.</summary>
@@ -66,10 +77,29 @@ public static class OrielProcess
             : OperatingSystem.IsMacOS() ? ProcessInfo.MacSystemMemory()
             : OperatingSystem.IsWindows() ? ProcessInfo.WindowsSystemMemory() : null;
         if (memory is null) throw new InvalidOperationException("Unable to retrieve system memory information");
+        return ToSystemMemoryInfo(memory);
+    }
+
+    // Electron reports every field in whole KiB (ByteSize::InKiB truncates).
+    internal static SystemMemoryInfo ToSystemMemoryInfo(ProcessInfo.SystemMemory memory)
+    {
         static long Kib(ulong bytes) => (long)(bytes / 1024);
         static long? OptionalKib(ulong? bytes) => bytes is { } b ? Kib(b) : null;
         return new SystemMemoryInfo(Kib(memory.Total), Kib(memory.Free), OptionalKib(memory.Available), OptionalKib(memory.SwapTotal),
             OptionalKib(memory.SwapFree), OptionalKib(memory.FileBacked), OptionalKib(memory.Purgeable));
+    }
+
+    /// <summary>This process's memory as Chromium's memory instrumentation reports it. Electron's
+    /// <c>process.getProcessMemoryInfo()</c>; Windows only so far.</summary>
+    /// <exception cref="InvalidOperationException">Before the app is ready, or the OS refused, with Electron's messages.</exception>
+    /// <exception cref="PlatformNotSupportedException">Not on Windows.</exception>
+    public static Task<ProcessMemoryInfo> GetProcessMemoryInfoAsync()
+    {
+        if (!OperatingSystem.IsWindows()) throw new PlatformNotSupportedException("getProcessMemoryInfo is implemented on Windows only.");
+        if (!OrielApp.Current.IsReady) return Task.FromException<ProcessMemoryInfo>(new InvalidOperationException("Memory Info is available only after app ready"));
+        return ProcessInfo.WindowsProcessMemory() is var (workingSet, privateBytes)
+            ? Task.FromResult(ToProcessMemoryInfo(workingSet, privateBytes))
+            : Task.FromException<ProcessMemoryInfo>(new InvalidOperationException("Failed to create memory dump"));
     }
 
     /// <summary>The OS's version: macOS's own (e.g. <c>26.0.1</c>), Windows' major.minor.build, Linux's kernel release.
@@ -79,7 +109,7 @@ public static class OrielProcess
         if (OperatingSystem.IsMacOS()) return ProcessInfo.MacOperatingSystemVersion();
         if (OperatingSystem.IsLinux()) return ProcessInfo.LinuxKernelRelease();
         var version = Environment.OSVersion.Version;
-        return $"{version.Major}.{version.Minor}.{version.Build}";
+        return FormatWindowsVersion(version.Major, version.Minor, version.Build);
     }
 
     /// <summary>Raises the soft limit on open files to <paramref name="maxDescriptors"/> or the hard limit, whichever is
@@ -89,6 +119,13 @@ public static class OrielProcess
     {
         if ((OperatingSystem.IsLinux() || OperatingSystem.IsMacOS()) && maxDescriptors > 0) ProcessInfo.IncreaseFdLimitTo((ulong)maxDescriptors);
     }
+
+    // Chromium's SysInfo::OperatingSystemVersion on Windows: major.minor.build, without the UBR patch number.
+    internal static string FormatWindowsVersion(int major, int minor, int build) => $"{major}.{minor}.{build}";
+
+    // Chromium saturates the OS dump's kilobytes: the resident set to uint32, private footprint to int32.
+    internal static ProcessMemoryInfo ToProcessMemoryInfo(ulong workingSetBytes, ulong privateBytes) =>
+        new((long)Math.Min(workingSetBytes / 1024, uint.MaxValue), (long)Math.Min(privateBytes / 1024, int.MaxValue), 0);
 
     private static string SafeRead(string path)
     {

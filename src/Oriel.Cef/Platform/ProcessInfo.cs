@@ -62,6 +62,27 @@ public static unsafe class ProcessInfo
         return new SystemMemory(status.TotalPhys, status.AvailPhys, null, status.TotalPageFile, status.AvailPageFile, null, null);
     }
 
+    /// <summary>This process's working set and private commit in bytes; Chromium's <c>ProcessMetrics::GetMemoryInfo</c> on
+    /// Windows, which feeds Electron's <c>getProcessMemoryInfo</c>. Null if the OS refuses.</summary>
+    [SupportedOSPlatform("windows")]
+    public static (ulong WorkingSet, ulong Private)? WindowsProcessMemory()
+    {
+        var counters = new ProcessMemoryCountersEx { Size = (uint)sizeof(ProcessMemoryCountersEx) };
+        if (K32GetProcessMemoryInfo(-1, &counters, counters.Size) == 0) return null;
+        return (counters.WorkingSetSize, counters.PrivateUsage);
+    }
+
+    /// <summary>Whether the process runs with package identity (MSIX / Desktop Bridge); Electron's
+    /// <c>IsRunningInDesktopBridge</c>.</summary>
+    [SupportedOSPlatform("windows")]
+    public static bool WindowsIsPackaged()
+    {
+        // Electron's buffer: PACKAGE_FAMILY_NAME_MAX_LENGTH wide chars; only success counts.
+        var length = 64u;
+        var name = stackalloc char[65];
+        return GetPackageFamilyName(-1, &length, name) == 0;
+    }
+
     /// <summary>The task's interrupt wakeups, which Chromium's mac <c>GetIdleWakeupsPerSecond</c> counts.</summary>
     [SupportedOSPlatform("macos")]
     public static ulong? MacInterruptWakeups()
@@ -131,6 +152,22 @@ public static unsafe class ProcessInfo
         public ulong AvailExtendedVirtual;
     }
 
+    [StructLayout(LayoutKind.Sequential)]
+    private struct ProcessMemoryCountersEx
+    {
+        public uint Size;
+        public uint PageFaultCount;
+        public nuint PeakWorkingSetSize;
+        public nuint WorkingSetSize;
+        public nuint QuotaPeakPagedPoolUsage;
+        public nuint QuotaPagedPoolUsage;
+        public nuint QuotaPeakNonPagedPoolUsage;
+        public nuint QuotaNonPagedPoolUsage;
+        public nuint PagefileUsage;
+        public nuint PeakPagefileUsage;
+        public nuint PrivateUsage;
+    }
+
     private static nint Send(nint receiver, nint selector) => ((delegate* unmanaged<nint, nint, nint>)s_msgSend)(receiver, selector);
 
     private static nint Class(ReadOnlySpan<byte> name)
@@ -155,4 +192,7 @@ public static unsafe class ProcessInfo
     [DllImport("libc", EntryPoint = "getrlimit")] private static extern int getrlimit(int resource, RLimit* limit);
     [DllImport("libc", EntryPoint = "setrlimit")] private static extern int setrlimit(int resource, RLimit* limit);
     [DllImport("kernel32")] private static extern int GlobalMemoryStatusEx(MemoryStatusEx* status);
+    // -1 is the GetCurrentProcess pseudo-handle.
+    [DllImport("kernel32")] private static extern int K32GetProcessMemoryInfo(nint process, ProcessMemoryCountersEx* counters, uint size);
+    [DllImport("kernel32")] private static extern int GetPackageFamilyName(nint process, uint* length, char* name);
 }
