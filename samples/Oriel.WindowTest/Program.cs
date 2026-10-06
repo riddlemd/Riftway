@@ -2054,6 +2054,8 @@ async Task PreferredSizeAsync()
 
     w.WebContents.SetZoomFactor(1.5);
     Check("PreferredSizeChanged: DIPs scale with the zoom", Eventually(() => sizes.LastOrDefault() == new System.Drawing.Size(300, 2250), step), string.Join(" ", sizes));
+    // Chromium keeps a page's zoom in the profile, so the next run would start this page zoomed.
+    w.WebContents.SetZoomFactor(1);
     w.Destroy();
     File.Delete(page);
 }
