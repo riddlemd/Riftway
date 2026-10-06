@@ -1779,7 +1779,8 @@ public sealed unsafe partial class BrowserWindow
     private void OnWindowCreated(cef_window_t* window)
     {
         _meantVisible = _options.Show;
-        if (OperatingSystem.IsWindows()) WindowsSubclass.RefuseActivationWhileHidden(Hwnd(window), () => !_meantVisible);
+        // Electron's widget for a focusable: false window cannot activate either; CEF activates it on creation.
+        if (OperatingSystem.IsWindows()) WindowsSubclass.RefuseActivationWhileHidden(Hwnd(window), () => !_meantVisible || !(_focusable ?? _options.Focusable));
         RouteSizeEvents(window);
         if (_menuBar is not null)
         {
