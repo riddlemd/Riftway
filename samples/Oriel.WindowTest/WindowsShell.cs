@@ -89,6 +89,101 @@ static unsafe class WindowsShell
         return names;
     }
 
+    /// <summary>The taskbar button whose name starts with <paramref name="prefix"/>: its help text, which the shell
+    /// fills from the overlay icon's description, and its screen bounds; null if there is none.</summary>
+    internal static (string Help, (int X, int Y, int Width, int Height) Bounds)? TaskbarButton(string prefix)
+    {
+        var tray = FindWindowW("Shell_TrayWnd", null);
+        if (tray == 0) return null;
+        void* automation;
+        var clsid = s_clsidAutomation;
+        var iid = s_iidAutomation;
+        if (CoCreateInstance(&clsid, null, 1, &iid, &automation) < 0) return null;
+        void* root = null, condition = null, all = null;
+        try
+        {
+            if (((delegate* unmanaged<void*, nint, void**, int>)Slot(automation, 6))(automation, tray, &root) < 0) return null;
+            if (((delegate* unmanaged<void*, void**, int>)Slot(automation, 21))(automation, &condition) < 0) return null;
+            if (((delegate* unmanaged<void*, int, void*, void**, int>)Slot(root, 6))(root, 4, condition, &all) < 0) return null;
+            int length;
+            ((delegate* unmanaged<void*, int*, int>)Slot(all, 3))(all, &length);
+            for (var i = 0; i < length; i++)
+            {
+                void* element;
+                if (((delegate* unmanaged<void*, int, void**, int>)Slot(all, 4))(all, i, &element) < 0) continue;
+                try
+                {
+                    var name = Bstr(element, 23); // get_CurrentName
+                    if (name is null || !name.StartsWith(prefix, StringComparison.Ordinal)) continue;
+                    var help = Bstr(element, 31) ?? ""; // get_CurrentHelpText
+                    UiaRect rect;
+                    ((delegate* unmanaged<void*, UiaRect*, int>)Slot(element, 43))(element, &rect); // get_CurrentBoundingRectangle
+                    return (help, (rect.Left, rect.Top, rect.Right - rect.Left, rect.Bottom - rect.Top));
+                }
+                finally { Release(element); }
+            }
+            return null;
+        }
+        finally
+        {
+            Release(all);
+            Release(condition);
+            Release(root);
+            Release(automation);
+        }
+    }
+
+    private static string? Bstr(void* element, int slot)
+    {
+        nint value;
+        if (((delegate* unmanaged<void*, nint*, int>)Slot(element, slot))(element, &value) < 0 || value == 0) return null;
+        try { return Marshal.PtrToStringBSTR(value); }
+        finally { Marshal.FreeBSTR(value); }
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct UiaRect
+    {
+        public int Left;
+        public int Top;
+        public int Right;
+        public int Bottom;
+    }
+
+    /// <summary>The screen's pixels in <paramref name="bounds"/> as (R, G, B), row by row.</summary>
+    internal static (byte R, byte G, byte B)[] ScreenPixels((int X, int Y, int Width, int Height) bounds)
+    {
+        var (w, h) = (Math.Max(1, bounds.Width), Math.Max(1, bounds.Height));
+        var pixels = new (byte, byte, byte)[w * h];
+        var screen = GetDC(0);
+        var dc = CreateCompatibleDC(screen);
+        var header = new BitmapInfoHeader { Size = 40, Width = w, Height = -h, Planes = 1, BitCount = 32 };
+        void* bits;
+        var bitmap = CreateDIBSection(dc, &header, 0, &bits, 0, 0);
+        try
+        {
+            if (bitmap == 0) return pixels;
+            var old = SelectObject(dc, bitmap);
+            _ = BitBlt(dc, 0, 0, w, h, screen, bounds.X, bounds.Y, 0x00CC0020 /* SRCCOPY */);
+            _ = SelectObject(dc, old);
+            var data = (byte*)bits;
+            for (var i = 0; i < pixels.Length; i++) pixels[i] = (data[i * 4 + 2], data[i * 4 + 1], data[i * 4]);
+        }
+        finally
+        {
+            if (bitmap != 0) _ = DeleteObject(bitmap);
+            _ = DeleteDC(dc);
+            _ = ReleaseDC(0, screen);
+        }
+        return pixels;
+    }
+
+    [DllImport("gdi32.dll")] private static extern nint CreateCompatibleDC(nint dc);
+    [DllImport("gdi32.dll")] private static extern int DeleteDC(nint dc);
+    [DllImport("gdi32.dll")] private static extern nint CreateDIBSection(nint dc, BitmapInfoHeader* header, uint usage, void** bits, nint section, uint offset);
+    [DllImport("gdi32.dll")] private static extern nint SelectObject(nint dc, nint obj);
+    [DllImport("gdi32.dll")] private static extern int BitBlt(nint dc, int x, int y, int w, int h, nint src, int sx, int sy, uint rop);
+
     /// <summary>The window's App User Model property, read back from its property store.</summary>
     internal static string? AppUserModel(nint hwnd, Oriel.Cef.Platform.AppUserModelProperty property)
         => OperatingSystem.IsWindows() ? Oriel.Cef.Platform.WindowsWindow.GetAppUserModel(hwnd, property) : null;

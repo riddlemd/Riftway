@@ -112,11 +112,14 @@ public static unsafe class WindowsTaskbar
         if (icon != 0) DestroyIcon(icon);
     }
 
-    /// <summary>Removes the overlay icon. False if the shell refused.</summary>
-    public static bool ClearOverlayIcon(nint hwnd)
+    /// <summary>Removes the overlay icon, passing <paramref name="description"/> as Electron does. False if the shell
+    /// refused.</summary>
+    public static bool ClearOverlayIcon(nint hwnd, string? description = null)
     {
         var taskbar = Taskbar();
-        return taskbar is not null && ((delegate* unmanaged<void*, nint, nint, char*, int>)Slot(taskbar, SetOverlayIconSlot))(taskbar, hwnd, 0, null) >= 0;
+        if (taskbar is null) return false;
+        fixed (char* text = description)
+            return ((delegate* unmanaged<void*, nint, nint, char*, int>)Slot(taskbar, SetOverlayIconSlot))(taskbar, hwnd, 0, text) >= 0;
     }
 
     /// <summary>Sets the tooltip on the window's taskbar thumbnail; empty restores the window title.
