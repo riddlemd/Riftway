@@ -16,6 +16,10 @@
 
   // The frame that last took focus is webContents.focusedFrame. Captured: an element's focus does not bubble.
   globalThis.addEventListener('focus', () => post(JSON.stringify({ t: 'focus', ch: '', args: [] })), true);
+  // Chromium's MediaStartedPlaying and MediaStoppedPlaying, per player; captured, as media events do not bubble.
+  globalThis.addEventListener('playing', () => post(JSON.stringify({ t: 'media', ch: '', args: [true] })), true);
+  // A player that reaches its end fires pause before ended, so pause alone is each stop once.
+  globalThis.addEventListener('pause', () => post(JSON.stringify({ t: 'media', ch: '', args: [false] })), true);
 
   // Ports bridged to the main process: this world holds one end of each under an id, and relays it.
   const bridged = new Map();

@@ -1505,6 +1505,53 @@ async Task WebContentsMethodsAsync()
     forcedContents.Close();
     Check("Close without waiting skips beforeunload, even after user activation", Eventually(() => forcedContents.IsDestroyed(), step) && forcedPreventions == 0, $"preventions={forcedPreventions}");
 
+    // content-bounds-updated: the page's moveTo and resizeTo move its window unless prevented.
+    var mover = new BrowserWindow(new BrowserWindowOptions { Width = 320, Height = 240, X = 60, Y = 80 });
+    File.WriteAllText(page, "<!doctype html><p>mover</p>");
+    await mover.WebContents.LoadFile(page);
+    var asked = new List<Rectangle>();
+    var preventNext = false;
+    mover.WebContents.ContentBoundsUpdated += (_, e) => { lock (asked) asked.Add(e.Bounds); e.Cancel = preventNext; };
+    await mover.WebContents.ExecuteJavaScriptAsync("window.moveTo(140, 160); 1");
+    var movedTo = Eventually(() => { lock (asked) return asked.Count == 1; }, step) && Eventually(() => mover.GetBounds() is { X: 140, Y: 160 }, step);
+    preventNext = true;
+    await mover.WebContents.ExecuteJavaScriptAsync("window.resizeTo(500, 400); 1");
+    var askedResize = Eventually(() => { lock (asked) return asked.Count == 2; }, step);
+    await Task.Delay(300);
+    Rectangle[] askedNow;
+    lock (asked) askedNow = [.. asked];
+    Check("window.moveTo raises content-bounds-updated and moves the window", movedTo && askedNow[0] is { X: 140, Y: 160 }, $"{string.Join(";", askedNow)} now {mover.GetBounds()}");
+    Check("preventDefault in content-bounds-updated keeps the window as it was", askedResize && askedNow[1] is { Width: 500, Height: 400 } && mover.GetBounds() is { Width: 320, Height: 240 },
+        $"{string.Join(";", askedNow)} now {mover.GetBounds()}");
+    mover.Destroy();
+
+    // media-started-playing and media-paused, once per start and stop; an ended player pauses once.
+    var wav = new MemoryStream();
+    using (var wr = new BinaryWriter(wav, System.Text.Encoding.ASCII, leaveOpen: true))
+    {
+        const int rate = 8000, samples = rate * 3 / 10;
+        wr.Write("RIFF"u8); wr.Write(36 + samples * 2); wr.Write("WAVEfmt "u8); wr.Write(16); wr.Write((short)1); wr.Write((short)1);
+        wr.Write(rate); wr.Write(rate * 2); wr.Write((short)2); wr.Write((short)16); wr.Write("data"u8); wr.Write(samples * 2); wr.Write(new byte[samples * 2]);
+    }
+    File.WriteAllText(page, $"<!doctype html><audio id=au src='data:audio/wav;base64,{Convert.ToBase64String(wav.ToArray())}'></audio>");
+    await wc.LoadFile(page);
+    var media = new List<string>();
+    EventHandler onStarted = (_, _) => { lock (media) media.Add("start"); };
+    EventHandler onPaused = (_, _) => { lock (media) media.Add("pause"); };
+    wc.MediaStartedPlaying += onStarted;
+    wc.MediaPaused += onPaused;
+    string Media() { lock (media) return string.Join(",", media); }
+    await wc.ExecuteJavaScriptAsync("au.loop = true; au.play(); 1", userGesture: true);
+    var started = Eventually(() => Media() == "start", step);
+    await wc.ExecuteJavaScriptAsync("au.pause(); 1");
+    var paused = Eventually(() => Media() == "start,pause", step);
+    await wc.ExecuteJavaScriptAsync("au.loop = false; au.currentTime = 0; au.play(); 1", userGesture: true);
+    var ended = Eventually(() => Media() == "start,pause,start,pause", step) && await Js(w, "au.ended") is "true";
+    wc.MediaStartedPlaying -= onStarted;
+    wc.MediaPaused -= onPaused;
+    Check("media-started-playing and media-paused follow play and pause", started && paused, Media());
+    Check("a player that reaches its end raises media-paused once", ended, Media());
+
     // Device emulation: Electron's parameters reach the page.
     var before = await Js(w, "[innerWidth, devicePixelRatio, screen.width]");
     wc.EnableDeviceEmulation(new DeviceEmulationParameters

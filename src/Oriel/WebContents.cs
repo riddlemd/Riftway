@@ -70,6 +70,7 @@ public sealed unsafe partial class WebContents
             ConsoleMessage = OnConsoleMessage,
             StatusMessage = OnStatusMessage,
             CursorChanged = OnCursorChanged,
+            ContentsBoundsChanged = OnContentsBoundsChanged,
         };
         ContextMenuRequests = new ContextMenuHandler(OnContextMenu);
         Load = new LoadHandler
@@ -1029,6 +1030,9 @@ public sealed unsafe partial class WebContents
 
             case "mousedown":
                 PageMouseDown?.Invoke();
+                break;
+            case "media":
+                Raise(args[0].GetBoolean() ? MediaStartedPlaying : MediaPaused, EventArgs.Empty, args[0].GetBoolean() ? "media-started-playing" : "media-paused");
                 break;
 
             case "focus":

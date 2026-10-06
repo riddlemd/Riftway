@@ -11,14 +11,14 @@ Percentages are over the non-n/a items; the second counts a partial item as half
 | Area | Items | Done | Partial | Missing | n/a | % done | % done + partial/2 |
 |---|---|---|---|---|---|---|---|
 | Static methods | 5 | 1 | 2 | 2 | 0 | 20.0% | 40.0% |
-| Instance events | 59 | 28 | 11 | 18 | 2 | 49.1% | 58.8% |
+| Instance events | 59 | 29 | 13 | 15 | 2 | 50.9% | 62.3% |
 | Instance methods | 118 | 37 | 21 | 52 | 8 | 33.6% | 43.2% |
 | Instance properties | 18 | 9 | 1 | 7 | 1 | 52.9% | 55.9% |
 | navigationHistory | 14 | 12 | 0 | 2 | 0 | 85.7% | 85.7% |
 | WebFrameMain events and statics | 3 | 1 | 0 | 2 | 0 | 33.3% | 33.3% |
 | WebFrameMain methods | 9 | 1 | 4 | 4 | 0 | 11.1% | 33.3% |
 | WebFrameMain properties | 15 | 10 | 0 | 5 | 0 | 66.7% | 66.7% |
-| **Total** | 241 | 99 | 39 | 92 | 11 | 43.0% | 51.5% |
+| **Total** | 241 | 100 | 41 | 89 | 11 | 43.5% | 52.4% |
 
 ## Checklist
 
@@ -49,7 +49,7 @@ Percentages are over the non-n/a items; the second counts a partial item as half
 | `did-fail-provisional-load` | `DidFailProvisionalLoad` | done | `DidFailLoad` now leaves out cancelled loads, as Electron's. |
 | `did-frame-finish-load` | `DidFrameFinishLoad` | partial | No process or routing ids (F2). |
 | `page-favicon-updated` | `PageFaviconUpdated` | done |  |
-| `content-bounds-updated` | — | missing |  |
+| `content-bounds-updated` | `ContentBoundsUpdated` | done |  |
 | `will-navigate` | `WillNavigate` | done | `Initiator` is null (C12). |
 | `will-frame-navigate` | `WillFrameNavigate` | done | C12. |
 | `did-start-navigation` | `DidStartNavigation` | done | C12. |
@@ -80,8 +80,8 @@ Percentages are over the non-n/a items; the second counts a partial item as half
 | `select-client-certificate` | `SelectClientCertificate` | done | The app's follows with the same arguments; checked on Linux (E25). |
 | `login` | `Login` | done | The app's `Login` follows, with the same arguments. |
 | `found-in-page` | `FoundInPage` | done |  |
-| `media-started-playing` | — | missing |  |
-| `media-paused` | — | missing |  |
+| `media-started-playing` | `MediaStartedPlaying` | partial | From the page's media events (C33). |
+| `media-paused` | `MediaPaused` | partial | From the page's media events (C33). |
 | `audio-state-changed` | — | missing | CEF never reports audio for Chrome-style browsers (C23). |
 | `did-change-theme-color` | — | missing |  |
 | `update-target-url` | `UpdateTargetUrl` | done |  |

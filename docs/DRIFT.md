@@ -126,6 +126,7 @@ Entries marked _(branch `x`)_ are on that branch and not yet in `main`.
 | C30 | `blur` when the page's view loses focus, including to another view in the same window | Raised when the page's window loses focus | CEF: `cef_focus_handler_t` reports gaining focus only; the page's own blur events miss it when focus is inside an iframe | Patch: forward `OnWebContentsLostFocus`; or blur the other views when a `WebContentsView` takes focus |
 | C31 | A `loadURL` kept from leaving by `beforeunload` raises `did-fail-load` (ERR_ABORTED) | Not raised | Todo: remember the URL a `LoadUrl` is waiting on, as Electron's `pending_unload_url_` does, and fail it when the unload is refused | Port |
 | C32 | `webContents.close()` without `waitForBeforeUnload` closes without running the page's `beforeunload` | The page's `beforeunload` listeners run; their objection is answered "leave" at once, and `will-prevent-unload` is not raised | CEF: Chrome-style `close_browser(force_close=1)` still dispatches `beforeunload` to a page with user activation | Patch: close the `WebContents` without the unload handlers |
+| C33 | `media-started-playing` and `media-paused` follow Chromium's media players: a stop is also reported when a playing player is destroyed with its document | Raised from each frame's `playing` and `pause` events; a document that unloads while its media plays reports no stop (unverified against Electron) | CEF: no media player observer callbacks | Patch: forward `MediaStartedPlaying` / `MediaStoppedPlaying` |
 
 ## Menu / MenuItem
 

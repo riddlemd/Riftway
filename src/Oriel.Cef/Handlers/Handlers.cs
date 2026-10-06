@@ -721,6 +721,25 @@ public sealed unsafe class DisplayHandler
         Native->on_console_message = &OnConsoleMessage;
         Native->on_status_message = &OnStatusMessage;
         Native->on_cursor_change = &OnCursorChange;
+        Native->on_contents_bounds_change = &OnContentsBoundsChange;
+    }
+
+    /// <summary>The page asked for new window bounds (<c>window.moveTo</c>, <c>resizeTo</c>), in DIP screen coordinates;
+    /// the callback applies them or not, and CEF's own handling is skipped.</summary>
+    public Action<cef_rect_t>? ContentsBoundsChanged { get; init; }
+
+    [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])]
+    private static int OnContentsBoundsChange(cef_display_handler_t* self, cef_browser_t* browser, cef_rect_t* newBounds)
+    {
+        var handled = 0;
+        if (NativeObject.Owner<DisplayHandler>(self).ContentsBoundsChanged is { } callback)
+        {
+            var bounds = *newBounds;
+            Guard.Run(() => callback(bounds));
+            handled = 1;
+        }
+        NativeObject.Release(browser);
+        return handled;
     }
 
     /// <summary>A console message: (severity, message, source, line). CEF still logs it.</summary>

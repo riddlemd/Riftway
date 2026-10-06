@@ -45,6 +45,14 @@ public sealed record CursorChangedEventArgs(string Type, NativeImage? Image, dou
 /// <param name="Stack">The error's stack.</param>
 public sealed record PreloadErrorEventArgs(string PreloadPath, string ErrorName, string Message, string Stack);
 
+/// <summary>Bounds a page asked for; Electron's <c>content-bounds-updated</c> arguments. Set
+/// <see cref="CancelEventArgs.Cancel"/> to keep the window where it is.</summary>
+public sealed class ContentBoundsUpdatedEventArgs(Rectangle bounds) : CancelEventArgs
+{
+    /// <summary>The window bounds the page asked for, in screen coordinates.</summary>
+    public Rectangle Bounds { get; } = bounds;
+}
+
 /// <summary>Options for <see cref="WebContents.Close"/>; Electron's <c>close()</c> options.</summary>
 public sealed record WebContentsCloseOptions
 {
@@ -72,6 +80,17 @@ public sealed unsafe partial class WebContents
     public event EventHandler<PreloadErrorEventArgs>? PreloadError;
 
     private void RaisePreloadError(PreloadErrorEventArgs args) => Raise(PreloadError, args, "preload-error");
+
+    /// <summary>The page asked for new window bounds with <c>window.moveTo</c>, <c>resizeTo</c> and the like. Its window
+    /// takes them unless a listener sets <see cref="CancelEventArgs.Cancel"/> (Electron's <c>event.preventDefault()</c>).
+    /// Electron's <c>content-bounds-updated</c>.</summary>
+    public event EventHandler<ContentBoundsUpdatedEventArgs>? ContentBoundsUpdated;
+
+    /// <summary>Media in the page started playing. Electron's <c>media-started-playing</c>.</summary>
+    public event EventHandler? MediaStartedPlaying;
+
+    /// <summary>Media in the page paused or ended. Electron's <c>media-paused</c>.</summary>
+    public event EventHandler? MediaPaused;
 
     /// <summary>The page logged a message. Electron's <c>console-message</c>.</summary>
     public event EventHandler<ConsoleMessageEventArgs>? ConsoleMessage;
@@ -156,6 +175,14 @@ public sealed unsafe partial class WebContents
         var args = new CancelEventArgs();
         Raise(WillPreventUnload, args, "will-prevent-unload");
         return args.Cancel;
+    }
+
+    // UI thread. Electron's default moves the window: BrowserWindow::OnSetContentBounds.
+    private void OnContentsBoundsChanged(cef_rect_t rect)
+    {
+        var args = new ContentBoundsUpdatedEventArgs(new Rectangle(rect.x, rect.y, rect.width, rect.height));
+        Raise(ContentBoundsUpdated, args, "content-bounds-updated");
+        if (!args.Cancel) BrowserWindow.FromWebContents(this)?.SetBounds(args.Bounds);
     }
 
     private void OnConsoleMessage(cef_log_severity_t severity, string message, string source, int line)
