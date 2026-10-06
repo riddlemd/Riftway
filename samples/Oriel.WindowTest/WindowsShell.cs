@@ -711,6 +711,83 @@ static unsafe class WindowsShell
         var info = Path.Combine(Path.GetDirectoryName(recycledPath)!, "$I" + Path.GetFileName(recycledPath)[2..]);
         File.Delete(info);
     }
+    /// <summary>Oriel's hidden system host window, or 0.</summary>
+    internal static nint SystemHost() => FindWindowW("OrielSystemHost", null);
+
+    /// <summary>Sends a message and waits for it.</summary>
+    internal static void Send(nint hwnd, uint message, nint wParam)
+    {
+        nint result;
+        _ = SendMessageTimeoutW(hwnd, message, wParam, 0, 2, 2000, &result);
+    }
+
+    /// <summary>The system execution state (<c>ES_</c> flags), which active power requests set.</summary>
+    internal static uint ExecutionState()
+    {
+        uint state;
+        return CallNtPowerInformation(16 /* SystemExecutionState */, null, 0, &state, 4) == 0 ? state : uint.MaxValue;
+    }
+
+    /// <summary>Whether this test can register the hotkey itself; if it can, it lets it go again.</summary>
+    internal static bool HotKeyFree(uint modifiers, uint virtualKey)
+    {
+        if (RegisterHotKey(0, 0xBEEF, modifiers, virtualKey) == 0) return false;
+        _ = UnregisterHotKey(0, 0xBEEF);
+        return true;
+    }
+
+    /// <summary>Presses the keys in order with the real keyboard input, then releases them in reverse.</summary>
+    internal static void Chord(params byte[] keys)
+    {
+        foreach (var key in keys) keybd_event(key, 0, 0, 0);
+        Thread.Sleep(50);
+        foreach (var key in keys.Reverse()) keybd_event(key, 0, 0x2 /* KEYEVENTF_KEYUP */, 0);
+        Thread.Sleep(100);
+    }
+
+    /// <summary>Presses the keys, then sends the last key's key-down <paramref name="repeats"/> more times as a held key
+    /// does, then releases them in reverse.</summary>
+    internal static void Hold(int repeats, params byte[] keys)
+    {
+        foreach (var key in keys) keybd_event(key, 0, 0, 0);
+        for (var i = 0; i < repeats; i++) { Thread.Sleep(30); keybd_event(keys[^1], 0, 0, 0); }
+        Thread.Sleep(50);
+        foreach (var key in keys.Reverse()) keybd_event(key, 0, 0x2 /* KEYEVENTF_KEYUP */, 0);
+        Thread.Sleep(100);
+    }
+
+    /// <summary>The entries of <c>powercfg /requests</c> by section (<c>DISPLAY</c>, <c>SYSTEM</c>, <c>EXECUTION</c>, ...);
+    /// null when powercfg refuses, which it does without elevation.</summary>
+    internal static Dictionary<string, List<string>>? PowerRequests()
+    {
+        var psi = new System.Diagnostics.ProcessStartInfo("powercfg.exe") { UseShellExecute = false, CreateNoWindow = true, RedirectStandardOutput = true };
+        psi.ArgumentList.Add("/requests");
+        using var process = System.Diagnostics.Process.Start(psi)!;
+        var text = process.StandardOutput.ReadToEnd();
+        process.WaitForExit();
+        if (process.ExitCode != 0) return null;
+        var sections = new Dictionary<string, List<string>>();
+        List<string>? current = null;
+        foreach (var raw in text.Split('\n'))
+        {
+            var line = raw.TrimEnd('\r');
+            if (line.Length > 1 && line.EndsWith(':') && !line.Any(char.IsLower)) sections[line[..^1]] = current = [];
+            else if (current is not null && line.Length > 0 && line != "None.") current.Add(line);
+        }
+        return sections;
+    }
+
+    /// <summary>A real mouse move, which counts as user input.</summary>
+    internal static void Nudge()
+    {
+        mouse_event(0x0001 /* MOUSEEVENTF_MOVE */, 1, 0, 0, 0);
+        mouse_event(0x0001, -1, 0, 0, 0);
+    }
+
+    [DllImport("powrprof.dll")] private static extern uint CallNtPowerInformation(int level, void* input, uint inputLength, uint* output, uint outputLength);
+    [DllImport("user32.dll")] private static extern int RegisterHotKey(nint hwnd, int id, uint modifiers, uint vk);
+    [DllImport("user32.dll")] private static extern int UnregisterHotKey(nint hwnd, int id);
+    [DllImport("user32.dll")] private static extern void keybd_event(byte vk, byte scan, uint flags, nint extra);
 
     private static void* Slot(void* com, int index) => (*(void***)com)[index];
 
