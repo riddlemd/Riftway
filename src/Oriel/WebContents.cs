@@ -583,14 +583,38 @@ public sealed unsafe partial class WebContents
     {
         if (_browser is null || !_navigated) return;
         _reloadRequested = true;
-        _browser->reload(_browser);
+        if (EntryLoadForReload() is { } entry) ReloadWith(entry);
+        else _browser->reload(_browser);
     });
+
+    // The options of the LoadUrl that made the page's entry, which Chromium's NavigationEntry keeps for its reloads.
+    private PendingLoad? _entryLoad;
+
+    // UI thread: the options the page's entry keeps for a reload, or null for none.
+    private PendingLoad? EntryLoadForReload()
+    {
+        lock (_pendingLoadGate) return _entryLoad is { } entry && entry.Matches(GetUrl()) ? entry : null;
+    }
+
+    // CEF's reload skips the request handler that applies the options, so the page is loaded again at its own URL,
+    // which Chromium turns into a reload of the current entry. A POST is left alone: Electron reloads with
+    // check_for_repost and has no repost dialog to ask.
+    private void ReloadWith(PendingLoad entry)
+    {
+        if (entry.PostData is not null) return;
+        Navigate(GetUrl(), entry);
+    }
 
     /// <summary>Reloads the page, bypassing the cache. Electron's <c>webContents.reloadIgnoringCache()</c>.</summary>
     public void ReloadIgnoringCache() => CefThread.RunOnUi(() =>
     {
         if (_browser is null || !_navigated) return;
         _reloadRequested = true;
+        if (EntryLoadForReload() is { } entry)
+        {
+            ReloadWith(entry);
+            return;
+        }
         _browser->reload_ignore_cache(_browser);
     });
 
@@ -882,9 +906,15 @@ public sealed unsafe partial class WebContents
         PendingLoad? load;
         lock (_pendingLoadGate)
         {
-            if (_pendingLoad is not { } pending || !pending.Matches(url)) return;
+            if (_pendingLoad is not { } pending || !pending.Matches(url))
+            {
+                // A navigation without options makes an entry without them.
+                _entryLoad = null;
+                return;
+            }
             load = pending;
             _pendingLoad = null;
+            _entryLoad = load;
         }
         load.ApplyTo(request);
     }
