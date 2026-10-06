@@ -845,6 +845,8 @@ public sealed unsafe partial class WebContents
 
     internal bool HasBrowser => _browser is not null;
 
+    internal DevToolsChannel DevTools => _devTools;
+
     internal void OnBrowserCreated(cef_browser_t* browser)
     {
         NativeObject.AddRef(browser);

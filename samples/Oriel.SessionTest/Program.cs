@@ -873,18 +873,78 @@ async Task RunAsync()
     Check("an excluding filter leaves the category out, and the trace goes to the path given",
         excluded.Path == chosenPath && File.Exists(chosenPath) && excluded.Categories.Length > 1 && !excluded.Categories.Contains("devtools.timeline"), string.Join(",", excluded.Categories.Take(8)));
     File.Delete(chosenPath);
+    var categories = await ContentTracing.GetCategoriesAsync();
+    Check("GetCategoriesAsync lists Chromium's categories, sorted", categories.Count > 20 && categories.Contains("toplevel") && categories.Contains("blink")
+        && categories.SequenceEqual(categories.Order(StringComparer.Ordinal)), $"{categories.Count}: {string.Join(",", categories.Take(6))}");
+    var idle = await ContentTracing.GetTraceBufferUsageAsync();
+    Check("GetTraceBufferUsageAsync is zeros when not recording, as Electron's", idle is { Value: 0, Percentage: 0 }, idle);
+    var mixed = await Trace(() => ContentTracing.StartRecordingAsync(new TraceConfig { IncludedCategories = ["*"], ExcludedCategories = ["toplevel"] }));
+    Check("a TraceConfig with included and excluded categories records the first without the second",
+        mixed.Categories.Length > 1 && !mixed.Categories.Contains("toplevel") && mixed.Categories.Contains("blink"), string.Join(",", mixed.Categories.Take(8)));
+    File.Delete(mixed.Path);
+    // A recording with options runs in the first page's DevTools session, which traces that page's renderer (drift P14).
+    var host = WebContents.GetAllWebContents().First(w => !w.IsDestroyed());
+    async Task<(string[] Categories, string[] Marks, string Path)> TraceInHost(Func<Task> start, string script, string? path = null)
+    {
+        await start();
+        await host.ExecuteJavaScriptAsync(script);
+        var written = await ContentTracing.StopRecordingAsync(path);
+        using var json = JsonDocument.Parse(File.ReadAllText(written));
+        File.Delete(written);
+        var events = json.RootElement.GetProperty("traceEvents").EnumerateArray().ToArray();
+        var cats = events.Select(e => e.TryGetProperty("cat", out var c) ? c.GetString() ?? "" : "").Distinct().ToArray();
+        var marks = events.Where(e => e.TryGetProperty("cat", out var c) && c.GetString() == "blink.user_timing" && e.TryGetProperty("name", out _))
+            .Select(e => e.GetProperty("name").GetString()!).Distinct().ToArray();
+        return (cats, marks, written);
+    }
+    const string MarkScript = "performance.mark('oriel-mark'); new Promise(r => setTimeout(r, 700))";
+    Exception? again = null;
+    var bufferSized = await TraceInHost(async () =>
+    {
+        await ContentTracing.StartRecordingAsync(new TraceConfig { IncludedCategories = ["blink.user_timing", "devtools.timeline"], ExcludedCategories = ["devtools.timeline"], TraceBufferSizeInKb = 8192 });
+        again = await Throws(() => ContentTracing.StartRecordingAsync("blink"));
+    }, MarkScript + ".then(() => new Promise(r => setTimeout(r, 300)))");
+    idle = await ContentTracing.GetTraceBufferUsageAsync();
+    Check("a TraceConfig with a buffer size records through DevTools only the categories it includes, the page's renderer among them",
+        bufferSized.Marks.Contains("oriel-mark") && bufferSized.Categories.All(c => c is "__metadata" or "" || c.Split(',').Any(p => p is "blink.user_timing" or "devtools.timeline")),
+        $"{string.Join(",", bufferSized.Categories.Take(8))} marks={string.Join(",", bufferSized.Marks)}");
+    Check("starting while recording resolves, as Electron's", again is null, again?.Message);
+    TraceBufferUsage? recordingUsage = null;
+    var excludedByConfig = await TraceInHost(async () =>
+    {
+        await ContentTracing.StartRecordingAsync(new TraceConfig { IncludedCategories = ["*"], ExcludedCategories = ["toplevel", "blink.user_timing"], EnableArgumentFilter = true });
+    }, MarkScript + ".then(async () => { await new Promise(r => setTimeout(r, 300)); })");
+    Check("a DevTools TraceConfig leaves out its excluded categories", excludedByConfig.Categories.Length > 2 && excludedByConfig.Marks.Length == 0
+        && !excludedByConfig.Categories.Contains("toplevel") && !excludedByConfig.Categories.Contains("blink.user_timing"), string.Join(",", excludedByConfig.Categories.Take(8)));
+    var usageRun = await TraceInHost(async () =>
+    {
+        await ContentTracing.StartRecordingAsync("blink.user_timing,devtools.timeline", "record-as-much-as-possible");
+        await host.ExecuteJavaScriptAsync("for (let i = 0; i < 3000; i++) performance.mark('fill' + i); new Promise(r => setTimeout(r, 700))");
+        recordingUsage = await ContentTracing.GetTraceBufferUsageAsync();
+    }, MarkScript);
+    Check("traceOptions start a DevTools recording of the filter's categories", usageRun.Marks.Contains("oriel-mark") && usageRun.Marks.Contains("fill2999"), usageRun.Marks.Length);
+    Check("GetTraceBufferUsageAsync while recording: Value 0 as Electron's, Percentage in (0, 1]; zeros again once stopped",
+        recordingUsage is { Value: 0, Percentage: > 0 and <= 1 } && idle is { Value: 0, Percentage: 0 }, $"{recordingUsage} / {idle}");
+    // A 512 KB buffer that fills: until-full keeps the first marks and drops the rest; continuously keeps the last.
+    const string FillScript = "performance.mark('first'); for (let i = 0; i < 30000; i++) performance.mark('m' + i); performance.mark('last'); new Promise(r => setTimeout(r, 500))";
+    var untilFull = await TraceInHost(() => ContentTracing.StartRecordingAsync(new TraceConfig { IncludedCategories = ["blink.user_timing"], ExcludedCategories = ["*"], TraceBufferSizeInKb = 512 }), FillScript, chosenPath);
+    Check("a DevTools recording goes to the path given", untilFull.Path == chosenPath && !File.Exists(chosenPath), untilFull.Path);
+    var ring = await TraceInHost(() => ContentTracing.StartRecordingAsync(new TraceConfig { IncludedCategories = ["blink.user_timing"], ExcludedCategories = ["*"], TraceBufferSizeInKb = 512, RecordingMode = "record-continuously" }),
+        FillScript + ".then(() => new Promise(r => setTimeout(r, 6000))).then(() => { for (let i = 0; i < 50; i++) performance.mark('tail'); return new Promise(r => setTimeout(r, 500)); })");
+    Check("RecordingMode and TraceBufferSizeInKb reach Chromium: until-full keeps the start, record-continuously the end (re-interned after Chromium clears incremental state)",
+        untilFull.Marks.Contains("first") && !untilFull.Marks.Contains("last") && !untilFull.Marks.Contains("tail") && ring.Marks.Contains("tail") && !ring.Marks.Contains("first"),
+        $"untilFull first={untilFull.Marks.Contains("first")} last={untilFull.Marks.Contains("last")} n={untilFull.Marks.Length}; ring first={ring.Marks.Contains("first")} tail={ring.Marks.Contains("tail")} n={ring.Marks.Length}");
     await ContentTracing.StartRecordingAsync("blink");
     var twice = await Throws(() => ContentTracing.StartRecordingAsync("blink"));
+    var cefRecordingUsage = await Throws(() => ContentTracing.GetTraceBufferUsageAsync());
     File.Delete(await ContentTracing.StopRecordingAsync());
     var unstarted = await Throws(() => ContentTracing.StopRecordingAsync());
-    Check("starting twice, or stopping what was not started, fails with the reason",
-        twice is InvalidOperationException && twice.Message.Contains("already started") && unstarted is InvalidOperationException && unstarted.Message.Contains("has not started"),
-        $"{twice?.Message} / {unstarted?.Message}");
-    Check("trace options CEF does not have throw NotSupportedException",
-        await Throws(() => ContentTracing.StartRecordingAsync(new TraceConfig { RecordingMode = "record-continuously" })) is NotSupportedException
-        && await Throws(() => ContentTracing.StartRecordingAsync(new TraceConfig { IncludedCategories = ["a"], ExcludedCategories = ["b"] })) is NotSupportedException
-        && await Throws(() => ContentTracing.StartRecordingAsync("blink", "record-until-full")) is NotSupportedException
-        && await Throws(() => ContentTracing.GetCategoriesAsync()) is NotSupportedException);
+    Check("starting twice resolves; stopping what was not started fails with Electron's message",
+        twice is null && unstarted is InvalidOperationException { Message: "Failed to stop tracing - no trace in progress" }, $"{twice?.Message} / {unstarted?.Message}");
+    Check("buffer usage of a categories-only recording throws NotSupportedException (drift P14)", cefRecordingUsage is NotSupportedException, cefRecordingUsage?.GetType().Name);
+    Check("options no route carries throw NotSupportedException (drift P15)",
+        await Throws(() => ContentTracing.StartRecordingAsync(new TraceConfig { IncludedProcessIds = [Environment.ProcessId] })) is NotSupportedException
+        && await Throws(() => ContentTracing.StartRecordingAsync(new TraceConfig { HistogramNames = ["Memory.Browser"] })) is NotSupportedException);
     traced.Destroy();
 
     // select-client-certificate: a TLS server that asks for one; the first is used unless a handler chooses.
