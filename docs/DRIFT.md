@@ -269,6 +269,20 @@ Entries marked _(branch `x`)_ are on that branch and not yet in `main`.
 | I8 | Renderer `webFrame`: `setSpellCheckProvider`, `setIsolatedWorldInfo`, `getResourceUsage`, `clearCache`, the frame tree (`getFrameForSelector`, `findFrameByName`, `findFrameByToken`, `top`, `opener`, `parent`, `firstChild`, `nextSibling`), `routingId`; `getZoomFactor` follows every zoom change | Missing; `getZoomFactor`/`getZoomLevel` follow zoom set through Oriel (`webFrame` or `WebContents`), not keyboard or wheel zoom; `insertCSS` keeps the `user` origin as author (C25) | Design: `oriel.webFrame` runs in the preload world and works through the main process over DevTools, which reports no zoom changes and has no renderer frame objects | Patch |
 | I9 | `ipcRenderer.sendSync` blocks the renderer on a synchronous IPC reply | A synchronous XHR from Oriel's isolated world to its private `oriel-ipc:` scheme, answered when a listener sets `returnValue`: Chromium refuses it in `pagehide`, `unload` and `beforeunload` handlers, where Electron's still works; values are JSON (I1); an unset reply's "reply was never sent" comes on .NET's garbage collection rather than V8's | CEF: no synchronous channel from a page to the browser process | Patch: a sync Mojo message |
 
+## Notification
+
+| ID | Electron | Oriel | Why | Possible resolution |
+|---|---|---|---|---|
+| Q2 _(branch `notify-storage`)_ | `new Notification()` throws "Notification groupTitle requires groupId to be set" for a `groupTitle` without `groupId` | `Show()` throws it | Design: C# object initialisers run after the constructor, so the constructor cannot see `GroupTitle`/`GroupId` | A constructor that takes the options |
+| Q3 _(branch `notify-storage`)_ | Notifications on macOS (`UNUserNotificationCenter`, with `Notification.getHistory()`, `remove()`, `removeAll()`, `removeGroup()`) and Linux (libnotify / D-Bus) | Windows only: `IsSupported()` is false and `Show()` throws `PlatformNotSupportedException` elsewhere; the macOS-only statics are missing | OS | Per-OS `INotificationBackend` |
+| Q4 _(branch `notify-storage`)_ | `click` and `action` from pressing the toast popup are covered by Electron's tests | Oriel's WindowTest drives the activator COM server directly (as Windows does) and the toast's XML, but cannot press the popup itself: it is not exposed to UI Automation on the test machine | Todo: test infrastructure | Drive the popup another way |
+
+## safeStorage
+
+| ID | Electron | Oriel | Why | Possible resolution |
+|---|---|---|---|---|
+| D1 _(branch `notify-storage`)_ | When os_crypt has to create the `Local State` key, DPAPI stores Electron's `version_info` product name (plus " (Developer Build)" for unofficial builds) as the blob's description | CEF normally creates the key; when Oriel has to, the description is the executable's VERSIONINFO product name | Unverified: Electron's `version_info::GetProductName()` value was not checked; the description has no effect on decryption | Match it once known |
+| D2 _(branch `notify-storage`)_ | macOS Keychain and Linux secret service; `getSelectedStorageBackend()` on Linux | `IsEncryptionAvailable()` is false and encrypt/decrypt throw Electron's "not available" errors; `GetSelectedStorageBackend()` (Linux-only, as in Electron) returns "unknown" | OS | Per-OS `ISafeStorageBackend` |
 ## Platform and runtime
 
 | ID | Electron | Oriel | Why | Possible resolution |

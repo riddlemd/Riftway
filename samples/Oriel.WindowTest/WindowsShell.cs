@@ -747,6 +747,46 @@ static unsafe class WindowsShell
         public uint Private;
     }
 
+    /// <summary>The process's explicit AppUserModelID straight from shell32, or null when none is set.</summary>
+    internal static string? ProcessAppUserModelId()
+    {
+        char* id;
+        if (GetCurrentProcessExplicitAppUserModelID(&id) < 0) return null;
+        var s = new string(id);
+        Marshal.FreeCoTaskMem((nint)id);
+        return s;
+    }
+
+    /// <summary>Does what Windows does when a toast is pressed: activates <paramref name="clsid"/> as a local server and
+    /// calls its <c>INotificationActivationCallback.Activate</c>. Returns the HRESULT of the first call that failed, or 0.</summary>
+    internal static int ActivateToast(Guid clsid, string appUserModelId, string arguments, params (string Key, string Value)[] inputs)
+    {
+        var iid = new Guid("53E31837-6600-4A81-9395-75CFFE746F94");
+        void* callback;
+        var hr = CoCreateInstance(&clsid, null, 4 /* CLSCTX_LOCAL_SERVER */, &iid, &callback);
+        if (hr < 0) return hr;
+        var strings = new List<nint>();
+        try
+        {
+            var data = stackalloc nint[Math.Max(1, inputs.Length * 2)];
+            for (var i = 0; i < inputs.Length; i++)
+            {
+                strings.Add(data[2 * i] = Marshal.StringToCoTaskMemUni(inputs[i].Key));
+                strings.Add(data[2 * i + 1] = Marshal.StringToCoTaskMemUni(inputs[i].Value));
+            }
+            fixed (char* aumid = appUserModelId)
+            fixed (char* args = arguments)
+                hr = ((delegate* unmanaged<void*, char*, char*, nint*, uint, int>)(*(void***)callback)[3])(callback, aumid, args, data, (uint)inputs.Length);
+            return hr;
+        }
+        finally
+        {
+            foreach (var s in strings) Marshal.FreeCoTaskMem(s);
+            ((delegate* unmanaged<void*, uint>)(*(void***)callback)[2])(callback);
+        }
+    }
+
+    [DllImport("shell32.dll")] private static extern int GetCurrentProcessExplicitAppUserModelID(char** id);
     [DllImport("user32.dll")] private static extern ushort RegisterClassW(WndClass* cls);
     [DllImport("user32.dll")] private static extern nint CreateWindowExW(uint exStyle, char* cls, char* name, uint style, int x, int y, int w, int h, nint parent, nint menu, nint instance, nint param);
     [DllImport("user32.dll")] private static extern uint RegisterWindowMessageW(char* name);

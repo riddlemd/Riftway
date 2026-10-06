@@ -127,6 +127,38 @@ public sealed unsafe partial class OrielApp
         return s_current = new OrielApp(name ?? Assembly.GetEntryAssembly()?.GetName().Name ?? "Oriel");
     }
 
+    private string? _appUserModelId;
+
+    /// <summary>Windows: the AppUserModelID that groups the app's taskbar buttons and sends its notifications. Not set at
+    /// startup; on first use it is the process's explicit id if one was set, else <c>electron.app.{product name}</c>
+    /// (the executable's VERSIONINFO product name), which then becomes the process's, as in Electron. Elsewhere the id
+    /// given to <see cref="SetAppUserModelId"/>, else <c>electron.app.{Name}</c>.</summary>
+    public string AppUserModelId => OperatingSystem.IsWindows()
+        ? WindowsAppIdentity.AppUserModelId
+        : _appUserModelId ?? "electron.app." + Name;
+
+    /// <summary>Sets the process's AppUserModelID; Electron's <c>app.setAppUserModelId()</c>. No-op off Windows.</summary>
+    public void SetAppUserModelId(string id)
+    {
+        ArgumentException.ThrowIfNullOrEmpty(id);
+        if (OperatingSystem.IsWindows()) WindowsAppIdentity.SetAppUserModelId(id);
+        else _appUserModelId = id;
+    }
+
+    /// <summary>Windows: the CLSID of the COM class that receives toast activations, in <c>{XXXXXXXX-...}</c> form; a
+    /// random one on first use unless set, or the one an existing Start-menu shortcut carries once a notification has
+    /// been prepared. Electron's <c>app.toastActivatorCLSID</c>. Null elsewhere.</summary>
+    public string? ToastActivatorClsid => OperatingSystem.IsWindows() ? WindowsAppIdentity.ToastActivatorClsid : null;
+
+    /// <summary>Windows: sets <see cref="ToastActivatorClsid"/>, with or without braces. Electron's
+    /// <c>app.setToastActivatorCLSID()</c>. No-op elsewhere.</summary>
+    /// <exception cref="ArgumentException">Not a CLSID ("Invalid CLSID format").</exception>
+    public void SetToastActivatorClsid(string clsid)
+    {
+        ArgumentNullException.ThrowIfNull(clsid);
+        if (OperatingSystem.IsWindows() && !WindowsAppIdentity.SetToastActivatorClsid(clsid))
+            throw new ArgumentException("Invalid CLSID format", nameof(clsid));
+    }
     /// <summary>Turns on Chromium's sandbox for every child process. Electron's <c>app.enableSandbox()</c>.</summary>
     /// <remarks>Call before <see cref="Run"/>. Linux only so far: macOS and Windows link CEF's sandbox library into
     /// the subprocess exe, which their packaging does not do yet.</remarks>
