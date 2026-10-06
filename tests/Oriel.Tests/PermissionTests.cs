@@ -82,33 +82,41 @@ public sealed class PermissionNamesTests
 
     [Fact]
     public void DisplayMediaAllowed_NullRefusesWithoutError()
-        => Assert.Equal((0u, (string?)null), PermissionNames.DisplayMediaAllowed(DesktopVideo, null));
+        => Assert.Equal((0u, (string?)null), PermissionNames.DisplayMediaAllowed(DesktopVideo, null, loopbackSupported: true));
 
     [Fact]
     public void DisplayMediaAllowed_VideoAndLoopbackAudio()
-        => Assert.Equal((DesktopVideo | DesktopAudio, (string?)null), PermissionNames.DisplayMediaAllowed(DesktopVideo | DesktopAudio, new DisplayMediaStreams { Video = s_screen, Audio = "loopback" }));
+        => Assert.Equal((DesktopVideo | DesktopAudio, (string?)null), PermissionNames.DisplayMediaAllowed(DesktopVideo | DesktopAudio, new DisplayMediaStreams { Video = s_screen, Audio = "loopback" }, loopbackSupported: true));
 
     [Fact]
     public void DisplayMediaAllowed_LoopbackWithMuteIsSystemAudio()
-        => Assert.Equal((DesktopVideo | DesktopAudio, (string?)null), PermissionNames.DisplayMediaAllowed(DesktopVideo | DesktopAudio, new DisplayMediaStreams { Video = s_screen, Audio = "loopbackWithMute" }));
+        => Assert.Equal((DesktopVideo | DesktopAudio, (string?)null), PermissionNames.DisplayMediaAllowed(DesktopVideo | DesktopAudio, new DisplayMediaStreams { Video = s_screen, Audio = "loopbackWithMute" }, loopbackSupported: true));
 
     [Fact]
     public void DisplayMediaAllowed_AudioLeftOutGivesVideoOnly()
-        => Assert.Equal((DesktopVideo, (string?)null), PermissionNames.DisplayMediaAllowed(DesktopVideo | DesktopAudio, new DisplayMediaStreams { Video = s_screen }));
+        => Assert.Equal((DesktopVideo, (string?)null), PermissionNames.DisplayMediaAllowed(DesktopVideo | DesktopAudio, new DisplayMediaStreams { Video = s_screen }, loopbackSupported: true));
 
     [Fact]
     public void DisplayMediaAllowed_AudioNotRequestedIsNotGranted()
-        => Assert.Equal((DesktopVideo, (string?)null), PermissionNames.DisplayMediaAllowed(DesktopVideo, new DisplayMediaStreams { Video = s_screen, Audio = "loopback" }));
+        => Assert.Equal((DesktopVideo, (string?)null), PermissionNames.DisplayMediaAllowed(DesktopVideo, new DisplayMediaStreams { Video = s_screen, Audio = "loopback" }, loopbackSupported: true));
 
     [Fact]
     public void DisplayMediaAllowed_RequestedVideoMissingIsElectronsError()
         => Assert.Equal((0u, "Video was requested, but no video stream was provided"),
-            PermissionNames.DisplayMediaAllowed(DesktopVideo | DesktopAudio, new DisplayMediaStreams { Audio = "loopback" }));
+            PermissionNames.DisplayMediaAllowed(DesktopVideo | DesktopAudio, new DisplayMediaStreams { Audio = "loopback" }, loopbackSupported: true));
 
     [Fact]
     public void DisplayMediaAllowed_OtherAudioIsElectronsError()
         => Assert.Equal((0u, "audio must be a WebFrameMain, \"loopback\" or \"loopbackWithMute\""),
-            PermissionNames.DisplayMediaAllowed(DesktopVideo | DesktopAudio, new DisplayMediaStreams { Video = s_screen, Audio = "speakers" }));
+            PermissionNames.DisplayMediaAllowed(DesktopVideo | DesktopAudio, new DisplayMediaStreams { Video = s_screen, Audio = "speakers" }, loopbackSupported: true));
+
+    [Fact]
+    public void DisplayMediaAllowed_LoopbackLeftOutWhereUnsupported()
+        => Assert.Equal((DesktopVideo, (string?)null), PermissionNames.DisplayMediaAllowed(DesktopVideo | DesktopAudio, new DisplayMediaStreams { Video = s_screen, Audio = "loopback" }, loopbackSupported: false));
+
+    [Fact]
+    public void DisplayMediaAllowed_OtherAudioIsAnErrorEvenWhereLoopbackIsUnsupported()
+        => Assert.Equal(0u, PermissionNames.DisplayMediaAllowed(DesktopVideo | DesktopAudio, new DisplayMediaStreams { Video = s_screen, Audio = "speakers" }, loopbackSupported: false).Allowed);
 
     [Fact]
     public void SettingsOf_NamesWhereChromiumStoresTheAnswer()

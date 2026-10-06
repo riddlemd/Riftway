@@ -43,7 +43,8 @@ public sealed record DisplayMediaStreams
     /// <remarks>CEF captures the whole desktop whatever the source names (drift E30).</remarks>
     public DisplayMediaSource? Video { get; init; }
 
-    /// <summary><c>loopback</c> or <c>loopbackWithMute</c> for the system's audio; null for none.</summary>
+    /// <summary><c>loopback</c> or <c>loopbackWithMute</c> for the system's audio; null for none. Windows and macOS only,
+    /// as Electron documents; on Linux the audio is left out (drift E30).</summary>
     public string? Audio { get; init; }
 }
 
@@ -116,8 +117,9 @@ internal static class PermissionNames
     /// <summary>The screen-capture part of CEF's media mask: <c>getDisplayMedia()</c> (and legacy desktop <c>getUserMedia</c>).</summary>
     internal static uint DesktopOf(uint mask) => mask & DesktopMedia;
 
-    /// <summary>The CEF media mask a display media handler's answer allows, or null with Electron's error when it refuses.</summary>
-    internal static (uint Allowed, string? Error) DisplayMediaAllowed(uint requested, DisplayMediaStreams? streams)
+    /// <summary>The CEF media mask a display media handler's answer allows, or 0 with Electron's error when it refuses.
+    /// Without <paramref name="loopbackSupported"/> a loopback answer leaves the audio out.</summary>
+    internal static (uint Allowed, string? Error) DisplayMediaAllowed(uint requested, DisplayMediaStreams? streams, bool loopbackSupported)
     {
         const uint video = (uint)cef_media_access_permission_types_t.CEF_MEDIA_PERMISSION_DESKTOP_VIDEO_CAPTURE;
         const uint audio = (uint)cef_media_access_permission_types_t.CEF_MEDIA_PERMISSION_DESKTOP_AUDIO_CAPTURE;
@@ -127,7 +129,7 @@ internal static class PermissionNames
         if ((requested & audio) != 0 && streams.Audio is { } device)
         {
             if (device is not ("loopback" or "loopbackWithMute")) return (0, "audio must be a WebFrameMain, \"loopback\" or \"loopbackWithMute\"");
-            allowed |= audio;
+            if (loopbackSupported) allowed |= audio;
         }
         if ((requested & video) != 0 && (allowed & video) == 0) return (0, "Video was requested, but no video stream was provided");
         return (allowed, null);

@@ -73,6 +73,9 @@ public sealed unsafe partial class Session
 // Outside the unsafe part: C# does not allow await in an unsafe context.
 public sealed partial class Session
 {
+    // Chromium CHECK-fails on Linux without a PulseAudio loopback source; Electron documents loopback for Windows and macOS.
+    private static bool LoopbackSupported => OperatingSystem.IsWindows() || OperatingSystem.IsMacOSVersionAtLeast(13);
+
     /// <summary>The CEF media mask the display media handler allows for <paramref name="request"/>; 0 refuses.</summary>
     internal async Task<uint> ChooseDisplayMediaAsync(DisplayMediaRequest request, uint requested)
     {
@@ -84,7 +87,7 @@ public sealed partial class Session
             Console.Error.WriteLine($"[Oriel] The display media request handler failed; refusing: {e}");
             return 0;
         }
-        var (allowed, error) = PermissionNames.DisplayMediaAllowed(requested, streams);
+        var (allowed, error) = PermissionNames.DisplayMediaAllowed(requested, streams, LoopbackSupported);
         if (error is not null) Console.Error.WriteLine($"[Oriel] Display media request refused: {error}");
         return allowed;
     }

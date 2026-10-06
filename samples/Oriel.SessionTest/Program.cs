@@ -11,6 +11,8 @@ using Cookie = Oriel.Cookie;
 // Linux: two client certificates in the user's NSS store, which Chromium opens at start-up.
 var clientCertificates = OperatingSystem.IsLinux() && File.Exists("/usr/bin/certutil") && File.Exists("/usr/bin/pk12util") ? InstallClientCertificates() : false;
 var app = OrielApp.Create("Oriel.SessionTest");
+// The media checks need devices that exist everywhere and ask for no OS consent; the handler still decides.
+app.CommandLine.AppendSwitch("use-fake-device-for-media-stream");
 var failures = -1;
 var results = new List<string>();
 
@@ -1514,22 +1516,26 @@ async Task PermissionChecks()
         $"{incognitoNotify} {Seen(incognitoAsked)}");
     incognitoWin.Destroy();
 
-    // Clipboard reads need a focused document.
+    // Chromium refuses clipboard reads in an unfocused document before any permission step (a locked screen, say).
     var clipAsked = new List<(WebContents Page, string Permission, PermissionRequestDetails Details)>();
     var clipAllow = false;
     var clipping = Session.FromPartition("perm-clipboard");
     clipping.SetPermissionRequestHandler(Recorder(clipAsked, () => clipAllow));
     var clipWin = await Open(clipping, show: true);
     clipWin.Focus();
-    const string ReadClipboard = "navigator.clipboard.readText().then(() => 'read', e => e.name)";
-    var clipDenied = await Run(clipWin, ReadClipboard, gesture: true);
-    clipAllow = true;
-    var clipGranted = await Run(clipWin, ReadClipboard, gesture: true);
-    Check("navigator.clipboard.readText asks the handler for clipboard-read: refused is NotAllowedError, granted reads", clipDenied == "NotAllowedError" && clipGranted == "read"
-        && clipAsked.Count == 2 && clipAsked.All(c => c.Permission == "clipboard-read" && c.Details.RequestingUrl == Site), $"{clipDenied} {clipGranted} {Seen(clipAsked)}");
+    if (await Run(clipWin, "document.hasFocus()") == "true")
+    {
+        const string ReadClipboard = "navigator.clipboard.readText().then(() => 'read', e => e.name)";
+        var clipDenied = await Run(clipWin, ReadClipboard, gesture: true);
+        clipAllow = true;
+        var clipGranted = await Run(clipWin, ReadClipboard, gesture: true);
+        Check("navigator.clipboard.readText asks the handler for clipboard-read: refused is NotAllowedError, granted reads", clipDenied == "NotAllowedError" && clipGranted == "read"
+            && clipAsked.Count == 2 && clipAsked.All(c => c.Permission == "clipboard-read" && c.Details.RequestingUrl == Site), $"{clipDenied} {clipGranted} {Seen(clipAsked)}");
+    }
+    else Console.WriteLine("SKIP  navigator.clipboard.readText: the document has no focus");
     clipWin.Destroy();
 
-    // Media: the handler decides, not Chromium's prompt. Needs a microphone, or --use-fake-device-for-media-stream.
+    // Media: the handler decides, not Chromium's prompt, on the fake devices the app's AppendSwitch asked for.
     var mediaAsked = new List<(WebContents Page, string Permission, PermissionRequestDetails Details)>();
     var mediaAllow = true;
     var media = Session.FromPartition("perm-media");
@@ -1537,30 +1543,23 @@ async Task PermissionChecks()
     var mediaWin = await Open(media);
     const string Microphone = "navigator.mediaDevices.getUserMedia({ audio: true }).then(s => { s.getTracks().forEach(t => t.stop()); return 'ok'; }, e => e.name)";
     const string CameraAndMicrophone = "navigator.mediaDevices.getUserMedia({ audio: true, video: true }).then(s => { s.getTracks().forEach(t => t.stop()); return 'ok'; }, e => e.name)";
-    var devices = await Run(mediaWin, "navigator.mediaDevices.enumerateDevices().then(d => d.map(x => x.kind).join(','))") ?? "";
-    if (devices.Contains("audioinput", StringComparison.Ordinal))
-    {
-        var heard = await Run(mediaWin, Microphone);
-        Check("getUserMedia asks the handler for media: mediaTypes ['audio'], securityOrigin, the frame's URL and isMainFrame", heard != "NotAllowedError"
-            && mediaAsked is [(_, "media", { MediaTypes: ["audio"], SecurityOrigin: Origin, RequestingUrl: Site, IsMainFrame: true })], $"{heard} {Seen(mediaAsked)}");
-        if (devices.Contains("videoinput", StringComparison.Ordinal))
-        {
-            lock (mediaAsked) mediaAsked.Clear();
-            var both = await Run(mediaWin, CameraAndMicrophone);
-            Check("camera and microphone together are one media request, mediaTypes audio then video, as Electron lists them", both != "NotAllowedError"
-                && mediaAsked is [(_, "media", { MediaTypes: ["audio", "video"] })], $"{both} {Seen(mediaAsked)}");
-        }
-        else Console.WriteLine("SKIP  camera and microphone together: no camera");
-        lock (mediaAsked) mediaAsked.Clear();
-        mediaAllow = false;
-        var refusedMedia = await Run(mediaWin, Microphone);
-        var refusedMediaAgain = await Run(mediaWin, Microphone);
-        Check("a handler that refuses media fails getUserMedia with NotAllowedError, and is asked on every request", refusedMedia == "NotAllowedError"
-            && refusedMediaAgain == "NotAllowedError" && mediaAsked.Count == 2, $"{refusedMedia} {refusedMediaAgain} {Seen(mediaAsked)}");
-        mediaAllow = true;
-    }
-    else Console.WriteLine($"SKIP  getUserMedia checks: no microphone ({devices}); run with --use-fake-device-for-media-stream");
-
+    var heard = await Run(mediaWin, Microphone);
+    Check("getUserMedia asks the handler for media: mediaTypes ['audio'], securityOrigin, the frame's URL and isMainFrame", heard != "NotAllowedError"
+        && mediaAsked is [(_, "media", { MediaTypes: ["audio"], SecurityOrigin: Origin, RequestingUrl: Site, IsMainFrame: true })], $"{heard} {Seen(mediaAsked)}");
+    var labels = await Run(mediaWin, "navigator.mediaDevices.getUserMedia({ audio: true, video: true }).then(s => { const l = s.getTracks().map(t => t.label).join(','); s.getTracks().forEach(t => t.stop()); return l; }, e => e.name)");
+    Check("CommandLine.AppendSwitch before Run reaches Chromium: capture uses the fake devices", app.CommandLine.HasSwitch("use-fake-device-for-media-stream")
+        && labels?.Contains("fake", StringComparison.OrdinalIgnoreCase) == true, labels);
+    lock (mediaAsked) mediaAsked.Clear();
+    var both = await Run(mediaWin, CameraAndMicrophone);
+    Check("camera and microphone together are one media request, mediaTypes audio then video, as Electron lists them", both != "NotAllowedError"
+        && mediaAsked is [(_, "media", { MediaTypes: ["audio", "video"] })], $"{both} {Seen(mediaAsked)}");
+    lock (mediaAsked) mediaAsked.Clear();
+    mediaAllow = false;
+    var refusedMedia = await Run(mediaWin, Microphone);
+    var refusedMediaAgain = await Run(mediaWin, Microphone);
+    Check("a handler that refuses media fails getUserMedia with NotAllowedError, and is asked on every request", refusedMedia == "NotAllowedError"
+        && refusedMediaAgain == "NotAllowedError" && mediaAsked.Count == 2, $"{refusedMedia} {refusedMediaAgain} {Seen(mediaAsked)}");
+    mediaAllow = true;
     // Screen capture: the request handler's media first, then the display media handler, as Electron.
     const string Screen = "navigator.mediaDevices.getDisplayMedia({ video: true, audio: true }).then(s => { const kinds = s.getTracks().map(t => t.kind).sort().join(','); s.getTracks().forEach(t => t.stop()); return kinds; }, e => e.name)";
     lock (mediaAsked) mediaAsked.Clear();
@@ -1580,7 +1579,9 @@ async Task PermissionChecks()
         $"{videoOnly} {string.Join("; ", displayRequests)}");
     streams = new() { Video = new DisplayMediaSource("screen:0:0", "Entire screen"), Audio = "loopback" };
     var withAudio = await Run(mediaWin, Screen, gesture: true);
-    Check("a display media handler's loopback audio is captured with the video", withAudio == "audio,video", withAudio);
+    // Electron documents loopback for Windows and macOS; on Linux Oriel leaves the audio out (drift E30).
+    var loopbackKinds = OperatingSystem.IsLinux() ? "video" : "audio,video";
+    Check($"a display media handler's loopback audio gives {loopbackKinds}", withAudio == loopbackKinds, withAudio);
     streams = null;
     var refusedScreen = await Run(mediaWin, Screen, gesture: true);
     streams = new() { Audio = "loopback" };
