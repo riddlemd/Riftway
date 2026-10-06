@@ -11,9 +11,59 @@ public sealed class Cookies
     private const long UnixEpochMicroseconds = 11_644_473_600_000_000;
 
     private readonly Session _session;
+    private readonly CookieWatch _watch;
+    private readonly Lock _handlersGate = new();
+    private EventHandler<CookieChangedEventArgs>? _changed;
     private nint _manager;
 
-    internal Cookies(Session session) => _session = session;
+    internal Cookies(Session session)
+    {
+        _session = session;
+        _watch = new CookieWatch(() => StartVisit(null), RaiseAsync);
+        session.WebRequest.SetCookieSeen = _watch.ResponseSetCookie;
+    }
+
+    /// <summary>A cookie was added, replaced or removed. Electron's <c>changed</c> event, raised on the UI thread.</summary>
+    /// <remarks>CEF has no cookie-change observer, so while this has handlers the store is read and compared: right
+    /// after <see cref="SetAsync"/> and <see cref="RemoveAsync"/>, about 50 ms after a page response with
+    /// <c>Set-Cookie</c>, and every second for the rest (page scripts, expiry). Changes undone between two reads are not
+    /// seen, and a removal nothing explains is reported as <see cref="CookieChangeCause.Expired"/> or
+    /// <see cref="CookieChangeCause.ExpiredOverwrite"/>.</remarks>
+    public event EventHandler<CookieChangedEventArgs>? Changed
+    {
+        add
+        {
+            lock (_handlersGate)
+            {
+                _changed += value;
+                if (_changed is not null) _watch.Start();
+            }
+        }
+        remove
+        {
+            lock (_handlersGate)
+            {
+                _changed -= value;
+                if (_changed is null) _watch.Stop();
+            }
+        }
+    }
+
+    // Resolves once the handlers have run, so an awaited SetAsync or RemoveAsync has raised its events.
+    private Task RaiseAsync(IReadOnlyList<CookieChangedEventArgs> events)
+    {
+        var done = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        CefThread.RunOnUi(() =>
+        {
+            foreach (var change in events)
+            {
+                try { _changed?.Invoke(this, change); }
+                catch (Exception e) { Console.Error.WriteLine($"[Oriel] A cookies changed handler failed: {e}"); }
+            }
+            done.SetResult();
+        });
+        return done.Task;
+    }
 
     /// <summary>The cookies matching <paramref name="filter"/>, all of them when it is null. Electron's <c>cookies.get()</c>.</summary>
     /// <remarks>With <see cref="CookieFilter.Url"/>, only the cookies a request to that URL would send, HttpOnly ones included.</remarks>
@@ -46,17 +96,34 @@ public sealed class Cookies
     }
 
     /// <summary>Stores a cookie for <see cref="CookieDetails.Url"/>. Electron's <c>cookies.set()</c>.</summary>
-    /// <exception cref="ArgumentException">Chromium rejected the cookie, e.g. its domain does not match the URL.</exception>
+    /// <exception cref="ArgumentException">Chromium rejected the cookie; the message is Electron's, e.g.
+    /// "Failed to set cookie - The cookie was set with an invalid Domain attribute.EXCLUDE_INVALID_DOMAIN, ...". A
+    /// rejection Oriel cannot explain (one that depends on the stored cookies or the public suffix list) reads
+    /// "Failed to set cookie - The cookie was malformed and could not be stored...".</exception>
     public async Task SetAsync(CookieDetails details)
     {
         ArgumentNullException.ThrowIfNull(details);
-        ArgumentException.ThrowIfNullOrEmpty(details.Url);
-        var (accepted, stored) = StartSet(details);
-        if (!accepted || !await stored.ConfigureAwait(false))
-            throw new ArgumentException($"Chromium rejected the cookie '{details.Name}' for {details.Url}.", nameof(details));
+        ArgumentNullException.ThrowIfNull(details.Url);
+        var secure = details.SecureOrDefault;
+        var verdict = CookieRules.Check(details.Url, details.Name, details.Value, details.Domain, details.Path, secure, details.HttpOnly, details.SameSite);
+        if (verdict.Rejection is { } reason) throw new ArgumentException(reason);
+        if (!_watch.Active)
+        {
+            await SetCoreAsync(details, secure).ConfigureAwait(false);
+            return;
+        }
+        var key = new CookieDiff.Key(details.Name, verdict.Domain, verdict.Path);
+        await _watch.RunAsync(new CookieDiff.Set(key), () => SetCoreAsync(details, secure)).ConfigureAwait(false);
     }
 
-    private unsafe (bool Accepted, Task<bool> Stored) StartSet(CookieDetails details)
+    private async Task SetCoreAsync(CookieDetails details, bool secure)
+    {
+        var (accepted, stored) = StartSet(details, secure);
+        // CEF's own CreateSanitizedCookie and store have the final word.
+        if (!accepted || !await stored.ConfigureAwait(false)) throw new ArgumentException(CookieRules.FailureToStoreMessage);
+    }
+
+    private unsafe (bool Accepted, Task<bool> Stored) StartSet(CookieDetails details, bool secure)
     {
         var callback = new SetCookieCallback();
         var accepted = true;
@@ -66,7 +133,7 @@ public sealed class Cookies
             var cookie = new cef_cookie_t
             {
                 size = (nuint)sizeof(cef_cookie_t),
-                secure = details.Secure ? 1 : 0,
+                secure = secure ? 1 : 0,
                 httponly = details.HttpOnly ? 1 : 0,
                 has_expires = details.ExpirationDate is null ? 0 : 1,
                 expires = new cef_basetime_t { val = details.ExpirationDate is { } seconds ? ToBaseTime(seconds) : 0 },
@@ -96,6 +163,16 @@ public sealed class Cookies
     {
         ArgumentException.ThrowIfNullOrEmpty(url);
         ArgumentException.ThrowIfNullOrEmpty(name);
+        if (!_watch.Active)
+        {
+            await RemoveCoreAsync(url, name).ConfigureAwait(false);
+            return;
+        }
+        await _watch.RunAsync(new CookieDiff.Remove(name), () => RemoveCoreAsync(url, name)).ConfigureAwait(false);
+    }
+
+    private async Task RemoveCoreAsync(string url, string name)
+    {
         var (accepted, deleted) = StartRemove(url, name);
         if (!accepted) throw new ArgumentException($"'{url}' is not a valid URL.", nameof(url));
         await deleted.ConfigureAwait(false);
@@ -265,8 +342,11 @@ public sealed record CookieDetails(string Url)
     /// <summary>The path; null takes it from <see cref="Url"/>.</summary>
     public string? Path { get; init; }
 
-    /// <summary>Whether it is only sent over secure connections.</summary>
-    public bool Secure { get; init; }
+    /// <summary>Whether it is only sent over secure connections; null makes it secure exactly when
+    /// <see cref="SameSite"/> is <see cref="CookieSameSite.NoRestriction"/>, as in Electron.</summary>
+    public bool? Secure { get; init; }
+
+    internal bool SecureOrDefault => Secure ?? SameSite == CookieSameSite.NoRestriction;
 
     /// <summary>Whether page scripts cannot read it.</summary>
     public bool HttpOnly { get; init; }

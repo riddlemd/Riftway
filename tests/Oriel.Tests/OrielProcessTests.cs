@@ -67,6 +67,13 @@ public sealed class OrielProcessTests
         Assert.Equal(int.MaxValue, rate.PerSecond(0));
         Assert.Equal(0, rate.PerSecond(0));
     }
+
+    [Fact]
+    public void ResourcesPathFor_IsTheBundlesResourcesOnMacOS_ElseResourcesBesideTheExecutable()
+    {
+        Assert.Equal(Path.Combine("/A.app", "Contents", "Resources"), OrielProcess.ResourcesPathFor(Path.Combine("/A.app", "Contents", "MacOS", "A"), macOS: true));
+        Assert.Equal(Path.Combine("/opt/app", "resources"), OrielProcess.ResourcesPathFor(Path.Combine("/opt/app", "a"), macOS: false));
+    }
 }
 
 public sealed class ProcessMemoryInfoTests

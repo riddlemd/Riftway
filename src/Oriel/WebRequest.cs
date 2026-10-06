@@ -144,6 +144,14 @@ public sealed class WebRequest
 
     internal WebRequest() { }
 
+    /// <summary>A response carried <c>Set-Cookie</c>; IO thread.</summary>
+    internal Action? SetCookieSeen { get; set; }
+
+    private void NoteSetCookie(ResponseInfo response)
+    {
+        if (SetCookieSeen is { } seen && response.Headers.Any(h => h.Key.Equals("Set-Cookie", StringComparison.OrdinalIgnoreCase))) seen();
+    }
+
     private sealed record Listener<T>(Func<string, string, bool> Matches, T Handle);
 
     private static Listener<T>? Make<T>(WebRequestFilter? filter, T? listener) where T : class
@@ -245,12 +253,14 @@ public sealed class WebRequest
 
     internal void Redirected(WebContents? page, RequestInfo request, ResponseInfo response, string url)
     {
+        NoteSetCookie(response);
         var internalRedirect = _redirected.TryRemove(request.Id, out _);
         Notify(_beforeRedirect, page, request, d => WithResponse(d, internalRedirect ? response with { StatusText = "Internal Redirect" } : response) with { RedirectUrl = url });
     }
 
     internal void ResponseStarted(WebContents? page, RequestInfo request, ResponseInfo response)
     {
+        NoteSetCookie(response);
         Notify(_headersReceived, page, request, d => WithResponse(d, response));
         Notify(_responseStarted, page, request, d => WithResponse(d, response));
     }

@@ -175,6 +175,7 @@ async Task RunAsync()
     }
     Check("a cookie the page sets lands in its session",
         fromPage == 1 && (await defaultSession.Cookies.GetAsync(new CookieFilter { Name = "fromPage" })).Count == 0, fromPage);
+    await CookieChangeChecks();
 
     // A popup can't change session: CEF gives it the opener's.
     var created = 0;
@@ -1366,6 +1367,128 @@ async Task RunAsync()
     listener.Stop();
 }
 
+// cookies.on('changed') and set()'s rejection messages, in a session of their own while win keeps the app alive.
+async Task CookieChangeChecks()
+{
+    var watched = Session.FromPartition("cookie-events");
+    watched.Protocol.Handle("https", request => new Uri(request.Url).AbsolutePath switch
+    {
+        ['/', 's', 'e', 't', '/', ..] and var path => PageSettingCookie($"{path[5..]}=1; Path=/"),
+        ['/', 'u', 'n', 's', 'e', 't', '/', ..] and var path => PageSettingCookie($"{path[7..]}=; Path=/; Max-Age=0"),
+        _ => ProtocolResponse.Text(Page, "text/html"),
+    });
+    static ProtocolResponse PageSettingCookie(string cookie) => new()
+    {
+        ContentType = "text/html", Body = new MemoryStream(Encoding.UTF8.GetBytes(Page)),
+        Headers = new Dictionary<string, string> { ["Set-Cookie"] = cookie },
+    };
+    var changes = new List<string>();
+    EventHandler<CookieChangedEventArgs> onChanged = (_, e) =>
+    {
+        lock (changes) changes.Add($"{e.Cookie.Name}={e.Cookie.Value}:{e.Cause}:{(e.Removed ? "removed" : "added")}");
+    };
+    string Take()
+    {
+        lock (changes)
+        {
+            var all = string.Join(" ", changes);
+            changes.Clear();
+            return all;
+        }
+    }
+    async Task<(string Changes, long Ms)> WaitForChange(string expected, int timeoutMs = 4000)
+    {
+        var clock = System.Diagnostics.Stopwatch.StartNew();
+        var seen = "";
+        while (clock.ElapsedMilliseconds < timeoutMs)
+        {
+            seen = (seen + " " + Take()).Trim();
+            if (seen == expected) break;
+            await Task.Delay(20);
+        }
+        return (seen, clock.ElapsedMilliseconds);
+    }
+    watched.Cookies.Changed += onChanged;
+    // The first read of the store, which later reads are compared with.
+    await Task.Delay(500);
+    await watched.Cookies.SetAsync(new CookieDetails(Site) { Name = "ev", Value = "1" });
+    var inserted = Take();
+    Check("changed: set() of a new cookie raises inserted before set() resolves", inserted == "ev=1:Inserted:added", inserted);
+    await watched.Cookies.SetAsync(new CookieDetails(Site) { Name = "ev", Value = "2" });
+    var overwritten = Take();
+    Check("changed: a new value raises overwrite (removed) then inserted", overwritten == "ev=1:Overwrite:removed ev=2:Inserted:added", overwritten);
+    await watched.Cookies.SetAsync(new CookieDetails(Site) { Name = "ev", Value = "2" });
+    var same = Take();
+    Check("changed: an identical cookie raises overwrite then inserted-no-change-overwrite",
+        same == "ev=2:Overwrite:removed ev=2:InsertedNoChangeOverwrite:added", same);
+    await watched.Cookies.SetAsync(new CookieDetails(Site) { Name = "ev", Value = "2", ExpirationDate = DateTimeOffset.UtcNow.AddHours(1).ToUnixTimeSeconds() });
+    var expiryOnly = Take();
+    Check("changed: a new expiry raises overwrite then inserted-no-value-change-overwrite",
+        expiryOnly == "ev=2:Overwrite:removed ev=2:InsertedNoValueChangeOverwrite:added", expiryOnly);
+    await watched.Cookies.RemoveAsync(Site, "ev");
+    var removed = Take();
+    Check("changed: remove() raises explicit (removed)", removed == "ev=2:Explicit:removed", removed);
+    await watched.Cookies.SetAsync(new CookieDetails(Site) { Name = "gone", Value = "1" });
+    Take();
+    await watched.Cookies.SetAsync(new CookieDetails(Site) { Name = "gone", Value = "1", ExpirationDate = 0 });
+    var expiredOverwrite = Take();
+    Check("changed: set() with a past expiry raises expired-overwrite", expiredOverwrite == "gone=1:ExpiredOverwrite:removed", expiredOverwrite);
+    await watched.Cookies.SetAsync(new CookieDetails(Site) { Name = "short", Value = "1", ExpirationDate = DateTimeOffset.UtcNow.AddSeconds(2).ToUnixTimeMilliseconds() / 1000.0 });
+    Take();
+    var (expired, expiredMs) = await WaitForChange("short=1:Expired:removed", 4000);
+    Check("changed: expiry raises expired (within the 1 s poll)", expired == "short=1:Expired:removed", $"{expired} after {expiredMs} ms");
+
+    // Changes made by pages: a response's Set-Cookie and document.cookie.
+    var page = new BrowserWindow(new BrowserWindowOptions { Show = false, WebPreferences = new WebPreferences { Session = watched } });
+    // Three in a row, each well inside the poll: a poll that happened to land early would not pass all three.
+    var responses = new List<string>();
+    foreach (var name in new[] { "net1", "net2", "net3" })
+    {
+        await page.LoadUrl($"{Site}set/{name}");
+        var (fromResponse, responseMs) = await WaitForChange($"{name}=1:Inserted:added");
+        responses.Add($"{fromResponse} after {responseMs} ms");
+        if (fromResponse != $"{name}=1:Inserted:added" || responseMs >= 400) break;
+    }
+    Check("changed: a response's Set-Cookie raises inserted within 400 ms, ahead of the poll",
+        responses.Count == 3 && responses.All(r => r.Contains(":Inserted:added after ") && int.Parse(r.Split(' ')[^2]) < 400), string.Join("; ", responses));
+    await page.LoadUrl($"{Site}unset/net1");
+    var (unsetByResponse, unsetMs) = await WaitForChange("net1=1:ExpiredOverwrite:removed");
+    Check("changed: a response's expired Set-Cookie raises expired-overwrite", unsetByResponse == "net1=1:ExpiredOverwrite:removed", $"{unsetByResponse} after {unsetMs} ms");
+    await page.WebContents.ExecuteJavaScriptAsync("document.cookie = 'js=1; path=/'; 1");
+    var (fromScript, scriptMs) = await WaitForChange("js=1:Inserted:added", 1500);
+    Check("changed: document.cookie raises inserted (within the 1 s poll)", fromScript == "js=1:Inserted:added", $"{fromScript} after {scriptMs} ms");
+    await page.WebContents.ExecuteJavaScriptAsync("document.cookie = 'js=; path=/; max-age=0'; 1");
+    var (deletedByScript, deletedMs) = await WaitForChange("js=1:ExpiredOverwrite:removed", 1500);
+    Check("changed: deleting through document.cookie raises expired-overwrite (within the 1 s poll)", deletedByScript == "js=1:ExpiredOverwrite:removed", $"{deletedByScript} after {deletedMs} ms");
+    page.Close();
+
+    watched.Cookies.Changed -= onChanged;
+    await watched.Cookies.SetAsync(new CookieDetails(Site) { Name = "unwatched", Value = "1" });
+    await Task.Delay(1500);
+    var afterRemoval = Take();
+    Check("changed: no events once the last handler is removed", afterRemoval == "", afterRemoval);
+
+    // set() rejects with Electron's message, from Chromium's inclusion status.
+    var badDomain = await Throws(() => watched.Cookies.SetAsync(new CookieDetails(Site) { Name = "bad", Domain = "elsewhere.test" }));
+    Check("set(): another site's domain rejects with Electron's message", badDomain is ArgumentException && badDomain.Message ==
+        "Failed to set cookie - The cookie's domain attribute did not match the domain of the URL attempting access.The cookie was set with an invalid Domain attribute.EXCLUDE_DOMAIN_MISMATCH, EXCLUDE_INVALID_DOMAIN, DO_NOT_WARN, NO_EXEMPTION",
+        badDomain?.Message);
+    var badPrefix = await Throws(() => watched.Cookies.SetAsync(new CookieDetails(Site) { Name = "__Host-x", Path = "/app", Secure = true }));
+    Check("set(): a __Host- cookie with a path rejects with Electron's message", badPrefix?.Message ==
+        "Failed to set cookie - The cookie was set with an invalid __Host- or __Secure- prefix.EXCLUDE_INVALID_PREFIX, DO_NOT_WARN, NO_EXEMPTION", badPrefix?.Message);
+    var insecureNone = await Throws(() => watched.Cookies.SetAsync(new CookieDetails(Site) { Name = "none", SameSite = CookieSameSite.NoRestriction, Secure = false }));
+    Check("set(): SameSite=None without Secure rejects with Electron's message", insecureNone?.Message ==
+        "Failed to set cookie - The cookie specified SameSite=None, but it was not Secure.EXCLUDE_SAMESITE_NONE_INSECURE, DO_NOT_WARN, NO_EXEMPTION", insecureNone?.Message);
+    var secureOnHttp = await Throws(() => watched.Cookies.SetAsync(new CookieDetails("http://oriel.test/") { Name = "s", Secure = true }));
+    Check("set(): a Secure cookie for http rejects with Electron's message", secureOnHttp?.Message ==
+        "Failed to set cookie - The cookie was Secure, but the URL was not allowed to access Secure cookies.EXCLUDE_SECURE_ONLY, DO_NOT_WARN, NO_EXEMPTION", secureOnHttp?.Message);
+    var badUrl = await Throws(() => watched.Cookies.SetAsync(new CookieDetails("not a url") { Name = "u" }));
+    Check("set(): an invalid URL rejects with Electron's message", badUrl?.Message ==
+        "Failed to set cookie - The cookie was set with an invalid Domain attribute.EXCLUDE_INVALID_DOMAIN, DO_NOT_WARN, NO_EXEMPTION", badUrl?.Message);
+    var defaulted = await Throws(() => watched.Cookies.SetAsync(new CookieDetails(Site) { Name = "noneDefault", Value = "1", SameSite = CookieSameSite.NoRestriction }));
+    var noneDefault = (await watched.Cookies.GetAsync(new CookieFilter { Name = "noneDefault" })).SingleOrDefault();
+    Check("set(): SameSite=None without a Secure choice is made secure, as in Electron", defaulted is null && noneDefault is { Secure: true }, defaulted?.Message ?? noneDefault?.ToString());
+}
 static async Task<T?> WaitFor<T>(Func<T?> probe) where T : class
 {
     for (var i = 0; i < 100; i++)

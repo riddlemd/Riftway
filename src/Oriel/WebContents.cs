@@ -78,7 +78,11 @@ public sealed unsafe partial class WebContents
         Load = new LoadHandler
         {
             LoadStarted = isMain => { if (isMain) ApplyDefaultZoom(); },
-            LoadingStateChanged = loading => Raise(loading ? DidStartLoading : DidStopLoading),
+            LoadingStateChanged = loading =>
+            {
+                Raise(loading ? DidStartLoading : DidStopLoading);
+                if (!loading && _navigated) OnStoppedLoadingForPreferredSize();
+            },
             LoadEnded = (isMain, _) =>
             {
                 if (_navigated) DidFrameFinishLoad?.Invoke(this, isMain);
@@ -268,7 +272,16 @@ public sealed unsafe partial class WebContents
         if (isChar && inputEvent.KeyCode.Length != 1) throw new ArgumentException("A Char event takes exactly one character.", nameof(inputEvent));
         var key = isChar ? default : KeyMap.Resolve(inputEvent.KeyCode, inputEvent.Modifiers.HasFlag(InputModifiers.Shift));
         var modifiers = KeyMap.DevToolsModifiers(inputEvent.Modifiers);
-        CefThread.RunOnUi(() => _devTools.Send("Input.dispatchKeyEvent", w =>
+        CefThread.RunOnUi(() =>
+        {
+            if (isChar) ReportSentChar(inputEvent);
+            SendKeyEvent(inputEvent, isChar, key, modifiers);
+        });
+    }
+
+    private void SendKeyEvent(KeyboardInputEvent inputEvent, bool isChar, KeyMap.Key key, int modifiers)
+    {
+        _devTools.Send("Input.dispatchKeyEvent", w =>
         {
             // rawKeyDown: a press that types nothing; text arrives only through char events.
             w.WriteString("type", inputEvent.Type switch { KeyboardInputEventType.KeyDown => "rawKeyDown", KeyboardInputEventType.KeyUp => "keyUp", _ => "char" });
@@ -284,7 +297,7 @@ public sealed unsafe partial class WebContents
             w.WriteString("code", key.Code);
             w.WriteNumber("windowsVirtualKeyCode", key.VirtualKeyCode);
             w.WriteNumber("nativeVirtualKeyCode", key.VirtualKeyCode);
-        }));
+        });
     }
 
     /// <summary>Sends a mouse event to the page as if from the user: a right button press opens a context menu.
@@ -369,6 +382,18 @@ public sealed unsafe partial class WebContents
     });
 
     private readonly HashSet<string> _zoomedHosts = new(StringComparer.OrdinalIgnoreCase);
+
+    /// <summary>Sets the pinch-to-zoom range; Electron starts every page at 1 and 1, which turns pinching off.
+    /// Electron's <c>webContents.setVisualZoomLevelLimits()</c>.</summary>
+    /// <remarks>Oriel turns pinching on or off; the page's scale range itself stays Chromium's (drift C37).</remarks>
+    public Task SetVisualZoomLevelLimits(double minimumLevel, double maximumLevel)
+    {
+        CefThread.RunOnUi(() => TellFramesPinch(AllowsPinch(minimumLevel, maximumLevel)));
+        return Task.CompletedTask;
+    }
+
+    // Electron's default_minimum/maximum_page_scale_factor of 1 leaves no room to pinch; any wider range allows it.
+    internal static bool AllowsPinch(double minimumLevel, double maximumLevel) => minimumLevel < 1 || maximumLevel > 1;
 
     /// <summary>The page's zoom level. Electron's <c>webContents.getZoomLevel()</c>.</summary>
     public double GetZoomLevel() => QueryHost(host => host->get_zoom_level(host), 0);
@@ -728,7 +753,9 @@ public sealed unsafe partial class WebContents
     // its own so one that fails, even to parse, is reported and the rest still run, as Electron's renderer init does.
     private string IsolatedScript()
     {
-        var script = new System.Text.StringBuilder("(() => {\nlet reportPreloadError;\n").Append(s_preloadRuntime);
+        var script = new System.Text.StringBuilder("(() => {\nlet reportPreloadError;\n")
+            .Append("const orielOptions = { preferredSizeMode: ").Append(_preferences.EnablePreferredSizeMode ? "true" : "false").Append(" };\n")
+            .Append(s_preloadRuntime);
         var paths = Session.GetPreloadScripts().Select(p => p.FilePath).ToList();
         if (_appPreloadPath is not null) paths.Add(_appPreloadPath);
         foreach (var path in paths) script.Append(PreloadWrapper(path, ReadPreload(path)));
@@ -974,6 +1001,7 @@ public sealed unsafe partial class WebContents
                     context.GetProperty("auxData").GetProperty("frameId").GetString() == _mainFrameId)
                 {
                     _isolatedContext = context.GetProperty("id").GetInt32();
+                    OnMainIsolatedContext(_isolatedContext.Value);
                     foreach (var pending in _pendingDeliveries) Deliver(_isolatedContext.Value, pending);
                     _pendingDeliveries.Clear();
                 }
@@ -1040,6 +1068,12 @@ public sealed unsafe partial class WebContents
 
             case "mousedown":
                 PageMouseDown?.Invoke();
+                break;
+            case "input" when context == _isolatedContext:
+                OnPagePointerEvent(args);
+                break;
+            case "psize" when context == _isolatedContext:
+                OnPagePreferredSize(args);
                 break;
             case "sync-hello":
                 SyncIpc.Register(args[0].GetString()!, this, context);
@@ -1198,6 +1232,18 @@ public sealed unsafe partial class WebContents
             Deliver(context, message);
         }
         else if (frame.Id == _mainFrameId) _pendingDeliveries.Add(message);
+    }
+
+    /// <summary>Sends a DevTools command to the page and completes with its result; for tests.</summary>
+    internal Task<JsonElement> DevToolsCommandAsync(string method, Action<Utf8JsonWriter>? writeParams = null)
+    {
+        var done = new TaskCompletionSource<JsonElement>(TaskCreationOptions.RunContinuationsAsynchronously);
+        CefThread.RunOnUi(() => _devTools.Send(method, writeParams, (result, error) =>
+        {
+            if (error is null) done.TrySetResult(result.Clone());
+            else done.TrySetException(new InvalidOperationException(error));
+        }));
+        return done.Task;
     }
 
     private void Deliver(int context, string message)
