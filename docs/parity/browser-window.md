@@ -322,7 +322,7 @@ Parameters in brackets are optional in Electron. `webContents` members are in [w
 | `isClosable()` | `IsClosable` | done |  |
 | `setHiddenInMissionControl(hidden)` | `SetHiddenInMissionControl` | done |  |
 | `isHiddenInMissionControl()` | `IsHiddenInMissionControl` | done |  |
-| `setAlwaysOnTop(flag, level, relativeLevel)` | `SetAlwaysOnTop` | partial | No `level` or `relativeLevel`. |
+| `setAlwaysOnTop(flag, level, relativeLevel)` | `SetAlwaysOnTop` | partial | `level` and `relativeLevel` on macOS only; no taskbar ordering on Windows (DRIFT W29). |
 | `isAlwaysOnTop()` | `IsAlwaysOnTop` | done |  |
 | `moveAbove(mediaSourceId)` | — | missing |  |
 | `moveTop()` | — | missing |  |
