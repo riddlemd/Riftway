@@ -43,7 +43,7 @@ Where an implemented module differs from Electron, the difference and its reason
 | `utilityProcess` | `UtilityProcess` (.NET child process) | .NET | M6 | — |
 | `parentPort` | `ParentPort` | .NET | M6 | — |
 | `MessageChannelMain` / `MessagePortMain` | `MessageChannelMain` / `MessagePortMain` | .NET + CEF | M6 | partial: channels in the main process, ports moved to and from pages (`webContents.postMessage`, `frame.postMessage`, `ipcRenderer.postMessage`, `event.ports`), ports through ports, `start`, `close`; JSON messages (I1); no `close` from a page's own `close()` (I7) |
-| `crashReporter` | `CrashReporter` (Crashpad) | CEF | M4 | — |
+| `crashReporter` | `CrashReporter` (Crashpad) | CEF | M4 | partial: every method; `Start` before `Run()` writes CEF's `crash_reporter.cfg`; Windows verified end to end (renderer and browser crashes, uploads, local-only, rate limit); see DRIFT.md CR1–CR12, CR14 |
 | `contentTracing` | `ContentTracing` | CEF | M6 | partial: `startRecording` (`TraceConfig` and `TraceCategoriesAndOptions`), `stopRecording`, `getCategories`, `getTraceBufferUsage`; options beyond categories, `getCategories` and buffer usage go through an open page's DevTools session (P6, P14, P15, P16); no `enableHeapProfiling` |
 | `autoUpdater` | `AutoUpdater` (Velopack) | Pack | M4 | — |
 | Fuses, ASAR | Fuses, packed app archive with integrity check | Pack | M4 | — |
