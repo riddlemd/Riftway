@@ -803,17 +803,31 @@ public sealed unsafe partial class WebContents
     }
 
     // The page's override, else its session's, else the app's fallback; CEF started with the fallback.
+    // The user agent last sent to DevTools for this page.
+    private string? _sentUserAgent;
+
     private void SendUserAgent()
     {
-        var userAgent = _userAgent is { Length: > 0 } own ? own : _defaultUserAgent ?? "";
-        var differs = userAgent != OrielApp.ProcessUserAgent || _acceptLanguages is not null;
-        // Emulation's override stays for the DevTools session, across navigations and renderer swaps; an empty one clears it.
+        var userAgent = _userAgent is { Length: > 0 } own ? own : _defaultUserAgent is { Length: > 0 } fallback ? fallback : OrielApp.ProcessUserAgent;
+        // The renderer keeps an earlier override's string when the next one is Chromium's own default; clearing first
+        // resets it (ProtocolTest: setUserAgent("") restores the default).
+        if (userAgent == OrielApp.ProcessUserAgent && _sentUserAgent is { } sent && sent != userAgent)
+            _devTools.Send("Emulation.setUserAgentOverride", w => w.WriteString("userAgent", ""));
+        _sentUserAgent = userAgent;
+        // Emulation's override stays for the DevTools session, across navigations and renderer swaps. Every page gets one:
+        // CEF starts Chromium with --user-agent, which leaves only the low-entropy hints unless metadata is passed in.
         _devTools.Send("Emulation.setUserAgentOverride", w =>
         {
-            w.WriteString("userAgent", differs ? userAgent : "");
+            w.WriteString("userAgent", userAgent);
             if (_acceptLanguages is { } languages) w.WriteString("acceptLanguage", languages);
+            w.WritePropertyName("userAgentMetadata");
+            s_userAgentMetadata.Value.WriteTo(w);
         });
     }
+
+    // Electron overrides the user agent with Chromium's default client hints (embedder_support::GetUserAgentMetadata);
+    // DevTools drops them unless they are passed in.
+    private static readonly Lazy<JsonObject> s_userAgentMetadata = new(() => UserAgentMetadata.ForThisMachine(OrielProcess.Versions.Chrome));
 
     private void Navigate(string url, PendingLoad? load)
     {
@@ -888,7 +902,7 @@ public sealed unsafe partial class WebContents
         // Per-frame DOMContentLoaded for dom-ready.
         _devTools.Send("Page.setLifecycleEventsEnabled", w => w.WriteBoolean("enabled", true));
         // A session's user agent, or a fallback changed after start-up, applies from the first page, as Electron's.
-        if (_userAgent is not null || _defaultUserAgent != OrielApp.ProcessUserAgent || _acceptLanguages is not null) SendUserAgent();
+        SendUserAgent();
         _devTools.Send("Runtime.enable");
         // Chrome-style browsers ignore the font sizes in the browser settings; this sets them for this page only.
         if (_preferences.DefaultFontSize is not null || _preferences.DefaultMonospaceFontSize is not null)
@@ -919,6 +933,11 @@ public sealed unsafe partial class WebContents
         _devTools.Send("Page.addScriptToEvaluateOnNewDocument", w => w.WriteString("source", s_mainWorldStub));
         AddPermissionCheckScript();
         AddIsolatedScript();
+        FinishSetup();
+    }
+
+    private void FinishSetup()
+    {
         _devTools.Send("Page.getFrameTree", onResult: (result, _) =>
         {
             var frame = result.GetProperty("frameTree").GetProperty("frame");

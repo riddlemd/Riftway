@@ -322,7 +322,7 @@ Parameters in brackets are optional in Electron. `webContents` members are in [w
 | `isClosable()` | `IsClosable` | done |  |
 | `setHiddenInMissionControl(hidden)` | `SetHiddenInMissionControl` | done |  |
 | `isHiddenInMissionControl()` | `IsHiddenInMissionControl` | done |  |
-| `setAlwaysOnTop(flag, level, relativeLevel)` | `SetAlwaysOnTop` | partial | `level` and `relativeLevel` on macOS only; no taskbar ordering on Windows (DRIFT W29). |
+| `setAlwaysOnTop(flag, level, relativeLevel)` | `SetAlwaysOnTop` | partial | `level` and `relativeLevel` on macOS only; no taskbar ordering on Windows (DRIFT W29). `level` `normal` with no `relativeLevel` leaves the window off top on macOS only, as Electron. |
 | `isAlwaysOnTop()` | `IsAlwaysOnTop` | done |  |
 | `moveAbove(mediaSourceId)` | — | missing |  |
 | `moveTop()` | — | missing |  |
@@ -467,7 +467,7 @@ Parameters in brackets are optional in Electron. `webContents` members are in [w
 | `leave-full-screen` | `LeftFullScreen` | done |  |
 | `enter-html-full-screen` | `EnterHtmlFullScreen` | done |  |
 | `leave-html-full-screen` | `LeaveHtmlFullScreen` | done |  |
-| `always-on-top-changed` | — | missing |  |
+| `always-on-top-changed` | `AlwaysOnTopChanged` | done | `AlwaysOnTopChangedEventArgs.IsAlwaysOnTop`. Raised by `SetAlwaysOnTop` only when the state changes, not for z-order changes made by other programs, as Electron. |
 | `app-command` | — | missing |  |
 | `swipe` | — | missing |  |
 | `rotate-gesture` | — | missing |  |

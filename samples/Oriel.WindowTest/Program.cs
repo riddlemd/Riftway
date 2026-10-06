@@ -153,10 +153,44 @@ async Task RunAsync(BrowserWindow win, BrowserWindow simple)
         if (!OperatingSystem.IsWindows()) return win.IsAlwaysOnTop;
         return Oriel.Cef.CefThread.InvokeOnUi(() => OperatingSystem.IsWindows() && WindowsWindow.IsTopmost(handle));
     }
+    var onTopEvents = new System.Collections.Concurrent.ConcurrentQueue<bool>();
+    EventHandler<AlwaysOnTopChangedEventArgs> onOnTop = (_, e) => onTopEvents.Enqueue(e.IsAlwaysOnTop);
+    string seenOnTop() => string.Join(",", onTopEvents);
+    // Any query runs after the commands queued before it, so the events they raise are in by then.
+    bool onTopEventsAre(params bool[] expected)
+    {
+        _ = win.IsAlwaysOnTop;
+        return onTopEvents.SequenceEqual(expected);
+    }
+    win.AlwaysOnTopChanged += onOnTop;
     win.SetAlwaysOnTop(true);
     Check("always on top", Eventually(() => win.IsAlwaysOnTop && topmost(), step), $"{win.IsAlwaysOnTop} topmost={topmost()}");
+    Check("SetAlwaysOnTop(true) raises AlwaysOnTopChanged(true) once", onTopEventsAre(true), seenOnTop());
+    win.SetAlwaysOnTop(true);
+    win.SetAlwaysOnTop(true, "screen-saver");
+    Check("SetAlwaysOnTop(true) again, at any level, raises nothing, as Electron", onTopEventsAre(true), seenOnTop());
+    if (OperatingSystem.IsWindows())
+    {
+        var handle = win.GetNativeWindowHandle();
+        var dropped = WindowsShell.SetTopmost(handle, false);
+        var raised = WindowsShell.SetTopmost(handle, true);
+        Check("another program changing WS_EX_TOPMOST raises nothing, as Electron", dropped && raised && onTopEventsAre(true),
+            $"{seenOnTop()} dropped={dropped} raised={raised} isAlwaysOnTop={win.IsAlwaysOnTop}");
+    }
     win.SetAlwaysOnTop(false);
     Check("always on top cleared", Eventually(() => !win.IsAlwaysOnTop && !topmost(), step), $"{win.IsAlwaysOnTop} topmost={topmost()}");
+    Check("SetAlwaysOnTop(false) raises AlwaysOnTopChanged(false) once", onTopEventsAre(true, false), seenOnTop());
+    win.SetAlwaysOnTop(false);
+    Check("SetAlwaysOnTop(false) again raises nothing", onTopEventsAre(true, false), seenOnTop());
+    // Electron maps level normal to NSNormalWindowLevel on macOS only; elsewhere the flag alone decides.
+    var normalOnTop = !OperatingSystem.IsMacOS();
+    win.SetAlwaysOnTop(true, "normal");
+    Check("SetAlwaysOnTop(true, \"normal\") is on top except on macOS, as Electron",
+        win.IsAlwaysOnTop == normalOnTop && (normalOnTop ? onTopEventsAre(true, false, true) : onTopEventsAre(true, false)),
+        $"{seenOnTop()} isAlwaysOnTop={win.IsAlwaysOnTop}");
+    win.SetAlwaysOnTop(false);
+    Check("always on top cleared after level normal", Eventually(() => !win.IsAlwaysOnTop && !topmost(), step), $"{win.IsAlwaysOnTop} topmost={topmost()}");
+    win.AlwaysOnTopChanged -= onOnTop;
 #pragma warning disable CA1416 // macOS only, inside the IsMacOS check
     if (OperatingSystem.IsMacOS())
     {
