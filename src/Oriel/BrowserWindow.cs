@@ -10,7 +10,7 @@ namespace Oriel;
 public readonly record struct Rectangle(int X, int Y, int Width, int Height);
 
 /// <summary>Options for a new <see cref="BrowserWindow"/>; Electron's <c>BrowserWindowConstructorOptions</c>.</summary>
-public sealed record BrowserWindowOptions
+public sealed partial record BrowserWindowOptions
 {
     /// <summary>Width in device-independent pixels.</summary>
     public int Width { get; init; } = 800;
@@ -905,16 +905,21 @@ public sealed unsafe partial class BrowserWindow
     /// <summary>Keeps the window above others, or stops. Electron's <c>win.setAlwaysOnTop()</c>.</summary>
     /// <remarks>On macOS, <paramref name="level"/> (<c>normal</c>, <c>floating</c>, <c>torn-off-menu</c>, <c>modal-panel</c>,
     /// <c>main-menu</c>, <c>status</c>, <c>pop-up-menu</c>, <c>screen-saver</c>) plus <paramref name="relativeLevel"/> sets the
-    /// window's level, as Electron; elsewhere they are ignored (DRIFT W29).</remarks>
+    /// window's level, as Electron. On Windows any level keeps the window on top, and the levels below <c>pop-up-menu</c>
+    /// keep it under the taskbar; Linux ignores them.</remarks>
     /// <exception cref="ArgumentException">An unknown level.</exception>
     public void SetAlwaysOnTop(bool flag, string level = "floating", int relativeLevel = 0)
     {
         var macLevel = MacWindowLevel(level) ?? throw new ArgumentException($"Unknown level '{level}'.", nameof(level));
         Command(w =>
         {
-            var onTop = flag && level != "normal";
+            // Only AppKit has a normal level; elsewhere any level with flag set is on top, as in Electron.
+            var onTop = flag && (level != "normal" || !OperatingSystem.IsMacOS());
+            var changed = (w->is_always_on_top(w) != 0) != onTop;
             w->set_always_on_top(w, onTop ? 1 : 0);
             if (OperatingSystem.IsMacOS()) MacWindow.SetLevel((nint)w->get_window_handle(w), onTop ? macLevel + relativeLevel : 0);
+            ApplyAlwaysOnTopLevel(w, onTop, level);
+            if (changed) AlwaysOnTopChanged?.Invoke(this, new AlwaysOnTopChangedEventArgs(onTop));
         });
     }
 
@@ -1671,6 +1676,7 @@ public sealed unsafe partial class BrowserWindow
         if (_options.AlwaysOnTop) window->set_always_on_top(window, 1);
         if (OperatingSystem.IsWindows()) ApplyWindowsStyles(window);
         if (TitleBar.HasOverlay(_options.TitleBarStyle, _options.TitleBarOverlay, OperatingSystem.IsMacOS())) AttachTitleBarOverlay(window, _options.TitleBarOverlay!);
+        AttachWindowsState(window);
         if (_options.Show)
         {
             window->show(window);

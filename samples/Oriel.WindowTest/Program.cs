@@ -266,6 +266,7 @@ async Task RunAsync(BrowserWindow win, BrowserWindow simple)
     await ProcessChildrenAsync();
     await WindowsApisAsync();
     await TransparencyAsync();
+    await WindowsStateChecks.RunAsync(Check, step);
     await NativeImageAsync();
     await WebContentsLifecycleAsync(win);
     await PageEventsAsync();
