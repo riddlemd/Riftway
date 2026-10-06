@@ -1973,7 +1973,13 @@ public sealed unsafe partial class BrowserWindow
 
     private void RaiseStateChanges()
     {
-        if (_window is null || _sizeState is not null) return;
+        if (_window is null) return;
+        // The overlay's maximize/restore button follows the state even where WM_SIZE raises the events.
+        if (_sizeState is not null)
+        {
+            _titleBarOverlay?.SetMaximized(IsMaximizedOn(_window));
+            return;
+        }
         var maximized = IsMaximizedOn(_window);
         var minimized = _window->is_minimized(_window) != 0;
         if (maximized != _wasMaximized) (maximized ? Maximized : Unmaximized)?.Invoke(this, EventArgs.Empty);

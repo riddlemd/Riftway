@@ -3823,6 +3823,9 @@ async Task TitleBarAsync(BrowserWindow win)
     var maxResting = WindowsShell.ScreenPixel(Button(1).X, Button(1).Y);
     var below = (X: mx, Y: WindowsShell.Bounds(oh).Y + 150);
     static bool IsYellow((byte R, byte G, byte B) c) => c.R > 200 && c.G > 200 && c.B < 100;
+    // Windows offers snap layouts to the foreground window only, and a load no longer activates a window, so a click does.
+    WindowsShell.Click(below.X, below.Y);
+    await Task.Delay(300);
     var pageBelow = WindowsShell.ScreenPixel(below.X, below.Y);
     WindowsShell.Hover(mx - 4, my);
     WindowsShell.Hover(mx, my);
