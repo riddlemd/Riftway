@@ -176,6 +176,7 @@ public static class CrashReporter
         {
             ReadLiveSlots();
             s_crashpadStarted = true;
+            if (OperatingSystem.IsWindows() && Cef.Platform.BootstrapHost.IsHosted) CrashReporterNative.RestoreCrashpadExceptionFilter();
             if (s_started) ApplyToBrowserProcess();
         }
     }

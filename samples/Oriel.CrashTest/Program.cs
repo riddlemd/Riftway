@@ -21,6 +21,9 @@ internal static class Child
     public static int Run(string[] args)
     {
         var (mode, port, appName) = (args[0], int.Parse(args[1], System.Globalization.CultureInfo.InvariantCulture), args[2]);
+        // A priming launch only writes this mode's cfg and reports which handler its own process runs (CR15).
+        var prime = mode.StartsWith("prime-", StringComparison.Ordinal);
+        if (prime) mode = mode["prime-".Length..];
         var app = OrielApp.Create(appName);
         var url = $"http://127.0.0.1:{port}/submit";
 
@@ -46,6 +49,11 @@ internal static class Child
         CrashReporter.AddExtraParameter(new string('k', 40), "too long");
         CrashReporter.RemoveExtraParameter("removed_key");
         Report("params", JsonSerializer.Serialize(CrashReporter.GetParameters().OrderBy(p => p.Key, StringComparer.Ordinal)));
+        if (prime)
+        {
+            Report("handler", HandlerCommandLine(appName) ?? "");
+            return 0;
+        }
 
         app.Ready += (_, _) => Task.Run(async () =>
         {
@@ -293,10 +301,26 @@ internal static class Driver
         Check("a later launch lists the browser crash", upload is not null && reports.Any(r => r.Id == upload.ResponseId), Fact(list, "reports"));
     }
 
+    // Electron starts Crashpad in crashReporter.start; in the bootstrap layout CEF's bootstrap.exe starts it from the cfg
+    // beside the exe before .NET runs, so a scenario's settings reach its own process only from the next launch (CR15).
+    private static bool StartAppliesNextLaunch => OperatingSystem.IsWindows() && Oriel.Cef.Platform.BootstrapHost.IsHosted;
+
     private static (int Exit, Dictionary<string, string> Facts) RunChild(string mode, int port, out string appName, string? reuse = null)
     {
         appName = reuse ?? $"Oriel.CrashTest.{mode}.{s_runId}";
         if (reuse is null) s_appNames.Add(appName);
+        if (reuse is null && StartAppliesNextLaunch)
+        {
+            var (primeExit, primed) = Launch("prime-" + mode, port, appName);
+            var primeHandler = Fact(primed, "handler") ?? "";
+            Check($"{mode}: bootstrap layout: the launch that calls start runs no handler for its own database (CR15)",
+                primeExit == 0 && !primeHandler.Contains($@"\{appName}\User Data\Crashpad", StringComparison.Ordinal), $"exit={primeExit} {primeHandler}");
+        }
+        return Launch(mode, port, appName);
+    }
+
+    private static (int Exit, Dictionary<string, string> Facts) Launch(string mode, int port, string appName)
+    {
         var start = new ProcessStartInfo(Environment.ProcessPath!, [mode, port.ToString(System.Globalization.CultureInfo.InvariantCulture), appName])
         {
             RedirectStandardOutput = true,

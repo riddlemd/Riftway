@@ -162,6 +162,20 @@ internal static unsafe class CrashReporterNative
     private static nint s_elf;
 
     // Only Windows builds chrome_elf; libcef has already loaded it, so this finds the same module.
+    /// <summary>Gives this process's unhandled native exceptions back to Crashpad (chrome_elf's <c>CrashForException</c>);
+    /// false when there is nothing to give them to.</summary>
+    /// <remarks>The bootstrap layout starts Crashpad before .NET, whose runtime then installs its own unhandled-exception
+    /// filter; in the apphost layout Crashpad starts after the runtime and its filter is the last one set.</remarks>
+    public static bool RestoreCrashpadExceptionFilter()
+    {
+        if (Export("CrashForException_ExportThunk") is not { } crash || Export("IsCrashReportingEnabledImpl") is not { } enabled) return false;
+        if (((delegate* unmanaged[Cdecl]<byte>)enabled)() == 0) return false;
+        _ = SetUnhandledExceptionFilter(crash);
+        return true;
+    }
+
+    [DllImport("kernel32.dll")]
+    private static extern nint SetUnhandledExceptionFilter(nint filter);
     private static nint? Export(string name)
     {
         if (!OperatingSystem.IsWindows()) return null;
