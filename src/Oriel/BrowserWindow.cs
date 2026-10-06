@@ -1326,7 +1326,7 @@ public sealed unsafe partial class BrowserWindow
     private bool CanResize(bool resizable) => OperatingSystem.IsWindows() ? WindowsFrame.CanResize(!IsFrameless, resizable, _options.ThickFrame) : resizable;
 
     /// <summary>Whether the user can resize the window. Electron's <c>win.isResizable()</c>.</summary>
-    public bool IsResizable => Query(_ => WindowTransparency.ReportsResizable(_options.Frame, _transparent, _resizable), false);
+    public bool IsResizable => Query(_ => WindowTransparency.ReportsResizable(_options.Frame, _transparent, CanResize(_resizable)), false);
 
     /// <summary>Lets the window be minimized, or stops. Electron's <c>win.setMinimizable()</c>.</summary>
     public void SetMinimizable(bool flag) => Command(_ =>
