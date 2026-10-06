@@ -19,6 +19,8 @@ eng/layout-linux.sh /work/out/app /work/out/subprocess/Oriel.Subprocess linuxarm
 
 Xvfb :99 -screen 0 1600x1000x24 > /dev/null 2>&1 &
 export DISPLAY=:99
+# Chromium's X11 desktop capturer dies (SIGILL) on this Xvfb; tests skip real screen capture under it.
+export ORIEL_XVFB=1
 sleep 1
 # Maximize, minimize and full screen are window-manager operations.
 openbox > /dev/null 2>&1 &
@@ -29,7 +31,7 @@ if [ "$sandbox" = 1 ]; then
   chown root:root /work/out/app/chrome-sandbox
   chmod 4755 /work/out/app/chrome-sandbox
   chmod -R a+rX /work/out
-  runuser -u oriel -- env DISPLAY=:99 ORIEL_TRACE_DEVTOOLS="${ORIEL_TRACE_DEVTOOLS:-}" "/work/out/app/$exe" --enable-sandbox ${ORIEL_EXTRA_ARGS:-} 2> /work/app.err || status=$?
+  runuser -u oriel -- env DISPLAY=:99 ORIEL_XVFB=1 ORIEL_TRACE_DEVTOOLS="${ORIEL_TRACE_DEVTOOLS:-}" "/work/out/app/$exe" --enable-sandbox ${ORIEL_EXTRA_ARGS:-} 2> /work/app.err || status=$?
 else
   "/work/out/app/$exe" ${ORIEL_EXTRA_ARGS:-} 2> /work/app.err || status=$?
 fi

@@ -1640,15 +1640,30 @@ async Task PermissionChecks(bool mediaOnly = false)
         lock (displayRequests) displayRequests.Add(request);
         return Task.FromResult<DisplayMediaStreams?>(streams);
     });
-    var videoOnly = await Run(mediaWin, Screen, gesture: true);
-    Check("a display media handler gets the frame, origin and what was requested; its video is captured, and audio left out is not",
-        videoOnly == "video" && displayRequests is [{ VideoRequested: true, AudioRequested: true, SecurityOrigin: Origin, UserGesture: false, Frame: { } frame }] && frame.Url == Site,
-        $"{videoOnly} {string.Join("; ", displayRequests)}");
-    streams = new() { Video = new DisplayMediaSource("screen:0:0", "Entire screen"), Audio = "loopback" };
-    var withAudio = await Run(mediaWin, Screen, gesture: true);
-    // Electron documents loopback for Windows and macOS; on Linux Oriel leaves the audio out (drift E30).
-    var loopbackKinds = OperatingSystem.IsLinux() ? "video" : "audio,video";
-    Check($"a display media handler's loopback audio gives {loopbackKinds}", withAudio == loopbackKinds, withAudio);
+    // Chromium's X11 desktop capturer dies with SIGILL under the Docker Xvfb (linux-todo: verify on a real X server).
+    if (Environment.GetEnvironmentVariable("ORIEL_XVFB") == "1")
+        Console.WriteLine("SKIP  display media capture checks: Chromium's desktop capturer crashes under Xvfb");
+    // Without Screen Recording consent, or while the screen is locked, macOS never starts the capture and it hangs.
+    else if (OperatingSystem.IsMacOS() && (!MacMediaConsent.ScreenCapture() || MacMediaConsent.ScreenLocked()))
+        Console.WriteLine($"SKIP  display media capture checks: macOS screen capture consent={MacMediaConsent.ScreenCapture()} locked={MacMediaConsent.ScreenLocked()}");
+    else
+    {
+        var videoOnly = await Run(mediaWin, Screen, gesture: true);
+        Check("a display media handler gets the frame, origin and what was requested; its video is captured, and audio left out is not",
+            videoOnly == "video" && displayRequests is [{ VideoRequested: true, AudioRequested: true, SecurityOrigin: Origin, UserGesture: false, Frame: { } frame }] && frame.Url == Site,
+            $"{videoOnly} {string.Join("; ", displayRequests)}");
+        // macOS system audio needs ScreenCaptureKit's own consent, which a test app never gets answered: the capture hangs.
+        if (OperatingSystem.IsMacOS())
+            Console.WriteLine("SKIP  display media loopback audio: macOS system-audio capture waits on consent");
+        else
+        {
+            streams = new() { Video = new DisplayMediaSource("screen:0:0", "Entire screen"), Audio = "loopback" };
+            var withAudio = await Run(mediaWin, Screen, gesture: true);
+            // Electron documents loopback for Windows and macOS; on Linux Oriel leaves the audio out (drift E30).
+            var loopbackKinds = OperatingSystem.IsLinux() ? "video" : "audio,video";
+            Check($"a display media handler's loopback audio gives {loopbackKinds}", withAudio == loopbackKinds, withAudio);
+        }
+    }
     streams = null;
     var refusedScreen = await Run(mediaWin, Screen, gesture: true);
     streams = new() { Audio = "loopback" };
@@ -1868,6 +1883,33 @@ static class MacMediaConsent
     [System.Runtime.InteropServices.DllImport(ObjC)] private static extern nint sel_registerName([System.Runtime.InteropServices.MarshalAs(System.Runtime.InteropServices.UnmanagedType.LPUTF8Str)] string name);
     [System.Runtime.InteropServices.DllImport(ObjC, EntryPoint = "objc_msgSend")] private static extern nint SendString(nint receiver, nint selector, [System.Runtime.InteropServices.MarshalAs(System.Runtime.InteropServices.UnmanagedType.LPUTF8Str)] string value);
     [System.Runtime.InteropServices.DllImport(ObjC, EntryPoint = "objc_msgSend")] private static extern nint SendObject(nint receiver, nint selector, nint value);
+
+    [System.Runtime.InteropServices.DllImport("/System/Library/Frameworks/CoreGraphics.framework/CoreGraphics")]
+    [return: System.Runtime.InteropServices.MarshalAs(System.Runtime.InteropServices.UnmanagedType.U1)]
+    private static extern bool CGPreflightScreenCaptureAccess();
+
+    /// <summary>Whether macOS lets this app record the screen, without asking.</summary>
+    public static bool ScreenCapture() => CGPreflightScreenCaptureAccess();
+
+    private const string CoreFoundation = "/System/Library/Frameworks/CoreFoundation.framework/CoreFoundation";
+    [System.Runtime.InteropServices.DllImport("/System/Library/Frameworks/CoreGraphics.framework/CoreGraphics")] private static extern nint CGSessionCopyCurrentDictionary();
+    [System.Runtime.InteropServices.DllImport(CoreFoundation)] private static extern nint CFDictionaryGetValue(nint dictionary, nint key);
+    [System.Runtime.InteropServices.DllImport(CoreFoundation)] private static extern nint CFStringCreateWithCString(nint allocator, [System.Runtime.InteropServices.MarshalAs(System.Runtime.InteropServices.UnmanagedType.LPUTF8Str)] string value, uint encoding);
+    [System.Runtime.InteropServices.DllImport(CoreFoundation)] [return: System.Runtime.InteropServices.MarshalAs(System.Runtime.InteropServices.UnmanagedType.U1)] private static extern bool CFBooleanGetValue(nint boolean);
+    [System.Runtime.InteropServices.DllImport(CoreFoundation)] private static extern void CFRelease(nint value);
+
+    /// <summary>Whether the login session's screen is locked (CGSSessionScreenIsLocked, absent when unlocked).</summary>
+    public static bool ScreenLocked()
+    {
+        var session = CGSessionCopyCurrentDictionary();
+        if (session == 0) return false;
+        var key = CFStringCreateWithCString(0, "CGSSessionScreenIsLocked", 0x08000100);
+        var value = CFDictionaryGetValue(session, key);
+        var locked = value != 0 && CFBooleanGetValue(value);
+        CFRelease(key);
+        CFRelease(session);
+        return locked;
+    }
 
     /// <summary>The audio and video statuses (0 not determined, 1 restricted, 2 denied, 3 authorized); -1 when unreadable.</summary>
     public static (long Audio, long Video) Read()
