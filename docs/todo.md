@@ -12,7 +12,8 @@ Cross-platform work. Platform-specific items: [linux-todo.md](linux-todo.md), [w
   - [x] `webPreferences` batch 1 (devTools, zoomFactor, javascript, images, textarea, webgl, fonts, disableDialogs)
   - [ ] Remaining `webPreferences` (see the parity doc: process-wide switches, spellcheck, ...; session/partition done)
   - [x] `parent`/`modal`, `isModal`, `getChildWindows`, `getParentWindow`
-  - [ ] `setParentWindow` (needs OS code: CEF sets the parent only at creation)
+  - [x] `setParentWindow` on Windows (branch `title-bar-2`)
+  - [ ] `setParentWindow` on macOS and Linux (DRIFT W8)
   - [x] Windows: `titleBarStyle`, `titleBarOverlay`/`setTitleBarOverlay`, `app-region` drag regions (branch `title-bar`)
   - [ ] Title bar on macOS (`trafficLightPosition`, hidden styles) and the page's Window Controls Overlay API (DRIFT W34, W37)
   - [x] Taskbar on Windows: `setProgressBar`, `flashFrame`, `setSkipTaskbar`/`skipTaskbar`, `setOverlayIcon`

@@ -51,6 +51,9 @@ internal static class TitleBar
     /// <summary>Button <paramref name="index"/>'s spacing: none for the first.</summary>
     internal static int SpacingAt(int index) => index == 0 ? 0 : ButtonSpacing;
 
+    /// <summary>How much of the symbol colour a disabled button's symbol keeps over the background.</summary>
+    internal const double DisabledSymbol = 0.4;
+
     /// <summary>Electron's close button tint, <c>#E81123</c>: opaque under the pointer, <see cref="ClosePressedAlpha"/> pressed.</summary>
     internal const uint CloseBase = 0xFFE81123;
 

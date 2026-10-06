@@ -167,6 +167,9 @@ static unsafe class WindowsShell
     /// <summary>The foreground window.</summary>
     internal static nint Foreground() => GetForegroundWindow();
 
+    /// <summary>Whether Win32 has the window visible (<c>IsWindowVisible</c>).</summary>
+    internal static bool Visible(nint hwnd) => IsWindowVisible(hwnd) != 0;
+
     /// <summary>The top-level window that takes the mouse at (<paramref name="x"/>, <paramref name="y"/>).</summary>
     internal static nint RootAt(int x, int y) => GetAncestor(WindowFromPoint(new PointNative { X = x, Y = y }), 2 /* GA_ROOT */);
 
@@ -251,6 +254,7 @@ static unsafe class WindowsShell
     }
 
     [DllImport("user32.dll")] private static extern nint GetForegroundWindow();
+    [DllImport("user32.dll")] private static extern int IsWindowVisible(nint hwnd);
     [DllImport("user32.dll")] private static extern nint WindowFromPoint(PointNative point);
     [DllImport("user32.dll")] private static extern nint GetAncestor(nint hwnd, uint flags);
     [DllImport("user32.dll")] private static extern int GetWindowRect(nint hwnd, RectNative* rect);
