@@ -3297,6 +3297,112 @@ async Task LinuxTaskbarAsync()
     await Task.Delay(300);
 }
 
+// Chromium's ids for frames, checked against the process table: ps for the renderer's launch switches, /proc for its CPU.
+async Task FrameIdsAsync(BrowserWindow host, WebFrameMain main, WebFrameMain a)
+{
+    var tokenShape = new System.Text.RegularExpressions.Regex("^[0-9A-F]{32}$");
+    // Linux: the pid ps lists for the renderer launched with this render process id.
+    static int? PsRenderer(int processId)
+    {
+        using var ps = System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo("ps", "-eo pid=,args=") { RedirectStandardOutput = true })!;
+        var listing = ps.StandardOutput.ReadToEnd();
+        ps.WaitForExit();
+        return listing.Split('\n').Select(l => l.Trim().Split(' ', 2)).Where(p => p.Length == 2
+            && p[1].Split(' ').Contains("--type=renderer") && p[1].Split(' ').Contains($"--renderer-client-id={processId}")).Select(p => (int?)int.Parse(p[0])).FirstOrDefault();
+    }
+    var nested = a.Frames[0];
+    WebFrameMain[] all = [main, a, nested];
+    Check("FrameToken is a token of its own per frame, ProcessId the page's render process",
+        all.All(f => tokenShape.IsMatch(f.FrameToken)) && all.Select(f => f.FrameToken).Distinct().Count() == 3 && all.All(f => f.ProcessId > 0 && f.ProcessId == main.ProcessId),
+        string.Join(" ", all.Select(f => $"{f.ProcessId}-{f.FrameToken}")));
+
+    var other = new BrowserWindow(new BrowserWindowOptions { Show = false });
+    await other.WebContents.LoadUrl("data:text/html,<p>other</p>");
+    var otherMain = other.WebContents.MainFrame!;
+    Check("a page in another renderer has another ProcessId and OsProcessId",
+        otherMain.ProcessId > 0 && otherMain.ProcessId != main.ProcessId && otherMain.OsProcessId > 0 && otherMain.OsProcessId != main.OsProcessId,
+        $"{otherMain.ProcessId}/{otherMain.OsProcessId} {main.ProcessId}/{main.OsProcessId}");
+
+    if (OperatingSystem.IsLinux())
+    {
+        Check("OsProcessId is the renderer ps lists with ProcessId as its client id, for every frame of the page",
+            PsRenderer(main.ProcessId) is { } psPid && all.All(f => f.OsProcessId == psPid) && PsRenderer(otherMain.ProcessId) == otherMain.OsProcessId,
+            $"{main.ProcessId}->{PsRenderer(main.ProcessId)} os={main.OsProcessId}");
+
+        // A busy frame's CPU time lands on its OsProcessId, not on another page's renderer; relative, as a loaded host
+        // gives the spin only part of a core.
+        static long CpuTicks(int pid)
+        {
+            if (!File.Exists($"/proc/{pid}/stat")) return -1;
+            var stat = File.ReadAllText($"/proc/{pid}/stat");
+            var fields = stat[(stat.LastIndexOf(')') + 2)..].Split(' ');
+            return long.Parse(fields[11]) + long.Parse(fields[12]);
+        }
+        var (busyBefore, idleBefore) = (CpuTicks(a.OsProcessId), CpuTicks(otherMain.OsProcessId));
+        await a.ExecuteJavaScriptAsync("{ const end = Date.now() + 1500; while (Date.now() < end); } 1");
+        var (busy, idle) = (CpuTicks(a.OsProcessId) - busyBefore, CpuTicks(otherMain.OsProcessId) - idleBefore);
+        Check("script spinning in a frame burns its OsProcessId's CPU", busyBefore >= 0 && idleBefore >= 0 && busy >= 30 && busy > 4 * idle, $"busy={busy} idle={idle} ticks");
+    }
+    else
+        Check("OsProcessId is one of the app's renderer processes", app.GetAppMetrics().Any(m => m.Type == "Tab" && m.Pid == main.OsProcessId) && a.OsProcessId == main.OsProcessId, main.OsProcessId);
+
+    Check("FromFrameToken finds each frame in any page from its ProcessId and FrameToken",
+        all.Append(otherMain).All(f => WebFrameMain.FromFrameToken(f.ProcessId, f.FrameToken) == f));
+    Check("FromFrameToken finds nothing for another process, an unknown token or a lower-case one",
+        WebFrameMain.FromFrameToken(otherMain.ProcessId, a.FrameToken) is null && WebFrameMain.FromFrameToken(main.ProcessId, new string('0', 32)) is null
+        && WebFrameMain.FromFrameToken(main.ProcessId, a.FrameToken.ToLowerInvariant()) is null && WebFrameMain.FromFrameToken(main.ProcessId, "x") is null);
+
+    var otherToken = otherMain.FrameToken;
+    var file = Path.Combine(Path.GetTempPath(), "oriel-frame-ids.html");
+    File.WriteAllText(file, "<!doctype html><p>file</p>");
+    await other.WebContents.LoadFile(file);
+    Check("a cross-site navigation gives the same frame a new FrameToken, by which it is found",
+        other.WebContents.MainFrame == otherMain && tokenShape.IsMatch(otherMain.FrameToken) && otherMain.FrameToken != otherToken
+        && WebFrameMain.FromFrameToken(otherMain.ProcessId, otherMain.FrameToken) == otherMain, $"{otherToken} -> {otherMain.ProcessId}-{otherMain.FrameToken}");
+
+    string? Document(WebFrameMain f) => f.ExecuteJavaScriptAsync("document.visibilityState").Result?.ToString();
+    Check("VisibilityState is visible in a shown window, as its documents say",
+        Eventually(() => main.VisibilityState == "visible" && a.VisibilityState == "visible" && Document(main) == "visible" && Document(a) == "visible", step), main.VisibilityState);
+    // A window created hidden can still hold a page Chromium counts as visible; the document is the truth.
+    Check("VisibilityState in a window never shown is what its document says", Eventually(() => Document(otherMain) is { } seen && otherMain.VisibilityState == seen, step),
+        $"{otherMain.VisibilityState} {Document(otherMain)}");
+    host.Hide();
+    Check("VisibilityState turns hidden when the window is hidden, with the documents",
+        Eventually(() => main.VisibilityState == "hidden" && nested.VisibilityState == "hidden" && Document(main) == "hidden" && Document(nested) == "hidden", step), $"{main.VisibilityState} {Document(main)}");
+    host.Show();
+    Check("VisibilityState turns visible again when it is shown", Eventually(() => main.VisibilityState == "visible" && Document(main) == "visible", step), $"{main.VisibilityState} {Document(main)}");
+    other.Destroy();
+
+    // Unnamed twins the parser made differ only in creation order. With the first removed, it must not take the remaining
+    // twin's ids.
+    await main.ExecuteJavaScriptAsync("const holder = document.createElement('iframe'); holder.className = 'holder'; holder.srcdoc = '<iframe srcdoc=x></iframe><iframe srcdoc=x></iframe>'; document.body.append(holder); 1");
+    var holder = Eventually(() => main.Frames.Any(f => f != a && f.Frames.Count(t => t.Url == "about:srcdoc") == 2), step) ? main.Frames.First(f => f != a) : null;
+    List<WebFrameMain> twins = holder is null ? [] : [.. holder.Frames];
+    await main.ExecuteJavaScriptAsync("document.querySelector('iframe.holder').contentDocument.querySelector('iframe').remove(); 1");
+    var removed = twins.Count == 2 && Eventually(() => twins.Count(f => f.Detached) == 1, step);
+    var gone = removed ? twins.First(f => f.Detached) : null;
+    var kept = removed ? twins.First(f => !f.Detached) : null;
+    string Throws(Func<object> read) { try { read(); return "no"; } catch (InvalidOperationException) { return "yes"; } }
+    Check("a removed frame keeps the ids of its last document, apart from its twin's, is not found by them, and OsProcessId and VisibilityState throw",
+        gone is not null && kept is not null && tokenShape.IsMatch(gone.FrameToken) && gone.ProcessId == main.ProcessId && gone.FrameToken != kept.FrameToken
+        && WebFrameMain.FromFrameToken(gone.ProcessId, gone.FrameToken) is null && WebFrameMain.FromFrameToken(kept.ProcessId, kept.FrameToken) == kept
+        && Throws(() => gone.OsProcessId) == "yes" && Throws(() => gone.VisibilityState) == "yes",
+        gone is null ? $"twins={twins.Count}" : $"{gone.ProcessId}-{gone.FrameToken} kept={kept?.FrameToken}");
+    await main.ExecuteJavaScriptAsync("document.querySelector('iframe.holder')?.remove(); 1");
+    Eventually(() => holder is null || holder.Detached, step);
+
+    // Chromium puts a sandboxed iframe in a process of its own, where DevTools reports neither its URL nor its name.
+    await main.ExecuteJavaScriptAsync("const boxed = document.createElement('iframe'); boxed.sandbox = ''; boxed.srcdoc = 'boxed'; document.body.append(boxed); 1");
+    var boxed = Eventually(() => main.Frames.Count == 2 && main.Frames.Any(f => f != a && f.ProcessId > 0), step) ? main.Frames.First(f => f != a) : null;
+    var boxedPid = boxed is null ? 0 : boxed.OsProcessId;
+    Check("a frame in another process has that renderer's ProcessId and OsProcessId, and is found by its FrameToken",
+        boxed is not null && boxed.ProcessId != main.ProcessId && tokenShape.IsMatch(boxed.FrameToken) && boxedPid > 0 && boxedPid != main.OsProcessId
+        && (!OperatingSystem.IsLinux() || PsRenderer(boxed.ProcessId) == boxedPid) && WebFrameMain.FromFrameToken(boxed.ProcessId, boxed.FrameToken) == boxed,
+        boxed is null ? "no frame" : $"{boxed.ProcessId}-{boxed.FrameToken} os={boxedPid} main={main.ProcessId}");
+    await main.ExecuteJavaScriptAsync("boxed.remove(); 1");
+    Eventually(() => main.Frames.Count == 1, step);
+}
+
 async Task FramesAsync()
 {
     var dir = Directory.CreateTempSubdirectory("oriel-frames-").FullName;
@@ -3341,6 +3447,7 @@ async Task FramesAsync()
     Check("a nested iframe has its parent and top", Eventually(() => a.Frames is [{ Name: "b" } b] && b.Parent == a && b.Top == main, step));
     Check("FramesInSubtree includes the frame itself", main.FramesInSubtree.Select(f => f.Name).SequenceEqual(["", "a", "b"]), string.Join(",", main.FramesInSubtree.Select(f => f.Name)));
     Check("the same frame is the same object", main.Frames[0] == a && host.WebContents.MainFrame == main);
+    await FrameIdsAsync(host, main, a);
 
     using (var frameReady = new ManualResetEventSlim())
     {

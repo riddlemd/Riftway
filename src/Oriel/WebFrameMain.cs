@@ -14,6 +14,11 @@ internal sealed class FrameState
     public int? IsolatedContext { get; set; }
     public bool Detached { get; set; }
     public WebFrameMain? Wrapper { get; set; }
+    // Kept once the frame goes: Electron's frameToken and processId outlive the frame.
+    public string? CefId { get; set; }
+    // Creation order, which tells apart sibling frames with the same name and URL.
+    public long Created { get; } = Interlocked.Increment(ref s_created);
+    private static long s_created;
 }
 
 /// <summary>A frame in a page: the main frame or an iframe; Electron's <c>WebFrameMain</c>.</summary>
@@ -42,8 +47,51 @@ public sealed class WebFrameMain
     /// Electron's <c>frame.ipc</c>.</summary>
     public IpcMainScope Ipc { get; } = new();
 
-    /// <summary>Identifies the frame for its lifetime; Chromium's DevTools frame token. Electron's <c>frameToken</c>.</summary>
-    public string FrameToken => _state.Id;
+    /// <summary>Chromium's token for the frame's current document host: 32 upper-case hex digits, new when a navigation
+    /// moves the frame to another host. Empty while the frame is not matched to CEF's (drift F6). Electron's <c>frameToken</c>.</summary>
+    public string FrameToken => _page.IdsOf(_state)?.FrameToken ?? string.Empty;
+
+    /// <summary>Chromium's id for the frame's render process (not the OS process id); -1 while the frame is not matched
+    /// to CEF's (drift F6). Electron's <c>processId</c>.</summary>
+    public int ProcessId => _page.IdsOf(_state)?.ProcessId ?? -1;
+
+    /// <summary>The operating system's id for the frame's render process; 0 while that process is not running.
+    /// Electron's <c>osProcessId</c>.</summary>
+    /// <exception cref="InvalidOperationException">The frame has gone.</exception>
+    public int OsProcessId
+    {
+        get
+        {
+            ThrowIfGone();
+            return ProcessId is var id and >= 0 ? OrielApp.RendererPid(id) : 0;
+        }
+    }
+
+    /// <summary>The page's visibility as the frame's document sees it: <c>visible</c> or <c>hidden</c>. Electron's
+    /// <c>visibilityState</c>.</summary>
+    /// <exception cref="InvalidOperationException">The frame has gone.</exception>
+    public string VisibilityState
+    {
+        get
+        {
+            ThrowIfGone();
+            return _page.VisibilityState;
+        }
+    }
+
+    // Electron's CheckRenderFrame message.
+    private void ThrowIfGone()
+    {
+        if (Detached) throw new InvalidOperationException("Render frame was disposed before WebFrameMain could be accessed");
+    }
+
+    /// <summary>The frame with <paramref name="frameToken"/> in the render process <paramref name="processId"/>, in any page;
+    /// null when there is none. Electron's <c>webFrameMain.fromFrameToken()</c>.</summary>
+    public static WebFrameMain? FromFrameToken(int processId, string frameToken)
+    {
+        ArgumentNullException.ThrowIfNull(frameToken);
+        return WebContents.FromFrameToken(processId, frameToken);
+    }
 
     /// <summary>The frame's current URL. Electron's <c>url</c>.</summary>
     public string Url => _page.ReadFrame(() => _state.Url);
