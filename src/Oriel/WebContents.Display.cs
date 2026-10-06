@@ -263,6 +263,13 @@ public sealed unsafe partial class WebContents
         if (_closingWithoutUnload) return true;
         var args = new CancelEventArgs();
         Raise(WillPreventUnload, args, "will-prevent-unload");
+        // The page stays: the load it kept from leaving fails, and Electron's loadURL rejects from that did-fail-load.
+        if (!args.Cancel && _pendingUnloadUrl is { } url)
+        {
+            _pendingUnloadUrl = null;
+            DidFailLoad?.Invoke(this, new LoadFailedEventArgs(AbortedError, "ERR_ABORTED", url, true));
+            CompleteLoad(new LoadFailedException(AbortedError, "ERR_ABORTED", url));
+        }
         return args.Cancel;
     }
 

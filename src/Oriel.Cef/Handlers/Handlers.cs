@@ -468,6 +468,7 @@ public sealed unsafe class RequestHandler
     {
         var owner = NativeObject.Owner<RequestHandler>(self);
         var wants = owner.Wants is not { } predicate || Guard.Run(() => predicate(frame, request, isNavigation != 0), false);
+        if (wants) HeaderMap.NoteInitiator(request, requestInitiator, isNavigation != 0, browser is not null);
         NativeObject.Release(request);
         NativeObject.Release(frame);
         NativeObject.Release(browser);
@@ -599,6 +600,7 @@ public sealed unsafe class ResourceRequestHandler
             var (info, answer) = (HeaderMap.Info(request, frame), HeaderMap.Info(response));
             Guard.Run(() => completed(info, answer, status));
         }
+        HeaderMap.ForgetInitiator(request->get_identifier(request));
         ReleaseAll(browser, frame, request, response);
     }
 

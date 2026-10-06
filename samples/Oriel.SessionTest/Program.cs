@@ -494,6 +494,13 @@ async Task RunAsync()
     Check("details carry webContentsId and the requesting frame, and no uploadData without a body",
         getDetails is { UploadData: null, Frame: not null } && getDetails.WebContentsId == requestWin.WebContents.Id && ReferenceEquals(getDetails.Frame, mainFrame),
         $"{getDetails?.WebContentsId}/{requestWin.WebContents.Id} {getDetails?.Frame?.Url} {getDetails?.UploadData?.Count}");
+    // Electron's initiatorOrigin: the page's origin for what it fetches, kept across a redirect, absent for loadURL.
+    var origin = Site.TrimEnd('/');
+    await requestWin.LoadUrl(Site + "browser-started");
+    var browserStarted = await WaitFor(() => Saw("before", "browser-started"));
+    Check("initiatorOrigin is the page's origin for its fetch and redirect, and absent for a navigation the app started",
+        getDetails?.InitiatorOrigin == origin && redirect?.InitiatorOrigin == origin && browserStarted is { InitiatorOrigin: null },
+        $"{getDetails?.InitiatorOrigin} | {redirect?.InitiatorOrigin} | {browserStarted?.InitiatorOrigin ?? "absent"}");
     var posted = await Fetch("/data", "{ method: 'POST', body: 'name=post%20test&type=string' }");
     var postBefore = Saw("before", "data");
     var postCompleted = await WaitFor(() => Saw("completed", "data") is { Method: "POST" } d ? d : null);
