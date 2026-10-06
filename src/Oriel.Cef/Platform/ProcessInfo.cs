@@ -72,6 +72,95 @@ public static unsafe class ProcessInfo
         return (counters.WorkingSetSize, counters.PrivateUsage);
     }
 
+    /// <summary>A Windows process's times, memory and integrity level, as <c>ProcessMetric</c> reads them.</summary>
+    /// <param name="CpuTime">Kernel plus user time.</param>
+    /// <param name="CreationFileTime">When it started, as a FILETIME (100 ns since 1601).</param>
+    /// <param name="IntegrityRid">The last sub-authority of its token's integrity SID, or null if the token is unreadable.</param>
+    public sealed record WindowsProcessDetails(TimeSpan CpuTime, ulong CreationFileTime, ulong WorkingSet, ulong PeakWorkingSet, ulong PrivateBytes, uint? IntegrityRid);
+
+    /// <summary>Every process's id and parent id, from a Toolhelp snapshot; empty if the snapshot fails.</summary>
+    [SupportedOSPlatform("windows")]
+    public static Dictionary<int, int> WindowsParents()
+    {
+        var parents = new Dictionary<int, int>();
+        var snapshot = CreateToolhelp32Snapshot(2, 0);
+        if (snapshot == -1) return parents;
+        try
+        {
+            var entry = new ProcessEntry32 { Size = (uint)sizeof(ProcessEntry32) };
+            for (var ok = Process32FirstW(snapshot, &entry) != 0; ok; ok = Process32NextW(snapshot, &entry) != 0)
+                parents[(int)entry.ProcessId] = (int)entry.ParentProcessId;
+        }
+        finally { CloseHandle(snapshot); }
+        return parents;
+    }
+
+    /// <summary>A process's command line, from the kernel (class 60, Windows 10+); null if it cannot be read.</summary>
+    [SupportedOSPlatform("windows")]
+    public static string? WindowsCommandLine(int pid)
+    {
+        var process = OpenProcess(QueryLimitedInformation, 0, (uint)pid);
+        if (process == 0) return null;
+        try
+        {
+            var buffer = new byte[8192];
+            for (var attempt = 0; attempt < 3; attempt++)
+            {
+                uint needed;
+                int status;
+                fixed (byte* p = buffer) status = NtQueryInformationProcess(process, 60, p, (uint)buffer.Length, &needed);
+                if (status >= 0)
+                {
+                    // UNICODE_STRING: Length (bytes), MaximumLength, then the pointer into this same buffer.
+                    fixed (byte* p = buffer) return new string(*(char**)(p + 8), 0, *(ushort*)p / 2);
+                }
+                // STATUS_BUFFER_OVERFLOW, STATUS_BUFFER_TOO_SMALL, STATUS_INFO_LENGTH_MISMATCH: retry with the size it asked for.
+                if (status is not (unchecked((int)0x80000005) or unchecked((int)0xC0000023) or unchecked((int)0xC0000004))) return null;
+                buffer = new byte[Math.Max(needed, (uint)buffer.Length * 2)];
+            }
+            return null;
+        }
+        finally { CloseHandle(process); }
+    }
+
+    /// <summary>A process's times, memory counters and token integrity level; null if it cannot be opened or its times read.
+    /// The integrity level alone is null if the token is refused.</summary>
+    [SupportedOSPlatform("windows")]
+    public static WindowsProcessDetails? WindowsDetails(int pid)
+    {
+        var process = OpenProcess(QueryLimitedInformation, 0, (uint)pid);
+        if (process == 0) return null;
+        try
+        {
+            ulong created, exited, kernel, user;
+            if (GetProcessTimes(process, &created, &exited, &kernel, &user) == 0) return null;
+            var counters = new ProcessMemoryCountersEx { Size = (uint)sizeof(ProcessMemoryCountersEx) };
+            if (K32GetProcessMemoryInfo(process, &counters, counters.Size) == 0) return null;
+            return new WindowsProcessDetails(TimeSpan.FromTicks((long)(kernel + user)), created, counters.WorkingSetSize, counters.PeakWorkingSetSize, counters.PrivateUsage, IntegrityRid(process));
+        }
+        finally { CloseHandle(process); }
+    }
+
+    // Electron's ProcessMetric::GetIntegrityLevel: TokenIntegrityLevel's SID, whose last sub-authority is the level.
+    [SupportedOSPlatform("windows")]
+    private static uint? IntegrityRid(nint process)
+    {
+        nint token;
+        if (OpenProcessToken(process, 8, &token) == 0) return null;
+        try
+        {
+            uint length;
+            GetTokenInformation(token, 25, null, 0, &length);
+            if (length == 0 || length > 4096) return null;
+            var label = stackalloc byte[(int)length];
+            if (GetTokenInformation(token, 25, label, length, &length) == 0) return null;
+            // TOKEN_MANDATORY_LABEL begins with the SID pointer.
+            var sid = *(void**)label;
+            return *GetSidSubAuthority(sid, (uint)(*GetSidSubAuthorityCount(sid) - 1));
+        }
+        finally { CloseHandle(token); }
+    }
+
     /// <summary>Whether the process runs with package identity (MSIX / Desktop Bridge); Electron's
     /// <c>IsRunningInDesktopBridge</c>.</summary>
     [SupportedOSPlatform("windows")]
@@ -152,6 +241,23 @@ public static unsafe class ProcessInfo
         public ulong AvailExtendedVirtual;
     }
 
+    private const uint QueryLimitedInformation = 0x1000;
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct ProcessEntry32
+    {
+        public uint Size;
+        public uint Usage;
+        public uint ProcessId;
+        public nuint DefaultHeapId;
+        public uint ModuleId;
+        public uint Threads;
+        public uint ParentProcessId;
+        public int PriorityClassBase;
+        public uint Flags;
+        public fixed char ExeFile[260];
+    }
+
     [StructLayout(LayoutKind.Sequential)]
     private struct ProcessMemoryCountersEx
     {
@@ -194,5 +300,16 @@ public static unsafe class ProcessInfo
     [DllImport("kernel32")] private static extern int GlobalMemoryStatusEx(MemoryStatusEx* status);
     // -1 is the GetCurrentProcess pseudo-handle.
     [DllImport("kernel32")] private static extern int K32GetProcessMemoryInfo(nint process, ProcessMemoryCountersEx* counters, uint size);
+    [DllImport("kernel32")] private static extern nint CreateToolhelp32Snapshot(uint flags, uint pid);
+    [DllImport("kernel32")] private static extern int Process32FirstW(nint snapshot, ProcessEntry32* entry);
+    [DllImport("kernel32")] private static extern int Process32NextW(nint snapshot, ProcessEntry32* entry);
+    [DllImport("kernel32")] private static extern int CloseHandle(nint handle);
+    [DllImport("kernel32")] private static extern nint OpenProcess(uint access, int inherit, uint pid);
+    [DllImport("kernel32")] private static extern int GetProcessTimes(nint process, ulong* created, ulong* exited, ulong* kernel, ulong* user);
+    [DllImport("advapi32")] private static extern int OpenProcessToken(nint process, uint access, nint* token);
+    [DllImport("advapi32")] private static extern int GetTokenInformation(nint token, int information, void* buffer, uint length, uint* returned);
+    [DllImport("advapi32")] private static extern byte* GetSidSubAuthorityCount(void* sid);
+    [DllImport("advapi32")] private static extern uint* GetSidSubAuthority(void* sid, uint index);
+    [DllImport("ntdll")] private static extern int NtQueryInformationProcess(nint process, int information, void* buffer, uint length, uint* returned);
     [DllImport("kernel32")] private static extern int GetPackageFamilyName(nint process, uint* length, char* name);
 }

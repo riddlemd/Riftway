@@ -1126,6 +1126,34 @@ async Task RunAsync()
         Check("each child's creation time is when ps says it started", etimes.All(e => Math.Abs(nowMs - e.Seconds * 1000 - e.m.CreationTime) < 2500),
             string.Join(",", etimes.Select(e => $"{e.m.Pid}:{nowMs - e.Seconds * 1000 - e.m.CreationTime:F0}")));
     }
+#pragma warning disable CA1416
+    if (OperatingSystem.IsWindows())
+    {
+        // Win32_Process is WMI's own view: parent, command line, start time and working set, in one table.
+        var table = Output("powershell.exe", "-NoProfile", "-Command",
+            "Get-CimInstance Win32_Process | ForEach-Object { \"$($_.ProcessId)|$($_.ParentProcessId)|$(([DateTimeOffset]$_.CreationDate).ToUnixTimeMilliseconds())|$($_.WorkingSetSize)|$($_.CommandLine)\" }")
+            .Split('\n', StringSplitOptions.RemoveEmptyEntries).Select(l => l.TrimEnd('\r')).Where(l => System.Text.RegularExpressions.Regex.IsMatch(l, @"^\d+\|\d+\|\d+\|\d+\|")).Select(l => l.Split('|', 5))
+            .Select(p => (Pid: int.Parse(p[0], CultureInfo.InvariantCulture), Parent: int.Parse(p[1], CultureInfo.InvariantCulture), Created: double.Parse(p[2], CultureInfo.InvariantCulture),
+                WorkingSet: long.Parse(p[3], CultureInfo.InvariantCulture), Args: p[4])).ToList();
+        bool Under(int pid) { for (var i = 0; i < 64; i++) { var row = table.FirstOrDefault(t => t.Pid == pid); if (row.Pid == 0) return false; if (row.Parent == Environment.ProcessId) return true; pid = row.Parent; } return false; }
+        string KindOf(string args) => args.Contains("--type=renderer") ? "Tab" : args.Contains("--type=gpu-process") ? "GPU" : args.Contains("--type=utility") ? "Utility" : "";
+        var expectedChildren = table.Where(t => Under(t.Pid) && KindOf(t.Args) != "").Select(t => $"{t.Pid}:{KindOf(t.Args)}").Order().ToList();
+        var listedChildren = firstMetrics.Skip(1).Select(m => $"{m.Pid}:{m.Type}").Order().ToList();
+        Check("on Windows, the children are the renderers, GPU and utility processes Win32_Process shows under this one, with a utility's service",
+            expectedChildren.SequenceEqual(listedChildren) && listedChildren.Any(c => c.EndsWith(":Tab", StringComparison.Ordinal))
+            && firstMetrics.Any(m => m.ServiceName == "network.mojom.NetworkService") && firstMetrics.All(m => m.Name is null),
+            $"{string.Join(",", expectedChildren)} vs {string.Join(",", listedChildren)}");
+        Check("each process's creation time is Win32_Process's CreationDate", firstMetrics.All(m => table.FirstOrDefault(t => t.Pid == m.Pid) is { Pid: not 0 } row && Math.Abs(row.Created - m.CreationTime) < 2500),
+            string.Join(",", firstMetrics.Select(m => $"{m.Pid}:{m.CreationTime - table.FirstOrDefault(t => t.Pid == m.Pid).Created:F0}")));
+        Check("each process's memory is in KiB: its working set as Win32_Process says, the peak above it, private bytes above 1 MiB",
+            firstMetrics.All(m => m.Memory is { } mem && table.FirstOrDefault(t => t.Pid == m.Pid) is { Pid: not 0 } row
+                && Math.Abs(mem.WorkingSetSize - row.WorkingSet / 1024) < Math.Max(10 * 1024, 0.25 * mem.WorkingSetSize) && mem.PeakWorkingSetSize >= mem.WorkingSetSize && mem.PrivateBytes > 1024),
+            string.Join(",", firstMetrics.Select(m => $"{m.Pid}:{m.Memory}")));
+        Check("each process's integrityLevel is its token's, and sandboxed means below medium",
+            firstMetrics.All(m => TokenProbe.IntegrityName(m.Pid) is { } name && m.IntegrityLevel == name && m.Sandboxed == (name is "untrusted" or "low")),
+            string.Join(",", firstMetrics.Select(m => $"{m.Pid}:{m.IntegrityLevel}/{m.Sandboxed}/{TokenProbe.IntegrityName(m.Pid)}")));
+    }
+#pragma warning restore CA1416
     await busyWin.WebContents.ExecuteJavaScriptAsync("const end = performance.now() + 500; while (performance.now() < end) {} 1");
     var secondMetrics = app.GetAppMetrics();
     Check("a page that keeps its renderer busy shows CPU use since the last call", secondMetrics.Any(m => m.Type == "Tab" && m.Cpu.PercentCPUUsage > 1)
@@ -1346,5 +1374,40 @@ static class FdLimit
         if (GetRLimit(resource, ref limit) != 0) return false;
         limit.Current = soft;
         return SetRLimit(resource, ref limit) == 0;
+    }
+}
+
+// A process's token integrity level, read through SecurityIdentifier rather than the SID sub-authority walk Oriel does.
+[System.Runtime.Versioning.SupportedOSPlatform("windows")]
+static class TokenProbe
+{
+    [System.Runtime.InteropServices.DllImport("kernel32")] private static extern IntPtr OpenProcess(uint access, bool inherit, uint pid);
+    [System.Runtime.InteropServices.DllImport("kernel32")] private static extern bool CloseHandle(IntPtr handle);
+    [System.Runtime.InteropServices.DllImport("advapi32")] private static extern bool OpenProcessToken(IntPtr process, uint access, out IntPtr token);
+    [System.Runtime.InteropServices.DllImport("advapi32")] private static extern bool GetTokenInformation(IntPtr token, int information, IntPtr buffer, int length, out int returned);
+
+    public static string? IntegrityName(int pid)
+    {
+        var process = OpenProcess(0x1000, false, (uint)pid);
+        if (process == IntPtr.Zero) return null;
+        try
+        {
+            if (!OpenProcessToken(process, 8, out var token)) return null;
+            try
+            {
+                GetTokenInformation(token, 25, IntPtr.Zero, 0, out var length);
+                var buffer = System.Runtime.InteropServices.Marshal.AllocHGlobal(length);
+                try
+                {
+                    if (!GetTokenInformation(token, 25, buffer, length, out _)) return null;
+                    var sid = new System.Security.Principal.SecurityIdentifier(System.Runtime.InteropServices.Marshal.ReadIntPtr(buffer));
+                    // S-1-16-<level>: 0 untrusted, 4096 low, 8192 medium, 12288 high; others are system or protected.
+                    return sid.Value.Split('-')[^1] switch { "0" => "untrusted", "4096" => "low", "8192" => "medium", "12288" => "high", _ => "unknown" };
+                }
+                finally { System.Runtime.InteropServices.Marshal.FreeHGlobal(buffer); }
+            }
+            finally { CloseHandle(token); }
+        }
+        finally { CloseHandle(process); }
     }
 }

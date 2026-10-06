@@ -1,4 +1,5 @@
 using System.Globalization;
+using Oriel.Cef.Platform;
 
 namespace Oriel;
 
@@ -6,7 +7,7 @@ namespace Oriel;
 /// <param name="WorkingSetSize">Memory pinned to physical RAM.</param>
 /// <param name="PeakWorkingSetSize">The most memory ever pinned to physical RAM.</param>
 /// <param name="PrivateBytes">Memory not shared with other processes (Windows).</param>
-public sealed record ProcessMemoryInfo(long WorkingSetSize, long PeakWorkingSetSize, long? PrivateBytes);
+public sealed record MemoryInfo(long WorkingSetSize, long PeakWorkingSetSize, long? PrivateBytes);
 
 /// <summary>One of the app's processes; Electron's <c>ProcessMetric</c>.</summary>
 /// <param name="Pid">Its process id.</param>
@@ -16,7 +17,10 @@ public sealed record ProcessMemoryInfo(long WorkingSetSize, long PeakWorkingSetS
 /// <param name="ServiceName">A utility process's service, e.g. <c>network.mojom.NetworkService</c>.</param>
 /// <param name="Name">A utility process's display name: never known here (drift A18).</param>
 /// <param name="Memory">Its memory, except on Linux.</param>
-public sealed record ProcessMetric(int Pid, string Type, CpuUsage Cpu, double CreationTime, string? ServiceName, string? Name, ProcessMemoryInfo? Memory);
+/// <param name="IntegrityLevel">Windows: <c>untrusted</c>, <c>low</c>, <c>medium</c>, <c>high</c> or <c>unknown</c>.</param>
+/// <param name="Sandboxed">Windows: whether its integrity level is below medium.</param>
+public sealed record ProcessMetric(int Pid, string Type, CpuUsage Cpu, double CreationTime, string? ServiceName, string? Name, MemoryInfo? Memory,
+    string? IntegrityLevel = null, bool? Sandboxed = null);
 
 public sealed partial class OrielApp
 {
@@ -24,12 +28,13 @@ public sealed partial class OrielApp
     private readonly Dictionary<int, (OrielProcess.CpuSampler Cpu, OrielProcess.EventRate Wakeups)> _samplers = [];
 
     /// <summary>The app's processes: this one and the Chromium processes it started, each with its CPU use since the
-    /// previous call. Electron's <c>app.getAppMetrics()</c>; child processes are listed on Linux only so far (drift A18).</summary>
+    /// previous call. Electron's <c>app.getAppMetrics()</c>; child processes are listed on Linux and Windows only so far (drift A18).</summary>
     public IReadOnlyList<ProcessMetric> GetAppMetrics()
     {
         var self = Environment.ProcessId;
         var processes = new List<(int Pid, string Type, string? Service)> { (self, "Browser", null) };
         if (OperatingSystem.IsLinux()) processes.AddRange(LinuxChildren(self));
+        else if (OperatingSystem.IsWindows()) processes.AddRange(WindowsChildren(self));
         var metrics = new List<ProcessMetric>();
         lock (_metricsGate)
         {
@@ -44,25 +49,33 @@ public sealed partial class OrielApp
                 }
                 var (percent, cumulative) = samplers.Cpu.Sample(info.Cpu);
                 var wakeups = OperatingSystem.IsWindows() || info.Wakeups is not { } count ? 0 : samplers.Wakeups.PerSecond(count);
-                metrics.Add(new ProcessMetric(pid, type, new CpuUsage(percent / Environment.ProcessorCount, cumulative, wakeups), info.CreationTime, service, null, null));
+                var level = info.IntegrityRid is { } rid ? IntegrityLevelName(rid) : "unknown";
+                metrics.Add(new ProcessMetric(pid, type, new CpuUsage(percent / Environment.ProcessorCount, cumulative, wakeups), info.CreationTime, service, null, info.Memory,
+                    OperatingSystem.IsWindows() ? level : null, OperatingSystem.IsWindows() ? IsSandboxedLevel(level) : null));
             }
         }
         return metrics;
     }
 
     // A process's cumulative CPU time, start time and voluntary context switches; null once it is gone.
-    private static (TimeSpan Cpu, double CreationTime, ulong? Wakeups)? ReadProcess(int pid)
+    private static (TimeSpan Cpu, double CreationTime, ulong? Wakeups, MemoryInfo? Memory, uint? IntegrityRid)? ReadProcess(int pid)
     {
+        if (OperatingSystem.IsWindows())
+        {
+            if (ProcessInfo.WindowsDetails(pid) is not { } d) return null;
+            return (d.CpuTime, FileTimeToUnixMilliseconds(d.CreationFileTime), null,
+                new MemoryInfo(KiB(d.WorkingSet), KiB(d.PeakWorkingSet), KiB(d.PrivateBytes)), d.IntegrityRid);
+        }
         if (OperatingSystem.IsLinux())
         {
             if (ParseLinuxStat(TryRead($"/proc/{pid}/stat")) is not { } stat || LinuxBootTime() is not { } boot) return null;
             var ticks = LinuxClockTicks;
             return (TimeSpan.FromSeconds((double)(stat.UserTicks + stat.SystemTicks) / ticks), (boot + (double)stat.StartTicks / ticks) * 1000,
-                LinuxVoluntarySwitches(TryRead($"/proc/{pid}/status")));
+                LinuxVoluntarySwitches(TryRead($"/proc/{pid}/status")), null, null);
         }
         if (pid != Environment.ProcessId) return null;
         using var current = System.Diagnostics.Process.GetCurrentProcess();
-        return (current.TotalProcessorTime, OrielProcess.GetCreationTime() ?? 0, null);
+        return (current.TotalProcessorTime, OrielProcess.GetCreationTime() ?? 0, null, null, null);
     }
 
     // Every descendant whose --type is one Chromium tracks as a child process: renderers, the GPU process, utilities.
@@ -79,6 +92,21 @@ public sealed partial class OrielApp
         var parents = new Dictionary<int, int>();
         foreach (var dir in Directory.EnumerateDirectories("/proc"))
             if (int.TryParse(Path.GetFileName(dir), out var pid) && ParseLinuxStat(TryRead(Path.Combine(dir, "stat"))) is { } stat) parents[pid] = stat.ParentPid;
+        return Descendants(parents, root);
+    }
+
+    // The same filter as Linux, over Toolhelp's process table: CEF's children hang directly off the browser.
+    [System.Runtime.Versioning.SupportedOSPlatform("windows")]
+    private static IEnumerable<(int Pid, string Type, string? Service)> WindowsChildren(int root)
+    {
+        foreach (var pid in Descendants(ProcessInfo.WindowsParents(), root))
+            if (ProcessInfo.WindowsCommandLine(pid) is { } line
+                && ChildKind(line.Split([' '], StringSplitOptions.RemoveEmptyEntries)) is { } kind) yield return (pid, kind.Type, kind.Service);
+    }
+
+    // Every pid whose parent chain reaches root (bounded, so a reused pid cannot loop), in pid order.
+    internal static IEnumerable<int> Descendants(IReadOnlyDictionary<int, int> parents, int root)
+    {
         bool Descends(int pid)
         {
             for (var depth = 0; depth < 64 && parents.TryGetValue(pid, out var parent); depth++, pid = parent)
@@ -87,6 +115,25 @@ public sealed partial class OrielApp
         }
         return parents.Keys.Where(Descends).Order();
     }
+
+    // Electron's ProcessMetric::GetIntegrityLevel: the token's integrity RID in SECURITY_MANDATORY_*_RID bands.
+    internal static string IntegrityLevelName(uint rid) => rid switch
+    {
+        >= 0x0000 and < 0x1000 => "untrusted",
+        >= 0x1000 and < 0x2000 => "low",
+        >= 0x2000 and < 0x3000 => "medium",
+        >= 0x3000 and < 0x4000 => "high",
+        _ => "unknown",
+    };
+
+    // Electron's ProcessMetric::IsSandboxed: above unknown and below medium.
+    internal static bool IsSandboxedLevel(string integrityLevel) => integrityLevel is "untrusted" or "low";
+
+    // Electron's memory fields are bytes >> 10.
+    internal static long KiB(ulong bytes) => (long)(bytes >> 10);
+
+    // FILETIME counts 100 ns from 1601; Electron reports milliseconds since the Unix epoch.
+    internal static double FileTimeToUnixMilliseconds(ulong fileTime) => (fileTime - 116444736000000000UL) / 10000.0;
 
     // content::GetProcessTypeNameInEnglish for the --type a child was launched with; the service is a utility's sub-type.
     internal static (string Type, string? Service)? ChildKind(IReadOnlyList<string> arguments)
