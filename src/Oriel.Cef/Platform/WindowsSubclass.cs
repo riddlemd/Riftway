@@ -25,7 +25,8 @@ public enum MaximizeButtonEvent
 }
 
 /// <summary>Routes a window's messages that CEF does not surface to callbacks: thumbnail toolbar clicks
-/// (<c>WM_COMMAND</c> with <c>THBN_CLICKED</c>) and the user's move and resize drags (<c>WM_MOVING</c>, <c>WM_SIZING</c>);
+/// (<c>WM_COMMAND</c> with <c>THBN_CLICKED</c>), the user's move and resize drags (<c>WM_MOVING</c>, <c>WM_SIZING</c>) and the
+/// other messages of <see cref="WindowsWindowMessages"/>;
 /// and forwards mouse moves to a click-through window's page.</summary>
 /// <remarks>UI thread only: a subclass belongs to the thread that owns the window.</remarks>
 [SupportedOSPlatform("windows")]
@@ -56,7 +57,13 @@ public static unsafe class WindowsSubclass
         public Action<MaximizeButtonEvent>? MaximizeEvent;
         public Func<int, int, bool>? TransparentAt;
         public bool TrackingLeave;
+        public WindowsMessageHooks? Messages;
     }
+
+    /// <summary>Routes <paramref name="hwnd"/>'s <c>PreHandleMSG</c> messages to <paramref name="messages"/> through this
+    /// subclass. False if the window could not be subclassed.</summary>
+    internal static bool RouteMessages(nint hwnd, WindowsMessageHooks messages)
+        => Hook(hwnd) is { } hooks && (hooks.Messages = messages) is not null;
 
     /// <summary>Calls <paramref name="onClick"/> with the button id whenever a thumbnail button of
     /// <paramref name="hwnd"/> is clicked. False if the window could not be subclassed.</summary>
@@ -243,17 +250,36 @@ public static unsafe class WindowsSubclass
                     onClick((int)(wParam & 0xFFFF));
                     return 0;
                 }
-                // Electron's rule: a cancelled drag puts the current window rectangle back and reports the message handled.
-                if (message == WmSizing && hooks.Sizing is { } onSizing && onSizing((int)wParam, Read(lParam)))
+                // Electron's PreHandleMSG order: will-resize sees the user's raw rectangle, and Chromium fits it to the
+                // aspect ratio only afterwards; a cancelled drag puts the current window rectangle back, handled.
+                if (message == WmSizing)
                 {
-                    GetWindowRect(hwnd, (RectNative*)lParam);
-                    return 1;
+                    if (hooks.Messages is { } m) m.Resizing = true;
+                    if (hooks.Sizing is { } onSizing && onSizing((int)wParam, Read(lParam)))
+                    {
+                        GetWindowRect(hwnd, (RectNative*)lParam);
+                        return 1;
+                    }
+                    if (hooks.Messages?.Sizing is { } fit && wParam is >= 1 and <= 8)
+                    {
+                        var rect = (RectNative*)lParam;
+                        var (l, t, r, b) = fit((int)wParam, Read(lParam));
+                        *rect = new RectNative { Left = l, Top = t, Right = r, Bottom = b };
+                    }
                 }
-                if (message == WmMoving && hooks.Moving is { } onMoving && onMoving(Read(lParam)))
+                // will-move fires even for a window that is not movable, before the move is blocked.
+                if (message == WmMoving)
                 {
-                    GetWindowRect(hwnd, (RectNative*)lParam);
-                    return 1;
+                    if (hooks.Messages is { } m) m.Moving = true;
+                    var prevented = hooks.Moving is { } onMoving && onMoving(Read(lParam));
+                    if (prevented || hooks.Messages is { Movable: false })
+                    {
+                        GetWindowRect(hwnd, (RectNative*)lParam);
+                        return 1;
+                    }
                 }
+                if (hooks.Messages is { } messages && WindowsWindowMessages.PreHandle(messages, message, wParam, lParam) is { } handled)
+                    return handled;
             }
             catch (Exception e) { Console.Error.WriteLine($"[Oriel] A window message handler threw: {e}"); }
         }
@@ -263,8 +289,15 @@ public static unsafe class WindowsSubclass
             foreach (var (top, page) in s_forwarding)
                 if (top == hwnd || page == hwnd) StopForwarding(top);
             RemoveWindowSubclass(hwnd, &Proc, 1);
+            return DefSubclassProc(hwnd, message, wParam, lParam);
         }
-        return DefSubclassProc(hwnd, message, wParam, lParam);
+        var result = DefSubclassProc(hwnd, message, wParam, lParam);
+        if (hooks?.Messages is { } after)
+        {
+            try { WindowsWindowMessages.PostHandle(after, hwnd, message, wParam); }
+            catch (Exception e) { Console.Error.WriteLine($"[Oriel] A window message handler threw: {e}"); }
+        }
+        return result;
     }
 
     private static (int, int, int, int) Read(nint lParam)

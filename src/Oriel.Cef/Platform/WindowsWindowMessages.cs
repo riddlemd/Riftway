@@ -1,4 +1,3 @@
-using System.Collections.Concurrent;
 using System.Runtime.InteropServices;
 using System.Runtime.Versioning;
 
@@ -41,17 +40,14 @@ public sealed class WindowsMessageHooks
     internal bool Resizing;
 }
 
-/// <summary>Routes a window's messages to its <see cref="WindowsMessageHooks"/> through a subclass of its own, so other
-/// subclasses of the window keep working.</summary>
+/// <summary>Routes a window's messages to its <see cref="WindowsMessageHooks"/> through <see cref="WindowsSubclass"/>'s
+/// subclass, which also raises <c>will-resize</c>/<c>will-move</c>: one procedure keeps Electron's order between them.</summary>
 /// <remarks>UI thread only: a subclass belongs to the thread that owns the window.</remarks>
 [SupportedOSPlatform("windows")]
 public static unsafe class WindowsWindowMessages
 {
-    private const nuint SubclassId = 0x4F57;
     private const uint WmActivate = 0x0006, WmEnable = 0x000A, WmQueryEndSession = 0x0011, WmEndSession = 0x0016;
-    private const uint WmContextMenu = 0x007B, WmNcDestroy = 0x0082;
-    private const uint WmSizing = 0x0214, WmMoving = 0x0216, WmExitSizeMove = 0x0232, WmAppCommand = 0x0319;
-    private static readonly ConcurrentDictionary<nint, WindowsMessageHooks> s_hooks = new();
+    private const uint WmContextMenu = 0x007B, WmExitSizeMove = 0x0232, WmAppCommand = 0x0319;
     private static int s_sessionEnded;
 
     /// <summary>Called once per process, with the lParam, for the first <c>WM_ENDSESSION</c> that ends the session.</summary>
@@ -59,17 +55,7 @@ public static unsafe class WindowsWindowMessages
 
     /// <summary>Starts routing <paramref name="hwnd"/>'s messages to <paramref name="hooks"/>. False if the window could
     /// not be subclassed.</summary>
-    public static bool Attach(nint hwnd, WindowsMessageHooks hooks)
-    {
-        if (s_hooks.ContainsKey(hwnd))
-        {
-            s_hooks[hwnd] = hooks;
-            return true;
-        }
-        if (SetWindowSubclass(hwnd, &Proc, SubclassId, 0) == 0) return false;
-        s_hooks[hwnd] = hooks;
-        return true;
-    }
+    public static bool Attach(nint hwnd, WindowsMessageHooks hooks) => WindowsSubclass.RouteMessages(hwnd, hooks);
 
     /// <summary>Sets the window's region to the union of <paramref name="rects"/> (pixels from the window's top left), or
     /// removes it for none, unless it is already that region.</summary>
@@ -95,78 +81,45 @@ public static unsafe class WindowsWindowMessages
         else SetWindowRgn(hwnd, region, 1);
     }
 
-    [UnmanagedCallersOnly]
-    private static nint Proc(nint hwnd, uint message, nint wParam, nint lParam, nuint id, nuint data)
+    /// <summary>The messages handled before the window procedure, past <c>WM_SIZING</c>/<c>WM_MOVING</c> (handled by
+    /// <see cref="WindowsSubclass"/>); a value is the message's result, null passes it on.</summary>
+    internal static nint? PreHandle(WindowsMessageHooks hooks, uint message, nint wParam, nint lParam)
     {
-        if (!s_hooks.TryGetValue(hwnd, out var hooks)) return DefSubclassProc(hwnd, message, wParam, lParam);
-        try
+        switch (message)
         {
-            switch (message)
-            {
-                case WmSizing:
-                    hooks.Resizing = true;
-                    if (hooks.Sizing is { } sizing && wParam is >= 1 and <= 8)
-                    {
-                        var rect = (Rect*)lParam;
-                        var (l, t, r, b) = sizing((int)wParam, (rect->Left, rect->Top, rect->Right, rect->Bottom));
-                        *rect = new Rect { Left = l, Top = t, Right = r, Bottom = b };
-                    }
-                    break;
-                case WmMoving:
-                    hooks.Moving = true;
-                    if (!hooks.Movable)
-                    {
-                        GetWindowRect(hwnd, (Rect*)lParam);
-                        return 1;
-                    }
-                    break;
-                case WmExitSizeMove:
-                    if (hooks.Resizing)
-                    {
-                        hooks.Resizing = false;
-                        hooks.ResizeFinished?.Invoke();
-                    }
-                    if (hooks.Moving)
-                    {
-                        hooks.Moving = false;
-                        hooks.MoveFinished?.Invoke();
-                    }
-                    break;
-                case WmQueryEndSession when hooks.QueryEndSession?.Invoke(lParam) == true:
-                    return 0;
-                case WmEndSession when wParam != 0 && Interlocked.Exchange(ref s_sessionEnded, 1) == 0:
-                    SessionEnded?.Invoke(lParam);
-                    break;
-                case WmContextMenu when hooks.SystemContextMenu?.Invoke((short)(lParam & 0xFFFF), (short)((lParam >> 16) & 0xFFFF)) == true:
-                    return 0;
-                case WmAppCommand:
-                    hooks.AppCommand?.Invoke(lParam);
-                    break;
-                case WmNcDestroy:
-                    s_hooks.TryRemove(hwnd, out _);
-                    RemoveWindowSubclass(hwnd, &Proc, SubclassId);
-                    return DefSubclassProc(hwnd, message, wParam, lParam);
-            }
+            case WmExitSizeMove:
+                if (hooks.Resizing)
+                {
+                    hooks.Resizing = false;
+                    hooks.ResizeFinished?.Invoke();
+                }
+                if (hooks.Moving)
+                {
+                    hooks.Moving = false;
+                    hooks.MoveFinished?.Invoke();
+                }
+                break;
+            case WmQueryEndSession when hooks.QueryEndSession?.Invoke(lParam) == true:
+                return 0;
+            case WmEndSession when wParam != 0 && Interlocked.Exchange(ref s_sessionEnded, 1) == 0:
+                SessionEnded?.Invoke(lParam);
+                break;
+            case WmContextMenu when hooks.SystemContextMenu?.Invoke((short)(lParam & 0xFFFF), (short)((lParam >> 16) & 0xFFFF)) == true:
+                return 0;
+            case WmAppCommand:
+                hooks.AppCommand?.Invoke(lParam);
+                break;
         }
-        // An exception must not cross into the window procedure.
-        catch (Exception e) { Console.Error.WriteLine($"[Oriel] A window message handler threw: {e}"); }
+        return null;
+    }
 
-        var result = DefSubclassProc(hwnd, message, wParam, lParam);
+    /// <summary>What follows the window procedure: Chromium re-orders and re-enables the window while handling these.</summary>
+    internal static void PostHandle(WindowsMessageHooks hooks, nint hwnd, uint message, nint wParam)
+    {
         if (message == WmActivate && (wParam & 0xFFFF) != 0 && hooks.BehindTaskbar) WindowsWindowOps.MoveBehindTaskbar(hwnd);
         if (message == WmEnable && wParam != 0 && hooks.KeepDisabled) WindowsWindowOps.Enable(hwnd, false);
-        return result;
     }
 
-    [StructLayout(LayoutKind.Sequential)]
-    private struct Rect
-    {
-        public int Left, Top, Right, Bottom;
-    }
-
-    [DllImport("comctl32.dll")] private static extern int SetWindowSubclass(nint hwnd, delegate* unmanaged<nint, uint, nint, nint, nuint, nuint, nint> proc, nuint id, nuint data);
-    [DllImport("comctl32.dll")] private static extern int RemoveWindowSubclass(nint hwnd, delegate* unmanaged<nint, uint, nint, nint, nuint, nuint, nint> proc, nuint id);
-    [DllImport("comctl32.dll")] private static extern nint DefSubclassProc(nint hwnd, uint message, nint wParam, nint lParam);
-    [DllImport("user32.dll")] private static extern int GetWindowRect(nint hwnd, Rect* rect);
     [DllImport("user32.dll")] private static extern int SetWindowRgn(nint hwnd, nint region, int redraw);
     [DllImport("user32.dll")] private static extern int GetWindowRgn(nint hwnd, nint region);
     [DllImport("gdi32.dll")] private static extern nint CreateRectRgn(int left, int top, int right, int bottom);
