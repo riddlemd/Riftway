@@ -683,6 +683,7 @@ public sealed unsafe partial class WebContents
         {
             CompleteLoad(new LoadFailedException(AbortedError, "ERR_ABORTED", url));
             _loadDone = done;
+            _pendingUnloadUrl = url;
             if (userAgent is not null) ApplyUserAgent(userAgent);
             Navigate(url, load);
         });
@@ -710,6 +711,9 @@ public sealed unsafe partial class WebContents
 
     // net::ERR_UPLOAD_FILE_CHANGED.
     private const int UploadFileChangedError = -14;
+
+    // The latest LoadUrl's URL, until a refused beforeunload reports it as Electron's pending_unload_url_; UI thread.
+    private string? _pendingUnloadUrl;
 
     // The task of the latest LoadUrl, until its page finishes or fails; UI thread only.
     private TaskCompletionSource? _loadDone;
