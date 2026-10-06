@@ -4,7 +4,13 @@ using Oriel;
 
 // End-to-end BrowserWindow check, driven from C#: each step issues a command from a worker thread
 // and waits for both the event and the state. Exit code = failures (-1 when the run never finishes).
+// The process checks crash or hang a process of their own, started with ProcessChild.
+const string ProcessChild = "--oriel-process-child";
+if (args.Length >= 2 && args[0] == ProcessChild) return ProcessChildMain(args[1], args.Length > 2 ? args[2] : "");
 var app = OrielApp.Create("Oriel.WindowTest");
+// Chromium's DevTools server on a free port: a switch only Chromium acts on, read back over HTTP.
+var debugPort = FreePort();
+app.CommandLine.AppendSwitch("remote-debugging-port", debugPort.ToString());
 var failures = -1;
 var results = new List<string>();
 var step = TimeSpan.FromSeconds(5);
@@ -253,6 +259,8 @@ async Task RunAsync(BrowserWindow win, BrowserWindow simple)
     await NavigationAsync();
     await FramesAsync();
     await TaskbarAsync(win);
+    await CommandLineAsync();
+    await ProcessChildrenAsync();
     await WindowsApisAsync();
     await NativeImageAsync();
     await WebContentsLifecycleAsync(win);
@@ -3176,6 +3184,122 @@ async Task WebContentsLifecycleAsync(BrowserWindow win)
 }
 
 
+static int FreePort()
+{
+    var listener = new System.Net.Sockets.TcpListener(System.Net.IPAddress.Loopback, 0);
+    listener.Start();
+    var port = ((System.Net.IPEndPoint)listener.LocalEndpoint).Port;
+    listener.Stop();
+    return port;
+}
+
+async Task CommandLineAsync()
+{
+    Check("CommandLine: an appended switch is readable",
+        app.CommandLine.HasSwitch("remote-debugging-port") && app.CommandLine.GetSwitchValue("remote-debugging-port") == debugPort.ToString());
+    string? version;
+    try
+    {
+        using var http = new HttpClient { Timeout = step };
+        version = await http.GetStringAsync($"http://127.0.0.1:{debugPort}/json/version");
+    }
+    catch (Exception e) { version = e.Message; }
+    Check("CommandLine: Chromium acts on a switch appended before Run", version?.Contains("\"Browser\"") == true, version?[..Math.Min(80, version.Length)]);
+
+    // What reaches Chromium, on a CEF command line of its own.
+    var line = new CommandLine([]);
+    line.RemoveSwitch("drop");
+    line.AppendSwitch("added", "3");
+    line.AppendSwitch("flag");
+    line.AppendSwitch("gone");
+    line.RemoveSwitch("gone");
+    line.AppendSwitch("Mixed", "4");
+    line.RemoveSwitch("back");
+    line.AppendSwitch("back", "5");
+    line.AppendArgument("extra.txt");
+    var applied = CommandLineProbe.Apply([("keep", "1"), ("drop", "2")], line);
+    Check("CommandLine: removals, switches and arguments reach Chromium's command line, in order",
+        applied.Contains("--keep=1") && !applied.Contains("--drop") && applied.Contains("--added=3") && applied.Contains("--flag")
+        && !applied.Contains("--gone") && applied.Contains("--mixed=4") && applied.Contains("--back=5") && applied.EndsWith("extra.txt"), applied);
+}
+
+// Crash and Hang, each in a process of its own; the hanging one also logs as ELECTRON_ENABLE_LOGGING=file asks.
+async Task ProcessChildrenAsync()
+{
+    var crash = new System.Diagnostics.ProcessStartInfo(Environment.ProcessPath!) { RedirectStandardOutput = true, RedirectStandardError = true };
+    crash.ArgumentList.Add(ProcessChild);
+    crash.ArgumentList.Add("crash");
+    using (var child = System.Diagnostics.Process.Start(crash)!)
+    {
+        var errors = child.StandardError.ReadToEndAsync();
+        await child.StandardOutput.ReadToEndAsync();
+        await child.WaitForExitAsync().WaitAsync(TimeSpan.FromSeconds(30));
+        // .NET reports a signal as 128 + its number; SIGSEGV is 11. An unhandled .NET exception would abort (134).
+        var segv = OperatingSystem.IsWindows() ? unchecked((int)0xC0000005) : 128 + 11;
+        Check("Process: Crash ends the process with a segmentation fault, as Electron's", child.ExitCode == segv,
+            $"{child.ExitCode} {(await errors).Split('\n').FirstOrDefault()}");
+    }
+
+    var userData = Directory.CreateTempSubdirectory("oriel-process-child-").FullName;
+    var hang = new System.Diagnostics.ProcessStartInfo(Environment.ProcessPath!) { RedirectStandardOutput = true, RedirectStandardError = true };
+    hang.ArgumentList.Add(ProcessChild);
+    hang.ArgumentList.Add("hang");
+    hang.ArgumentList.Add(userData);
+    hang.Environment["ELECTRON_ENABLE_LOGGING"] = "file";
+    hang.Environment.Remove("ELECTRON_LOG_FILE");
+    hang.Environment.Remove("ORIEL_LOG_FILE");
+    using (var child = System.Diagnostics.Process.Start(hang)!)
+    {
+        _ = child.StandardError.ReadToEndAsync();
+        var lines = new List<string>();
+        try
+        {
+            while (await child.StandardOutput.ReadLineAsync().WaitAsync(TimeSpan.FromSeconds(60)) is { } read)
+            {
+                lines.Add(read);
+                if (read.StartsWith("UI-", StringComparison.Ordinal)) break;
+            }
+        }
+        catch (TimeoutException) { }
+        Check("Process: Hang stops the UI thread for good", lines.Contains("UI-HUNG") && !child.HasExited, string.Join(",", lines));
+        var log = Path.Combine(userData, "oriel_debug.log");
+        var text = File.Exists(log) ? File.ReadAllText(log) : null;
+        Check("Logging: ELECTRON_ENABLE_LOGGING=file logs to oriel_debug.log in userData", text is not null, text?.Length);
+        // Electron's line prefix: [pid:MMDD/HHMMSS.micros:SEVERITY:...]; Chromium's default adds the thread id.
+        var first = text?.Split('\n').FirstOrDefault(l => l.StartsWith('[')) ?? "";
+        Check("Logging: lines carry the process id and a timestamp only, as Electron's",
+            System.Text.RegularExpressions.Regex.IsMatch(first, @"^\[\d+:\d{4}/\d{6}\.\d+:[A-Z]+:"), first);
+        child.Kill(entireProcessTree: true);
+        await child.WaitForExitAsync();
+    }
+    for (var attempt = 0; attempt < 40 && Directory.Exists(userData); attempt++)
+    {
+        try { Directory.Delete(userData, recursive: true); }
+        catch (Exception e) when (e is IOException or UnauthorizedAccessException) { await Task.Delay(250); }
+    }
+}
+
+static int ProcessChildMain(string mode, string userData)
+{
+    if (mode == "crash")
+    {
+        OrielProcess.Crash();
+        return 0;
+    }
+    var child = OrielApp.Create("Oriel.WindowTest");
+    // Its own data directory: Chromium's process singleton would hand this run to the main one.
+    child.SetPath("userData", userData);
+    child.Ready += (_, _) => Task.Run(() =>
+    {
+        Console.WriteLine("READY");
+        OrielProcess.Hang();
+        using var ran = new ManualResetEventSlim();
+        Oriel.Cef.CefThread.RunOnUi(ran.Set);
+        Console.WriteLine(ran.Wait(3000) ? "UI-RAN" : "UI-HUNG");
+    });
+    return child.Run();
+}
+
 app.Ready += (_, _) =>
 {
     var win = new BrowserWindow(new BrowserWindowOptions
@@ -3535,4 +3659,30 @@ static unsafe class LinuxX11
     [System.Runtime.InteropServices.DllImport(Lib)]
     private static extern int XGetWindowProperty(nint display, nint window, nint property, nint offset, nint length, int delete, nint type,
         out nint actualType, out int actualFormat, out nuint count, out nuint bytesAfter, out nint* data);
+}
+
+// A CEF command line built here, so what CommandLine.ApplyTo does to Chromium's own can be read back.
+static unsafe class CommandLineProbe
+{
+    internal static string Apply((string Name, string Value)[] switches, CommandLine line) => Oriel.Cef.CefThread.InvokeOnUi(() =>
+    {
+        var commandLine = Oriel.Cef.Interop.CefNative.cef_command_line_create();
+        Oriel.Cef.Interop.cef_string_utf16_t program = default;
+        Oriel.Cef.CefString.Set(&program, "prog");
+        commandLine->set_program(commandLine, &program);
+        Oriel.Cef.CefString.Clear(&program);
+        foreach (var (name, value) in switches)
+        {
+            Oriel.Cef.Interop.cef_string_utf16_t n = default, v = default;
+            Oriel.Cef.CefString.Set(&n, name);
+            Oriel.Cef.CefString.Set(&v, value);
+            commandLine->append_switch_with_value(commandLine, &n, &v);
+            Oriel.Cef.CefString.Clear(&n);
+            Oriel.Cef.CefString.Clear(&v);
+        }
+        line.ApplyTo(commandLine);
+        var text = Oriel.Cef.CefString.ReadUserFree(commandLine->get_command_line_string(commandLine));
+        Oriel.Cef.NativeObject.Release(commandLine);
+        return text;
+    });
 }
