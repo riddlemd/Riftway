@@ -16,11 +16,16 @@ public sealed record WebRequestFilter
     /// <summary>Resource types such as <c>mainFrame</c>, <c>script</c> or <c>xhr</c>; empty for every type.</summary>
     public IReadOnlyList<string> Types { get; init; } = [];
 
-    /// <summary>The filter as a test; throws <see cref="ArgumentException"/> for an invalid pattern, as Electron does.</summary>
+    // Electron's ResourceTypes table: "other" is a type a request can have but not one a filter may name.
+    private static readonly HashSet<string> s_types = new(StringComparer.Ordinal)
+        { "cspReport", "font", "image", "mainFrame", "media", "object", "ping", "script", "stylesheet", "subFrame", "webSocket", "xhr" };
+
+    /// <summary>The filter as a test; throws <see cref="ArgumentException"/> for an invalid pattern or type, as Electron does.</summary>
     internal Func<string, string, bool> Compile()
     {
         var urls = Urls.Select(UrlPattern.Parse).ToArray();
         var excluded = ExcludeUrls.Select(UrlPattern.Parse).ToArray();
+        if (Types.FirstOrDefault(t => !s_types.Contains(t)) is { } invalid) throw new ArgumentException($"Invalid type {invalid}", nameof(Types));
         var types = Types.ToHashSet(StringComparer.Ordinal);
         return (url, type) => (types.Count == 0 || types.Contains(type))
             && (urls.Length == 0 || urls.Any(p => p.Matches(url)))
@@ -51,8 +56,18 @@ public sealed record WebRequestDetails
     /// <summary>When the event happened, in milliseconds since the Unix epoch.</summary>
     public required double Timestamp { get; init; }
 
-    /// <summary>The page that made the request.</summary>
+    /// <summary>The page that made the request; null for a request without one, such as a service worker's.</summary>
     public WebContents? WebContents { get; init; }
+
+    /// <summary>The <see cref="Oriel.WebContents.Id"/> of the page that made the request; null without one.</summary>
+    public int? WebContentsId { get; init; }
+
+    /// <summary>The frame that made the request; null without one, or when the frame is no longer known.</summary>
+    public WebFrameMain? Frame { get; init; }
+
+    /// <summary>The request's body; null for a request without one. Blob and stream bodies are left out: CEF does not
+    /// list them.</summary>
+    public IReadOnlyList<UploadData>? UploadData { get; init; }
 
     /// <summary>The request headers (<c>onBeforeSendHeaders</c>, <c>onSendHeaders</c>).</summary>
     public IReadOnlyDictionary<string, string>? RequestHeaders { get; init; }
@@ -74,6 +89,19 @@ public sealed record WebRequestDetails
 
     /// <summary>Whether the response came from the cache. CEF does not say: always false.</summary>
     public bool FromCache { get; init; }
+}
+
+/// <summary>One element of a request's body; Electron's <c>UploadData</c>.</summary>
+public sealed record UploadData
+{
+    /// <summary><c>rawData</c> for bytes, <c>file</c> for a file.</summary>
+    public required string Type { get; init; }
+
+    /// <summary>The bytes sent (<c>rawData</c>).</summary>
+    public byte[]? Bytes { get; init; }
+
+    /// <summary>The path of the file sent (<c>file</c>).</summary>
+    public string? File { get; init; }
 }
 
 /// <summary>An <c>OnBeforeRequest</c> listener's answer; Electron's callback response.</summary>
@@ -162,6 +190,7 @@ public sealed class WebRequest
     /// <summary>IO thread: the decision for a request about to be sent; null when no listener wants it.</summary>
     internal Task<RequestDecision>? Decide(WebContents? page, RequestInfo request)
     {
+        if (IsHidden(request.Url)) return null;
         var type = ResourceTypeName(request.ResourceType);
         var before = _beforeRequest is { } b && b.Matches(request.Url, type) ? b : null;
         var headers = _beforeSendHeaders is { } h && h.Matches(request.Url, type) ? h : null;
@@ -174,7 +203,7 @@ public sealed class WebRequest
     {
         if (before is not null)
         {
-            var answer = await Ask(before.Handle, Details(page, request, type)).ConfigureAwait(false);
+            var answer = await Ask(before.Handle, page, request, Details(page, request, type)).ConfigureAwait(false);
             if (answer?.Cancel == true) return Block(request);
             if (answer?.RedirectUrl is { Length: > 0 } redirect)
             {
@@ -183,7 +212,7 @@ public sealed class WebRequest
             }
         }
         if (headers is null) return new RequestDecision();
-        var sent = await Ask(headers.Handle, Details(page, request, type) with { RequestHeaders = RequestHeadersOf(request) }).ConfigureAwait(false);
+        var sent = await Ask(headers.Handle, page, request, Details(page, request, type) with { RequestHeaders = RequestHeadersOf(request) }).ConfigureAwait(false);
         if (sent?.Cancel == true) return Block(request);
         return new RequestDecision(Headers: sent?.RequestHeaders?.Select(kv => KeyValuePair.Create(kv.Key, kv.Value)).ToList());
     }
@@ -195,12 +224,12 @@ public sealed class WebRequest
     }
 
     // A listener that throws leaves the request as it was.
-    private static async Task<T?> Ask<T>(Func<WebRequestDetails, Task<T>> listener, WebRequestDetails details) where T : class
+    private static async Task<T?> Ask<T>(Func<WebRequestDetails, Task<T>> listener, WebContents? page, RequestInfo request, WebRequestDetails details) where T : class
     {
         var asked = new TaskCompletionSource<Task<T>>(TaskCreationOptions.RunContinuationsAsynchronously);
         CefThread.RunOnUi(() =>
         {
-            try { asked.SetResult(listener(details)); }
+            try { asked.SetResult(listener(WithFrame(details, page, request))); }
             catch (Exception e) { asked.SetException(e); }
         });
         try { return await (await asked.Task.ConfigureAwait(false)).ConfigureAwait(false); }
@@ -235,13 +264,13 @@ public sealed class WebRequest
 
     private static void Notify(Listener<Action<WebRequestDetails>>? listener, WebContents? page, RequestInfo request, Func<WebRequestDetails, WebRequestDetails> shape)
     {
-        if (listener is null) return;
+        if (listener is null || IsHidden(request.Url)) return;
         var type = ResourceTypeName(request.ResourceType);
         if (!listener.Matches(request.Url, type)) return;
         var details = shape(Details(page, request, type));
         CefThread.RunOnUi(() =>
         {
-            try { listener.Handle(details); }
+            try { listener.Handle(WithFrame(details, page, request)); }
             catch (Exception e) { Console.Error.WriteLine($"[Oriel] A webRequest listener failed: {e}"); }
         });
     }
@@ -255,6 +284,41 @@ public sealed class WebRequest
         Referrer = request.Referrer,
         Timestamp = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(),
         WebContents = page,
+        WebContentsId = page?.Id,
+        UploadData = UploadDataOf(request.Upload),
+    };
+
+    // UI thread, where the page's frames are known.
+    private static WebRequestDetails WithFrame(WebRequestDetails details, WebContents? page, RequestInfo request)
+        => page is not null && request.FramePath is { } path ? details with { Frame = page.FrameOfPath(path) } : details;
+
+    /// <summary>Electron's <c>uploadData</c> from CEF's body elements.</summary>
+    internal static IReadOnlyList<UploadData>? UploadDataOf(IReadOnlyList<UploadElement>? upload) => upload?.Select(e => e.File is { } file
+        ? new UploadData { Type = "file", File = file }
+        : new UploadData { Type = "rawData", Bytes = e.Bytes ?? [] }).ToList();
+
+    /// <summary>Requests Oriel or Chromium make for themselves, which webRequest leaves out: Oriel's sendSync channel
+    /// (Electron's sendSync is not a request at all), DevTools and Chrome's own pages.</summary>
+    internal static bool IsHidden(string url)
+    {
+        var colon = url.IndexOf(':');
+        return colon > 0 && url[..colon].ToLowerInvariant() is SyncIpc.Scheme or "devtools" or "chrome" or "chrome-untrusted";
+    }
+
+    /// <summary>Hooks for a session's requests without a page; <paramref name="find"/> gives the session's
+    /// <see cref="WebRequest"/>, null while there is none.</summary>
+    internal static RequestContextHandler PagelessHandler(Func<WebRequest?> find, Action<nint>? initialized = null) => new()
+    {
+        Initialized = initialized,
+        Wants = () => find()?.HasListeners == true,
+        Resource = new ResourceRequestHandler
+        {
+            Decide = request => find()?.Decide(null, request),
+            Sent = request => find()?.Sent(null, request),
+            Redirected = (request, response, url) => find()?.Redirected(null, request, response, url),
+            ResponseStarted = (request, response) => find()?.ResponseStarted(null, request, response),
+            Completed = (request, response, status) => find()?.Completed(null, request, response, status),
+        },
     };
 
     private static WebRequestDetails WithResponse(WebRequestDetails details, ResponseInfo response) => details with

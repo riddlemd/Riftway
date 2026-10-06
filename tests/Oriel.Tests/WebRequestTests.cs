@@ -77,6 +77,17 @@ public sealed class WebRequestFilterTests
     [Fact]
     public void Compile_ThrowsForAnInvalidPattern()
         => Assert.Throws<ArgumentException>(() => new WebRequestFilter { ExcludeUrls = ["nope"] }.Compile());
+
+    [Theory]
+    [InlineData("other")]     // a request's type, but not a filter's in Electron
+    [InlineData("subframe")]
+    public void Compile_ThrowsForATypeElectronRejects(string type)
+        => Assert.StartsWith($"Invalid type {type}", Assert.Throws<ArgumentException>(() => new WebRequestFilter { Types = ["xhr", type] }.Compile()).Message);
+
+    [Fact]
+    public void Compile_AcceptsEveryElectronType()
+        => Assert.True(new WebRequestFilter { Types = ["cspReport", "font", "image", "mainFrame", "media", "object", "ping", "script", "stylesheet", "subFrame", "webSocket", "xhr"] }
+            .Compile()("https://a.test/", "webSocket"));
 }
 
 public sealed class WebRequestTests
@@ -124,4 +135,36 @@ public sealed class WebRequestTests
         Assert.Equal("2", headers["X-One"]);
         Assert.Equal(2, headers.Count);
     }
+
+    [Fact]
+    public void UploadData_NullWithoutABody() => Assert.Null(WebRequest.UploadDataOf(null));
+
+    [Fact]
+    public void UploadData_IsElectronsShapeInOrder()
+    {
+        var upload = WebRequest.UploadDataOf([new UploadElement([1, 2], null), new UploadElement(null, "/tmp/a.txt"), new UploadElement(null, null)]);
+        Assert.NotNull(upload);
+        Assert.Equal(3, upload.Count);
+        Assert.Equal("rawData", upload[0].Type);
+        Assert.Equal([1, 2], upload[0].Bytes!);
+        Assert.Null(upload[0].File);
+        Assert.Equal("file", upload[1].Type);
+        Assert.Equal("/tmp/a.txt", upload[1].File);
+        Assert.Null(upload[1].Bytes);
+        Assert.Equal("rawData", upload[2].Type);
+        Assert.Empty(upload[2].Bytes!);
+    }
+
+    [Theory]
+    [InlineData("oriel-ipc://sync/", true)]
+    [InlineData("devtools://devtools/bundled/inspector.html", true)]
+    [InlineData("chrome://version/", true)]
+    [InlineData("CHROME://version/", true)]
+    [InlineData("chrome-untrusted://x/", true)]
+    [InlineData("https://oriel.test/", false)]
+    [InlineData("chrome-extension://abc/x.js", false)]
+    [InlineData("x-webrequest://app/data", false)]
+    [InlineData("about:blank", false)]
+    [InlineData("nocolon", false)]
+    public void IsHidden_OnlyInternalSchemes(string url, bool hidden) => Assert.Equal(hidden, WebRequest.IsHidden(url));
 }

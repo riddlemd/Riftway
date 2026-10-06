@@ -110,7 +110,7 @@ public sealed partial class WebContents
     }
 
     // The DevTools frame for CEF's frame: the main frame, then down by each frame's name and current URL.
-    private WebFrameMain? FrameOfPath(IReadOnlyList<(string Name, string Url)> path)
+    internal WebFrameMain? FrameOfPath(IReadOnlyList<(string Name, string Url)> path)
     {
         if (_mainFrameId is null || !_frames.TryGetValue(_mainFrameId, out var current)) return null;
         for (var i = path.Count - 2; i >= 0; i--)

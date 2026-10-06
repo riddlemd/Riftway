@@ -9,16 +9,41 @@ public sealed record CefCookie(
     string Name, string Value, string Domain, string Path, bool Secure, bool HttpOnly,
     long? Expires, cef_cookie_same_site_t SameSite);
 
-/// <summary><c>cef_request_context_handler_t</c>: tells when a request context can be configured.</summary>
+/// <summary><c>cef_request_context_handler_t</c>: tells when a request context can be configured, and hooks the
+/// context's requests that have no page.</summary>
 public sealed unsafe class RequestContextHandler
 {
     public RequestContextHandler()
     {
         Native = NativeObject.Create<cef_request_context_handler_t>(this);
         Native->on_request_context_initialized = &OnRequestContextInitialized;
+        Native->get_resource_request_handler = &GetResourceRequestHandler;
     }
 
     public cef_request_context_handler_t* Native { get; }
+
+    /// <summary>Hooks for requests without a browser (service and shared workers); null for none.</summary>
+    public ResourceRequestHandler? Resource { get; init; }
+
+    /// <summary>Which page-less requests reach <see cref="Resource"/>; null for all. Runs on the IO thread.</summary>
+    public Func<bool>? Wants { get; init; }
+
+    // A request with a browser only comes here when the browser's own handler declined it.
+    [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])]
+    private static cef_resource_request_handler_t* GetResourceRequestHandler(cef_request_context_handler_t* self, cef_browser_t* browser,
+        cef_frame_t* frame, cef_request_t* request, int isNavigation, int isDownload, cef_string_utf16_t* requestInitiator, int* disableDefaultHandling)
+    {
+        var owner = NativeObject.Owner<RequestContextHandler>(self);
+        var wants = browser is null && owner.Resource is not null
+            && (owner.Wants is not { } predicate || Guard.Run(predicate, false));
+        NativeObject.Release(request);
+        if (frame is not null) NativeObject.Release(frame);
+        if (browser is not null) NativeObject.Release(browser);
+        if (!wants) return null;
+        var handler = owner.Resource!.Native;
+        NativeObject.AddRef(handler);
+        return handler;
+    }
 
     /// <summary>UI thread; the context argument is only valid during the call.</summary>
     public Action<nint>? Initialized { get; init; }
