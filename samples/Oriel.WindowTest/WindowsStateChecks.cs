@@ -11,7 +11,9 @@ static partial class WindowsStateChecks
     internal static async Task RunAsync(CheckFn check, TimeSpan step)
     {
         if (!OperatingSystem.IsWindows()) return;
-        var app = System.Diagnostics.Process.GetCurrentProcess().ProcessName;
+        // The shell names the group after the exe's FileDescription; in the bootstrap layout the exe's own name differs.
+        var app = System.Diagnostics.FileVersionInfo.GetVersionInfo(Environment.ProcessPath!).FileDescription is { Length: > 0 } description
+            ? description : System.Diagnostics.Process.GetCurrentProcess().ProcessName;
         int? Buttons() => WindowsShell.TaskbarNames().FirstOrDefault(n => n.StartsWith(app + " - ", StringComparison.Ordinal)) is { } name
             && System.Text.RegularExpressions.Regex.Match(name[(app.Length + 3)..], @"\d+") is { Success: true } m ? int.Parse(m.Value) : null;
 

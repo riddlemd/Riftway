@@ -3000,7 +3000,9 @@ async Task TaskbarAsync(BrowserWindow win)
 async Task BadgeAsync(BrowserWindow win)
 {
     if (!OperatingSystem.IsWindows()) return;
-    var prefix = System.Diagnostics.Process.GetCurrentProcess().ProcessName + " - ";
+    // The shell names the group after the exe's FileDescription; in the bootstrap layout the exe's own name differs.
+    var prefix = (System.Diagnostics.FileVersionInfo.GetVersionInfo(Environment.ProcessPath!).FileDescription is { Length: > 0 } description
+        ? description : System.Diagnostics.Process.GetCurrentProcess().ProcessName) + " - ";
     string? Help() => WindowsShell.TaskbarButton(prefix)?.Help;
     win.Show();
     await Task.Delay(1000);
@@ -4715,7 +4717,8 @@ async Task AppWindowsAsync()
     using (var adv = Microsoft.Win32.Registry.CurrentUser.OpenSubKey(@"Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced"))
         trackDocs = adv?.GetValue("Start_TrackDocs") is not 0;
     var tag = "OrielWT" + Guid.NewGuid().ToString("N")[..8];
-    var expectedAppId = "electron.app." + System.Diagnostics.FileVersionInfo.GetVersionInfo(Environment.ProcessPath!).ProductName;
+    // NotificationAsync may already have given the process an explicit id; jump lists keep it, as Electron's.
+    var expectedAppId = WindowsJumpList.ExplicitAppUserModelId() ?? "electron.app." + System.Diagnostics.FileVersionInfo.GetVersionInfo(Environment.ProcessPath!).ProductName;
     try
     {
         var tasksSet = app.SetUserTasks([
@@ -4723,7 +4726,7 @@ async Task AppWindowsAsync()
             new UserTask { Program = notepad, Arguments = "x.txt", Title = tag + " two" }]);
         Check("SetUserTasks puts both tasks in the shell's jump list file", tasksSet && Listed(tag + " one") && Listed(tag + " two"), tasksSet);
         var processAppId = WindowsJumpList.ExplicitAppUserModelId();
-        Check("jump lists set the process AppUserModelID to electron.app.<ProductName> when it has none", processAppId == expectedAppId, processAppId);
+        Check("jump lists set the process AppUserModelID to electron.app.<ProductName> when it has none, else keep it", processAppId == expectedAppId, processAppId);
         var result = app.SetJumpList([
             new JumpListCategory { Type = JumpListCategoryType.Tasks, Items = [new JumpListItem { Type = JumpListItemType.Task, Program = notepad, Title = tag + " task" }, new JumpListItem { Type = JumpListItemType.Separator }] },
             new JumpListCategory { Type = JumpListCategoryType.Recent },
