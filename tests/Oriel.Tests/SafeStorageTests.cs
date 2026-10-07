@@ -77,6 +77,35 @@ public sealed class SafeStorageTests : IDisposable
         return WindowsDpapi.Unprotect(decoded.AsSpan(5))!;
     }
 
+    [System.Runtime.InteropServices.DllImport("crypt32.dll")]
+    private static extern unsafe int CryptUnprotectData(DpapiBlob* input, char** description, nint entropy, nint reserved, nint prompt, uint flags, DpapiBlob* output);
+
+    [System.Runtime.InteropServices.DllImport("kernel32.dll")]
+    private static extern unsafe nint LocalFree(void* memory);
+
+    private unsafe struct DpapiBlob
+    {
+        public uint Size;
+        public byte* Data;
+    }
+
+    // DPAPI's ppszDataDescr out-parameter, read here rather than through Oriel's wrapper.
+    private unsafe string StoredKeyDescription()
+    {
+        var decoded = Convert.FromBase64String((string)_state.Values[OsCryptBackend.EncryptedKeyPref]);
+        fixed (byte* data = decoded)
+        {
+            var input = new DpapiBlob { Size = (uint)(decoded.Length - 5), Data = data + 5 };
+            DpapiBlob output = default;
+            char* description = null;
+            Assert.NotEqual(0, CryptUnprotectData(&input, &description, 0, 0, 0, 0, &output));
+            LocalFree(output.Data);
+            var text = new string(description);
+            LocalFree(description);
+            return text;
+        }
+    }
+
     // Chromium's layout, built here with .NET's AES-GCM rather than Oriel's code.
     private static byte[] OsCryptEncrypt(byte[] key, string text)
     {
@@ -129,6 +158,7 @@ public sealed class SafeStorageTests : IDisposable
         Assert.True(SafeStorage.IsEncryptionAvailable());
         Assert.Equal(32, StoredKey().Length);
         Assert.Equal(true, _state.Values[OsCryptBackend.AuditEnabledPref]);
+        Assert.Equal("Chromium", StoredKeyDescription());
     }
 
     [WindowsFact]
@@ -151,6 +181,7 @@ public sealed class SafeStorageTests : IDisposable
         Assert.NotEqual(stored, _state.Values[OsCryptBackend.EncryptedKeyPref]);
         Assert.Equal(key, StoredKey());
         Assert.Equal(true, _state.Values[OsCryptBackend.AuditEnabledPref]);
+        Assert.Equal("Chromium", StoredKeyDescription());
     }
 
     [WindowsTheory]

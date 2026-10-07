@@ -176,6 +176,10 @@ internal sealed class OsCryptBackend(ILocalState localState) : ISafeStorageBacke
 {
     internal const string EncryptedKeyPref = "os_crypt.encrypted_key";
     internal const string AuditEnabledPref = "os_crypt.audit_enabled";
+
+    // version_info::GetProductName() comes from Chromium's own BRANDING, which Electron does not replace; release builds
+    // are official, so there is no " (Developer Build)" suffix.
+    internal const string KeyDescription = "Chromium";
     private const int KeyLength = 32;
     private const int NonceLength = 12;
     private const int TagLength = 16;
@@ -257,7 +261,7 @@ internal sealed class OsCryptBackend(ILocalState localState) : ISafeStorageBacke
 
     private bool Store(byte[] key)
     {
-        if (WindowsDpapi.ProtectAudited(key, WindowsAppIdentity.ProductName) is not { } wrapped) return false;
+        if (WindowsDpapi.ProtectAudited(key, KeyDescription) is not { } wrapped) return false;
         return localState.Set(EncryptedKeyPref, Convert.ToBase64String([.. "DPAPI"u8, .. wrapped]));
     }
 }

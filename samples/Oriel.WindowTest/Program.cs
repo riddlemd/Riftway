@@ -6199,6 +6199,29 @@ async Task SafeStorageAsync()
     }
     catch (InvalidOperationException e) { asyncOpened = e.Message; }
     Check("EncryptStringAsync and DecryptStringAsync use the same key and format", asyncOpened == "async ✓" && asyncResult == new SafeStorageDecryptResult(false, "sealed ✓"), $"{asyncOpened} | {asyncResult}");
+
+    // This profile's key may have been made by an older Oriel, so CEF makes a new one in a fresh profile in a child process;
+    // its Local State file is read after the child quits and CEF has written it.
+    var freshData = Directory.CreateTempSubdirectory("oriel-safestorage-").FullName;
+    var start = new System.Diagnostics.ProcessStartInfo(Environment.ProcessPath!) { RedirectStandardOutput = true, RedirectStandardError = true };
+    start.ArgumentList.Add(ProcessChild);
+    start.ArgumentList.Add("safestorage");
+    start.ArgumentList.Add(freshData);
+    var childOutput = "";
+    using (var child = System.Diagnostics.Process.Start(start)!)
+    {
+        _ = child.StandardError.ReadToEndAsync();
+        try { childOutput = await child.StandardOutput.ReadToEndAsync().WaitAsync(TimeSpan.FromSeconds(60)); }
+        catch (TimeoutException) { childOutput = "timed out"; }
+        if (!child.WaitForExit(30_000)) child.Kill(entireProcessTree: true);
+    }
+    var freshDescription = OperatingSystem.IsWindows() ? WindowsDpapiProbe.Description(Path.Combine(freshData, "Local State")) : "";
+    Check("a new Local State key's DPAPI description is Electron's version_info product name, \"Chromium\", the one Oriel writes",
+        childOutput.Contains("AVAILABLE=True") && freshDescription == "Chromium" && OperatingSystem.IsWindows() && Oriel.OsCryptBackend.KeyDescription == freshDescription,
+        $"{childOutput.Trim()} {freshDescription}");
+    try { Directory.Delete(freshData, recursive: true); }
+    catch (IOException) { }
+    catch (UnauthorizedAccessException) { }
 }
 
 #pragma warning disable CA1416 // Called only on Windows.
@@ -8331,6 +8354,17 @@ static int ProcessChildMain(string mode, string userData)
         return 0;
     }
     if (mode == "theme") return ThemeChildMain(userData);
+    if (mode == "safestorage")
+    {
+        var store = OrielApp.Create("Oriel.WindowTest");
+        store.SetPath("userData", userData);
+        store.Ready += (_, _) => Task.Run(() =>
+        {
+            Console.WriteLine("AVAILABLE=" + SafeStorage.IsEncryptionAvailable());
+            Oriel.Cef.CefThread.RunOnUi(store.Quit);
+        });
+        return store.Run();
+    }
     var child = OrielApp.Create("Oriel.WindowTest");
     // Its own data directory: Chromium's process singleton would hand this run to the main one.
     child.SetPath("userData", userData);
