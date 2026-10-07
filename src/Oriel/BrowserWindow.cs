@@ -970,11 +970,13 @@ public sealed unsafe partial class BrowserWindow
     /// <remarks>On macOS, <paramref name="level"/> (<c>normal</c>, <c>floating</c>, <c>torn-off-menu</c>, <c>modal-panel</c>,
     /// <c>main-menu</c>, <c>status</c>, <c>pop-up-menu</c>, <c>screen-saver</c>) plus <paramref name="relativeLevel"/> sets the
     /// window's level, as Electron. On Windows any level keeps the window on top, and the levels below <c>pop-up-menu</c>
-    /// keep it under the taskbar; Linux ignores them.</remarks>
-    /// <exception cref="ArgumentException">An unknown level.</exception>
+    /// keep it under the taskbar; Linux ignores them. An unknown level throws nowhere, as Electron: macOS takes it as
+    /// <c>normal</c>, so the window leaves the top unless <paramref name="relativeLevel"/> moves it; Windows keeps the
+    /// window on top and above the taskbar. A null level is <c>floating</c>, as Electron's for a non-string one.</remarks>
     public void SetAlwaysOnTop(bool flag, string level = "floating", int relativeLevel = 0)
     {
-        var macLevel = MacWindowLevel(level) ?? throw new ArgumentException($"Unknown level '{level}'.", nameof(level));
+        level ??= "floating";
+        var macLevel = MacWindowLevel(level);
         Command(w =>
         {
             var onTop = StaysOnTop(flag, macLevel + relativeLevel, OperatingSystem.IsMacOS());
@@ -992,8 +994,8 @@ public sealed unsafe partial class BrowserWindow
     /// not the normal one, so <c>normal</c> with no <c>relativeLevel</c> is off; elsewhere <paramref name="flag"/> alone, as Electron.</summary>
     internal static bool StaysOnTop(bool flag, long macLevel, bool mac) => flag && (!mac || macLevel != 0);
 
-    /// <summary>Electron's level names as AppKit window levels (NSWindowLevel).</summary>
-    internal static long? MacWindowLevel(string level) => level switch
+    /// <summary>Electron's level names as AppKit window levels (NSWindowLevel); any other name is NSNormalWindowLevel.</summary>
+    internal static long MacWindowLevel(string level) => level switch
     {
         "normal" => 0,
         "floating" or "torn-off-menu" => 3,
@@ -1002,7 +1004,7 @@ public sealed unsafe partial class BrowserWindow
         "status" => 25,
         "pop-up-menu" => 101,
         "screen-saver" => 1000,
-        _ => null,
+        _ => 0,
     };
 
     /// <summary>Whether the window stays above others. Electron's <c>win.isAlwaysOnTop()</c>.</summary>
