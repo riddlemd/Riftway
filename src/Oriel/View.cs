@@ -139,7 +139,8 @@ public unsafe class View
     /// <summary>Whether the view is set to be shown. Electron's <c>view.getVisible()</c>.</summary>
     public bool GetVisible() => CefThread.InvokeOnUi(() => NativeView is not null && NativeView->is_visible(NativeView) != 0);
 
-    /// <summary>Fills the view's background, e.g. <c>#RRGGBB</c> or <c>#AARRGGBB</c>. Electron's <c>view.setBackgroundColor()</c>.</summary>
+    /// <summary>Fills the view's background, e.g. <c>#RRGGBB</c> or <c>#AARRGGBB</c>; a <see cref="WebContentsView"/>'s page takes the
+    /// colour as its own background too. Electron's <c>view.setBackgroundColor()</c>.</summary>
     /// <exception cref="FormatException">The colour is not a hex colour.</exception>
     public void SetBackgroundColor(string color)
     {
@@ -149,9 +150,16 @@ public unsafe class View
         {
             _backgroundColor = parsed;
             ApplyBackgroundColor();
+            OnBackgroundColorSet(parsed);
             return true;
         });
     }
+
+    /// <summary>UI thread: <see cref="SetBackgroundColor"/> was called with <paramref name="argb"/>.</summary>
+    private protected virtual void OnBackgroundColorSet(uint argb) { }
+
+    /// <summary>UI thread: the page below the children, if any.</summary>
+    private protected cef_view_t* Page => _page;
 
     /// <summary>UI thread: an ARGB background, kept through theme changes as <see cref="SetBackgroundColor"/> keeps one.</summary>
     internal void SetBackgroundArgb(uint argb)

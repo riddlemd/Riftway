@@ -18,6 +18,18 @@ internal static class WindowTransparency
         _ => null,
     };
 
+    /// <summary>The page's background (Electron's <c>WebContentsPreferences::background_color_</c>): the window's colour
+    /// when it has one (its <c>backgroundColor</c>, or transparent for a translucent window, which Electron copies into the
+    /// page's preferences over <c>transparent</c>), else transparent when <c>webPreferences.transparent</c> is true, else
+    /// none: Chromium's white. A <see cref="WebContentsView"/>'s page passes no window colour.</summary>
+    internal static string? PageBackgroundColor(string? windowColor, bool transparentPreference)
+        => windowColor ?? (transparentPreference ? "#00000000" : null);
+
+    /// <summary>What the window itself is filled with: its colour, else white under a page made transparent (Electron's
+    /// default window colour, where CEF's would follow the theme), else none.</summary>
+    internal static string? WindowFill(string? windowColor, bool transparentPreference)
+        => windowColor ?? (transparentPreference ? "#FFFFFFFF" : null);
+
     /// <summary>The browser view's colour: the window's when opaque, else transparent, so a translucent colour is
     /// painted once by the page and once by the window, as Electron's root view and page do.</summary>
     internal static uint BrowserViewColor(uint argb) => argb >> 24 == 0xFF ? argb : 0;
