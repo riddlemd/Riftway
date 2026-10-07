@@ -76,6 +76,7 @@ Entries marked _(branch `x`)_ are on that branch and not yet in `main`.
 | W41 | `setThumbarButtons` fails on a flag string it does not know, including `'enabled'` (missing from `GetThumbarButtonFlags`) | `ThumbarButtonFlags.Enabled` is 0, so it never fails; an undefined bit fails the call the same way _(branch `win-shell-apis`)_ | Design: an enum cannot hold an unknown name | None |
 | W33 | `kiosk` on macOS also hides the Dock and menu bar and blocks app switching | Full screen on every OS _(branch `window-polish`)_ | OS | macOS presentation options |
 | W42 | Windows: `setFullScreen` raises `enter-full-screen`/`leave-full-screen` at once, before the resize | Raised when CEF reports the transition finished; the `WM_SIZE` state follows `setFullScreen` as Electron's does _(branch `win-display`)_ | Todo | Raise them from `SetFullScreen` on Windows |
+| W47 | macOS: `setAlwaysOnTop` clamps the level to `CGWindowLevelForKey(kCGMinimumWindowLevelKey)`..`CGWindowLevelForKey(kCGMaximumWindowLevelKey)` (`native_window_mac.mm`) | `MacWindowLevel` plus `relativeLevel` is not clamped; only an extreme `relativeLevel` differs | Todo | Clamp to the window-server level range |
 
 ## nativeImage
 
