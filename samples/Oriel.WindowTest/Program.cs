@@ -312,6 +312,7 @@ async Task RunAsync(BrowserWindow win, BrowserWindow simple)
     await NavigationAsync();
     await FramesAsync();
     await TaskbarAsync(win);
+    await DownloadFolderAsync();
     await CommandLineAsync();
     await ProcessChildrenAsync();
     await ThemeAsync(win);
@@ -4519,6 +4520,42 @@ static int FreePort()
     var port = ((System.Net.IPEndPoint)listener.LocalEndpoint).Port;
     listener.Stop();
     return port;
+}
+
+// Electron's CreateDownloadPath: the save dialog starts in the last folder saved to, else the profile's download folder.
+async Task DownloadFolderAsync()
+{
+    var root = Directory.CreateTempSubdirectory("oriel-download-folder-").FullName;
+    var original = app.GetPath("downloads");
+    var first = Path.Combine(root, "first");
+    Directory.CreateDirectory(first);
+    app.SetPath("downloads", first);
+    var made = Session.FromPartition("download-folder-a");
+    string Folder(Session s) => Oriel.Cef.CefThread.InvokeOnUi(s.DownloadDirectoryForDialog);
+    var initial = Folder(made);
+    var later = Path.Combine(root, "later");
+    Directory.CreateDirectory(later);
+    app.SetPath("downloads", later);
+    var keeps = Folder(made);
+    var newer = Folder(Session.FromPartition("download-folder-b"));
+    Check("a session's download folder is app.getPath('downloads') when it was made, as Electron registers the preference",
+        initial == first && keeps == first && newer == later, $"{initial} | {keeps} | {newer}");
+    var chosen = Path.Combine(root, "chosen", "nested");
+    made.SetDownloadPath(chosen);
+    var set = Folder(made);
+    Check("SetDownloadPath wins, and a missing folder is made", set == chosen && Directory.Exists(chosen), set);
+    var saved = Path.Combine(root, "saved");
+    Directory.CreateDirectory(saved);
+    Oriel.Cef.CefThread.InvokeOnUi(() => { made.NoteSavedDirectory(saved); return true; });
+    var afterSave = Folder(made);
+    Directory.Delete(saved);
+    var afterDelete = Folder(made);
+    Check("the folder last saved to wins while it exists", afterSave == saved && afterDelete == chosen, $"{afterSave} | {afterDelete}");
+    // setPath refuses a folder that does not exist, as Electron's; a fresh Linux home may have no Downloads yet.
+    Directory.CreateDirectory(original);
+    app.SetPath("downloads", original);
+    Directory.Delete(root, recursive: true);
+    await Task.CompletedTask;
 }
 
 async Task CommandLineAsync()

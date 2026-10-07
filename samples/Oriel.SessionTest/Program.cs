@@ -652,6 +652,23 @@ async Task RunAsync()
         await Throws(() => Task.FromResult(preloaded.RegisterPreloadScript(new PreloadScriptRegistration("frame", "relative.js")))) is ArgumentException
         && await Throws(() => Task.FromResult(preloaded.RegisterPreloadScript(new PreloadScriptRegistration("frame", PreloadFile("again")) { Id = s2 }))) is ArgumentException
         && await Throws(() => Task.FromResult(preloaded.RegisterPreloadScript(new PreloadScriptRegistration("service-worker", PreloadFile("sw"))))) is NotSupportedException);
+    // Electron's deprecated setPreloads replaces every frame preload, registered ones included; getPreloads lists their paths.
+#pragma warning disable CS0618
+    var legacy = Session.FromPartition("preloads-legacy");
+    legacy.Protocol.Handle("https", _ => ProtocolResponse.Text(Page, "text/html"));
+    legacy.RegisterPreloadScript(new PreloadScriptRegistration("frame", PreloadFile("registered")));
+    legacy.SetPreloads([PreloadFile("legacyA"), PreloadFile("legacyB")]);
+    var legacyList = legacy.GetPreloads();
+    var legacyWin = new BrowserWindow(new BrowserWindowOptions { Show = false, WebPreferences = new WebPreferences { Session = legacy } });
+    await legacyWin.LoadUrl(Site);
+    var legacyOrder = (await legacyWin.WebContents.ExecuteJavaScriptAsync("document.body.dataset.order ?? 'none'"))?.ToString();
+    legacy.SetPreloads([]);
+    var emptied = legacy.GetPreloadScripts().Count;
+#pragma warning restore CS0618
+    legacyWin.Destroy();
+    Check("SetPreloads replaces the frame preloads and GetPreloads lists them, as Electron's deprecated pair",
+        legacyOrder == "legacyA,legacyB" && legacyList.SequenceEqual([PreloadFile("legacyA"), PreloadFile("legacyB")]) && emptied == 0,
+        $"{legacyOrder} [{string.Join(",", legacyList.Select(Path.GetFileName))}] left={emptied}");
     // sendSync from a page in its own session reaches the main process too.
     var syncPreload = Path.Combine(preloadDir, "sync.js");
     File.WriteAllText(syncPreload, "oriel.contextBridge.exposeInMainWorld('sync', { ask: (v) => oriel.ipcRenderer.sendSync('session-sync', v) });");

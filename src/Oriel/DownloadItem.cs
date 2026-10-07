@@ -156,11 +156,14 @@ public sealed class DownloadItem
         }
         var options = SaveDialogOptions;
         if (string.IsNullOrEmpty(options.DefaultPath))
-            options = options with { DefaultPath = Path.Combine(DownloadsDirectory, _snapshot.SuggestedFileName) };
+            options = options with { DefaultPath = Path.Combine(Session?.DownloadDirectoryForDialog() ?? DownloadsDirectory, _snapshot.SuggestedFileName) };
         Dialog.ShowSaveDialogAsync(window, options).ContinueWith(t => CefThread.RunOnUi(() =>
         {
             if (t.IsCompletedSuccessfully && !t.Result.Canceled && t.Result.FilePath is { Length: > 0 } chosen && !_cancelRequested)
+            {
+                Session?.NoteSavedDirectory(Path.GetDirectoryName(chosen));
                 Save(before, chosen);
+            }
             else
                 Finish(before);
         }), TaskScheduler.Default);
@@ -205,6 +208,9 @@ public sealed class DownloadItem
     internal uint Id => _snapshot.Id;
 
     internal Action<DownloadItem>? Finished { get; init; }
+
+    // The session whose download folder the save dialog starts in.
+    internal Session? Session { get; init; }
 
     /// <summary>Where the save dialog starts; Electron's <c>app.getPath('downloads')</c>.</summary>
     internal static string DownloadsDirectory
