@@ -124,7 +124,10 @@ public sealed unsafe partial class OrielApp
     public static OrielApp Create(string? name = null)
     {
         if (s_current is not null) throw new InvalidOperationException("An OrielApp already exists in this process.");
-        return s_current = new OrielApp(name ?? Assembly.GetEntryAssembly()?.GetName().Name ?? "Oriel");
+        s_current = new OrielApp(name ?? Assembly.GetEntryAssembly()?.GetName().Name ?? "Oriel");
+        // Electron's init.ts does this at start-up, from package.json's desktopName or the app's name.
+        s_current.SetDesktopName(DefaultDesktopName(s_current.Name));
+        return s_current;
     }
 
     /// <summary>Turns on Chromium's sandbox for every child process. Electron's <c>app.enableSandbox()</c>.</summary>

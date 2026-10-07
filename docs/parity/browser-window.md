@@ -38,7 +38,8 @@ Counted from the Checklist at the end: `BaseWindow` and `BrowserWindow` are one 
 - Taskbar: `SetProgressBar` (`ProgressBarOptions.Mode`), `FlashFrame`, `SetSkipTaskbar` and the `SkipTaskbar` option,
   `SetOverlayIcon` (`NativeImage`; the path overload is gone, so `null` is unambiguous), `SetThumbarButtons` (Windows: Windows `ITaskbarList3` and `FlashWindowEx` (`WindowsTaskbar`); macOS the Dock tile
   (`MacDock`: a progress bar over the icon, `requestUserAttention:`); Linux X11 (`X11Window`: the urgency hint,
-  `_NET_WM_STATE_SKIP_TASKBAR`). Gaps: Linux progress, macOS error/paused colours (DRIFT W20, W23).
+  `_NET_WM_STATE_SKIP_TASKBAR`) and the Unity launcher entry D-Bus signal for progress (`LinuxLauncherEntry`, DRIFT A20).
+  Gaps: macOS error/paused colours (DRIFT W20, W23).
 - Windows only, as in Electron: `SetAppDetails` (`AppDetailsOptions`: the window property store's
   `PKEY_AppUserModel_*`), `SetThumbnailClip` and `SetThumbnailToolTip` (`ITaskbarList3`; clips run on an STA thread
   because the shell's proxy rejects the NULL clip that clears them), `BackgroundMaterial` option and
@@ -355,7 +356,7 @@ Parameters in brackets are optional in Electron. `webContents` members are in [w
 | `reload()` | `Reload` | done |  |
 | `setMenu(menu)` | `SetMenu` | done | Drawn by CEF Views on Windows/Linux (W16). |
 | `removeMenu()` | `RemoveMenu` | done |  |
-| `setProgressBar(progress, options)` | `SetProgressBar` | partial | No Linux progress; macOS error/paused show as plain bar (W20). |
+| `setProgressBar(progress, options)` | `SetProgressBar` | partial | macOS error/paused show as plain bar (W20); Linux sends Electron's launcher entry signal (A20). |
 | `setOverlayIcon(overlay, description)` | `SetOverlayIcon` | done | Takes a `NativeImage`. |
 | `invalidateShadow()` | — | missing |  |
 | `setHasShadow(hasShadow)` | — | missing |  |

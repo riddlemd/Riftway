@@ -1121,7 +1121,8 @@ public sealed unsafe partial class BrowserWindow
     /// <summary>Shows progress on the taskbar button, from 0 to 1; below 0 removes it and above 1 shows it as
     /// indeterminate. Electron's <c>win.setProgressBar()</c>.</summary>
     /// <remarks>macOS: on the Dock icon, which all windows share; error and paused show as the plain bar.
-    /// Linux: not shown yet (desktop-specific).</remarks>
+    /// Linux: a Unity launcher entry signal for the whole app, as Electron's: the raw value, shown only inside (0, 1),
+    /// whatever the mode; only some desktops show it.</remarks>
     public void SetProgressBar(double progress, ProgressBarOptions? options = null)
     {
         var (state, percent) = ProgressBar.Map(progress, options?.Mode ?? ProgressBarMode.Normal);
@@ -1132,6 +1133,7 @@ public sealed unsafe partial class BrowserWindow
             // One Dock tile for the whole application; error and paused show as the plain bar.
             if (OperatingSystem.IsMacOS())
                 MacDock.SetProgress(state == TaskbarProgressState.None ? null : percent / 100.0, state == TaskbarProgressState.Indeterminate);
+            if (OperatingSystem.IsLinux()) _ = LinuxLauncherEntry.SetProgress(progress);
         });
     }
 

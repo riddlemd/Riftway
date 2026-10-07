@@ -1167,6 +1167,42 @@ async Task RunAsync()
             $"{languages}|{systemLocale}|{countryCode} vs LC_MESSAGES={messages} LC_TIME={time}");
     }
 
+    // setBadgeCount on Linux: the launcher entry signal as dbus-monitor decodes it off the session bus.
+    if (OperatingSystem.IsLinux())
+    {
+        using var monitor = Oriel.Samples.LauncherEntryMonitor.Start();
+        Check("a session bus and dbus-monitor are there to see the launcher entry", monitor is not null, Environment.GetEnvironmentVariable("DBUS_SESSION_BUS_ADDRESS"));
+        if (monitor is not null)
+        {
+            static (string, string)[] Badge(string count, bool visible) => [("count", "int64 " + count), ("count-visible", visible ? "boolean true" : "boolean false")];
+            const string Uri = "application://oriel-sessiontest.desktop";
+            var calls = new List<string>();
+            foreach (var count in new int?[] { 7, 0, null, -3 }) calls.Add($"{app.SetBadgeCount(count)}:{app.GetBadgeCount()}");
+            // Sent from a thread of its own, so a probe sent after it can overtake it.
+            var synced = Until(() => monitor.Updates().Count >= 3, TimeSpan.FromSeconds(5)) && monitor.Sync();
+            Check("SetBadgeCount sends Update(application://<desktop name>, {count: x, count-visible: b}); null sends nothing and returns false",
+                synced && calls.SequenceEqual(["True:7", "True:0", "False:0", "True:-3"]) && monitor.Updates().SequenceEqual([
+                    Oriel.Samples.LauncherEntryMonitor.Update(Uri, Badge("7", true)), Oriel.Samples.LauncherEntryMonitor.Update(Uri, Badge("0", false)),
+                    Oriel.Samples.LauncherEntryMonitor.Update(Uri, Badge("-3", true))]),
+                string.Join(",", calls) + " | " + string.Join(" / ", monitor.Updates()));
+            var updatesBefore = monitor.Updates().Count;
+            app.SetDesktopName("");
+            var noName = app.SetBadgeCount(5);
+            // Long enough for the sender thread to have sent anything it was given.
+            await Task.Delay(300);
+            synced = monitor.Sync();
+            Check("without a desktop name SetBadgeCount sends nothing, returns false and keeps the count",
+                synced && !noName && app.GetBadgeCount() == -3 && monitor.Updates(updatesBefore).Count == 0, $"{noName}:{app.GetBadgeCount()} {string.Join(" / ", monitor.Updates(updatesBefore))}");
+            app.SetDesktopName("custom-name.desktop");
+            var renamed = app.SetBadgeCount(2);
+            synced = Until(() => monitor.Updates(updatesBefore).Count >= 1, TimeSpan.FromSeconds(5)) && monitor.Sync();
+            Check("SetDesktopName names the app in the signal", synced && renamed && monitor.Updates(updatesBefore).SequenceEqual([
+                Oriel.Samples.LauncherEntryMonitor.Update("application://custom-name.desktop", Badge("2", true))]), string.Join(" / ", monitor.Updates(updatesBefore)));
+            app.SetDesktopName("oriel-sessiontest.desktop");
+            app.SetBadgeCount(0);
+        }
+    }
+
     // app.hide / show / isHidden / focus, setBadgeCount and app.dock, read back by another process (macOS).
     if (OperatingSystem.IsMacOS())
     {

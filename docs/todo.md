@@ -17,7 +17,7 @@ Cross-platform work. Platform-specific items: [linux-todo.md](linux-todo.md), [w
   - [x] Taskbar on Windows: `setProgressBar`, `flashFrame`, `setSkipTaskbar`/`skipTaskbar`, `setOverlayIcon`
   - [x] Taskbar on macOS (Dock progress and bounce) and Linux (urgency hint, skip taskbar)
   - [x] `setThumbarButtons`, `setIcon`/`setOverlayIcon` with `NativeImage`
-  - [ ] Linux taskbar progress (desktop-specific)
+  - [x] Linux taskbar progress and badge count (Unity launcher entry on the session bus), `app.setDesktopName`
   - [x] Windows: `setAppDetails`, `setThumbnailClip`, `setThumbnailToolTip`, `backgroundMaterial`/`setBackgroundMaterial`
   - [x] Make `backgroundMaterial` visible; `transparent` on Windows
   - [ ] `transparent` on macOS and Linux (DRIFT W24)
