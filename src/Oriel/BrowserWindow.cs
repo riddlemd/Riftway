@@ -127,6 +127,11 @@ public sealed record BrowserWindowOptions
 
     /// <summary>Settings for the page. Electron's <c>webPreferences</c>.</summary>
     public WebPreferences WebPreferences { get; init; } = new();
+
+    /// <summary>The page the window shows instead of a new one, whose preferences then apply instead of
+    /// <see cref="WebPreferences"/>: only the popup page a <see cref="WindowOpenHandlerResponse.CreateWindow"/> callback
+    /// receives, adopted while it runs (drift V4). Electron's <c>webContents</c>.</summary>
+    public WebContents? WebContents { get; init; }
 }
 
 /// <summary>Settings for a window's page; Electron's <c>WebPreferences</c>.</summary>
@@ -283,16 +288,22 @@ public sealed unsafe partial class BrowserWindow
     private nint _routedNSWindow;
     // Touched only on the UI thread.
     private readonly List<BrowserWindow> _children = [];
-    // Popups this window's page opened, closed with it unless they outlive it; UI thread only.
-    // Popups allowed by on_before_popup whose view CEF has not created yet, by the client CEF will use.
-    private static readonly Dictionary<nint, (BrowserWindow Window, int PopupId, WindowOpenDetails Details)> s_pendingPopups = [];
+    // Popups allowed by on_before_popup whose view CEF has not created yet, by the client CEF will use; UI thread only.
+    private static readonly Dictionary<nint, PendingPopup> s_pendingPopups = [];
     private WebContents? _opener;
-    private bool _outlivesOpener;
+
+    // Where a popup's view goes: a window's page or a view's (from a createWindow callback).
+    private sealed record PendingPopup(BrowserWindow? Window, WebContentsView? View, WebContents Page, int PopupId,
+        WindowOpenDetails Details, bool RaiseDidCreateWindow, bool ClosesWithOpener)
+    {
+        public nint Delegate => Window is { } window ? (nint)window._viewDelegate.Native : View!.ViewDelegateNative;
+    }
 
     /// <summary>Creates the window, shown unless <see cref="BrowserWindowOptions.Show"/> is false.</summary>
     /// <exception cref="InvalidOperationException">The application is not ready yet, or the parent is closed.</exception>
     /// <exception cref="ArgumentException"><see cref="BrowserWindowOptions.Modal"/> without a parent.</exception>
-    /// <exception cref="NotSupportedException">An option CEF cannot honour, such as <see cref="WebPreferences.MinimumFontSize"/>.</exception>
+    /// <exception cref="NotSupportedException">An option CEF cannot honour, such as <see cref="WebPreferences.MinimumFontSize"/>,
+    /// or a <see cref="BrowserWindowOptions.WebContents"/> that is not a createWindow callback's popup page.</exception>
     public BrowserWindow(BrowserWindowOptions? options = null) : this(options, opener: null)
     {
     }
@@ -315,11 +326,13 @@ public sealed unsafe partial class BrowserWindow
         _resizable = _options.Resizable;
         _backgroundColor = WindowTransparency.InitialBackgroundColor(_options.BackgroundColor, _transparent || _macTransparent,
             OperatingSystem.IsWindows() ? _options.BackgroundMaterial : null);
-        var session = _options.WebPreferences.ResolveSession();
+        var adopted = _options.WebContents;
+        var session = adopted?.Session ?? _options.WebPreferences.ResolveSession();
+        if (adopted is not null) opener = PopupGuest.Adopt(adopted, this).Opener;
         // CEF gives a popup its opener's request context, whatever the options say.
         if (opener is not null && session != opener.Session)
             throw new InvalidOperationException("A window a page opens must use its opener's session.");
-        WebContents = new WebContents(_options.WebPreferences.Preload, _options.WebPreferences, session);
+        WebContents = adopted ?? new WebContents(_options.WebPreferences.Preload, _options.WebPreferences, session) { IsAlloyStyle = opener?.IsAlloyStyle ?? false };
         ContentView = new View();
         _pageView = new WebContentsView(WebContents);
         CefThread.InvokeOnUi(() =>
@@ -450,8 +463,10 @@ public sealed unsafe partial class BrowserWindow
 
         var parsed = PopupOptionsFrom(features, opener.Preferences);
         var options = response.OverrideBrowserWindowOptions ?? response.ConfigureBrowserWindowOptions?.Invoke(parsed) ?? parsed;
+        if (response.CreateWindow is { } createWindow)
+            return OpenCreatedPopup(opener, request, details, options, createWindow, response.OutlivesOpener, settings);
         BrowserWindow popup;
-        try { popup = new BrowserWindow(options, opener) { _outlivesOpener = response.OutlivesOpener }; }
+        try { popup = new BrowserWindow(options, opener); }
         catch (Exception e) when (e is ArgumentException or NotSupportedException or InvalidOperationException)
         {
             Console.Error.WriteLine($"[Oriel] Blocked a window the page opened: {e.Message}");
@@ -459,35 +474,88 @@ public sealed unsafe partial class BrowserWindow
         }
         settings->background_color = popup._backgroundColor is null ? settings->background_color : ParseColor(popup._backgroundColor);
         ApplyWebPreferences(settings, popup._options.WebPreferences);
-        s_pendingPopups[(nint)popup._client.Native] = (popup, request.PopupId, details);
+        s_pendingPopups[(nint)popup._client.Native] = new PendingPopup(popup, null, popup.WebContents, request.PopupId, details,
+            RaiseDidCreateWindow: true, ClosesWithOpener: !response.OutlivesOpener);
         return popup._client.Native;
+    }
+
+    // Electron's createWindow path: the popup's page exists before the app's window or view does, which adopts it. Under
+    // CEF the browser comes after on_before_popup, so the page waits here, and CEF is given the adopter's client.
+    private static cef_client_t* OpenCreatedPopup(WebContents opener, PopupRequest request, WindowOpenDetails details, BrowserWindowOptions options,
+        Func<BrowserWindowOptions, WebContents?> createWindow, bool outlivesOpener, cef_browser_settings_t* settings)
+    {
+        var preferences = options.WebPreferences;
+        try
+        {
+            preferences.Validate(nameof(options));
+            // CEF gives a popup its opener's request context, whatever the options say.
+            if (preferences.ResolveSession() != opener.Session) throw new InvalidOperationException("A window a page opens must use its opener's session.");
+        }
+        catch (Exception e) when (e is ArgumentException or NotSupportedException or InvalidOperationException)
+        {
+            Console.Error.WriteLine($"[Oriel] Blocked a window the page opened: {e.Message}");
+            return null;
+        }
+        var page = new WebContents(preferences.Preload, preferences, opener.Session) { IsAlloyStyle = opener.IsAlloyStyle };
+        var guest = page.Guest = new PopupGuest(opener);
+        WebContents? returned = null;
+        try { returned = createWindow(options with { WebContents = page }); }
+        catch (Exception e) { Console.Error.WriteLine($"[Oriel] Unhandled exception in createWindow: {e}"); }
+        finally { page.Guest = null; }
+
+        var (adopted, returnedThePage) = (guest.Host is not null, ReferenceEquals(returned, page));
+        if (PopupGuest.ErrorFor(adopted, returnedThePage) is { } error) Console.Error.WriteLine($"[Oriel] {error}");
+        var outcome = PopupGuest.Decide(adopted, returnedThePage, outlivesOpener);
+        if (outcome == CreateWindowOutcome.Block)
+        {
+            page.DiscardUnborn();
+            return null;
+        }
+        var (window, view) = (guest.Host as BrowserWindow, guest.Host as WebContentsView);
+        if (window?._backgroundColor is { } color) settings->background_color = ParseColor(color);
+        ApplyWebPreferences(settings, preferences);
+        var client = window is not null ? window._client.Native : view!.ClientNative;
+        s_pendingPopups[(nint)client] = new PendingPopup(window, view, page, request.PopupId, details,
+            RaiseDidCreateWindow: false, ClosesWithOpener: outcome == CreateWindowOutcome.Wired);
+        return client;
     }
 
     internal static void OnPopupAborted(int popupId)
     {
         foreach (var (client, pending) in s_pendingPopups.ToArray())
-            if (pending.PopupId == popupId) s_pendingPopups.Remove(client);
+        {
+            if (pending.PopupId != popupId) continue;
+            s_pendingPopups.Remove(client);
+            pending.Page.DiscardUnborn();
+        }
     }
 
-    // The delegate for a popup's view: the waiting window's, found by the client OpenPopup chose.
+    // The delegate for a popup's view: the waiting window's or view's, found by the client OpenPopup chose.
     internal static nint PopupDelegateFor(nint client)
-        => s_pendingPopups.TryGetValue(client, out var pending) ? (nint)pending.Window._viewDelegate.Native : 0;
+        => s_pendingPopups.TryGetValue(client, out var pending) ? pending.Delegate : 0;
 
-    // The popup's view arrives with the delegate PopupDelegateFor chose, which identifies the waiting window.
+    // The popup's view arrives with the delegate PopupDelegateFor chose, which identifies the waiting window or view.
     internal static bool AdoptPopupView(WebContents opener, nint popupView, nint popupDelegate)
     {
         foreach (var (client, pending) in s_pendingPopups.ToArray())
         {
-            if ((nint)pending.Window._viewDelegate.Native != popupDelegate) continue;
+            if (pending.Delegate != popupDelegate) continue;
             s_pendingPopups.Remove(client);
-            var popup = pending.Window;
-            NativeObject.AddRef((void*)popupView);
-            popup._browserView = (cef_browser_view_t*)popupView;
-            popup._pageView.SetNative(popup._browserView);
-            popup.WebContents.MarkOpenedByPage();
-            if (!popup._outlivesOpener) opener.Popups.Add(popup);
-            popup.OpenWindow();
-            opener.RaiseDidCreateWindow(new DidCreateWindowEventArgs(popup, pending.Details));
+            pending.Page.MarkOpenedByPage();
+            if (pending.Window is { } popup)
+            {
+                NativeObject.AddRef((void*)popupView);
+                popup._browserView = (cef_browser_view_t*)popupView;
+                popup._pageView.SetNative(popup._browserView);
+                if (pending.ClosesWithOpener) opener.Popups.Add(popup);
+                popup.OpenWindow();
+                if (pending.RaiseDidCreateWindow) opener.RaiseDidCreateWindow(new DidCreateWindowEventArgs(popup, pending.Details));
+            }
+            else
+            {
+                pending.View!.AdoptPopupPage((cef_browser_view_t*)popupView);
+                if (pending.ClosesWithOpener) opener.ClosePopupPageWithThis(pending.Page);
+            }
             return true;
         }
         return false;

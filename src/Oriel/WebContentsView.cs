@@ -9,6 +9,11 @@ public sealed record WebContentsViewOptions
 {
     /// <summary>Settings for the view's page. Electron's <c>webPreferences</c>.</summary>
     public WebPreferences WebPreferences { get; init; } = new();
+
+    /// <summary>The page the view shows instead of a new one, whose preferences then apply: only the popup page a
+    /// <see cref="WindowOpenHandlerResponse.CreateWindow"/> callback receives, from a view's page, adopted while it runs
+    /// (drift V4). Electron's <c>webContents</c>.</summary>
+    public WebContents? WebContents { get; init; }
 }
 
 /// <summary>A view showing a page, placed inside a window's <see cref="BrowserWindow.ContentView"/> or another
@@ -30,14 +35,23 @@ public sealed unsafe class WebContentsView : View
 
     /// <summary>Creates a view with a new page. Electron's <c>new WebContentsView()</c>.</summary>
     /// <exception cref="InvalidOperationException">The app is not ready.</exception>
-    /// <exception cref="NotSupportedException">A web preference CEF cannot apply.</exception>
+    /// <exception cref="NotSupportedException">A web preference CEF cannot apply, or a
+    /// <see cref="WebContentsViewOptions.WebContents"/> that is not a createWindow callback's popup page from a view's page.</exception>
     public WebContentsView(WebContentsViewOptions? options = null)
     {
         RequireReady();
-        var preferences = (options ?? new WebContentsViewOptions()).WebPreferences;
+        options ??= new WebContentsViewOptions();
+        var preferences = options.WebPreferences;
         preferences.Validate(nameof(options));
-        var session = preferences.ResolveSession();
-        WebContents = new WebContents(preferences.Preload, preferences, session);
+        if (options.WebContents is { } adopted)
+        {
+            // CEF makes a popup its opener's style, and a window's own page is its one Chrome-style browser.
+            if (!adopted.IsAlloyStyle && adopted.Guest is not null)
+                throw new NotSupportedException("A popup of a window's own page can only be shown as a BrowserWindow's page: CEF gives it the opener's Chrome style.");
+            PopupGuest.Adopt(adopted, this);
+        }
+        var session = options.WebContents?.Session ?? preferences.ResolveSession();
+        WebContents = options.WebContents ?? new WebContents(preferences.Preload, preferences, session) { IsAlloyStyle = true };
         var lifeSpan = new LifeSpanHandler
         {
             BeforePopup = (request, features, settings) => BrowserWindow.OpenPopup(WebContents, request, features, settings),
@@ -79,6 +93,8 @@ public sealed unsafe class WebContentsView : View
             PopupDelegate = BrowserWindow.PopupDelegateFor,
             PopupViewCreated = (view, popupDelegate) => BrowserWindow.AdoptPopupView(WebContents, view, popupDelegate),
         };
+        // A popup's browser view comes from CEF (AdoptPopupPage).
+        if (options.WebContents is not null) return;
         // CEF refuses a browser view while its profile is still loading, as for a window's page.
         session.WaitUntilInitialized();
         CefThread.InvokeOnUi(() =>
@@ -115,6 +131,17 @@ public sealed unsafe class WebContentsView : View
 
     /// <summary>The view's page. Electron's <c>view.webContents</c>.</summary>
     public WebContents WebContents { get; }
+
+    internal cef_client_t* ClientNative => _client!.Native;
+
+    internal nint ViewDelegateNative => (nint)_viewDelegate!.Native;
+
+    /// <summary>UI thread: the popup browser view CEF created for this view's adopted page; CEF's reference stays CEF's.</summary>
+    internal void AdoptPopupPage(cef_browser_view_t* popupView)
+    {
+        NativeObject.AddRef(popupView);
+        SetPage((cef_view_t*)popupView);
+    }
 
     // UI thread: a window's own page receives its browser view, with a reference for this object.
     internal void SetNative(cef_browser_view_t* browserView)
