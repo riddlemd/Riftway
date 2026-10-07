@@ -28,6 +28,38 @@ public sealed class WindowTransparencyTests
         Assert.Null(WindowTransparency.InitialBackgroundColor(null, transparent: false, material: null));
     }
 
+    // Electron's WebContentsPreferences: the window's copied backgroundColor wins over webPreferences.transparent.
+    [Theory]
+    [InlineData("#FFFFFFFF", true)]
+    [InlineData("#00000000", false)]
+    [InlineData("#80102030", true)]
+    public void PageBackgroundColor_WindowColourWins(string window, bool transparent) =>
+        Assert.Equal(window, WindowTransparency.PageBackgroundColor(window, transparent));
+
+    [Fact]
+    public void PageBackgroundColor_TransparentPreferenceClearsAPageWithoutWindowColour() =>
+        Assert.Equal("#00000000", WindowTransparency.PageBackgroundColor(null, transparentPreference: true));
+
+    [Fact]
+    public void PageBackgroundColor_FalseOrUnsetLeavesChromiumWhite() =>
+        Assert.Null(WindowTransparency.PageBackgroundColor(null, transparentPreference: false));
+
+    // Electron's documented default of true is a <webview>'s; a window's or view's page acts only on an explicit true.
+    [Fact]
+    public void WebPreferences_TransparentIsOffByDefault() => Assert.False(new WebPreferences().Transparent);
+
+    [Fact]
+    public void WindowFill_OwnColourWins() =>
+        Assert.Equal("#00000000", WindowTransparency.WindowFill("#00000000", transparentPreference: true));
+
+    [Fact]
+    public void WindowFill_WhiteUnderATransparentPage() =>
+        Assert.Equal("#FFFFFFFF", WindowTransparency.WindowFill(null, transparentPreference: true));
+
+    [Fact]
+    public void WindowFill_NothingLeavesCefDefault() =>
+        Assert.Null(WindowTransparency.WindowFill(null, transparentPreference: false));
+
     [Theory]
     [InlineData(BackgroundMaterial.Mica, "#00000000")]
     [InlineData(BackgroundMaterial.Acrylic, "#00000000")]

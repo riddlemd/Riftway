@@ -347,6 +347,133 @@ static unsafe class WindowsShell
         public uint Private;
     }
 
+    /// <summary>Whether a contrast theme is on, from <c>SPI_GETHIGHCONTRAST</c>; and the registry's copy of the flags.</summary>
+    [System.Runtime.Versioning.SupportedOSPlatform("windows")]
+    internal static (bool Api, bool Registry) HighContrastOn()
+    {
+        // HIGHCONTRASTW: cbSize, dwFlags, lpszDefaultScheme.
+        var info = stackalloc byte[16];
+        *(uint*)info = 16;
+        var api = SystemParametersInfoW(0x0042, 16, info, 0) != 0 && (((uint*)info)[1] & 1) != 0;
+        var flags = Microsoft.Win32.Registry.GetValue(@"HKEY_CURRENT_USER\Control Panel\Accessibility\HighContrast", "Flags", "0") as string;
+        return (api, uint.TryParse(flags, out var f) && (f & 1) != 0);
+    }
+
+    /// <summary>The icon <c>LoadImage(IMAGE_ICON, size, size, LR_LOADFROMFILE)</c> makes of <paramref name="path"/>, as
+    /// straight BGRA with the AND mask applied to icons without alpha; null if it cannot be loaded.</summary>
+    internal static (int Width, int Height, byte[] Bgra)? LoadIcon(string path, int size)
+    {
+        var icon = LoadImageW(0, path, 1 /* IMAGE_ICON */, size, size, 0x10 /* LR_LOADFROMFILE */);
+        if (icon == 0) return null;
+        IconInfo info;
+        try
+        {
+            if (GetIconInfo(icon, &info) == 0 || info.Color == 0) return null;
+        }
+        finally { _ = DestroyIcon(icon); }
+        try
+        {
+            BitmapHeader bitmap;
+            if (GetObjectW(info.Color, sizeof(BitmapHeader), &bitmap) == 0) return null;
+            var (w, h) = (bitmap.Width, bitmap.Height);
+            var colour = Bits(info.Color, w, h);
+            var mask = Bits(info.Mask, w, h);
+            if (colour is null || mask is null) return null;
+            var anyAlpha = false;
+            for (var i = 3; i < colour.Length; i += 4) anyAlpha |= colour[i] != 0;
+            if (!anyAlpha)
+                for (var i = 0; i < colour.Length; i += 4) colour[i + 3] = mask[i] == 0 ? (byte)255 : (byte)0;
+            return (w, h, colour);
+        }
+        finally
+        {
+            _ = DeleteObject(info.Color);
+            if (info.Mask != 0) _ = DeleteObject(info.Mask);
+        }
+
+        static byte[]? Bits(nint bmp, int w, int h)
+        {
+            var header = new BitmapInfoHeader { Size = 40, Width = w, Height = -h, Planes = 1, BitCount = 32 };
+            var pixels = new byte[w * h * 4];
+            var dc = GetDC(0);
+            try
+            {
+                fixed (byte* data = pixels)
+                    return GetDIBits(dc, bmp, 0, (uint)h, data, &header, 0) == 0 ? null : pixels;
+            }
+            finally { _ = ReleaseDC(0, dc); }
+        }
+    }
+
+    /// <summary>The composited screen pixel at (<paramref name="x"/>, <paramref name="y"/>) DIPs into the window's client area.</summary>
+    internal static (byte R, byte G, byte B) ClientPixel(nint hwnd, int x, int y)
+    {
+        long origin = 0;
+        _ = ClientToScreen(hwnd, &origin);
+        var scale = GetDpiForWindow(hwnd) / 96.0;
+        var dc = GetDC(0);
+        var c = GetPixel(dc, (int)origin + (int)(x * scale), (int)(origin >> 32) + (int)(y * scale));
+        _ = ReleaseDC(0, dc);
+        return ((byte)c, (byte)(c >> 8), (byte)(c >> 16));
+    }
+
+    internal static nint Foreground() => GetForegroundWindow();
+
+    /// <summary>Records every window that becomes the foreground window (<c>EVENT_SYSTEM_FOREGROUND</c>) until disposed,
+    /// however briefly: a window handing activation straight back is still seen.</summary>
+    internal sealed class ForegroundWatch : IDisposable
+    {
+        private static readonly ConcurrentQueue<(nint Hwnd, int ProcessId)> s_seen = new();
+        private readonly Thread _thread;
+        private uint _threadId;
+
+        internal ForegroundWatch()
+        {
+            s_seen.Clear();
+            using var ready = new ManualResetEventSlim();
+            _thread = new Thread(() =>
+            {
+                _threadId = GetCurrentThreadId();
+                var hook = SetWinEventHook(3 /* EVENT_SYSTEM_FOREGROUND */, 3, 0, &OnEvent, 0, 0, 0 /* WINEVENT_OUTOFCONTEXT */);
+                ready.Set();
+                Msg msg;
+                while (GetMessageW(&msg, 0, 0, 0) > 0) DispatchMessageW(&msg);
+                _ = UnhookWinEvent(hook);
+            }) { IsBackground = true, Name = "foreground watch" };
+            _thread.Start();
+            ready.Wait();
+        }
+
+        internal IReadOnlyList<(nint Hwnd, int ProcessId)> Seen => [.. s_seen];
+
+        public void Dispose()
+        {
+            _ = PostThreadMessageW(_threadId, 0x0012 /* WM_QUIT */, 0, 0);
+            _thread.Join(2000);
+        }
+
+        [UnmanagedCallersOnly]
+        // The owner is read now: a window that is already gone by the time the test looks has no process.
+        private static void OnEvent(nint hook, uint e, nint hwnd, int obj, int child, uint thread, uint time) => s_seen.Enqueue((hwnd, ProcessOf(hwnd)));
+    }
+
+    /// <summary>The process that owns <paramref name="hwnd"/>.</summary>
+    internal static int ProcessOf(nint hwnd)
+    {
+        uint pid;
+        _ = GetWindowThreadProcessId(hwnd, &pid);
+        return (int)pid;
+    }
+
+    [DllImport("user32.dll")] private static extern int SystemParametersInfoW(uint action, uint param, void* data, uint winIni);
+    [DllImport("user32.dll", CharSet = CharSet.Unicode)] private static extern nint LoadImageW(nint instance, string name, uint type, int cx, int cy, uint flags);
+    [DllImport("user32.dll")] private static extern int DestroyIcon(nint icon);
+    [DllImport("user32.dll")] private static extern uint GetDpiForWindow(nint hwnd);
+    [DllImport("user32.dll")] private static extern nint GetForegroundWindow();
+    [DllImport("user32.dll")] private static extern nint SetWinEventHook(uint min, uint max, nint module, delegate* unmanaged<nint, uint, nint, int, int, uint, uint, void> proc, uint pid, uint thread, uint flags);
+    [DllImport("user32.dll")] private static extern int UnhookWinEvent(nint hook);
+    [DllImport("user32.dll")] private static extern int PostThreadMessageW(uint thread, uint message, nint wParam, nint lParam);
+    [DllImport("kernel32.dll")] private static extern uint GetCurrentThreadId();
     [DllImport("user32.dll")] private static extern ushort RegisterClassW(WndClass* cls);
     [DllImport("user32.dll")] private static extern nint CreateWindowExW(uint exStyle, char* cls, char* name, uint style, int x, int y, int w, int h, nint parent, nint menu, nint instance, nint param);
     [DllImport("user32.dll")] private static extern uint RegisterWindowMessageW(char* name);

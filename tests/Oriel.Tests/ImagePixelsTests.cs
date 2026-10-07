@@ -56,83 +56,94 @@ public sealed class ImagePixelsTests
         Assert.Equal((0, 0, 0), (crop.Width, crop.Height, crop.Bgra.Length));
     }
 
+    // Expectations come from an independent Python port of skia's ResizeFilter (float32 weights, 14-bit fixed point), not from this code.
+    private static readonly byte[] Step = [64, 64, 64, 64, 192, 192, 192, 192];
+
     [Fact]
-    public void Resize_ShrinkByTwo_AveragesPremultipliedPixels()
+    public void Resize_BestEnlargeStepEdge_RingsAroundTheEdge()
     {
-        // B sums to 200, G 100, R 50, A 638 over four pixels; /4 gives 50, 25, 12.5, 159.5, rounded to nearest.
-        var src = new ImageBitmap(2, 2, [200, 0, 0, 255, 0, 100, 0, 255, 0, 0, 50, 128, 0, 0, 0, 0]);
-        var r = ImagePixels.Resize(src, 1, 1);
-        Assert.Equal((1, 1), (r.Width, r.Height));
-        Assert.Equal(new byte[] { 50, 25, 13, 160 }, r.Bgra);
+        var r = ImagePixels.Resize(Gray(8, 1, Step), 16, 1, ResizeQuality.Best);
+        Assert.Equal(new byte[] { 64, 64, 64, 64, 67, 56, 50, 90, 165, 205, 199, 188, 191, 192, 192, 192 }, Levels(r));
     }
 
     [Fact]
-    public void Resize_ShrinkHorizontally_AveragesPairs()
+    public void Resize_GoodEnlargeStepEdge_StaysWithinTheEdgeLevels()
     {
-        var r = ImagePixels.Resize(Gray(4, 1, 0, 100, 200, 255), 2, 1);
-        Assert.Equal(new byte[] { 50, 228 }, Levels(r));
+        var r = ImagePixels.Resize(Gray(8, 1, Step), 16, 1, ResizeQuality.Good);
+        Assert.Equal(new byte[] { 64, 64, 64, 64, 64, 64, 64, 73, 182, 192, 192, 192, 192, 192, 192, 192 }, Levels(r));
     }
 
     [Fact]
-    public void Resize_ShrinkVertically_AveragesPairs()
+    public void Resize_BetterUsesTheSameFilterAsGood()
     {
-        var r = ImagePixels.Resize(Gray(1, 4, 0, 100, 200, 255), 1, 2);
-        Assert.Equal(new byte[] { 50, 228 }, Levels(r));
+        var good = ImagePixels.Resize(Gray(8, 1, Step), 16, 1, ResizeQuality.Good);
+        Assert.Equal(good.Bgra, ImagePixels.Resize(Gray(8, 1, Step), 16, 1, ResizeQuality.Better).Bgra);
     }
 
     [Fact]
-    public void Resize_ShrinkByFraction_WeightsPartialOverlap()
+    public void Resize_DefaultQualityIsBest()
+        => Assert.Equal(ImagePixels.Resize(Gray(8, 1, Step), 16, 1, ResizeQuality.Best).Bgra, ImagePixels.Resize(Gray(8, 1, Step), 16, 1).Bgra);
+
+    [Fact]
+    public void Resize_ShrinkStepEdge_MatchesTheFilter()
     {
-        // Scale 1.5: first output covers source 0 whole and half of 1 -> (0 + 45) / 1.5; second covers half of 1 and all of 2.
-        var r = ImagePixels.Resize(Gray(3, 1, 0, 90, 150), 2, 1);
-        Assert.Equal(new byte[] { 30, 130 }, Levels(r));
+        Assert.Equal(new byte[] { 61, 70, 185, 194 }, Levels(ImagePixels.Resize(Gray(8, 1, Step), 4, 1, ResizeQuality.Best)));
+        Assert.Equal(new byte[] { 64, 68, 187, 192 }, Levels(ImagePixels.Resize(Gray(8, 1, Step), 4, 1, ResizeQuality.Good)));
     }
 
     [Fact]
-    public void Resize_EnlargeHorizontally_InterpolatesBilinearlyAndClampsEdges()
+    public void Resize_FractionalScale_MatchesTheFilter()
     {
-        var r = ImagePixels.Resize(Gray(2, 1, 0, 100), 4, 1);
-        Assert.Equal(new byte[] { 0, 25, 75, 100 }, Levels(r));
+        Assert.Equal(new byte[] { 66, 53, 128, 202, 189 }, Levels(ImagePixels.Resize(Gray(8, 1, Step), 5, 1, ResizeQuality.Best)));
+        Assert.Equal(new byte[] { 64, 64, 128, 192, 192 }, Levels(ImagePixels.Resize(Gray(8, 1, Step), 5, 1, ResizeQuality.Good)));
     }
 
     [Fact]
-    public void Resize_EnlargeVertically_InterpolatesBilinearly()
+    public void Resize_Vertically_UsesTheSameFilter()
     {
-        var r = ImagePixels.Resize(Gray(1, 2, 0, 100), 1, 4);
-        Assert.Equal(new byte[] { 0, 25, 75, 100 }, Levels(r));
+        var r = ImagePixels.Resize(Gray(1, 8, Step), 1, 16, ResizeQuality.Best);
+        Assert.Equal(new byte[] { 64, 64, 64, 64, 67, 56, 50, 90, 165, 205, 199, 188, 191, 192, 192, 192 }, Levels(r));
     }
 
     [Fact]
-    public void Resize_EnlargeByFraction_SamplesBetweenPixels()
+    public void Resize_TwoDimensions_ConvolvesHorizontallyThenVertically()
     {
-        var r = ImagePixels.Resize(Gray(2, 1, 0, 100), 3, 1);
-        Assert.Equal(new byte[] { 0, 50, 100 }, Levels(r));
+        var src = Gray(4, 4, 0, 50, 100, 150, 200, 250, 10, 60, 110, 160, 210, 30, 80, 130, 180, 230);
+        Assert.Equal(new byte[] { 74, 80, 110, 191, 170, 33, 77, 171, 194 }, Levels(ImagePixels.Resize(src, 3, 3, ResizeQuality.Best)));
+        Assert.Equal(new byte[] { 37, 83, 128, 162, 157, 54, 91, 159, 196 }, Levels(ImagePixels.Resize(src, 3, 3, ResizeQuality.Good)));
     }
 
     [Fact]
-    public void Resize_EnlargeWithSemiTransparentPixel_InterpolatesEveryChannel()
+    public void Resize_ThreeToOne_WeightsTheSourcePixelUnderTheDestinationCentre()
     {
-        var src = new ImageBitmap(2, 1, [0, 0, 0, 0, 100, 40, 20, 200]);
-        var r = ImagePixels.Resize(src, 4, 1);
-        Assert.Equal(new byte[] { 0, 0, 0, 0, 25, 10, 5, 50, 75, 30, 15, 150, 100, 40, 20, 200 }, r.Bgra);
+        Assert.Equal(new byte[] { 97 }, Levels(ImagePixels.Resize(Gray(3, 1, 0, 255, 0), 1, 1, ResizeQuality.Best)));
+        Assert.Equal(new byte[] { 112 }, Levels(ImagePixels.Resize(Gray(3, 1, 0, 255, 0), 1, 1, ResizeQuality.Good)));
     }
 
     [Fact]
-    public void Resize_ShrinkOneAxisAndEnlargeTheOther_UsesEachRule()
+    public void Resize_FlatImage_KeepsItsLevelAtEveryQuality()
     {
-        var r = ImagePixels.Resize(Gray(2, 1, 0, 100), 1, 2);
-        Assert.Equal((1, 2), (r.Width, r.Height));
-        Assert.Equal(new byte[] { 50, 50 }, Levels(r));
+        foreach (var quality in new[] { ResizeQuality.Good, ResizeQuality.Best })
+        {
+            Assert.All(Levels(ImagePixels.Resize(Gray(5, 1, 100, 100, 100, 100, 100), 3, 1, quality)), v => Assert.Equal(100, v));
+            Assert.All(Levels(ImagePixels.Resize(Gray(3, 1, 100, 100, 100), 7, 1, quality)), v => Assert.Equal(100, v));
+        }
     }
 
     [Fact]
-    public void Resize_TwoDimensions_ComposesBothAxes()
+    public void Resize_RingingOnAlpha_CutsPremultipliedColourBackToAlpha()
     {
-        // Mean of 0, 40, 80, 120; the 2x1 case averages each column's two rows: 40 and 80.
-        var r = ImagePixels.Resize(Gray(2, 2, 0, 40, 80, 120), 1, 1);
-        Assert.Equal(new byte[] { 60 }, Levels(r));
-        var wide = ImagePixels.Resize(Gray(2, 2, 0, 40, 80, 120), 2, 1);
-        Assert.Equal(new byte[] { 40, 80 }, Levels(wide));
+        ImageBitmap Px(params (byte c, byte a)[] p) => new(p.Length, 1, p.SelectMany(x => new[] { x.c, x.c, x.c, x.a }).ToArray());
+        var r = ImagePixels.Resize(Px((0, 0), (0, 60), (60, 60), (60, 60), (0, 0), (0, 60)), 4, 1, ResizeQuality.Best);
+        // Unclamped the third pixel would be (44, 44, 44, 34).
+        Assert.Equal(new byte[] { 0, 0, 0, 19, 44, 44, 44, 69, 34, 34, 34, 34, 0, 0, 0, 34 }, r.Bgra);
+    }
+
+    [Fact]
+    public void Resize_ColourChannels_AreFilteredIndependently()
+    {
+        var src = new ImageBitmap(2, 1, [10, 20, 30, 255, 10, 20, 30, 255]);
+        Assert.Equal(new byte[] { 10, 20, 30, 255, 10, 20, 30, 255, 10, 20, 30, 255 }, ImagePixels.Resize(src, 3, 1).Bgra);
     }
 
     [Fact]

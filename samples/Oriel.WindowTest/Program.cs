@@ -19,7 +19,14 @@ BrowserWindow? childAlive = null;
 var willQuit = 0;
 KeyboardEvent? saveKeys = null;
 ExitedEventArgs? exited = null;
-app.Exited += (_, e) => exited = e;
+// A view page left outside every window; quitting must close it before CEF shuts down, which follows Exited.
+WebContents? strandedPage = null;
+bool? strandedClosedAtExit = null;
+app.Exited += (_, e) =>
+{
+    exited = e;
+    strandedClosedAtExit = strandedPage?.IsDestroyed();
+};
 void countWillQuit(object? _, CancelEventArgs e) => willQuit++;
 
 void Check(string name, bool pass, object? detail = null)
@@ -300,6 +307,7 @@ async Task RunAsync(BrowserWindow win, BrowserWindow simple)
     await InputEventAsync();
     await PreferredSizeAsync();
     await WindowOpenAsync(win);
+    await CreateWindowAsync();
     await LoadAndSizeAsync(win);
     await NavigationAsync();
     await FramesAsync();
@@ -307,6 +315,8 @@ async Task RunAsync(BrowserWindow win, BrowserWindow simple)
     await DownloadFolderAsync();
     await CommandLineAsync();
     await ProcessChildrenAsync();
+    await ThemeAsync(win);
+    await ViewsAsync();
     await WindowsApisAsync();
     await TransparencyAsync();
     await MacTransparencyAsync();
@@ -321,6 +331,7 @@ async Task RunAsync(BrowserWindow win, BrowserWindow simple)
     await MessageBoxTest.RunAsync(win, Check, step);
     await ShellAsync();
     await ClipboardAsync();
+    await DebuggerAsync();
 
     // Closing cancelled once: the window must survive the first close.
     var closingCount = 0;
@@ -2556,6 +2567,155 @@ async Task WindowOpenAsync(BrowserWindow win)
     Directory.Delete(dir, recursive: true);
 }
 
+// Electron's createWindow: the app's window or view adopts the popup's page, which stays the opener's child.
+async Task CreateWindowAsync()
+{
+    var dir = Directory.CreateTempSubdirectory("oriel-createwindow-").FullName;
+    var openerPage = Path.Combine(dir, "opener.html");
+    var popupPage = Path.Combine(dir, "popup.html");
+    var secondPage = Path.Combine(dir, "second.html");
+    const string listen = "<script>window.addEventListener('message', e => { window.__got = e.data; });</script>";
+    File.WriteAllText(openerPage, "<!doctype html><title>opener</title>" + listen);
+    File.WriteAllText(popupPage, "<!doctype html><title>popup page</title>" + listen);
+    File.WriteAllText(secondPage, "<!doctype html><title>second page</title>");
+    var popupUrl = new Uri(popupPage).AbsoluteUri;
+    async Task<string?> Js(WebContents page, string code)
+    {
+        var task = page.ExecuteJavaScriptAsync(code);
+        return await Task.WhenAny(task, Task.Delay(step)) == task ? task.Result?.ToJsonString() : "timeout";
+    }
+    bool Shows(WebContents page, string url, string title) => Eventually(() => page.GetUrl() == url && page.GetTitle() == title, step);
+
+    var opener = new BrowserWindow(new BrowserWindowOptions { Title = "Oriel window test: createWindow opener", Width = 400, Height = 300 });
+    await opener.WebContents.LoadFile(openerPage);
+    var didCreate = 0;
+    opener.WebContents.DidCreateWindow += (_, _) => didCreate++;
+
+    // A BrowserWindow built from the options it is given.
+    BrowserWindowOptions? received = null;
+    BrowserWindow? made = null;
+    var calls = 0;
+    opener.WebContents.SetWindowOpenHandler(_ => WindowOpenHandlerResponse.Allow(options =>
+    {
+        calls++;
+        received = options;
+        made = new BrowserWindow(options);
+        return made.WebContents;
+    }));
+    var windows = BrowserWindow.GetAllWindows().Count;
+    var opened = await Js(opener.WebContents, "window.__p = window.open('popup.html', 'cw', 'width=330,height=250'); window.__p !== null");
+    Check("createWindow: window.open returns a window", opened == "true", opened);
+    Check("createWindow: receives Electron's options: the features' size, the opener's preferences, the popup's page",
+        calls == 1 && received is { Width: 330, Height: 250, Show: true, WebContents: { } given } && given != opener.WebContents && !given.IsDestroyed()
+        && ReferenceEquals(received.WebPreferences, opener.WebContents.Preferences),
+        $"calls={calls} {received?.Width}x{received?.Height}");
+    Check("createWindow: the returned page is the new window's and shows the popup's URL",
+        made is not null && made.WebContents == received?.WebContents && Shows(made.WebContents, popupUrl, "popup page")
+        && BrowserWindow.GetAllWindows().Count == windows + 1, made?.WebContents.GetUrl());
+    if (made is not null)
+    {
+        Check("createWindow: the window takes the options' size", Eventually(() => made.GetSize() == (330, 250), step), made.GetSize());
+        await Js(made.WebContents, "window.opener.postMessage('from-popup', '*'); 1");
+        Check("createWindow: the popup's window.opener reaches the opener (postMessage)",
+            Eventually(() => Js(opener.WebContents, "window.__got").Result == "\"from-popup\"", step), Js(opener.WebContents, "window.__got").Result);
+        await Js(opener.WebContents, "window.__p.postMessage('from-opener', '*'); 1");
+        Check("createWindow: the opener's handle reaches the popup (postMessage)",
+            Eventually(() => Js(made.WebContents, "window.__got").Result == "\"from-opener\"", step), Js(made.WebContents, "window.__got").Result);
+        var same = await Js(opener.WebContents, "window.open('second.html', 'cw') === window.__p");
+        Check("createWindow: the named target reuses the window without calling createWindow again",
+            same == "true" && Shows(made.WebContents, new Uri(secondPage).AbsoluteUri, "second page") && calls == 1
+            && BrowserWindow.GetAllWindows().Count == windows + 1, $"{same} calls={calls}");
+    }
+    await Task.Delay(300);
+    Check("createWindow: DidCreateWindow is not raised, as Electron", didCreate == 0, didCreate);
+
+    // Returning nothing: Electron throws and shows no window; Oriel opens none (window.open gives null, drift O3).
+    WebContents? unadopted = null;
+    opener.WebContents.SetWindowOpenHandler(_ => WindowOpenHandlerResponse.Allow(createWindow: options =>
+    {
+        unadopted = options.WebContents;
+        return null;
+    }));
+    windows = BrowserWindow.GetAllWindows().Count;
+    var nothing = await Js(opener.WebContents, "window.open('popup.html') === null");
+    await Task.Delay(500);
+    Check("createWindow: returning nothing opens no window, and its page is gone",
+        nothing == "true" && BrowserWindow.GetAllWindows().Count == windows && unadopted is { } gone && gone.IsDestroyed()
+        && !WebContents.GetAllWebContents().Contains(gone), nothing);
+
+    // Adopting the page but returning a destroyed one: Electron shows the window, reports the error and leaves the
+    // window out of the opener's lifetime.
+    var dead = new BrowserWindow(new BrowserWindowOptions { Show = false });
+    var deadPage = dead.WebContents;
+    dead.Destroy();
+    Eventually(deadPage.IsDestroyed, step);
+    BrowserWindow? unwired = null;
+    Exception? secondAdoption = null;
+    opener.WebContents.SetWindowOpenHandler(_ => WindowOpenHandlerResponse.Allow(options =>
+    {
+        unwired = new BrowserWindow(options);
+        try { GC.KeepAlive(new BrowserWindow(options)); } catch (Exception e) { secondAdoption = e; }
+        return deadPage;
+    }));
+    var shown = await Js(opener.WebContents, "window.open('popup.html') !== null");
+    Check("createWindow: returning a destroyed page still shows the adopted one, as Electron",
+        shown == "true" && deadPage.IsDestroyed() && unwired is not null && Shows(unwired.WebContents, popupUrl, "popup page"), shown);
+    Check("createWindow: a page is adopted once", secondAdoption is NotSupportedException, secondAdoption?.GetType().Name);
+
+    // A window's own page is Chrome style, and CEF gives its popups that style: no view can take one.
+    Exception? viewRefused = null;
+    opener.WebContents.SetWindowOpenHandler(_ => WindowOpenHandlerResponse.Allow(options =>
+    {
+        try { GC.KeepAlive(new WebContentsView(new WebContentsViewOptions { WebContents = options.WebContents })); } catch (Exception e) { viewRefused = e; }
+        return options.WebContents;
+    }));
+    windows = BrowserWindow.GetAllWindows().Count;
+    var refused = await Js(opener.WebContents, "window.open('popup.html') === null");
+    Check("createWindow: a view cannot adopt a popup of a window's page (drift V4)",
+        viewRefused is NotSupportedException && refused == "true" && BrowserWindow.GetAllWindows().Count == windows, viewRefused?.GetType().Name);
+
+    // Closing the opener closes the window createWindow returned, not the one it did not.
+    opener.Destroy();
+    Check("createWindow: the returned window closes with its opener", made is not null && Eventually(() => made.IsDestroyed, step));
+    await Task.Delay(500);
+    Check("createWindow: a window whose page was not returned outlives the opener, as Electron", unwired is { IsDestroyed: false });
+    unwired?.Destroy();
+
+    // Electron's documented use: a view's page opens into a view of the same window.
+    var host = new BrowserWindow(new BrowserWindowOptions { Title = "Oriel window test: createWindow views", Width = 400, Height = 300 });
+    var viewOpener = new WebContentsView();
+    host.ContentView.AddChildView(viewOpener);
+    viewOpener.SetBounds(new Rectangle(0, 0, 200, 150));
+    await viewOpener.WebContents.LoadFile(openerPage);
+    WebContentsView? popupView = null;
+    viewOpener.WebContents.SetWindowOpenHandler(_ => WindowOpenHandlerResponse.Allow(options =>
+    {
+        popupView = new WebContentsView(new WebContentsViewOptions { WebContents = options.WebContents });
+        host.ContentView.AddChildView(popupView);
+        popupView.SetBounds(new Rectangle(200, 0, 200, 150));
+        return popupView.WebContents;
+    }));
+    windows = BrowserWindow.GetAllWindows().Count;
+    var inView = await Js(viewOpener.WebContents, "window.__p = window.open('popup.html', 'vw'); window.__p !== null");
+    Check("createWindow: a view's popup shows in the app's WebContentsView, in no new window",
+        inView == "true" && popupView is not null && host.ContentView.Children.Contains(popupView) && Shows(popupView.WebContents, popupUrl, "popup page")
+        && popupView.NativeChildrenMatch() && BrowserWindow.GetAllWindows().Count == windows, $"{inView} {popupView?.WebContents.GetUrl()}");
+    if (popupView is not null)
+    {
+        await Js(popupView.WebContents, "window.opener.postMessage('from-view-popup', '*'); 1");
+        Check("createWindow: the view popup's window.opener reaches the opener",
+            Eventually(() => Js(viewOpener.WebContents, "window.__got").Result == "\"from-view-popup\"", step), Js(viewOpener.WebContents, "window.__got").Result);
+        await Js(viewOpener.WebContents, "window.__p.postMessage('to-view-popup', '*'); 1");
+        Check("createWindow: the view opener's handle reaches the popup",
+            Eventually(() => Js(popupView.WebContents, "window.__got").Result == "\"to-view-popup\"", step), Js(popupView.WebContents, "window.__got").Result);
+        viewOpener.WebContents.Close();
+        Check("createWindow: the view's popup page closes with its opener", Eventually(() => popupView.WebContents.IsDestroyed(), step));
+    }
+    host.Destroy();
+    await Task.Delay(300);
+    Directory.Delete(dir, recursive: true);
+}
+
 async Task LoadAndSizeAsync(BrowserWindow win)
 {
     var dir = Directory.CreateTempSubdirectory("oriel-load-").FullName;
@@ -2897,6 +3057,76 @@ async Task TransparencyAsync()
     Check("Unmaximize puts a transparent window back", Eventually(() => frameless.GetBounds() == before && !frameless.IsMaximized, step), frameless.GetBounds());
     await Close(frameless);
 
+    // Views in a transparent window: each page is its own child window, composited over the see-through one. Electron
+    // gives a view's page Chromium's white unless webPreferences.transparent is true or the view has a background colour.
+    var (viewed, viewedHwnd) = await Open(new BrowserWindowOptions { Title = "Oriel window test: transparent with views", Transparent = true });
+    async Task<WebContentsView> AddView(Rectangle bounds, string url, bool? transparent)
+    {
+        var v = transparent is { } t ? new WebContentsView(new WebContentsViewOptions { WebPreferences = new WebPreferences { Transparent = t } }) : new WebContentsView();
+        viewed.ContentView.AddChildView(v);
+        v.SetBounds(bounds);
+        await v.WebContents.LoadUrl(url);
+        return v;
+    }
+    const string greenPage = "data:text/html,<body style='margin:0;background:%2322aa44'></body>";
+    var solidView = await AddView(new Rectangle(10, 10, 120, 80), greenPage, transparent: true);
+    var defaultView = await AddView(new Rectangle(140, 10, 120, 80), clear, transparent: null);
+    var falseView = await AddView(new Rectangle(270, 10, 120, 80), clear, transparent: false);
+    var clearView = await AddView(new Rectangle(10, 110, 120, 80), clear, transparent: true);
+    var colouredView = await AddView(new Rectangle(140, 110, 120, 80), clear, transparent: null);
+    // A plain View has no background of its own, as in Electron.
+    var plainView = new View();
+    viewed.ContentView.AddChildView(plainView);
+    plainView.SetBounds(new Rectangle(270, 110, 120, 80));
+    static bool Green((byte R, byte G, byte B) c) => c.G > 120 && c.R < 90 && c.B < 120;
+    static bool Blue((byte R, byte G, byte B) c) => c.B > 150 && c.R < 90 && c.G < 90;
+    (byte R, byte G, byte B) At(int x, int y) => WindowsShell.ClientPixel(viewedHwnd, x, y);
+    Check("a transparent window stays see-through outside its WebContentsViews and under a plain View (screen pixel)",
+        Eventually(() => Red(At(200, 260)) && Red(At(330, 150)), step), $"{At(200, 260)} {At(330, 150)}");
+    Check("an opaque page in a WebContentsView covers a transparent window, webPreferences.transparent or not (screen pixel)",
+        Eventually(() => Green(At(70, 50)), step), At(70, 50));
+    Check("webPreferences.transparent: a view's transparent page shows the window behind (screen pixel)", Eventually(() => Red(At(70, 150)), step), At(70, 150));
+    Check("a view's page is Chromium's white by default and with transparent false, as Electron (screen pixel)",
+        Eventually(() => White(At(200, 50)) && White(At(330, 50)), step), $"{At(200, 50)} {At(330, 50)}");
+    colouredView.SetBackgroundColor("#FF0000FF");
+    Check("SetBackgroundColor on a WebContentsView colours its page's background (screen pixel)", Eventually(() => Blue(At(200, 150)), step), At(200, 150));
+    colouredView.SetBackgroundColor("#00000000");
+    Check("a transparent SetBackgroundColor on a WebContentsView clears its page (screen pixel)", Eventually(() => Red(At(200, 150)), step), At(200, 150));
+    await colouredView.WebContents.LoadUrl(clear + "<!-- again -->");
+    Check("the view's page background lasts across a navigation (screen pixel)", Eventually(() => Red(At(200, 150)), step), At(200, 150));
+    foreach (var v in new[] { solidView, defaultView, falseView, clearView, colouredView }) v.WebContents.Close();
+    await Task.Delay(500);
+    Check("closing the views' pages leaves the window see-through where they were",
+        Eventually(() => Red(At(70, 50)) && Red(At(200, 50)) && Red(At(200, 260)), step), $"{At(70, 50)} {At(200, 50)} {At(200, 260)}");
+    await Close(viewed);
+
+    // A window's own page: the window's colour, copied into its page's preferences, decides over webPreferences.transparent.
+    var (clearPref, clearPrefHwnd) = await Open(new BrowserWindowOptions { Title = "Oriel window test: transparent false", Transparent = true, WebPreferences = new WebPreferences { Transparent = false } });
+    Check("a transparent window's page stays see-through with webPreferences.transparent false, as Electron (screen pixel)",
+        Eventually(() => Red(WindowsShell.ClientCentrePixel(clearPrefHwnd)), step), WindowsShell.ClientCentrePixel(clearPrefHwnd));
+    await Close(clearPref);
+    var (whitePref, whitePrefHwnd) = await Open(new BrowserWindowOptions { Title = "Oriel window test: white over transparent", Transparent = true, BackgroundColor = "#FFFFFF", WebPreferences = new WebPreferences { Transparent = true } });
+    Check("a window's BackgroundColor wins over webPreferences.transparent for its page (screen pixel)",
+        Eventually(() => White(WindowsShell.ClientCentrePixel(whitePrefHwnd)), step), WindowsShell.ClientCentrePixel(whitePrefHwnd));
+    await Close(whitePref);
+    var (opaquePref, opaquePrefHwnd) = await Open(new BrowserWindowOptions { Title = "Oriel window test: transparent page", WebPreferences = new WebPreferences { Transparent = true } });
+    // The page is clear; what shows is the window's own white, Electron's default, not the theme's colour.
+    Check("webPreferences.transparent on an ordinary window shows the window's white under the page (screen pixel)",
+        Eventually(() => White(WindowsShell.ClientCentrePixel(opaquePrefHwnd)), step), $"{WindowsShell.ClientCentrePixel(opaquePrefHwnd)} dark={NativeTheme.ShouldUseDarkColors}");
+    await Close(opaquePref);
+
+    // In an ordinary window a transparent view page shows the window's own page under it, as Electron's one compositor does.
+    var (under, underHwnd) = await Open(new BrowserWindowOptions { Title = "Oriel window test: page under a view" });
+    await under.LoadUrl(greenPage);
+    var overView = new WebContentsView(new WebContentsViewOptions { WebPreferences = new WebPreferences { Transparent = true } });
+    under.ContentView.AddChildView(overView);
+    overView.SetBounds(new Rectangle(100, 75, 200, 150));
+    await overView.WebContents.LoadUrl(clear);
+    Check("a transparent view page over a window's page shows that page (screen pixel)",
+        Eventually(() => Green(WindowsShell.ClientCentrePixel(underHwnd)), step), WindowsShell.ClientCentrePixel(underHwnd));
+    overView.WebContents.Close();
+    await Close(under);
+
     var (acrylic, acrylicHwnd) = await Open(new BrowserWindowOptions { Title = "Oriel window test: acrylic", BackgroundMaterial = BackgroundMaterial.Acrylic });
     Check("BackgroundMaterial Acrylic shows the window behind, blurred, through the page (screen pixel)", Eventually(() => Red(WindowsShell.ClientCentrePixel(acrylicHwnd)), step), WindowsShell.ClientCentrePixel(acrylicHwnd));
     Check("a material makes the background colour transparent, as in Electron", acrylic.GetBackgroundColor() == "#00000000", acrylic.GetBackgroundColor());
@@ -3199,6 +3429,122 @@ async Task NativeImageAsync()
     added.AddRepresentation(new AddRepresentationOptions { ScaleFactor = 2, DataUrl = NativeImage.CreateFromBitmap(Solid(8, 1, 2, 3), new NativeImageBitmapOptions { Width = 8, Height = 8 }).ToDataUrl() });
     Check("AddRepresentation takes a PNG buffer and a data URL", added.GetScaleFactors().SequenceEqual([1.0, 2.0]) && added.GetSize(2) == (4, 4), string.Join(",", added.GetScaleFactors()));
 
+    // .ico is read on Windows only; Windows' own LoadImage of the same file at 256x256 is the reference.
+    if (OperatingSystem.IsWindows())
+    {
+        // A DIB entry: bottom-up XOR rows, then a 1bpp AND mask whose top-left quadrant is transparent.
+        static byte[] Dib(int size, int bits, byte b, byte g, byte r)
+        {
+            var stride = (size * bits / 8 + 3) / 4 * 4;
+            var maskStride = (size + 31) / 32 * 4;
+            using var s = new MemoryStream();
+            using var w = new BinaryWriter(s);
+            w.Write(40); w.Write(size); w.Write(size * 2); w.Write((short)1); w.Write((short)bits);
+            w.Write(0); w.Write(0); w.Write(0); w.Write(0); w.Write(0); w.Write(0);
+            for (var y = 0; y < size; y++)
+            {
+                var row = new byte[stride];
+                for (var x = 0; x < size; x++)
+                {
+                    var o = x * bits / 8;
+                    (row[o], row[o + 1], row[o + 2]) = (b, g, r);
+                    // Rows are bottom-up: y counts from the bottom. 32bpp carries alpha; the quadrant is clear there too.
+                    if (bits == 32) row[o + 3] = (byte)(x < size / 2 && y >= size / 2 ? 0 : 255);
+                }
+                w.Write(row);
+            }
+            for (var y = 0; y < size; y++)
+            {
+                var row = new byte[maskStride];
+                for (var x = 0; x < size / 2 && y >= size / 2; x++) row[x / 8] |= (byte)(0x80 >> (x % 8));
+                w.Write(row);
+            }
+            return s.ToArray();
+        }
+        static byte[] Ico(params (int Size, int Bits, byte[] Data)[] entries)
+        {
+            using var s = new MemoryStream();
+            using var w = new BinaryWriter(s);
+            w.Write((short)0); w.Write((short)1); w.Write((short)entries.Length);
+            var offset = 6 + 16 * entries.Length;
+            foreach (var (size, bits, data) in entries)
+            {
+                w.Write((byte)(size >= 256 ? 0 : size)); w.Write((byte)(size >= 256 ? 0 : size)); w.Write((byte)0); w.Write((byte)0);
+                w.Write((short)1); w.Write((short)bits); w.Write(data.Length); w.Write(offset);
+                offset += data.Length;
+            }
+            foreach (var e in entries) w.Write(e.Data);
+            return s.ToArray();
+        }
+        // Straight alpha of a premultiplied pixel, as GDI keeps it.
+        static (int B, int G, int R, int A) At(byte[] bgra, int width, int x, int y, bool premultiplied)
+        {
+            var i = (y * width + x) * 4;
+            int a = bgra[i + 3];
+            int Un(int c) => premultiplied && a is > 0 and < 255 ? Math.Min(255, c * 255 / a) : c;
+            return (Un(bgra[i]), Un(bgra[i + 1]), Un(bgra[i + 2]), a);
+        }
+        // Pixels where Oriel and LoadImage disagree: alpha by more than 8, or colour by more than 8 where both are opaque.
+        static (int Bad, string First) Compare(NativeImage oriel, (int Width, int Height, byte[] Bgra) windows)
+        {
+            var mine = oriel.ToBitmap();
+            var (bad, first) = (0, "");
+            for (var y = 0; y < windows.Height; y++)
+            for (var x = 0; x < windows.Width; x++)
+            {
+                var (o, r) = (At(mine, 256, x, y, true), At(windows.Bgra, windows.Width, x, y, false));
+                var off = Math.Abs(o.A - r.A) > 8 || (o.A == 255 && r.A == 255 && (Math.Abs(o.B - r.B) > 8 || Math.Abs(o.G - r.G) > 8 || Math.Abs(o.R - r.R) > 8));
+                if (!off) continue;
+                if (bad++ == 0) first = $"({x},{y}) oriel={o} windows={r}";
+            }
+            return (bad, first);
+        }
+
+        var bluePng = NativeImage.CreateFromBitmap(Solid(256, 255, 0, 0), new NativeImageBitmapOptions { Width = 256, Height = 256 }).ToPng();
+        var withPng = Path.Combine(dir, "with-png.ico");
+        File.WriteAllBytes(withPng, Ico((16, 32, Dib(16, 32, 0, 0, 255)), (48, 24, Dib(48, 24, 0, 200, 0)), (256, 32, bluePng)));
+        var fromPng = NativeImage.CreateFromPath(withPng);
+        var windowsPng = WindowsShell.LoadIcon(withPng, 256);
+        Check("CreateFromPath of an .ico takes its 256x256 PNG entry as the one representation, as LoadImage does",
+            fromPng.GetScaleFactors().SequenceEqual([1.0]) && fromPng.GetSize() == (256, 256) && Centre(fromPng.ToBitmap(), 256) == "255,0,0,255"
+            && windowsPng is { Width: 256, Height: 256 } wp && Compare(fromPng, wp).Bad == 0,
+            $"{fromPng.GetSize()} {Centre(fromPng.ToBitmap(), 256)} windows={(windowsPng is { } p ? Compare(fromPng, p).ToString() : "none")}");
+
+        var dibsOnly = Path.Combine(dir, "dibs.ico");
+        File.WriteAllBytes(dibsOnly, Ico((16, 32, Dib(16, 32, 0, 0, 255)), (48, 24, Dib(48, 24, 0, 200, 0))));
+        var fromDib = NativeImage.CreateFromPath(dibsOnly);
+        var windowsDib = WindowsShell.LoadIcon(dibsOnly, 256);
+        var dibPixels = fromDib.ToBitmap();
+        Check("an .ico without a 256 entry: its 48x48 24bpp DIB stretched to 256, the AND mask's quadrant clear",
+            fromDib.GetSize() == (256, 256) && dibPixels.Length == 256 * 256 * 4 && At(dibPixels, 256, 192, 192, true) == (0, 200, 0, 255) && At(dibPixels, 256, 32, 32, true).A == 0,
+            $"{fromDib.GetSize()} {(dibPixels.Length == 256 * 256 * 4 ? $"{At(dibPixels, 256, 192, 192, true)} {At(dibPixels, 256, 32, 32, true)}" : "no pixels")}");
+        // As Electron, Windows stretches the icon itself, so even the quadrant's edges match its LoadImage.
+        var dibDiff = windowsDib is { } wd ? Compare(fromDib, wd) : (-1, "LoadImage failed");
+        Check("the stretched DIB icon is LoadImage's, pixel for pixel",
+            windowsDib is { Width: 256, Height: 256 } && dibDiff.Item1 == 0, $"{dibDiff.Item1} pixels differ, first {dibDiff.Item2}");
+
+        var only16 = Path.Combine(dir, "only16.ico");
+        File.WriteAllBytes(only16, Ico((16, 32, Dib(16, 32, 0, 0, 255))));
+        var from16 = NativeImage.CreateFromPath(only16).ToBitmap();
+        Check("a 32bpp DIB keeps its own alpha (the clear quadrant) through the stretch",
+            // Windows' 16-to-256 stretch blends even inside a flat quadrant (253, 254 is seen), so near-opaque red.
+            from16.Length == 256 * 256 * 4 && At(from16, 256, 200, 200, true) is { B: 0, G: 0, R: > 240, A: > 240 } && At(from16, 256, 20, 20, true).A == 0,
+            from16.Length == 256 * 256 * 4 ? $"{At(from16, 256, 200, 200, true)} {At(from16, 256, 20, 20, true)}" : $"{from16.Length} bytes");
+        Check("an .ico file is not read by CreateFromBuffer, as Electron", NativeImage.CreateFromBuffer(File.ReadAllBytes(withPng)).IsEmpty());
+
+        // A real icon Windows ships, if there is a plain .ico (OneDrive.ico's largest entry is 64, so it is stretched).
+        var shipped = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.System), "OneDrive.ico");
+        if (File.Exists(shipped))
+        {
+            var system = NativeImage.CreateFromPath(shipped);
+            var reference = WindowsShell.LoadIcon(shipped, 256);
+            var diff = reference is { } r ? Compare(system, r) : (-1, "LoadImage failed");
+            Check($"a shipped icon ({Path.GetFileName(shipped)}) reads as LoadImage reads it, pixel for pixel",
+                system.GetSize() == (256, 256) && reference is { Width: 256, Height: 256 } && diff.Item1 == 0,
+                $"{system.GetSize()} {diff.Item1} pixels differ, first {diff.Item2}");
+        }
+    }
+
     // Windows reads the icon back through WM_GETICON; CEF scales it to the system size, which keeps a solid colour.
     if (OperatingSystem.IsWindows())
     {
@@ -3339,6 +3685,574 @@ async Task LinuxTaskbarAsync()
     await Task.Delay(300);
 }
 
+async Task DebuggerAsync()
+{
+    var page = Path.Combine(Path.GetTempPath(), "oriel-debugger-test.html");
+    File.WriteAllText(page, "<!doctype html><title>debugger</title><p>debugger</p>");
+
+    var w = new BrowserWindow(new BrowserWindowOptions { Show = false });
+    var debug = w.WebContents.Debugger;
+    var unattached = debug.SendCommandAsync("Runtime.evaluate");
+    Check("Debugger: SendCommand needs Attach; the task fails, as Electron's promise rejects",
+        unattached.Exception?.InnerException is InvalidOperationException && !debug.IsAttached(), unattached.Status);
+    Check("Debugger: an unknown protocol version is refused",
+        Record.Exception(() => debug.Attach("9.9")) is ArgumentException && !debug.IsAttached());
+    // A wrongly accepted version must fail the check above, not end the run at the next Attach.
+    if (debug.IsAttached()) debug.Detach();
+    debug.Attach("1.3");
+    var early = debug.SendCommandAsync("Runtime.evaluate", new System.Text.Json.Nodes.JsonObject { ["expression"] = "6 * 7", ["returnByValue"] = true });
+    Check("Debugger: Attach; a second Attach is refused",
+        debug.IsAttached() && Record.Exception(() => debug.Attach()) is InvalidOperationException);
+    var earlyDone = await Task.WhenAny(early, Task.Delay(step)) == early && early.IsCompletedSuccessfully;
+    Check("Debugger: a command sent right after the window is created returns its result",
+        earlyDone && early.Result?["result"]?["value"]?.GetValue<int>() == 42, earlyDone ? early.Result?.ToJsonString() : early.Status);
+    await w.WebContents.LoadFile(page);
+
+    // Errors and events.
+    var failed = await Record.ExceptionAsync(() => debug.SendCommandAsync("Nope.nothing"));
+    Check("Debugger: a protocol error fails the command", failed is DebuggerCommandException { Method: "Nope.nothing" }, failed?.Message);
+    var requests = new System.Collections.Concurrent.ConcurrentQueue<string>();
+    debug.Message += (_, e) => { if (e.Method == "Network.requestWillBeSent") requests.Enqueue(e.Params?["request"]?["url"]?.ToString() ?? ""); };
+    await debug.SendCommandAsync("Network.enable");
+    await w.WebContents.ExecuteJavaScriptAsync("location.reload(); 1");
+    Check("Debugger: Message carries the events of a domain it enabled",
+        Eventually(() => requests.Any(u => u.EndsWith("oriel-debugger-test.html")), step), string.Join(",", requests));
+
+    // A popup's page has no browser yet when DidCreateWindow is raised: the command waits for it.
+    Task<System.Text.Json.Nodes.JsonNode?>? popupCommand = null;
+    BrowserWindow? popup = null;
+    void onPopup(object? _, DidCreateWindowEventArgs e)
+    {
+        popup = e.Window;
+        e.Window.WebContents.Debugger.Attach();
+        popupCommand = e.Window.WebContents.Debugger.SendCommandAsync("Runtime.evaluate",
+            new System.Text.Json.Nodes.JsonObject { ["expression"] = "'popup:' + (1 + 1)", ["returnByValue"] = true });
+    }
+    w.WebContents.DidCreateWindow += onPopup;
+    await w.WebContents.ExecuteJavaScriptAsync("window.open('about:blank'); 1", userGesture: true);
+    var popupDone = Eventually(() => popupCommand is { IsCompleted: true }, step);
+    Check("Debugger: a command sent before a popup's page exists returns its result",
+        popupDone && popupCommand!.IsCompletedSuccessfully && popupCommand.Result?["result"]?["value"]?.ToString() == "popup:2",
+        popupCommand?.Status);
+    w.WebContents.DidCreateWindow -= onPopup;
+    popup?.Destroy();
+
+    // A child session (a cross-site iframe in its own process): its events reach Message with their session.
+    var sites = Session.FromPartition("debugger-sites");
+    sites.Protocol.Handle("https", request => ProtocolResponse.Text(new Uri(request.Url).Host == "a.test"
+        ? "<!doctype html><title>a</title><iframe src='https://b.test/frame'></iframe>"
+        : "<!doctype html><title>b</title><p>b", "text/html"));
+    var host = new BrowserWindow(new BrowserWindowOptions { Show = false, WebPreferences = new WebPreferences { Partition = "debugger-sites" } });
+    await host.WebContents.LoadUrl("https://a.test/");
+    var hostDebug = host.WebContents.Debugger;
+    hostDebug.Attach();
+    var childSessions = new System.Collections.Concurrent.ConcurrentQueue<string>();
+    var childEvents = new System.Collections.Concurrent.ConcurrentQueue<string>();
+    hostDebug.Message += (_, e) =>
+    {
+        if (e.Method == "Target.attachedToTarget" && e.Params?["sessionId"]?.ToString() is { } sid) childSessions.Enqueue(sid);
+        if (e.SessionId is not null) childEvents.Enqueue(e.Method);
+    };
+    await hostDebug.SendCommandAsync("Target.setAutoAttach", new System.Text.Json.Nodes.JsonObject
+    {
+        ["autoAttach"] = true, ["waitForDebuggerOnStart"] = false, ["flatten"] = true,
+    });
+    var attached = Eventually(() => !childSessions.IsEmpty, step);
+    if (attached && childSessions.TryPeek(out var child))
+    {
+        await hostDebug.SendCommandAsync("Runtime.enable", null, child);
+        await hostDebug.SendCommandAsync("Page.enable", null, child);
+    }
+    Check("Debugger: a child session's events reach Message with their session id",
+        attached && Eventually(() => childEvents.Contains("Runtime.executionContextCreated"), step), string.Join(",", childEvents.Distinct()));
+    hostDebug.Detach();
+    host.Destroy();
+
+    // Detach: no more events, and Detach again is harmless.
+    debug.Detach();
+    debug.Detach();
+    var before = requests.Count;
+    await w.WebContents.ExecuteJavaScriptAsync("location.reload(); 1");
+    await Task.Delay(1500);
+    Check("Debugger: Detach stops Message", !debug.IsAttached() && requests.Count == before, $"{before} -> {requests.Count}");
+
+    // Closing the page detaches with a reason and fails what is still waiting.
+    string? reason = null;
+    debug.Detached += (_, e) => reason = e.Reason;
+    debug.Attach();
+    var hanging = debug.SendCommandAsync("Runtime.evaluate", new System.Text.Json.Nodes.JsonObject
+    {
+        ["expression"] = "new Promise(() => {})", ["awaitPromise"] = true,
+    });
+    await Task.Delay(300);
+    w.Destroy();
+    var hangingDone = await Task.WhenAny(hanging, Task.Delay(step)) == hanging;
+    Check("Debugger: closing the page raises Detached and fails pending commands",
+        Eventually(() => reason == "target closed", step) && !debug.IsAttached() && hangingDone && hanging.IsFaulted,
+        $"{reason} {hanging.Status}");
+    File.Delete(page);
+    await Task.Delay(300);
+}
+
+async Task ThemeAsync(BrowserWindow win)
+{
+    async Task<bool?> PageIsDark(BrowserWindow w)
+        => (await w.WebContents.ExecuteJavaScriptAsync("matchMedia('(prefers-color-scheme: dark)').matches"))?.GetValue<bool>();
+    async Task<bool> PageBecomes(BrowserWindow w, bool dark)
+    {
+        for (var i = 0; i < 30; i++)
+        {
+            if (await PageIsDark(w) == dark) return true;
+            await Task.Delay(100);
+        }
+        return false;
+    }
+    bool? AppIsDark() => OperatingSystem.IsMacOS() ? Oriel.Cef.CefThread.InvokeOnUi(Oriel.Cef.Platform.MacAppearance.IsDark) : null;
+
+    var updates = 0;
+    EventHandler counter = (_, _) => updates++;
+    NativeTheme.Updated += counter;
+
+    NativeTheme.ThemeSource = ThemeSource.Dark;
+    Check("NativeTheme: Dark reaches the page", await PageBecomes(win, true) && NativeTheme.ShouldUseDarkColors);
+    Check("NativeTheme: Dark reaches macOS's appearance", AppIsDark() is null or true, AppIsDark());
+    var partitioned = new BrowserWindow(new BrowserWindowOptions { Show = false, WebPreferences = new WebPreferences { Partition = "persist:theme" } });
+    var load = partitioned.WebContents.LoadUrl("about:blank");
+    var loaded = await Task.WhenAny(load, Task.Delay(TimeSpan.FromSeconds(15))) == load && load.IsCompletedSuccessfully;
+    Check("NativeTheme: a persistent session made later follows it", loaded && await PageBecomes(partitioned, true), $"loaded={loaded}");
+
+    NativeTheme.ThemeSource = ThemeSource.Light;
+    Check("NativeTheme: Light reaches the page", await PageBecomes(win, false) && !NativeTheme.ShouldUseDarkColors);
+    Check("NativeTheme: a session that already exists follows a change", loaded && await PageBecomes(partitioned, false));
+    partitioned.Destroy();
+    Check("NativeTheme: Light reaches macOS's appearance", AppIsDark() is null or false, AppIsDark());
+    Check("NativeTheme: setting ThemeSource raises Updated", updates >= 2, updates);
+
+    NativeTheme.ThemeSource = ThemeSource.System;
+    var systemDark = SystemIsDark();
+    Check("NativeTheme: System follows the operating system", NativeTheme.ShouldUseDarkColors == systemDark
+        && await PageBecomes(win, systemDark), $"system={systemDark}");
+    if (OperatingSystem.IsMacOS())
+    {
+        var idleChecks = NativeTheme.Checks;
+        await Task.Delay(2500);
+        Check("NativeTheme: macOS waits for the system's notification instead of polling", NativeTheme.Checks == idleChecks,
+            $"{idleChecks} -> {NativeTheme.Checks}");
+        Oriel.Cef.CefThread.RunOnUi(Oriel.Cef.Platform.MacAppearance.PostThemeChanged);
+        Check("NativeTheme: a system appearance change is checked at once", Eventually(() => NativeTheme.Checks > idleChecks, TimeSpan.FromSeconds(1)),
+            $"{idleChecks} -> {NativeTheme.Checks}");
+    }
+    else if (OperatingSystem.IsWindows())
+    {
+        // The system's settings are read, not changed: toggling contrast or theme would disturb the desktop.
+        var (contrastApi, contrastRegistry) = WindowsShell.HighContrastOn();
+        Check("NativeTheme: ShouldUseHighContrastColors and InForcedColorsMode are Windows' contrast theme (SPI_GETHIGHCONTRAST)",
+            NativeTheme.ShouldUseHighContrastColors == contrastApi && NativeTheme.InForcedColorsMode == contrastApi && contrastApi == contrastRegistry,
+            $"oriel={NativeTheme.ShouldUseHighContrastColors}/{NativeTheme.InForcedColorsMode} spi={contrastApi} registry={contrastRegistry}");
+        var pageForced = (await win.WebContents.ExecuteJavaScriptAsync("matchMedia('(forced-colors: active)').matches"))?.GetValue<bool>();
+        Check("NativeTheme: InForcedColorsMode agrees with the page's forced-colors", pageForced == NativeTheme.InForcedColorsMode, pageForced);
+        Check("NativeTheme: Windows has no inverted scheme or reduced transparency setting, as Electron",
+            !NativeTheme.ShouldUseInvertedColorScheme && !NativeTheme.PrefersReducedTransparency);
+        var checks = NativeTheme.Checks;
+        await Task.Delay(2500);
+        Check("NativeTheme: Windows checks the system settings once a second while there are handlers (DRIFT Y1)",
+            NativeTheme.Checks - checks is >= 2 and <= 4, $"{checks} -> {NativeTheme.Checks}");
+    }
+    else if (OperatingSystem.IsLinux())
+    {
+        // GTK_THEME is one of the settings Oriel reads on Linux, and a test can change it.
+        var (before, checks) = (updates, NativeTheme.Checks);
+        Environment.SetEnvironmentVariable("GTK_THEME", "Adwaita:dark");
+        Check("NativeTheme: Linux polls the system setting and raises Updated",
+            Eventually(() => updates > before, TimeSpan.FromSeconds(3)) && NativeTheme.ShouldUseDarkColors, $"{checks} -> {NativeTheme.Checks} checks");
+        Environment.SetEnvironmentVariable("GTK_THEME", null);
+        Eventually(() => updates > before + 1, TimeSpan.FromSeconds(3));
+    }
+    NativeTheme.Updated -= counter;
+}
+
+// The OS's own answer, read without Oriel.
+static bool SystemIsDark()
+{
+    if (OperatingSystem.IsMacOS())
+    {
+        using var defaults = System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo("defaults", "read -g AppleInterfaceStyle")
+        { RedirectStandardOutput = true, RedirectStandardError = true })!;
+        var output = defaults.StandardOutput.ReadToEnd();
+        defaults.WaitForExit();
+        return output.Trim() == "Dark";
+    }
+    if (OperatingSystem.IsWindows())
+        return Microsoft.Win32.Registry.GetValue(@"HKEY_CURRENT_USER\Software\Microsoft\Windows\CurrentVersion\Themes\Personalize", "AppsUseLightTheme", 1) is 0;
+    return false;
+}
+
+async Task ViewsAsync()
+{
+    static Exception? ThrowsOf(Action act)
+    {
+        try { act(); return null; }
+        catch (Exception e) { return e; }
+    }
+
+    var dir = Directory.CreateTempSubdirectory("oriel-views-").FullName;
+    var page = Path.Combine(dir, "view.html");
+    File.WriteAllText(page, "<!doctype html><title>view</title><body style='margin:0;background:#2a4'>view</body>");
+    var preload = Path.Combine(dir, "preload.js");
+    File.WriteAllText(preload, "oriel.contextBridge.exposeInMainWorld('bridge', { ask: () => oriel.ipcRenderer.invoke('view-ask') });");
+
+    var host = new BrowserWindow(new BrowserWindowOptions { Width = 600, Height = 400, Title = "views" });
+    await host.WebContents.LoadFile(page);
+    var main = host.ContentView.Children;
+    Check("Views: ContentView's first child shows the window's page",
+        main.Count == 1 && main[0] is WebContentsView own && own.WebContents == host.WebContents);
+
+    var view = new WebContentsView(new WebContentsViewOptions { WebPreferences = new WebPreferences { Preload = preload } });
+    host.ContentView.AddChildView(view);
+    view.SetBounds(new Rectangle(10, 20, 200, 150));
+    await view.WebContents.LoadFile(page);
+    Check("Views: AddChildView adds above the page", host.ContentView.Children is [WebContentsView, var added] && added == view);
+    Check("Views: the view's page loads", view.WebContents.GetUrl().EndsWith("view.html"), view.WebContents.GetUrl());
+    Check("Views: GetBounds reads SetBounds back", view.GetBounds() == new Rectangle(10, 20, 200, 150), view.GetBounds());
+    var size = await PageSizeBecomes(view, "\"200x150\"");
+    Check("Views: the page is the size of its bounds", size == "\"200x150\"", size);
+
+    host.SetContentSize(700, 500);
+    var grown = Eventually(() => main[0].GetBounds() is { Width: 700, Height: 500 }, step);
+    Check("Views: the window's page fills the content view as it resizes", grown, main[0].GetBounds());
+    string? keptWidth = null;
+    for (var i = 0; i < 40 && keptWidth != "200"; i++)
+    {
+        keptWidth = await ViewJs(view, "innerWidth");
+        if (keptWidth != "200") await Task.Delay(100);
+    }
+    Check("Views: a view keeps its bounds when the window resizes",
+        view.GetBounds() == new Rectangle(10, 20, 200, 150) && keptWidth == "200", $"{view.GetBounds()} innerWidth={keptWidth}");
+
+    // Moving a view that is already laid out.
+    var viewMoves = 0;
+    view.BoundsChanged += (_, _) => viewMoves++;
+    view.SetBounds(new Rectangle(30, 40, 220, 160));
+    var immediately = view.GetBounds();
+    var movedSize = await PageSizeBecomes(view, "\"220x160\"");
+    Check("Views: SetBounds moves a view that is already laid out",
+        immediately == new Rectangle(30, 40, 220, 160) && movedSize == "\"220x160\"", $"{immediately} {movedSize}");
+
+    var movesAfterOne = viewMoves;
+    view.SetBounds(new Rectangle(30, 40, 220, 160));
+    Check("Views: BoundsChanged once for a move, not for the same bounds", movesAfterOne == 1 && viewMoves == 1, $"{movesAfterOne} {viewMoves}");
+    var contentMoves = 0;
+    var pageMoves = 0;
+    host.ContentView.BoundsChanged += (_, _) => contentMoves++;
+    main[0].BoundsChanged += (_, _) => pageMoves++;
+    host.SetContentSize(640, 480);
+    Check("Views: a window resize raises BoundsChanged on the content view and its page",
+        Eventually(() => contentMoves > 0 && pageMoves > 0, step) && viewMoves == 1, $"content={contentMoves} page={pageMoves} view={viewMoves}");
+
+    // IPC from a view's page.
+    WebContents? asker = null;
+    IpcMain.Handle("view-ask", e => { asker = e.Sender; return "answered"; });
+    var answer = await ViewJs(view, "bridge.ask()");
+    IpcMain.RemoveHandler("view-ask");
+    Check("Views: IPC from a view's page names its WebContents as the sender",
+        answer == "\"answered\"" && asker == view.WebContents, answer);
+    Check("Views: FromWebContents is null for a view's page (as Electron)",
+        BrowserWindow.FromWebContents(view.WebContents) is null && BrowserWindow.FromWebContents(host.WebContents) == host);
+
+    // Alt from a view's page reaches the window's menu bar (Windows and Linux), as from its own page.
+    if (!OperatingSystem.IsMacOS())
+    {
+        host.SetMenu(new Menu { new MenuItem { Label = "&File", Submenu = new Menu { new MenuItem { Label = "Quit" } } } });
+        host.AutoHideMenuBar = true;
+        host.Focus();
+        await Task.Delay(300);
+        view.WebContents.SendInputEvent(new KeyboardInputEvent(KeyboardInputEventType.KeyDown, "Alt") { Modifiers = InputModifiers.Alt });
+        view.WebContents.SendInputEvent(new KeyboardInputEvent(KeyboardInputEventType.KeyUp, "Alt"));
+        Check("Views: Alt in a view's page shows the window's auto-hidden menu bar", Eventually(() => host.IsMenuBarVisible, step));
+        host.RemoveMenu();
+    }
+
+    // Visibility.
+    view.SetVisible(false);
+    Check("Views: SetVisible(false) hides; the page keeps running", !view.GetVisible() && await ViewJs(view, "1 + 1") == "2");
+    view.SetVisible(true);
+    Check("Views: SetVisible(true) shows", view.GetVisible());
+
+    // Order and moves.
+    var second = new WebContentsView();
+    host.ContentView.AddChildView(second, 1);
+    Check("Views: AddChildView at an index",
+        host.ContentView.Children is [_, var s1, var v2] && s1 == second && v2 == view && host.ContentView.NativeChildrenMatch());
+    host.ContentView.AddChildView(second);
+    Check("Views: adding a child again moves it to the top",
+        host.ContentView.Children is [_, var v1, var s2] && v1 == view && s2 == second && host.ContentView.NativeChildrenMatch());
+    var group = new View();
+    host.ContentView.AddChildView(group);
+    group.SetBounds(new Rectangle(250, 20, 300, 200));
+    group.AddChildView(second);
+    Check("Views: adding to another view leaves the first",
+        !host.ContentView.Children.Contains(second) && group.Children is [var g] && g == second
+        && host.ContentView.NativeChildrenMatch() && group.NativeChildrenMatch());
+    second.SetBounds(new Rectangle(5, 5, 100, 80));
+    await second.WebContents.LoadFile(page);
+    Check("Views: a moved view is placed in its new parent", second.GetBounds() == new Rectangle(5, 5, 100, 80), second.GetBounds());
+    // A page that never moved: on Linux a moved page can keep a stale size (DRIFT V13).
+    var nestedPage = new WebContentsView();
+    group.AddChildView(nestedPage);
+    nestedPage.SetBounds(new Rectangle(120, 5, 90, 70));
+    await nestedPage.WebContents.LoadFile(page);
+    var nested = await PageSizeBecomes(nestedPage, "\"90x70\"");
+    Check("Views: a nested view's page is the size of its bounds", nested == "\"90x70\"", $"{nested} view={nestedPage.GetBounds()} group={group.GetBounds()}");
+    // A new persistent session's profile loads asynchronously, and CEF refuses a browser view until it has.
+    var persistent = new WebContentsView(new WebContentsViewOptions { WebPreferences = new WebPreferences { Partition = "persist:views" } });
+    host.ContentView.AddChildView(persistent);
+    persistent.SetBounds(new Rectangle(0, 0, 50, 50));
+    var persistentLoad = persistent.WebContents.LoadFile(page);
+    Check("Views: a view in a new persistent session loads its page",
+        await Task.WhenAny(persistentLoad, Task.Delay(step * 3)) == persistentLoad && persistent.WebContents.GetUrl().EndsWith("view.html"),
+        persistent.WebContents.GetUrl());
+    host.ContentView.RemoveChildView(persistent);
+    persistent.WebContents.Close();
+
+    // Removing keeps the page; adding it back shows it again.
+    await view.WebContents.ExecuteJavaScriptAsync("window.marker = 'kept'; 1");
+    host.ContentView.RemoveChildView(view);
+    Check("Views: RemoveChildView removes", !host.ContentView.Children.Contains(view) && host.ContentView.NativeChildrenMatch());
+    await Task.Delay(500);
+    host.ContentView.AddChildView(view);
+    Check("Views: a removed view's page survives and comes back", await ViewJs(view, "window.marker") == "\"kept\"");
+
+    // Errors.
+    // As Electron, a WebContentsView is a View: children go above its page.
+    var overlay = new WebContentsView();
+    view.AddChildView(overlay);
+    overlay.SetBounds(new Rectangle(10, 10, 60, 40));
+    await overlay.WebContents.LoadFile(page);
+    Check("Views: a WebContentsView holds child views above its page",
+        view.Children is [var o] && o == overlay && view.NativeChildrenMatch() && await PageSizeBecomes(overlay, "\"60x40\"") == "\"60x40\""
+        && await PageSizeBecomes(view, "\"220x160\"") == "\"220x160\"");
+    view.RemoveChildView(overlay);
+    overlay.WebContents.Close();
+    Check("Views: a view cannot be added inside itself", ThrowsOf(() => group.AddChildView(host.ContentView)) is InvalidOperationException);
+    var extra = new View();
+    host.ContentView.AddChildView(extra, 99);
+    Check("Views: an index past the end adds at the end, as Electron", host.ContentView.Children[^1] == extra && host.ContentView.NativeChildrenMatch());
+    host.ContentView.AddChildView(view, 99);
+    Check("Views: an existing child moved past the end goes to the top",
+        host.ContentView.Children[^1] == view && host.ContentView.Children.Contains(extra) && host.ContentView.NativeChildrenMatch());
+    host.ContentView.RemoveChildView(extra);
+    var before = host.ContentView.Children;
+    Check("Views: a negative index is refused and an existing child stays",
+        ThrowsOf(() => host.ContentView.AddChildView(view, -1)) is ArgumentOutOfRangeException
+        && host.ContentView.Children.SequenceEqual(before) && host.ContentView.NativeChildrenMatch());
+
+    // A view's page opens windows as a window's page does; they close with it.
+    var popupHost = new WebContentsView();
+    host.ContentView.AddChildView(popupHost);
+    popupHost.SetBounds(new Rectangle(0, 0, 120, 90));
+    await popupHost.WebContents.LoadFile(page);
+    BrowserWindow? viewPopup = null;
+    popupHost.WebContents.DidCreateWindow += (_, e) => viewPopup = e.Window;
+    var opened = (await popupHost.WebContents.ExecuteJavaScriptAsync("window.open('about:blank') !== null", userGesture: true))?.ToString();
+    Check("Views: window.open from a view's page opens a BrowserWindow",
+        opened == "true" && Eventually(() => viewPopup is not null, step) && BrowserWindow.GetAllWindows().Contains(viewPopup!)
+        && viewPopup!.WebContents.Session == popupHost.WebContents.Session, opened);
+
+    // Closing a view's page: the view leaves its parent, the window stays, its popups close.
+    var pageDestroyed = false;
+    popupHost.WebContents.Destroyed += (_, _) => pageDestroyed = true;
+    if (OperatingSystem.IsWindows())
+    {
+        host.Focus();
+        Eventually(() => WindowsShell.Foreground() == host.GetNativeWindowHandle(), step);
+    }
+    var foregroundBefore = OperatingSystem.IsWindows() ? WindowsShell.Foreground() : 0;
+    var watch = OperatingSystem.IsWindows() ? new WindowsShell.ForegroundWatch() : null;
+    popupHost.WebContents.Close();
+    Check("Views: WebContents.Close closes a view's page; the view stays where it was, as Electron",
+        Eventually(() => pageDestroyed && popupHost.WebContents.IsDestroyed(), step) && host.ContentView.Children.Contains(popupHost)
+        && host.ContentView.NativeChildrenMatch() && popupHost.NativeChildrenMatch() && BrowserWindow.GetAllWindows().Contains(host));
+    if (watch is not null)
+    {
+        await Task.Delay(1000);
+        watch.Dispose();
+        // The page is torn down in a hidden window of its own; activating it would take the keyboard from the window.
+        var ours = watch.Seen.Where(s => s.Hwnd != 0 && s.ProcessId == Environment.ProcessId).Select(s => s.Hwnd).ToList();
+        Check("Views: closing a view's page activates no other window (EVENT_SYSTEM_FOREGROUND), and the window keeps the foreground",
+            foregroundBefore == host.GetNativeWindowHandle() && ours.All(h => h == host.GetNativeWindowHandle()) && WindowsShell.Foreground() == host.GetNativeWindowHandle(),
+            $"before={foregroundBefore} host={host.GetNativeWindowHandle()} seen=[{string.Join(",", watch.Seen)}] now={WindowsShell.Foreground()}");
+    }
+    host.ContentView.RemoveChildView(popupHost);
+    Check("Views: windows a view's page opened close with it",
+        Eventually(() => viewPopup is not null && !BrowserWindow.GetAllWindows().Contains(viewPopup), step));
+
+    // A view left outside every window when the app quits.
+    var detached = new WebContentsView();
+    host.ContentView.AddChildView(detached);
+    await detached.WebContents.LoadFile(page);
+    host.ContentView.RemoveChildView(detached);
+    strandedPage = detached.WebContents;
+
+    // WebContents.Close on a window's page closes the window.
+    var closingWindow = new BrowserWindow(new BrowserWindowOptions { Show = false });
+    await closingWindow.WebContents.LoadFile(page);
+    var windowClosed = false;
+    closingWindow.Closed += (_, _) => windowClosed = true;
+    closingWindow.WebContents.Close();
+    Check("Views: WebContents.Close on a window's page closes the window", Eventually(() => windowClosed, step));
+
+    // Closing the window takes its views' pages with it.
+    var closed = false;
+    host.Closed += (_, _) => closed = true;
+    host.Close();
+    Check("Views: the window closes with views in it", Eventually(() => closed, step));
+    Check("Views: the views' pages outlive their window, as in Electron",
+        !view.WebContents.IsDestroyed() && !second.WebContents.IsDestroyed() && await ViewJs(view, "window.marker") == "\"kept\"",
+        $"view={view.WebContents.IsDestroyed()} second={second.WebContents.IsDestroyed()} marker={await ViewJs(view, "window.marker")} parent={view.GetBounds()}");
+    view.WebContents.Close();
+    second.WebContents.Close();
+    Check("Views: a page outliving its window still closes",
+        Eventually(() => view.WebContents.IsDestroyed() && second.WebContents.IsDestroyed(), step));
+    Directory.Delete(dir, recursive: true);
+}
+
+// Linux applies a page's new size asynchronously (DRIFT V12).
+async Task<string?> PageSizeBecomes(View v, string size)
+{
+    string? seen = null;
+    for (var i = 0; i < 80 && seen != size; i++)
+    {
+        seen = await ViewJs(v, "innerWidth + 'x' + innerHeight");
+        if (seen != size) await Task.Delay(100);
+    }
+    return seen;
+}
+
+async Task<string?> ViewJs(View v, string code) => await JsOf(((WebContentsView)v).WebContents, code);
+
+async Task<string?> JsOf(WebContents contents, string code)
+{
+    var task = contents.ExecuteJavaScriptAsync(code);
+    if (await Task.WhenAny(task, Task.Delay(step)) != task) return "timeout";
+    return task.IsCompletedSuccessfully ? task.Result?.ToJsonString() : task.Exception?.InnerException?.Message;
+}
+
+// Chromium's ids for frames, checked against the process table: ps for the renderer's launch switches, /proc for its CPU.
+async Task FrameIdsAsync(BrowserWindow host, WebFrameMain main, WebFrameMain a)
+{
+    var tokenShape = new System.Text.RegularExpressions.Regex("^[0-9A-F]{32}$");
+    // The pid ps (Windows: WMI's Win32_Process) lists for the renderer launched with this render process id.
+    static int? PsRenderer(int processId)
+    {
+        using var ps = System.Diagnostics.Process.Start(OperatingSystem.IsWindows()
+            ? new System.Diagnostics.ProcessStartInfo("powershell.exe",
+                $"-NoProfile -Command \"Get-CimInstance Win32_Process -Filter 'ParentProcessId={Environment.ProcessId}' | ForEach-Object {{ '' + $_.ProcessId + ' ' + $_.CommandLine }}\"")
+            { RedirectStandardOutput = true, CreateNoWindow = true }
+            : new System.Diagnostics.ProcessStartInfo("ps", "-eo pid=,args=") { RedirectStandardOutput = true })!;
+        var listing = ps.StandardOutput.ReadToEnd();
+        ps.WaitForExit();
+        return listing.Split('\n').Select(l => l.Trim().Split(' ', 2)).Where(p => p.Length == 2
+            && p[1].Split(' ').Contains("--type=renderer") && p[1].Split(' ').Contains($"--renderer-client-id={processId}")).Select(p => (int?)int.Parse(p[0])).FirstOrDefault();
+    }
+    var nested = a.Frames[0];
+    WebFrameMain[] all = [main, a, nested];
+    Check("FrameToken is a token of its own per frame, ProcessId the page's render process",
+        all.All(f => tokenShape.IsMatch(f.FrameToken)) && all.Select(f => f.FrameToken).Distinct().Count() == 3 && all.All(f => f.ProcessId > 0 && f.ProcessId == main.ProcessId),
+        string.Join(" ", all.Select(f => $"{f.ProcessId}-{f.FrameToken}")));
+
+    var other = new BrowserWindow(new BrowserWindowOptions { Show = false });
+    await other.WebContents.LoadUrl("data:text/html,<p>other</p>");
+    var otherMain = other.WebContents.MainFrame!;
+    Check("a page in another renderer has another ProcessId and OsProcessId",
+        otherMain.ProcessId > 0 && otherMain.ProcessId != main.ProcessId && otherMain.OsProcessId > 0 && otherMain.OsProcessId != main.OsProcessId,
+        $"{otherMain.ProcessId}/{otherMain.OsProcessId} {main.ProcessId}/{main.OsProcessId}");
+
+    if (OperatingSystem.IsLinux() || OperatingSystem.IsWindows())
+    {
+        Check("OsProcessId is the renderer ps lists with ProcessId as its client id, for every frame of the page",
+            PsRenderer(main.ProcessId) is { } psPid && all.All(f => f.OsProcessId == psPid) && PsRenderer(otherMain.ProcessId) == otherMain.OsProcessId,
+            $"{main.ProcessId}->{PsRenderer(main.ProcessId)} os={main.OsProcessId}");
+
+        // A busy frame's CPU time lands on its OsProcessId, not on another page's renderer; relative, as a loaded host
+        // gives the spin only part of a core.
+        static long CpuTicks(int pid)
+        {
+            // Windows: the kernel's CPU time for the process, in the same 10 ms ticks as Linux's.
+            if (OperatingSystem.IsWindows())
+            {
+                try { return (long)System.Diagnostics.Process.GetProcessById(pid).TotalProcessorTime.TotalMilliseconds / 10; }
+                catch (ArgumentException) { return -1; }
+            }
+            if (!File.Exists($"/proc/{pid}/stat")) return -1;
+            var stat = File.ReadAllText($"/proc/{pid}/stat");
+            var fields = stat[(stat.LastIndexOf(')') + 2)..].Split(' ');
+            return long.Parse(fields[11]) + long.Parse(fields[12]);
+        }
+        var (busyBefore, idleBefore) = (CpuTicks(a.OsProcessId), CpuTicks(otherMain.OsProcessId));
+        await a.ExecuteJavaScriptAsync("{ const end = Date.now() + 1500; while (Date.now() < end); } 1");
+        var (busy, idle) = (CpuTicks(a.OsProcessId) - busyBefore, CpuTicks(otherMain.OsProcessId) - idleBefore);
+        Check("script spinning in a frame burns its OsProcessId's CPU", busyBefore >= 0 && idleBefore >= 0 && busy >= 30 && busy > 4 * idle, $"busy={busy} idle={idle} ticks");
+    }
+    else
+        Check("OsProcessId is one of the app's renderer processes", app.GetAppMetrics().Any(m => m.Type == "Tab" && m.Pid == main.OsProcessId) && a.OsProcessId == main.OsProcessId, main.OsProcessId);
+
+    Check("FromFrameToken finds each frame in any page from its ProcessId and FrameToken",
+        all.Append(otherMain).All(f => WebFrameMain.FromFrameToken(f.ProcessId, f.FrameToken) == f));
+    Check("FromFrameToken finds nothing for another process, an unknown token or a lower-case one",
+        WebFrameMain.FromFrameToken(otherMain.ProcessId, a.FrameToken) is null && WebFrameMain.FromFrameToken(main.ProcessId, new string('0', 32)) is null
+        && WebFrameMain.FromFrameToken(main.ProcessId, a.FrameToken.ToLowerInvariant()) is null && WebFrameMain.FromFrameToken(main.ProcessId, "x") is null);
+
+    var otherToken = otherMain.FrameToken;
+    var file = Path.Combine(Path.GetTempPath(), "oriel-frame-ids.html");
+    File.WriteAllText(file, "<!doctype html><p>file</p>");
+    await other.WebContents.LoadFile(file);
+    Check("a cross-site navigation gives the same frame a new FrameToken, by which it is found",
+        other.WebContents.MainFrame == otherMain && tokenShape.IsMatch(otherMain.FrameToken) && otherMain.FrameToken != otherToken
+        && WebFrameMain.FromFrameToken(otherMain.ProcessId, otherMain.FrameToken) == otherMain, $"{otherToken} -> {otherMain.ProcessId}-{otherMain.FrameToken}");
+
+    string? Document(WebFrameMain f) => f.ExecuteJavaScriptAsync("document.visibilityState").Result?.ToString();
+    Check("VisibilityState is visible in a shown window, as its documents say",
+        Eventually(() => main.VisibilityState == "visible" && a.VisibilityState == "visible" && Document(main) == "visible" && Document(a) == "visible", step), main.VisibilityState);
+    // A window created hidden can still hold a page Chromium counts as visible; the document is the truth.
+    Check("VisibilityState in a window never shown is what its document says", Eventually(() => Document(otherMain) is { } seen && otherMain.VisibilityState == seen, step),
+        $"{otherMain.VisibilityState} {Document(otherMain)}");
+    host.Hide();
+    Check("VisibilityState turns hidden when the window is hidden, with the documents",
+        Eventually(() => main.VisibilityState == "hidden" && nested.VisibilityState == "hidden" && Document(main) == "hidden" && Document(nested) == "hidden", step), $"{main.VisibilityState} {Document(main)}");
+    host.Show();
+    Check("VisibilityState turns visible again when it is shown", Eventually(() => main.VisibilityState == "visible" && Document(main) == "visible", step), $"{main.VisibilityState} {Document(main)}");
+    other.Destroy();
+
+    // Unnamed twins the parser made differ only in creation order. With the first removed, it must not take the remaining
+    // twin's ids.
+    await main.ExecuteJavaScriptAsync("const holder = document.createElement('iframe'); holder.className = 'holder'; holder.srcdoc = '<iframe srcdoc=x></iframe><iframe srcdoc=x></iframe>'; document.body.append(holder); 1");
+    var holder = Eventually(() => main.Frames.Any(f => f != a && f.Frames.Count(t => t.Url == "about:srcdoc") == 2), step) ? main.Frames.First(f => f != a) : null;
+    List<WebFrameMain> twins = holder is null ? [] : [.. holder.Frames];
+    await main.ExecuteJavaScriptAsync("document.querySelector('iframe.holder').contentDocument.querySelector('iframe').remove(); 1");
+    var removed = twins.Count == 2 && Eventually(() => twins.Count(f => f.Detached) == 1, step);
+    var gone = removed ? twins.First(f => f.Detached) : null;
+    var kept = removed ? twins.First(f => !f.Detached) : null;
+    string Throws(Func<object> read) { try { read(); return "no"; } catch (InvalidOperationException) { return "yes"; } }
+    Check("a removed frame keeps the ids of its last document, apart from its twin's, is not found by them, and OsProcessId and VisibilityState throw",
+        gone is not null && kept is not null && tokenShape.IsMatch(gone.FrameToken) && gone.ProcessId == main.ProcessId && gone.FrameToken != kept.FrameToken
+        && WebFrameMain.FromFrameToken(gone.ProcessId, gone.FrameToken) is null && WebFrameMain.FromFrameToken(kept.ProcessId, kept.FrameToken) == kept
+        && Throws(() => gone.OsProcessId) == "yes" && Throws(() => gone.VisibilityState) == "yes",
+        gone is null ? $"twins={twins.Count}" : $"{gone.ProcessId}-{gone.FrameToken} kept={kept?.FrameToken}");
+    await main.ExecuteJavaScriptAsync("document.querySelector('iframe.holder')?.remove(); 1");
+    Eventually(() => holder is null || holder.Detached, step);
+
+    // Chromium puts a sandboxed iframe in a process of its own, where DevTools reports neither its URL nor its name.
+    await main.ExecuteJavaScriptAsync("const boxed = document.createElement('iframe'); boxed.sandbox = ''; boxed.srcdoc = 'boxed'; document.body.append(boxed); 1");
+    var boxed = Eventually(() => main.Frames.Count == 2 && main.Frames.Any(f => f != a && f.ProcessId > 0), step) ? main.Frames.First(f => f != a) : null;
+    var boxedPid = boxed is null ? 0 : boxed.OsProcessId;
+    Check("a frame in another process has that renderer's ProcessId and OsProcessId, and is found by its FrameToken",
+        boxed is not null && boxed.ProcessId != main.ProcessId && tokenShape.IsMatch(boxed.FrameToken) && boxedPid > 0 && boxedPid != main.OsProcessId
+        && (OperatingSystem.IsMacOS() || PsRenderer(boxed.ProcessId) == boxedPid) && WebFrameMain.FromFrameToken(boxed.ProcessId, boxed.FrameToken) == boxed,
+        boxed is null ? "no frame" : $"{boxed.ProcessId}-{boxed.FrameToken} os={boxedPid} main={main.ProcessId}");
+    await main.ExecuteJavaScriptAsync("boxed.remove(); 1");
+    Eventually(() => main.Frames.Count == 1, step);
+}
+
 async Task FramesAsync()
 {
     var dir = Directory.CreateTempSubdirectory("oriel-frames-").FullName;
@@ -3383,6 +4297,7 @@ async Task FramesAsync()
     Check("a nested iframe has its parent and top", Eventually(() => a.Frames is [{ Name: "b" } b] && b.Parent == a && b.Top == main, step));
     Check("FramesInSubtree includes the frame itself", main.FramesInSubtree.Select(f => f.Name).SequenceEqual(["", "a", "b"]), string.Join(",", main.FramesInSubtree.Select(f => f.Name)));
     Check("the same frame is the same object", main.Frames[0] == a && host.WebContents.MainFrame == main);
+    await FrameIdsAsync(host, main, a);
 
     using (var frameReady = new ManualResetEventSlim())
     {
@@ -3875,6 +4790,7 @@ if (failures >= 0)
     // Checked once Run has returned: the final Quit must have raised WillQuit on its way out.
     Check("WillQuit is raised when the app quits", willQuit == 1, willQuit);
     Check("Exited is raised with the exit code, as Electron's quit event", exited is { ExitCode: 0 }, exited);
+    Check("Views: quitting closes the page of a view outside every window", strandedClosedAtExit == true, strandedClosedAtExit);
     failures = results.Count(r => r.StartsWith("FAIL", StringComparison.Ordinal));
 }
 Console.WriteLine(failures < 0 ? "RESULT: did not finish" : $"RESULT: {failures} failure(s)");
@@ -4242,4 +5158,19 @@ static unsafe class CommandLineProbe
         Oriel.Cef.NativeObject.Release(commandLine);
         return text;
     });
+}
+
+static class Record
+{
+    internal static Exception? Exception(Action act)
+    {
+        try { act(); return null; }
+        catch (Exception e) { return e; }
+    }
+
+    internal static async Task<Exception?> ExceptionAsync(Func<Task> act)
+    {
+        try { await act(); return null; }
+        catch (Exception e) { return e; }
+    }
 }

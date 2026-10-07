@@ -249,7 +249,8 @@ public sealed unsafe partial class OrielApp
         _quitting = false;
         if (will.Cancel) return;
         SessionHelperPage.CloseAll();
-        CefNative.cef_quit_message_loop();
+        // CEF must not shut down with a page still open: views outside every window still have theirs.
+        WebContentsView.CloseAll(CefNative.cef_quit_message_loop);
     }
 
     /// <summary>A window refused to close; a quit in progress stops, as in Electron.</summary>
@@ -309,6 +310,7 @@ public sealed unsafe partial class OrielApp
         var global = CefNative.cef_request_context_get_global_context();
         Session.ApplyElectronDefaults(global);
         NativeObject.Release(global);
+        NativeTheme.OnReady();
         // Before Ready, so the first window's page can already load from a custom scheme.
         Protocol.OnContextInitialized();
         IsReady = true;

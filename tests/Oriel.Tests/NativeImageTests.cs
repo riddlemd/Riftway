@@ -171,4 +171,84 @@ public sealed class NativeImageTests
         Assert.Equal(8, (int)ThumbarButtonFlags.Hidden);
         Assert.Equal(16, (int)ThumbarButtonFlags.NonInteractive);
     }
+
+    private static byte[] OneRedPixelIco()
+        => IcoDecoderTests.Ico((1, 1, 24, IcoDecoderTests.Dib(1, 1, 24, [IcoDecoderTests.Px(0, 0, 255)], [IcoDecoderTests.Px(0)])));
+
+    [Fact]
+    public void CreateFromPath_IcoWhereIcoIsRead_GivesTheIconAsTheOnlyScaleOneRepresentation()
+    {
+        var dir = Directory.CreateTempSubdirectory();
+        try
+        {
+            var path = Path.Combine(dir.FullName, "app.ICO");
+            File.WriteAllBytes(path, OneRedPixelIco());
+            // PNG content: a sibling Oriel tried to decode would reach CEF's codec, which unit tests do not load.
+            File.WriteAllBytes(Path.Combine(dir.FullName, "app@2x.ICO"), [0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A]);
+            var image = NativeImage.CreateFromPath(path, readIco: true);
+            // Electron's ICO icon is the 256x256 one, stretched when the file has no such entry.
+            Assert.Equal([1.0], image.GetScaleFactors());
+            Assert.Equal((256, 256), image.GetSize());
+            Assert.Equal(new byte[] { 0, 0, 255, 255 }, image.ToBitmap()[..4]);
+        }
+        finally { dir.Delete(true); }
+    }
+
+    [Fact]
+    public void CreateFromPath_IcoWhereIcoIsNotRead_IsEmpty()
+    {
+        var dir = Directory.CreateTempSubdirectory();
+        try
+        {
+            var path = Path.Combine(dir.FullName, "app.ico");
+            File.WriteAllBytes(path, OneRedPixelIco());
+            Assert.True(NativeImage.CreateFromPath(path, readIco: false).IsEmpty());
+        }
+        finally { dir.Delete(true); }
+    }
+
+    [Fact]
+    public void CreateFromPath_BrokenOrMissingIco_IsEmpty()
+    {
+        var dir = Directory.CreateTempSubdirectory();
+        try
+        {
+            var path = Path.Combine(dir.FullName, "bad.ico");
+            File.WriteAllBytes(path, [1, 2, 3]);
+            Assert.True(NativeImage.CreateFromPath(path, readIco: true).IsEmpty());
+            Assert.True(NativeImage.CreateFromPath(Path.Combine(dir.FullName, "none.ico"), readIco: true).IsEmpty());
+        }
+        finally { dir.Delete(true); }
+    }
+
+    [Fact]
+    public void CreateFromBuffer_IcoBytes_IsNotDecoded()
+        => Assert.True(NativeImage.CreateFromBuffer(OneRedPixelIco()).IsEmpty());
+
+    [Fact]
+    public void CreateFromPath_Ico_FollowsThePlatform()
+    {
+        var dir = Directory.CreateTempSubdirectory();
+        try
+        {
+            var path = Path.Combine(dir.FullName, "app.ico");
+            File.WriteAllBytes(path, OneRedPixelIco());
+            // Electron reads ICO on Windows only.
+            Assert.Equal(!OperatingSystem.IsWindows(), NativeImage.CreateFromPath(path).IsEmpty());
+        }
+        finally { dir.Delete(true); }
+    }
+
+    [Fact]
+    public void Resize_QualityPicksTheFilter_AndDefaultsToBest()
+    {
+        byte[] step = [.. Enumerable.Range(0, 8).SelectMany(i => Enumerable.Repeat((byte)(i < 4 ? 64 : 192), 4))];
+        var image = NativeImage.CreateFromBitmap(step, new NativeImageBitmapOptions { Width = 8, Height = 1 });
+        byte[] Resized(ResizeOptions o) => image.Resize(o).ToBitmap();
+        var best = Resized(new ResizeOptions { Width = 16, Height = 1, Quality = ResizeQuality.Best });
+        var good = Resized(new ResizeOptions { Width = 16, Height = 1, Quality = ResizeQuality.Good });
+        Assert.Equal(new byte[] { 64, 64, 64, 64, 67, 56, 50, 90, 165, 205, 199, 188, 191, 192, 192, 192 }, Enumerable.Range(0, 16).Select(i => best[i * 4]));
+        Assert.Equal(new byte[] { 64, 64, 64, 64, 64, 64, 64, 73, 182, 192, 192, 192, 192, 192, 192, 192 }, Enumerable.Range(0, 16).Select(i => good[i * 4]));
+        Assert.Equal(best, Resized(new ResizeOptions { Width = 16, Height = 1 }));
+    }
 }
