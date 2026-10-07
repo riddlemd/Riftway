@@ -56,11 +56,9 @@ public sealed unsafe partial class Session
         {
             RequireReady();
             Session session;
-            lock (s_gate)
-            {
-                session = s_default ??= new Session(CefNative.cef_request_context_get_global_context(), OrielApp.DataDirectory, null);
-                if (s_defaultPagelessContext == 0) ShareDefaultForPageless(session._context);
-            }
+            lock (s_gate) session = s_default ??= new Session(CefNative.cef_request_context_get_global_context(), OrielApp.DataDirectory, null);
+            // Outside s_gate: this waits for the UI thread, which may itself be waiting for s_gate.
+            if (Interlocked.CompareExchange(ref s_sharingDefault, 1, 0) == 0) ShareDefaultForPageless(session._context);
             return Announce(session);
         }
     }
@@ -315,6 +313,7 @@ public sealed unsafe partial class Session
     // sharing it (CefBrowserContext::UpdateWorkerRequestContextHandler), so this context exists only to carry one.
     private static readonly RequestContextHandler s_defaultPageless = WebRequest.PagelessHandler(() => Volatile.Read(ref s_default)?.WebRequest);
     private static nint s_defaultPagelessContext;
+    private static int s_sharingDefault;
 
     private static void ShareDefaultForPageless(cef_request_context_t* global) => s_defaultPagelessContext = CefThread.InvokeOnUi(() =>
     {

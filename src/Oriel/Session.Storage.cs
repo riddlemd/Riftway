@@ -8,10 +8,15 @@ public sealed partial class Session
     private readonly Lock _helperGate = new();
     private Task<SessionHelperPage>? _helper;
 
-    // The hidden page is made on first use and lives until the app quits.
+    // The hidden page is made on first use and lives until the app quits; one that failed or closed is made again.
     private Task<SessionHelperPage> Helper()
     {
-        lock (_helperGate) return _helper ??= SessionHelperPage.CreateAsync(this);
+        lock (_helperGate)
+        {
+            if (_helper is { IsFaulted: true } or { IsCanceled: true } || (_helper is { IsCompletedSuccessfully: true } done && !done.Result.IsAlive))
+                _helper = null;
+            return _helper ??= SessionHelperPage.CreateAsync(this);
+        }
     }
 
     private async Task<JsonElement> DevToolsAsync(string method, Action<Utf8JsonWriter>? writeParams = null)

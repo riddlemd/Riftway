@@ -41,6 +41,8 @@ public sealed partial class OrielApp
         lock (_metricsGate)
         {
             foreach (var stale in _samplers.Keys.Except(processes.Select(p => p.Pid)).ToList()) _samplers.Remove(stale);
+            // A pid the OS gives a new process must not inherit the old one's peak.
+            foreach (var stale in _peakResident.Keys.Except(processes.Select(p => p.Pid)).ToList()) _peakResident.Remove(stale);
             foreach (var (pid, type, service) in processes)
             {
                 if (ReadProcess(pid) is not { } info) continue;

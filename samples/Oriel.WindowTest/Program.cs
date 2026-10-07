@@ -1582,6 +1582,18 @@ async Task WebContentsMethodsAsync()
         $"{blockedLoad?.GetType().Name}:{(blockedLoad as LoadFailedException)?.ErrorCode} [{Failures()}] at {stayingContents.GetUrl()}");
     stayingContents.WillPreventUnload += (_, e) => e.Cancel = true;
     staying.Destroy();
+    // A load that got past the old page is no longer pending: a later refused close reports nothing, as Electron
+    // records a pending load only when the old page asks.
+    var settled = new BrowserWindow(new BrowserWindowOptions { Show = false });
+    await settled.WebContents.LoadFile(page);
+    var settledFailures = 0;
+    settled.WebContents.DidFailLoad += (_, _) => Interlocked.Increment(ref settledFailures);
+    await settled.WebContents.ExecuteJavaScriptAsync("0", userGesture: true);
+    settled.WebContents.Close(new WebContentsCloseOptions { WaitForBeforeUnload = true });
+    await Task.Delay(1500);
+    Check("a refused close after a finished load raises no did-fail-load for that load", !settled.WebContents.IsDestroyed() && settledFailures == 0,
+        $"destroyed={settled.WebContents.IsDestroyed()} failures={settledFailures}");
+    settled.Destroy();
 
     // zoom-changed: Ctrl+wheel the page leaves alone is reported, one per tick, and does not zoom; never on macOS.
     File.WriteAllText(page, "<!doctype html><div id=box style='height:3000px'>zoom</div>");

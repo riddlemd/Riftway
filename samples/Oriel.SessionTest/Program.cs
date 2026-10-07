@@ -480,6 +480,17 @@ async Task RunAsync()
     Check("a navigation a listener cancels fails LoadUrl and DidFailLoad with ERR_BLOCKED_BY_CLIENT, as Electron's",
         blockedLoad is LoadFailedException { ErrorCode: -20 } && failedLoads.SequenceEqual([-20]) && !settledBeforeEvent,
         $"{blockedLoad?.Message} [{string.Join(",", failedLoads)}] settled before the event: {settledBeforeEvent}");
+    // A did-fail-load handler that loads elsewhere gets its own task: the failure settles only the load that failed, which
+    // the new navigation aborted first, as Electron's loadURL rejects on did-start-navigation before its own did-fail-load.
+    Task? fallbackTask = null;
+    EventHandler<LoadFailedEventArgs> retry = (_, e) => { if (e.ErrorCode == -20 && fallbackTask is null) fallbackTask = requestWin.LoadUrl(Site + "fallback"); };
+    requestWin.WebContents.DidFailLoad += retry;
+    var retriedLoad = await Throws(() => requestWin.LoadUrl(Site + "blocked").WaitAsync(TimeSpan.FromSeconds(10)));
+    var fallbackLoad = fallbackTask is null ? new InvalidOperationException("no retry") : await Throws(() => fallbackTask.WaitAsync(TimeSpan.FromSeconds(10)));
+    requestWin.WebContents.DidFailLoad -= retry;
+    Check("a LoadUrl a did-fail-load handler starts loads, while the failed one fails as aborted, as Electron's",
+        retriedLoad is LoadFailedException { ErrorCode: -3 } && fallbackLoad is null && requestWin.WebContents.GetUrl() == Site + "fallback",
+        $"{retriedLoad?.Message} | {fallbackLoad?.Message ?? "loaded"} | {requestWin.WebContents.GetUrl()}");
     var unfiltered = await Fetch("/unfiltered");
     Check("onBeforeRequest follows its filter", unfiltered == Page && Saw("before", "unfiltered") is null && await WaitFor(() => Saw("completed", "unfiltered")) is not null);
 
