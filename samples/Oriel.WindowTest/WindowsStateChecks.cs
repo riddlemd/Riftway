@@ -263,6 +263,25 @@ static partial class WindowsStateChecks
         check("level normal with flag set still keeps the window on top on Windows", Eventually(() => w.IsAlwaysOnTop && Has(hwnd, ExTopmost), step), w.IsAlwaysOnTop);
         w.SetAlwaysOnTop(false);
         Eventually(() => !Has(hwnd, ExTopmost), step);
+        string? unknownError = null;
+        try { w.SetAlwaysOnTop(true, "bogus-level"); } catch (Exception e) { unknownError = e.GetType().Name; }
+        check("an unknown level does not throw and keeps the window on top, as Electron on Windows",
+            unknownError is null && Eventually(() => w.IsAlwaysOnTop && Has(hwnd, ExTopmost), step), $"error={unknownError} onTop={w.IsAlwaysOnTop}");
+        // Activation is when a behind-the-taskbar level drops back under it, so the unknown level must survive one.
+        w.MoveTop();
+        fixedWindow.Focus();
+        await Task.Delay(300);
+        w.Focus();
+        await Task.Delay(500);
+        check("an unknown level stays above the taskbar after activation, as Electron on Windows", Above(hwnd, tray) && Has(hwnd, ExTopmost), $"above={Above(hwnd, tray)}");
+        w.SetAlwaysOnTop(true, null!);
+        fixedWindow.Focus();
+        await Task.Delay(300);
+        w.Focus();
+        check("a null level is floating, under the taskbar after activation, as Electron's non-string level",
+            Eventually(() => Above(tray, hwnd), step) && Has(hwnd, ExTopmost), $"under={Above(tray, hwnd)}");
+        w.SetAlwaysOnTop(false);
+        Eventually(() => !Has(hwnd, ExTopmost), step);
 
         unfocusable.Destroy();
         fixedWindow.Destroy();

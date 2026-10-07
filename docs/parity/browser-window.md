@@ -362,7 +362,7 @@ Parameters in brackets are optional in Electron. `webContents` members are in [w
 | `isClosable()` | `IsClosable` | done |  |
 | `setHiddenInMissionControl(hidden)` | `SetHiddenInMissionControl` | done |  |
 | `isHiddenInMissionControl()` | `IsHiddenInMissionControl` | done |  |
-| `setAlwaysOnTop(flag, level, relativeLevel)` | `SetAlwaysOnTop` | done | macOS window levels; Windows: levels below `pop-up-menu` go under the taskbar (again on each activation); `level` `normal` with no `relativeLevel` leaves the window off top on macOS only, as Electron; an unknown level throws (W48). |
+| `setAlwaysOnTop(flag, level, relativeLevel)` | `SetAlwaysOnTop` | done | macOS window levels; Windows: levels below `pop-up-menu` go under the taskbar (again on each activation); `level` `normal` with no `relativeLevel` leaves the window off top on macOS only, as Electron; an unknown level throws nowhere, as Electron: macOS takes it as `normal` (plus `relativeLevel`), Windows keeps the window on top and above the taskbar, and a null level is `floating`. |
 | `isAlwaysOnTop()` | `IsAlwaysOnTop` | done |  |
 | `moveAbove(mediaSourceId)` | `MoveAbove` | partial | Windows, Chromium's id parsing and Electron's error; macOS and Linux not yet (W43). |
 | `moveTop()` | `MoveTop` | partial | Windows only (W43). |
