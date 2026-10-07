@@ -34,7 +34,7 @@ Cross-platform work. Platform-specific items: [linux-todo.md](linux-todo.md), [w
 - [x] `Debugger` (`WebContents.Debugger`; shares Oriel's protocol session, DRIFT C43)
 - [ ] `View` and `WebContentsView` ([design](design/web-contents-view.md)): phase 1 done (`ContentView`, child views,
       bounds, visibility, `bounds-changed`, popups and `close()` from view pages); next `BaseWindow` (DRIFT V1, V2, V4, V7, V9, V12, V13)
-- [ ] Windows: closing a view's page tears it down in a hidden, never-shown window; check it takes no focus there
+- [x] Windows: closing a view's page tears it down in a hidden, never-shown window; check it takes no focus there (WindowTest: no `EVENT_SYSTEM_FOREGROUND`, the window keeps the foreground)
 - [ ] macOS: check whether a hidden window or a `LoadUrl` takes focus (it did on Windows; fixed on branch `window-polish`)
 - [ ] Remaining M2 modules: `BaseWindow`; the remaining Electron command-line switches and `ELECTRON_*` variables,
       checked one by one

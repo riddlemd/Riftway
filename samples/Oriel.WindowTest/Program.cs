@@ -3464,6 +3464,22 @@ async Task ThemeAsync(BrowserWindow win)
         Check("NativeTheme: a system appearance change is checked at once", Eventually(() => NativeTheme.Checks > idleChecks, TimeSpan.FromSeconds(1)),
             $"{idleChecks} -> {NativeTheme.Checks}");
     }
+    else if (OperatingSystem.IsWindows())
+    {
+        // The system's settings are read, not changed: toggling contrast or theme would disturb the desktop.
+        var (contrastApi, contrastRegistry) = WindowsShell.HighContrastOn();
+        Check("NativeTheme: ShouldUseHighContrastColors and InForcedColorsMode are Windows' contrast theme (SPI_GETHIGHCONTRAST)",
+            NativeTheme.ShouldUseHighContrastColors == contrastApi && NativeTheme.InForcedColorsMode == contrastApi && contrastApi == contrastRegistry,
+            $"oriel={NativeTheme.ShouldUseHighContrastColors}/{NativeTheme.InForcedColorsMode} spi={contrastApi} registry={contrastRegistry}");
+        var pageForced = (await win.WebContents.ExecuteJavaScriptAsync("matchMedia('(forced-colors: active)').matches"))?.GetValue<bool>();
+        Check("NativeTheme: InForcedColorsMode agrees with the page's forced-colors", pageForced == NativeTheme.InForcedColorsMode, pageForced);
+        Check("NativeTheme: Windows has no inverted scheme or reduced transparency setting, as Electron",
+            !NativeTheme.ShouldUseInvertedColorScheme && !NativeTheme.PrefersReducedTransparency);
+        var checks = NativeTheme.Checks;
+        await Task.Delay(2500);
+        Check("NativeTheme: Windows checks the system settings once a second while there are handlers (DRIFT Y1)",
+            NativeTheme.Checks - checks is >= 2 and <= 4, $"{checks} -> {NativeTheme.Checks}");
+    }
     else if (OperatingSystem.IsLinux())
     {
         // GTK_THEME is one of the settings Oriel reads on Linux, and a test can change it.
@@ -3667,10 +3683,27 @@ async Task ViewsAsync()
     // Closing a view's page: the view leaves its parent, the window stays, its popups close.
     var pageDestroyed = false;
     popupHost.WebContents.Destroyed += (_, _) => pageDestroyed = true;
+    if (OperatingSystem.IsWindows())
+    {
+        host.Focus();
+        Eventually(() => WindowsShell.Foreground() == host.GetNativeWindowHandle(), step);
+    }
+    var foregroundBefore = OperatingSystem.IsWindows() ? WindowsShell.Foreground() : 0;
+    var watch = OperatingSystem.IsWindows() ? new WindowsShell.ForegroundWatch() : null;
     popupHost.WebContents.Close();
     Check("Views: WebContents.Close closes a view's page; the view stays where it was, as Electron",
         Eventually(() => pageDestroyed && popupHost.WebContents.IsDestroyed(), step) && host.ContentView.Children.Contains(popupHost)
         && host.ContentView.NativeChildrenMatch() && popupHost.NativeChildrenMatch() && BrowserWindow.GetAllWindows().Contains(host));
+    if (watch is not null)
+    {
+        await Task.Delay(1000);
+        watch.Dispose();
+        // The page is torn down in a hidden window of its own; activating it would take the keyboard from the window.
+        var ours = watch.Seen.Where(s => s.Hwnd != 0 && s.ProcessId == Environment.ProcessId).Select(s => s.Hwnd).ToList();
+        Check("Views: closing a view's page activates no other window (EVENT_SYSTEM_FOREGROUND), and the window keeps the foreground",
+            foregroundBefore == host.GetNativeWindowHandle() && ours.All(h => h == host.GetNativeWindowHandle()) && WindowsShell.Foreground() == host.GetNativeWindowHandle(),
+            $"before={foregroundBefore} host={host.GetNativeWindowHandle()} seen=[{string.Join(",", watch.Seen)}] now={WindowsShell.Foreground()}");
+    }
     host.ContentView.RemoveChildView(popupHost);
     Check("Views: windows a view's page opened close with it",
         Eventually(() => viewPopup is not null && !BrowserWindow.GetAllWindows().Contains(viewPopup), step));
@@ -3730,10 +3763,14 @@ async Task<string?> JsOf(WebContents contents, string code)
 async Task FrameIdsAsync(BrowserWindow host, WebFrameMain main, WebFrameMain a)
 {
     var tokenShape = new System.Text.RegularExpressions.Regex("^[0-9A-F]{32}$");
-    // Linux: the pid ps lists for the renderer launched with this render process id.
+    // The pid ps (Windows: WMI's Win32_Process) lists for the renderer launched with this render process id.
     static int? PsRenderer(int processId)
     {
-        using var ps = System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo("ps", "-eo pid=,args=") { RedirectStandardOutput = true })!;
+        using var ps = System.Diagnostics.Process.Start(OperatingSystem.IsWindows()
+            ? new System.Diagnostics.ProcessStartInfo("powershell.exe",
+                $"-NoProfile -Command \"Get-CimInstance Win32_Process -Filter 'ParentProcessId={Environment.ProcessId}' | ForEach-Object {{ '' + $_.ProcessId + ' ' + $_.CommandLine }}\"")
+            { RedirectStandardOutput = true, CreateNoWindow = true }
+            : new System.Diagnostics.ProcessStartInfo("ps", "-eo pid=,args=") { RedirectStandardOutput = true })!;
         var listing = ps.StandardOutput.ReadToEnd();
         ps.WaitForExit();
         return listing.Split('\n').Select(l => l.Trim().Split(' ', 2)).Where(p => p.Length == 2
@@ -3752,7 +3789,7 @@ async Task FrameIdsAsync(BrowserWindow host, WebFrameMain main, WebFrameMain a)
         otherMain.ProcessId > 0 && otherMain.ProcessId != main.ProcessId && otherMain.OsProcessId > 0 && otherMain.OsProcessId != main.OsProcessId,
         $"{otherMain.ProcessId}/{otherMain.OsProcessId} {main.ProcessId}/{main.OsProcessId}");
 
-    if (OperatingSystem.IsLinux())
+    if (OperatingSystem.IsLinux() || OperatingSystem.IsWindows())
     {
         Check("OsProcessId is the renderer ps lists with ProcessId as its client id, for every frame of the page",
             PsRenderer(main.ProcessId) is { } psPid && all.All(f => f.OsProcessId == psPid) && PsRenderer(otherMain.ProcessId) == otherMain.OsProcessId,
@@ -3762,6 +3799,12 @@ async Task FrameIdsAsync(BrowserWindow host, WebFrameMain main, WebFrameMain a)
         // gives the spin only part of a core.
         static long CpuTicks(int pid)
         {
+            // Windows: the kernel's CPU time for the process, in the same 10 ms ticks as Linux's.
+            if (OperatingSystem.IsWindows())
+            {
+                try { return (long)System.Diagnostics.Process.GetProcessById(pid).TotalProcessorTime.TotalMilliseconds / 10; }
+                catch (ArgumentException) { return -1; }
+            }
             if (!File.Exists($"/proc/{pid}/stat")) return -1;
             var stat = File.ReadAllText($"/proc/{pid}/stat");
             var fields = stat[(stat.LastIndexOf(')') + 2)..].Split(' ');
@@ -3826,7 +3869,7 @@ async Task FrameIdsAsync(BrowserWindow host, WebFrameMain main, WebFrameMain a)
     var boxedPid = boxed is null ? 0 : boxed.OsProcessId;
     Check("a frame in another process has that renderer's ProcessId and OsProcessId, and is found by its FrameToken",
         boxed is not null && boxed.ProcessId != main.ProcessId && tokenShape.IsMatch(boxed.FrameToken) && boxedPid > 0 && boxedPid != main.OsProcessId
-        && (!OperatingSystem.IsLinux() || PsRenderer(boxed.ProcessId) == boxedPid) && WebFrameMain.FromFrameToken(boxed.ProcessId, boxed.FrameToken) == boxed,
+        && (OperatingSystem.IsMacOS() || PsRenderer(boxed.ProcessId) == boxedPid) && WebFrameMain.FromFrameToken(boxed.ProcessId, boxed.FrameToken) == boxed,
         boxed is null ? "no frame" : $"{boxed.ProcessId}-{boxed.FrameToken} os={boxedPid} main={main.ProcessId}");
     await main.ExecuteJavaScriptAsync("boxed.remove(); 1");
     Eventually(() => main.Frames.Count == 1, step);
