@@ -6,7 +6,8 @@ using Oriel;
 // and waits for both the event and the state. Exit code = failures (-1 when the run never finishes).
 // The process checks crash or hang a process of their own, started with ProcessChild.
 const string ProcessChild = "--oriel-process-child";
-if (args.Length >= 2 && args[0] == ProcessChild) return ProcessChildMain(args[1], args.Length > 2 ? args[2] : "");
+if (args.Length >= 2 && args[0] == ProcessChild)
+    return args[1] == WindowStatePersistenceChecks.Mode ? WindowStatePersistenceChecks.ChildMain(args[2..]) : ProcessChildMain(args[1], args.Length > 2 ? args[2] : "");
 var app = OrielApp.Create("Oriel.WindowTest");
 // Chromium's DevTools server on a free port: a switch only Chromium acts on, read back over HTTP.
 var debugPort = FreePort();
@@ -308,6 +309,7 @@ async Task RunAsync(BrowserWindow win, BrowserWindow simple)
     await DownloadFolderAsync();
     await CommandLineAsync();
     await ProcessChildrenAsync();
+    await WindowStatePersistenceChecks.RunAsync(Check, step);
     await BadgeAsync(win);
     await WindowsApisAsync();
     await TransparencyAsync();

@@ -16,7 +16,7 @@ The 67 rows include `BrowserView` (deprecated, never implemented; counted as not
 
 | Checklist | Applicable items | Done | Partial | Missing | % done | % done + partial/2 |
 |---|---|---|---|---|---|---|
-| [BrowserWindow](parity/browser-window.md) (with `BaseWindow`) | 294 | 160 | 56 | 78 | 54.4% | 63.9% |
+| [BrowserWindow](parity/browser-window.md) (with `BaseWindow`) | 294 | 164 | 56 | 74 | 55.8% | 65.3% |
 | [webContents](parity/web-contents.md) (with `navigationHistory`, `WebFrameMain`) | 230 | 105 | 51 | 74 | 45.7% | 56.7% |
 
 **Source** — where the implementation comes from:
@@ -55,7 +55,7 @@ Detailed item-by-item status: [parity/browser-window.md](parity/browser-window.m
 | Electron | Oriel | Source | Wave | Status |
 |---|---|---|---|---|
 | `BaseWindow` | `BaseWindow` | CEF (Views) | M2 | — |
-| `BrowserWindow` | `BrowserWindow` | CEF (Views) | M2 | partial: 160 of 294 applicable items done (54.4%), see parity/browser-window.md |
+| `BrowserWindow` | `BrowserWindow` | CEF (Views) | M2 | partial: 164 of 294 applicable items done (55.8%), see parity/browser-window.md |
 | `View` | `View` | CEF (Views panel) | M2 | — |
 | `WebContentsView` | `WebContentsView` | CEF (Views browser view) | M2 | — |
 | `ImageView` | `ImageView` | CEF + .NET | M5 | — |

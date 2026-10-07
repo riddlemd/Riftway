@@ -45,6 +45,9 @@ public unsafe delegate void CommandLineCallback(string processType, cef_command_
 /// <summary>A child process's command line before it launches.</summary>
 public unsafe delegate void ChildCommandLineCallback(cef_command_line_t* commandLine);
 
+/// <summary>Registers preferences of <paramref name="type"/>: the app-wide <c>Local State</c> (global) or a profile's.</summary>
+public unsafe delegate void RegisterPreferencesCallback(cef_preferences_type_t type, cef_preference_registrar_t* registrar);
+
 /// <summary><c>cef_app_t</c>: process-level hooks.</summary>
 public sealed unsafe class AppHandler
 {
@@ -106,6 +109,7 @@ public sealed unsafe class BrowserProcessHandler
         Native->on_context_initialized = &OnContextInitialized;
         Native->on_already_running_app_relaunch = &OnAlreadyRunningAppRelaunch;
         Native->on_before_child_process_launch = &OnBeforeChildProcessLaunch;
+        Native->on_register_custom_preferences = &OnRegisterCustomPreferences;
     }
 
     public cef_browser_process_handler_t* Native { get; }
@@ -119,6 +123,17 @@ public sealed unsafe class BrowserProcessHandler
 
     /// <summary>A child process (zygote, renderer, GPU, utility) is about to launch with this command line.</summary>
     public ChildCommandLineCallback? BeforeChildProcessLaunch { get; init; }
+
+    /// <summary>Preferences to register before CEF reads them from disk; an unregistered one cannot be set.</summary>
+    public RegisterPreferencesCallback? RegisterPreferences { get; init; }
+
+    // The registrar is scoped to the call (cef_base_scoped_t), so it is never released.
+    [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])]
+    private static void OnRegisterCustomPreferences(cef_browser_process_handler_t* self, cef_preferences_type_t type, cef_preference_registrar_t* registrar)
+    {
+        var owner = NativeObject.Owner<BrowserProcessHandler>(self);
+        if (owner.RegisterPreferences is { } callback) Guard.Run(() => callback(type, registrar));
+    }
 
     [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])]
     private static void OnBeforeChildProcessLaunch(cef_browser_process_handler_t* self, cef_command_line_t* commandLine)
