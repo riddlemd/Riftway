@@ -10,15 +10,15 @@ Percentages are over the non-n/a items; the second counts a partial item as half
 
 | Area | Items | Done | Partial | Missing | n/a | % done | % done + partial/2 |
 |---|---|---|---|---|---|---|---|
-| Static methods | 5 | 2 | 2 | 1 | 0 | 40.0% | 60.0% |
+| Static methods | 5 | 3 | 2 | 0 | 0 | 60.0% | 80.0% |
 | Instance events | 59 | 31 | 18 | 8 | 2 | 54.4% | 70.2% |
-| Instance methods | 118 | 42 | 23 | 45 | 8 | 38.2% | 48.6% |
+| Instance methods | 118 | 42 | 24 | 44 | 8 | 38.2% | 49.1% |
 | Instance properties | 18 | 10 | 1 | 6 | 1 | 58.8% | 61.8% |
 | navigationHistory | 14 | 12 | 0 | 2 | 0 | 85.7% | 85.7% |
 | WebFrameMain events and statics | 3 | 1 | 1 | 1 | 0 | 33.3% | 50.0% |
 | WebFrameMain methods | 9 | 1 | 4 | 4 | 0 | 11.1% | 33.3% |
 | WebFrameMain properties | 15 | 10 | 3 | 2 | 0 | 66.7% | 76.7% |
-| **Total** | 241 | 109 | 52 | 69 | 11 | 47.4% | 58.7% |
+| **Total** | 241 | 110 | 53 | 67 | 11 | 47.8% | 59.3% |
 
 ## Checklist
 
@@ -30,7 +30,7 @@ Percentages are over the non-n/a items; the second counts a partial item as half
 | `getFocusedWebContents()` | `GetFocusedWebContents` | partial | Never a DevTools page (C17). |
 | `fromId(id)` | `FromId` | done |  |
 | `fromFrame(frame)` | `FromFrame` | done |  |
-| `fromDevToolsTargetId(targetId)` | — | missing |  |
+| `fromDevToolsTargetId(targetId)` | `FromDevToolsTargetId` | done |  |
 
 ### Instance events
 
@@ -201,7 +201,7 @@ Percentages are over the non-n/a items; the second counts a partial item as half
 | `getWebRTCUDPPortRange()` | — | missing |  |
 | `setWebRTCUDPPortRange()` | — | missing |  |
 | `getMediaSourceId()` | — | missing |  |
-| `getOrCreateDevToolsTargetId()` | — | missing |  |
+| `getOrCreateDevToolsTargetId()` | `GetOrCreateDevToolsTargetId` | partial | Read over DevTools as the page is created; `'` on the UI thread before that (C46). |
 | `getOSProcessId()` | `GetOSProcessId` | done | 0 once the page has closed. |
 | `getProcessId()` | `GetProcessId` | done | The main frame's, read from CEF's main frame; -1 once the page has closed. |
 | `clone()` | — | missing |  |

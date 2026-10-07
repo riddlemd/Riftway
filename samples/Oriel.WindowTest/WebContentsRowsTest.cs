@@ -9,6 +9,44 @@ static class WebContentsRowsTest
     internal static async Task RunAsync(CheckFn check, TimeSpan step, int debugPort)
     {
         await ProcessAsync(check);
+        await DevToolsTargetAsync(check, debugPort);
+    }
+
+    // The ids Chromium's own DevTools HTTP endpoint lists, by URL.
+    static async Task<Dictionary<string, string>> ListedTargets(int debugPort)
+    {
+        using var http = new HttpClient { Timeout = TimeSpan.FromSeconds(10) };
+        var list = System.Text.Json.Nodes.JsonNode.Parse(await http.GetStringAsync($"http://127.0.0.1:{debugPort}/json/list"))!.AsArray();
+        var byUrl = new Dictionary<string, string>();
+        foreach (var target in list)
+            if ((string?)target!["type"] == "page") byUrl[(string)target["url"]!] = (string)target["id"]!;
+        return byUrl;
+    }
+
+    static async Task DevToolsTargetAsync(CheckFn check, int debugPort)
+    {
+        var first = new BrowserWindow(new BrowserWindowOptions { Show = false });
+
+        var second = new BrowserWindow(new BrowserWindowOptions { Show = false });
+        const string FirstUrl = "data:text/html,target-one", SecondUrl = "data:text/html,target-two";
+        await first.WebContents.LoadUrl(FirstUrl);
+        await second.WebContents.LoadUrl(SecondUrl);
+        var (a, b) = (first.WebContents, second.WebContents);
+        var listed = await ListedTargets(debugPort);
+        var (idA, idB) = (a.GetOrCreateDevToolsTargetId(), b.GetOrCreateDevToolsTargetId());
+        check("GetOrCreateDevToolsTargetId is the id Chromium's remote-debugging endpoint lists for the page",
+            idA.Length > 0 && idA != idB && listed.GetValueOrDefault(FirstUrl) == idA && listed.GetValueOrDefault(SecondUrl) == idB,
+            $"{idA} {idB} listed={string.Join(",", listed.Where(p => p.Key.Contains("target-")).Select(p => p.Value))}");
+        await b.LoadUrl("data:text/html,<p>target-two-again</p>");
+        check("the target id stays with the page across navigations", b.GetOrCreateDevToolsTargetId() == idB, b.GetOrCreateDevToolsTargetId());
+        check("FromDevToolsTargetId finds each page by its id, and nothing for an unknown id",
+            WebContents.FromDevToolsTargetId(idA) == a && WebContents.FromDevToolsTargetId(idB) == b && WebContents.FromDevToolsTargetId("0123456789ABCDEF0123456789ABCDEF") is null);
+        var closed = new TaskCompletionSource();
+        b.Destroyed += (_, _) => closed.TrySetResult();
+        second.Destroy();
+        await Task.WhenAny(closed.Task, Task.Delay(5000));
+        check("FromDevToolsTargetId finds nothing once the page has closed", WebContents.FromDevToolsTargetId(idB) is null);
+        first.Destroy();
     }
 
     // The pid the process table lists for the renderer launched with this render process id.
