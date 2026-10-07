@@ -88,6 +88,12 @@ public sealed unsafe class NativeImage
         var image = new NativeImage();
         if (readIco && path.EndsWith(".ico", StringComparison.OrdinalIgnoreCase))
         {
+            // Windows' own LoadImage, as Electron, picks the entry and stretches it; the managed decoder stands in elsewhere.
+            if (OperatingSystem.IsWindows())
+            {
+                if (File.Exists(path) && Oriel.Cef.Platform.WindowsIcon.Load(Path.GetFullPath(path), 256) is var (w, h, bgra)) image.Add(1f, new ImageBitmap(w, h, bgra));
+                return image;
+            }
             try
             {
                 if (IcoDecoder.Decode(File.ReadAllBytes(path), 256, bytes => ImageCodec.Decode(bytes)) is { } icon) image.Add(1f, icon);

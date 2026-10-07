@@ -3224,6 +3224,122 @@ async Task NativeImageAsync()
     added.AddRepresentation(new AddRepresentationOptions { ScaleFactor = 2, DataUrl = NativeImage.CreateFromBitmap(Solid(8, 1, 2, 3), new NativeImageBitmapOptions { Width = 8, Height = 8 }).ToDataUrl() });
     Check("AddRepresentation takes a PNG buffer and a data URL", added.GetScaleFactors().SequenceEqual([1.0, 2.0]) && added.GetSize(2) == (4, 4), string.Join(",", added.GetScaleFactors()));
 
+    // .ico is read on Windows only; Windows' own LoadImage of the same file at 256x256 is the reference.
+    if (OperatingSystem.IsWindows())
+    {
+        // A DIB entry: bottom-up XOR rows, then a 1bpp AND mask whose top-left quadrant is transparent.
+        static byte[] Dib(int size, int bits, byte b, byte g, byte r)
+        {
+            var stride = (size * bits / 8 + 3) / 4 * 4;
+            var maskStride = (size + 31) / 32 * 4;
+            using var s = new MemoryStream();
+            using var w = new BinaryWriter(s);
+            w.Write(40); w.Write(size); w.Write(size * 2); w.Write((short)1); w.Write((short)bits);
+            w.Write(0); w.Write(0); w.Write(0); w.Write(0); w.Write(0); w.Write(0);
+            for (var y = 0; y < size; y++)
+            {
+                var row = new byte[stride];
+                for (var x = 0; x < size; x++)
+                {
+                    var o = x * bits / 8;
+                    (row[o], row[o + 1], row[o + 2]) = (b, g, r);
+                    // Rows are bottom-up: y counts from the bottom. 32bpp carries alpha; the quadrant is clear there too.
+                    if (bits == 32) row[o + 3] = (byte)(x < size / 2 && y >= size / 2 ? 0 : 255);
+                }
+                w.Write(row);
+            }
+            for (var y = 0; y < size; y++)
+            {
+                var row = new byte[maskStride];
+                for (var x = 0; x < size / 2 && y >= size / 2; x++) row[x / 8] |= (byte)(0x80 >> (x % 8));
+                w.Write(row);
+            }
+            return s.ToArray();
+        }
+        static byte[] Ico(params (int Size, int Bits, byte[] Data)[] entries)
+        {
+            using var s = new MemoryStream();
+            using var w = new BinaryWriter(s);
+            w.Write((short)0); w.Write((short)1); w.Write((short)entries.Length);
+            var offset = 6 + 16 * entries.Length;
+            foreach (var (size, bits, data) in entries)
+            {
+                w.Write((byte)(size >= 256 ? 0 : size)); w.Write((byte)(size >= 256 ? 0 : size)); w.Write((byte)0); w.Write((byte)0);
+                w.Write((short)1); w.Write((short)bits); w.Write(data.Length); w.Write(offset);
+                offset += data.Length;
+            }
+            foreach (var e in entries) w.Write(e.Data);
+            return s.ToArray();
+        }
+        // Straight alpha of a premultiplied pixel, as GDI keeps it.
+        static (int B, int G, int R, int A) At(byte[] bgra, int width, int x, int y, bool premultiplied)
+        {
+            var i = (y * width + x) * 4;
+            int a = bgra[i + 3];
+            int Un(int c) => premultiplied && a is > 0 and < 255 ? Math.Min(255, c * 255 / a) : c;
+            return (Un(bgra[i]), Un(bgra[i + 1]), Un(bgra[i + 2]), a);
+        }
+        // Pixels where Oriel and LoadImage disagree: alpha by more than 8, or colour by more than 8 where both are opaque.
+        static (int Bad, string First) Compare(NativeImage oriel, (int Width, int Height, byte[] Bgra) windows)
+        {
+            var mine = oriel.ToBitmap();
+            var (bad, first) = (0, "");
+            for (var y = 0; y < windows.Height; y++)
+            for (var x = 0; x < windows.Width; x++)
+            {
+                var (o, r) = (At(mine, 256, x, y, true), At(windows.Bgra, windows.Width, x, y, false));
+                var off = Math.Abs(o.A - r.A) > 8 || (o.A == 255 && r.A == 255 && (Math.Abs(o.B - r.B) > 8 || Math.Abs(o.G - r.G) > 8 || Math.Abs(o.R - r.R) > 8));
+                if (!off) continue;
+                if (bad++ == 0) first = $"({x},{y}) oriel={o} windows={r}";
+            }
+            return (bad, first);
+        }
+
+        var bluePng = NativeImage.CreateFromBitmap(Solid(256, 255, 0, 0), new NativeImageBitmapOptions { Width = 256, Height = 256 }).ToPng();
+        var withPng = Path.Combine(dir, "with-png.ico");
+        File.WriteAllBytes(withPng, Ico((16, 32, Dib(16, 32, 0, 0, 255)), (48, 24, Dib(48, 24, 0, 200, 0)), (256, 32, bluePng)));
+        var fromPng = NativeImage.CreateFromPath(withPng);
+        var windowsPng = WindowsShell.LoadIcon(withPng, 256);
+        Check("CreateFromPath of an .ico takes its 256x256 PNG entry as the one representation, as LoadImage does",
+            fromPng.GetScaleFactors().SequenceEqual([1.0]) && fromPng.GetSize() == (256, 256) && Centre(fromPng.ToBitmap(), 256) == "255,0,0,255"
+            && windowsPng is { Width: 256, Height: 256 } wp && Compare(fromPng, wp).Bad == 0,
+            $"{fromPng.GetSize()} {Centre(fromPng.ToBitmap(), 256)} windows={(windowsPng is { } p ? Compare(fromPng, p).ToString() : "none")}");
+
+        var dibsOnly = Path.Combine(dir, "dibs.ico");
+        File.WriteAllBytes(dibsOnly, Ico((16, 32, Dib(16, 32, 0, 0, 255)), (48, 24, Dib(48, 24, 0, 200, 0))));
+        var fromDib = NativeImage.CreateFromPath(dibsOnly);
+        var windowsDib = WindowsShell.LoadIcon(dibsOnly, 256);
+        var dibPixels = fromDib.ToBitmap();
+        Check("an .ico without a 256 entry: its 48x48 24bpp DIB stretched to 256, the AND mask's quadrant clear",
+            fromDib.GetSize() == (256, 256) && dibPixels.Length == 256 * 256 * 4 && At(dibPixels, 256, 192, 192, true) == (0, 200, 0, 255) && At(dibPixels, 256, 32, 32, true).A == 0,
+            $"{fromDib.GetSize()} {(dibPixels.Length == 256 * 256 * 4 ? $"{At(dibPixels, 256, 192, 192, true)} {At(dibPixels, 256, 32, 32, true)}" : "no pixels")}");
+        // As Electron, Windows stretches the icon itself, so even the quadrant's edges match its LoadImage.
+        var dibDiff = windowsDib is { } wd ? Compare(fromDib, wd) : (-1, "LoadImage failed");
+        Check("the stretched DIB icon is LoadImage's, pixel for pixel",
+            windowsDib is { Width: 256, Height: 256 } && dibDiff.Item1 == 0, $"{dibDiff.Item1} pixels differ, first {dibDiff.Item2}");
+
+        var only16 = Path.Combine(dir, "only16.ico");
+        File.WriteAllBytes(only16, Ico((16, 32, Dib(16, 32, 0, 0, 255))));
+        var from16 = NativeImage.CreateFromPath(only16).ToBitmap();
+        Check("a 32bpp DIB keeps its own alpha (the clear quadrant) through the stretch",
+            // Windows' 16-to-256 stretch blends even inside a flat quadrant (253, 254 is seen), so near-opaque red.
+            from16.Length == 256 * 256 * 4 && At(from16, 256, 200, 200, true) is { B: 0, G: 0, R: > 240, A: > 240 } && At(from16, 256, 20, 20, true).A == 0,
+            from16.Length == 256 * 256 * 4 ? $"{At(from16, 256, 200, 200, true)} {At(from16, 256, 20, 20, true)}" : $"{from16.Length} bytes");
+        Check("an .ico file is not read by CreateFromBuffer, as Electron", NativeImage.CreateFromBuffer(File.ReadAllBytes(withPng)).IsEmpty());
+
+        // A real icon Windows ships, if there is a plain .ico (OneDrive.ico's largest entry is 64, so it is stretched).
+        var shipped = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.System), "OneDrive.ico");
+        if (File.Exists(shipped))
+        {
+            var system = NativeImage.CreateFromPath(shipped);
+            var reference = WindowsShell.LoadIcon(shipped, 256);
+            var diff = reference is { } r ? Compare(system, r) : (-1, "LoadImage failed");
+            Check($"a shipped icon ({Path.GetFileName(shipped)}) reads as LoadImage reads it, pixel for pixel",
+                system.GetSize() == (256, 256) && reference is { Width: 256, Height: 256 } && diff.Item1 == 0,
+                $"{system.GetSize()} {diff.Item1} pixels differ, first {diff.Item2}");
+        }
+    }
+
     // Windows reads the icon back through WM_GETICON; CEF scales it to the system size, which keeps a solid colour.
     if (OperatingSystem.IsWindows())
     {
