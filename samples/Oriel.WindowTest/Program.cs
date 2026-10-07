@@ -2894,6 +2894,34 @@ async Task TransparencyAsync()
     Check("Unmaximize puts a transparent window back", Eventually(() => frameless.GetBounds() == before && !frameless.IsMaximized, step), frameless.GetBounds());
     await Close(frameless);
 
+    // Views in a transparent window: each page is its own child window, composited over the see-through one.
+    var (viewed, viewedHwnd) = await Open(new BrowserWindowOptions { Title = "Oriel window test: transparent with views", Transparent = true });
+    var solidView = new WebContentsView();
+    viewed.ContentView.AddChildView(solidView);
+    solidView.SetBounds(new Rectangle(20, 20, 150, 100));
+    await solidView.WebContents.LoadUrl("data:text/html,<body style='margin:0;background:%2322aa44'></body>");
+    var clearView = new WebContentsView();
+    viewed.ContentView.AddChildView(clearView);
+    clearView.SetBounds(new Rectangle(220, 20, 150, 100));
+    await clearView.WebContents.LoadUrl(clear);
+    // A plain View has no background of its own, as in Electron.
+    var plainView = new View();
+    viewed.ContentView.AddChildView(plainView);
+    plainView.SetBounds(new Rectangle(150, 180, 100, 80));
+    static bool Green((byte R, byte G, byte B) c) => c.G > 120 && c.R < 90 && c.B < 120;
+    (byte R, byte G, byte B) Outside() => WindowsShell.ClientPixel(viewedHwnd, 200, 220);
+    Check("a transparent window stays see-through outside its WebContentsViews and under a plain View (screen pixel)", Eventually(() => Red(Outside()), step), Outside());
+    Check("an opaque page in a WebContentsView covers a transparent window (screen pixel)",
+        Eventually(() => Green(WindowsShell.ClientPixel(viewedHwnd, 95, 70)), step), WindowsShell.ClientPixel(viewedHwnd, 95, 70));
+    // Reported, not checked: CEF paints an Alloy page's default background opaque, and Electron's default is unverified.
+    Console.WriteLine($"INFO  a transparent page in a WebContentsView over a transparent window reads {WindowsShell.ClientPixel(viewedHwnd, 295, 70)}");
+    solidView.WebContents.Close();
+    clearView.WebContents.Close();
+    await Task.Delay(500);
+    Check("closing the views' pages leaves the window see-through where they were",
+        Eventually(() => Red(WindowsShell.ClientPixel(viewedHwnd, 95, 70)) && Red(Outside()), step), $"{WindowsShell.ClientPixel(viewedHwnd, 95, 70)} {Outside()}");
+    await Close(viewed);
+
     var (acrylic, acrylicHwnd) = await Open(new BrowserWindowOptions { Title = "Oriel window test: acrylic", BackgroundMaterial = BackgroundMaterial.Acrylic });
     Check("BackgroundMaterial Acrylic shows the window behind, blurred, through the page (screen pixel)", Eventually(() => Red(WindowsShell.ClientCentrePixel(acrylicHwnd)), step), WindowsShell.ClientCentrePixel(acrylicHwnd));
     Check("a material makes the background colour transparent, as in Electron", acrylic.GetBackgroundColor() == "#00000000", acrylic.GetBackgroundColor());

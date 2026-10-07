@@ -258,9 +258,10 @@ public unsafe class View
         BoundsChanged?.Invoke(this, EventArgs.Empty);
     }
 
-    // CEF resets a view's colours when the theme changes.
+    // CEF gives a panel the theme's opaque colour whenever the theme applies (joining a window included); Electron's views
+    // have no background unless set, and a themed one would hide a transparent window and what lies under a view.
     private void ApplyBackgroundColor()
     {
-        if (_backgroundColor is { } color && NativeView is not null) NativeView->set_background_color(NativeView, color);
+        if (NativeView is not null) NativeView->set_background_color(NativeView, _backgroundColor ?? 0);
     }
 }
