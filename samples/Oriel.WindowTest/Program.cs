@@ -307,6 +307,7 @@ async Task RunAsync(BrowserWindow win, BrowserWindow simple)
     await InputEventAsync();
     await PreferredSizeAsync();
     await WindowOpenAsync(win);
+    await CreateWindowAsync();
     await LoadAndSizeAsync(win);
     await NavigationAsync();
     await FramesAsync();
@@ -2549,6 +2550,155 @@ async Task WindowOpenAsync(BrowserWindow win)
     if (!second.IsDestroyed) second.Destroy();
     foreach (var p in popups.ToArray()) if (!p.IsDestroyed) p.Destroy();
     win.WebContents.SetWindowOpenHandler(null);
+    await Task.Delay(300);
+    Directory.Delete(dir, recursive: true);
+}
+
+// Electron's createWindow: the app's window or view adopts the popup's page, which stays the opener's child.
+async Task CreateWindowAsync()
+{
+    var dir = Directory.CreateTempSubdirectory("oriel-createwindow-").FullName;
+    var openerPage = Path.Combine(dir, "opener.html");
+    var popupPage = Path.Combine(dir, "popup.html");
+    var secondPage = Path.Combine(dir, "second.html");
+    const string listen = "<script>window.addEventListener('message', e => { window.__got = e.data; });</script>";
+    File.WriteAllText(openerPage, "<!doctype html><title>opener</title>" + listen);
+    File.WriteAllText(popupPage, "<!doctype html><title>popup page</title>" + listen);
+    File.WriteAllText(secondPage, "<!doctype html><title>second page</title>");
+    var popupUrl = new Uri(popupPage).AbsoluteUri;
+    async Task<string?> Js(WebContents page, string code)
+    {
+        var task = page.ExecuteJavaScriptAsync(code);
+        return await Task.WhenAny(task, Task.Delay(step)) == task ? task.Result?.ToJsonString() : "timeout";
+    }
+    bool Shows(WebContents page, string url, string title) => Eventually(() => page.GetUrl() == url && page.GetTitle() == title, step);
+
+    var opener = new BrowserWindow(new BrowserWindowOptions { Title = "Oriel window test: createWindow opener", Width = 400, Height = 300 });
+    await opener.WebContents.LoadFile(openerPage);
+    var didCreate = 0;
+    opener.WebContents.DidCreateWindow += (_, _) => didCreate++;
+
+    // A BrowserWindow built from the options it is given.
+    BrowserWindowOptions? received = null;
+    BrowserWindow? made = null;
+    var calls = 0;
+    opener.WebContents.SetWindowOpenHandler(_ => WindowOpenHandlerResponse.Allow(options =>
+    {
+        calls++;
+        received = options;
+        made = new BrowserWindow(options);
+        return made.WebContents;
+    }));
+    var windows = BrowserWindow.GetAllWindows().Count;
+    var opened = await Js(opener.WebContents, "window.__p = window.open('popup.html', 'cw', 'width=330,height=250'); window.__p !== null");
+    Check("createWindow: window.open returns a window", opened == "true", opened);
+    Check("createWindow: receives Electron's options: the features' size, the opener's preferences, the popup's page",
+        calls == 1 && received is { Width: 330, Height: 250, Show: true, WebContents: { } given } && given != opener.WebContents && !given.IsDestroyed()
+        && ReferenceEquals(received.WebPreferences, opener.WebContents.Preferences),
+        $"calls={calls} {received?.Width}x{received?.Height}");
+    Check("createWindow: the returned page is the new window's and shows the popup's URL",
+        made is not null && made.WebContents == received?.WebContents && Shows(made.WebContents, popupUrl, "popup page")
+        && BrowserWindow.GetAllWindows().Count == windows + 1, made?.WebContents.GetUrl());
+    if (made is not null)
+    {
+        Check("createWindow: the window takes the options' size", Eventually(() => made.GetSize() == (330, 250), step), made.GetSize());
+        await Js(made.WebContents, "window.opener.postMessage('from-popup', '*'); 1");
+        Check("createWindow: the popup's window.opener reaches the opener (postMessage)",
+            Eventually(() => Js(opener.WebContents, "window.__got").Result == "\"from-popup\"", step), Js(opener.WebContents, "window.__got").Result);
+        await Js(opener.WebContents, "window.__p.postMessage('from-opener', '*'); 1");
+        Check("createWindow: the opener's handle reaches the popup (postMessage)",
+            Eventually(() => Js(made.WebContents, "window.__got").Result == "\"from-opener\"", step), Js(made.WebContents, "window.__got").Result);
+        var same = await Js(opener.WebContents, "window.open('second.html', 'cw') === window.__p");
+        Check("createWindow: the named target reuses the window without calling createWindow again",
+            same == "true" && Shows(made.WebContents, new Uri(secondPage).AbsoluteUri, "second page") && calls == 1
+            && BrowserWindow.GetAllWindows().Count == windows + 1, $"{same} calls={calls}");
+    }
+    await Task.Delay(300);
+    Check("createWindow: DidCreateWindow is not raised, as Electron", didCreate == 0, didCreate);
+
+    // Returning nothing: Electron throws and shows no window; Oriel opens none (window.open gives null, drift O3).
+    WebContents? unadopted = null;
+    opener.WebContents.SetWindowOpenHandler(_ => WindowOpenHandlerResponse.Allow(createWindow: options =>
+    {
+        unadopted = options.WebContents;
+        return null;
+    }));
+    windows = BrowserWindow.GetAllWindows().Count;
+    var nothing = await Js(opener.WebContents, "window.open('popup.html') === null");
+    await Task.Delay(500);
+    Check("createWindow: returning nothing opens no window, and its page is gone",
+        nothing == "true" && BrowserWindow.GetAllWindows().Count == windows && unadopted is { } gone && gone.IsDestroyed()
+        && !WebContents.GetAllWebContents().Contains(gone), nothing);
+
+    // Adopting the page but returning a destroyed one: Electron shows the window, reports the error and leaves the
+    // window out of the opener's lifetime.
+    var dead = new BrowserWindow(new BrowserWindowOptions { Show = false });
+    var deadPage = dead.WebContents;
+    dead.Destroy();
+    Eventually(deadPage.IsDestroyed, step);
+    BrowserWindow? unwired = null;
+    Exception? secondAdoption = null;
+    opener.WebContents.SetWindowOpenHandler(_ => WindowOpenHandlerResponse.Allow(options =>
+    {
+        unwired = new BrowserWindow(options);
+        try { GC.KeepAlive(new BrowserWindow(options)); } catch (Exception e) { secondAdoption = e; }
+        return deadPage;
+    }));
+    var shown = await Js(opener.WebContents, "window.open('popup.html') !== null");
+    Check("createWindow: returning a destroyed page still shows the adopted one, as Electron",
+        shown == "true" && deadPage.IsDestroyed() && unwired is not null && Shows(unwired.WebContents, popupUrl, "popup page"), shown);
+    Check("createWindow: a page is adopted once", secondAdoption is NotSupportedException, secondAdoption?.GetType().Name);
+
+    // A window's own page is Chrome style, and CEF gives its popups that style: no view can take one.
+    Exception? viewRefused = null;
+    opener.WebContents.SetWindowOpenHandler(_ => WindowOpenHandlerResponse.Allow(options =>
+    {
+        try { GC.KeepAlive(new WebContentsView(new WebContentsViewOptions { WebContents = options.WebContents })); } catch (Exception e) { viewRefused = e; }
+        return options.WebContents;
+    }));
+    windows = BrowserWindow.GetAllWindows().Count;
+    var refused = await Js(opener.WebContents, "window.open('popup.html') === null");
+    Check("createWindow: a view cannot adopt a popup of a window's page (drift V4)",
+        viewRefused is NotSupportedException && refused == "true" && BrowserWindow.GetAllWindows().Count == windows, viewRefused?.GetType().Name);
+
+    // Closing the opener closes the window createWindow returned, not the one it did not.
+    opener.Destroy();
+    Check("createWindow: the returned window closes with its opener", made is not null && Eventually(() => made.IsDestroyed, step));
+    await Task.Delay(500);
+    Check("createWindow: a window whose page was not returned outlives the opener, as Electron", unwired is { IsDestroyed: false });
+    unwired?.Destroy();
+
+    // Electron's documented use: a view's page opens into a view of the same window.
+    var host = new BrowserWindow(new BrowserWindowOptions { Title = "Oriel window test: createWindow views", Width = 400, Height = 300 });
+    var viewOpener = new WebContentsView();
+    host.ContentView.AddChildView(viewOpener);
+    viewOpener.SetBounds(new Rectangle(0, 0, 200, 150));
+    await viewOpener.WebContents.LoadFile(openerPage);
+    WebContentsView? popupView = null;
+    viewOpener.WebContents.SetWindowOpenHandler(_ => WindowOpenHandlerResponse.Allow(options =>
+    {
+        popupView = new WebContentsView(new WebContentsViewOptions { WebContents = options.WebContents });
+        host.ContentView.AddChildView(popupView);
+        popupView.SetBounds(new Rectangle(200, 0, 200, 150));
+        return popupView.WebContents;
+    }));
+    windows = BrowserWindow.GetAllWindows().Count;
+    var inView = await Js(viewOpener.WebContents, "window.__p = window.open('popup.html', 'vw'); window.__p !== null");
+    Check("createWindow: a view's popup shows in the app's WebContentsView, in no new window",
+        inView == "true" && popupView is not null && host.ContentView.Children.Contains(popupView) && Shows(popupView.WebContents, popupUrl, "popup page")
+        && popupView.NativeChildrenMatch() && BrowserWindow.GetAllWindows().Count == windows, $"{inView} {popupView?.WebContents.GetUrl()}");
+    if (popupView is not null)
+    {
+        await Js(popupView.WebContents, "window.opener.postMessage('from-view-popup', '*'); 1");
+        Check("createWindow: the view popup's window.opener reaches the opener",
+            Eventually(() => Js(viewOpener.WebContents, "window.__got").Result == "\"from-view-popup\"", step), Js(viewOpener.WebContents, "window.__got").Result);
+        await Js(viewOpener.WebContents, "window.__p.postMessage('to-view-popup', '*'); 1");
+        Check("createWindow: the view opener's handle reaches the popup",
+            Eventually(() => Js(popupView.WebContents, "window.__got").Result == "\"to-view-popup\"", step), Js(popupView.WebContents, "window.__got").Result);
+        viewOpener.WebContents.Close();
+        Check("createWindow: the view's popup page closes with its opener", Eventually(() => popupView.WebContents.IsDestroyed(), step));
+    }
+    host.Destroy();
     await Task.Delay(300);
     Directory.Delete(dir, recursive: true);
 }
