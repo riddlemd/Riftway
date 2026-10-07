@@ -14,7 +14,8 @@ public sealed partial class DriftRegisterTests
         throw new InvalidOperationException("No repository root above the test output.");
     }
 
-    [GeneratedRegex(@"^\| (?<id>[A-Z]{1,2}[0-9]+) \|", RegexOptions.Multiline)]
+    // A row may note its branch after the ID: "| Q2 _(branch `notify-storage`)_ |".
+    [GeneratedRegex(@"^\| (?<id>[A-Z]{1,2}[0-9]+)\b[^|]*\|", RegexOptions.Multiline)]
     private static partial Regex RowId();
 
     // "drift W5", "DRIFT C37", "(drift E30)"; a reference to a closed row says "was DRIFT X".
@@ -49,7 +50,7 @@ public sealed partial class DriftRegisterTests
     [Fact]
     public void ParsesRowsAndReferences_SkippingClosedOnes()
     {
-        Assert.Equal(["A1", "W12"], Ids("| A1 | x |\n| W12 | y |\nnot | B3 | row"));
+        Assert.Equal(["A1", "W12", "Q2"], Ids("| A1 | x |\n| W12 | y |\nnot | B3 | row\n| Q2 _(branch `b`)_ | z |"));
         Assert.Equal(["C3", "E27", "W5"], References("see drift C3 and DRIFT E27 (drift W5); was DRIFT A4; adrift X1"));
     }
 }
