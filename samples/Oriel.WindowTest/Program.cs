@@ -3891,6 +3891,35 @@ async Task ThemeAsync(BrowserWindow win)
         Check("NativeTheme: a hidden top-level window of Oriel's own takes the system's broadcasts",
             observer != 0 && facts == (Environment.ProcessId, "OrielThemeObserver", false, true), facts);
 
+        // DRIFT Y3: Chromium sets DWM's dark mode (attribute 20) from CEF's colour scheme on each window it gives a backdrop,
+        // transparent ones included; Electron's SetDarkModeForWindow agrees with it outside contrast themes.
+        bool?[] Frames(params nint[] hwnds) => [.. hwnds.Select(WindowsShell.ImmersiveDarkMode)];
+        var mainHwnd = win.GetNativeWindowHandle();
+        Check("NativeTheme: a window's DWM dark mode is the theme's, read back (DRIFT Y3)",
+            contrastApi || WindowsShell.ImmersiveDarkMode(mainHwnd) == NativeTheme.ShouldUseDarkColors, WindowsShell.ImmersiveDarkMode(mainHwnd));
+        NativeTheme.ThemeSource = ThemeSource.Dark;
+        var bar = new BrowserWindow(new BrowserWindowOptions { X = 200, Y = 150, Width = 400, Height = 300, Title = "Oriel window test: menu bar theme" });
+        await bar.LoadUrl("about:blank");
+        var seeThrough = new BrowserWindow(new BrowserWindowOptions { X = 220, Y = 170, Width = 300, Height = 200, Transparent = true, Title = "Oriel window test: transparent frame" });
+        await seeThrough.LoadUrl("about:blank");
+        await Task.Delay(1000);
+        nint[] hwnds = [mainHwnd, bar.GetNativeWindowHandle(), seeThrough.GetNativeWindowHandle()];
+        var underDark = Frames(hwnds);
+        var darkBar = WindowsShell.ClientPixel(hwnds[1], 360, 8);
+        NativeTheme.ThemeSource = ThemeSource.Light;
+        var lightFrames = Eventually(() => Frames(hwnds).All(f => f == false), TimeSpan.FromSeconds(2));
+        await Task.Delay(1000);
+        var lightBar = WindowsShell.ClientPixel(hwnds[1], 360, 8);
+        Check("NativeTheme: Dark and Light reach DWM's dark mode on open, new and transparent windows (DRIFT Y3)",
+            underDark.All(f => f == true) && lightFrames, $"dark [{string.Join(",", underDark)}] light [{string.Join(",", Frames(hwnds))}]");
+        static int Luma((byte R, byte G, byte B) c) => (c.R * 299 + c.G * 587 + c.B * 114) / 1000;
+        Check("NativeTheme: the menu bar is dark under Dark and light under Light (screen pixel; DRIFT Y3)",
+            Luma(darkBar) < 100 && Luma(lightBar) > 160, $"dark={darkBar} light={lightBar}");
+        NativeTheme.ThemeSource = ThemeSource.System;
+        Check("NativeTheme: System gives them the system's scheme (DRIFT Y3)",
+            contrastApi || Eventually(() => Frames(hwnds).All(f => f == NativeTheme.ShouldUseDarkColors), TimeSpan.FromSeconds(2)), string.Join(",", Frames(hwnds)));
+        bar.Destroy();
+        seeThrough.Destroy();
         var prefix = $@"Software\OrielTest-{Guid.NewGuid():N}\";
         var personalize = Microsoft.Win32.Registry.CurrentUser.CreateSubKey(prefix + @"Software\Microsoft\Windows\CurrentVersion\Themes\Personalize");
         bool? darkSeen = null, transparencySeen = null;
