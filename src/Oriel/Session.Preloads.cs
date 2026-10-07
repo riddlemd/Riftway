@@ -53,6 +53,35 @@ public sealed partial class Session
         lock (_preloads) return [.. _preloads];
     }
 
+    /// <summary>Replaces the session's <c>frame</c> preload scripts with <paramref name="preloads"/>. Electron's deprecated
+    /// <c>ses.setPreloads()</c>, a wrapper over <see cref="RegisterPreloadScript"/>.</summary>
+    /// <exception cref="ArgumentException">A path is not absolute.</exception>
+    [Obsolete("Use RegisterPreloadScript, as Electron deprecates session.setPreloads.")]
+    public void SetPreloads(IEnumerable<string> preloads)
+    {
+        ArgumentNullException.ThrowIfNull(preloads);
+        WarnDeprecated(ref s_setPreloadsWarned, "session.setPreloads", "session.registerPreloadScript");
+        foreach (var script in GetPreloadScripts().Where(p => p.Type == "frame")) UnregisterPreloadScript(script.Id);
+        foreach (var path in preloads) RegisterPreloadScript(new PreloadScriptRegistration("frame", path));
+    }
+
+    /// <summary>The paths of the session's <c>frame</c> preload scripts. Electron's deprecated <c>ses.getPreloads()</c>.</summary>
+    [Obsolete("Use GetPreloadScripts, as Electron deprecates session.getPreloads.")]
+    public IReadOnlyList<string> GetPreloads()
+    {
+        WarnDeprecated(ref s_getPreloadsWarned, "session.getPreloads", "session.getPreloadScripts");
+        return [.. GetPreloadScripts().Where(p => p.Type == "frame").Select(p => p.FilePath)];
+    }
+
+    private static int s_setPreloadsWarned, s_getPreloadsWarned;
+
+    // Electron's deprecate.warnOnce: one warning per process for each deprecated call.
+    private static void WarnDeprecated(ref int warned, string oldName, string newName)
+    {
+        if (Interlocked.Exchange(ref warned, 1) == 0)
+            Console.Error.WriteLine($"[Oriel] DeprecationWarning: '{oldName}' is deprecated and will be removed. Please use '{newName}' instead.");
+    }
+
     private void PreloadsChanged()
     {
         WebContents[] pages;

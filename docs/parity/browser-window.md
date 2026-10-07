@@ -17,13 +17,13 @@ Counted from the Checklist at the end: `BaseWindow` and `BrowserWindow` are one 
 
 | Area | Items | Done | Partial | Missing | n/a | % done | % done + partial/2 |
 |---|---|---|---|---|---|---|---|
-| BaseWindow + BrowserWindow options | 54 | 27 | 2 | 25 | 0 | 50.0% | 51.9% |
+| BaseWindow + BrowserWindow options | 54 | 29 | 2 | 23 | 0 | 53.7% | 55.6% |
 | webPreferences | 46 | 11 | 4 | 24 | 7 | 28.2% | 33.3% |
-| Instance methods | 143 | 71 | 9 | 57 | 6 | 51.8% | 55.1% |
+| Instance methods | 143 | 72 | 8 | 57 | 6 | 52.6% | 55.5% |
 | Instance properties | 24 | 11 | 0 | 13 | 0 | 45.8% | 45.8% |
-| Events | 35 | 14 | 4 | 17 | 0 | 40.0% | 45.7% |
+| Events | 35 | 15 | 4 | 16 | 0 | 42.9% | 48.6% |
 | Static methods | 6 | 4 | 0 | 1 | 1 | 80.0% | 80.0% |
-| **Total** | 308 | 138 | 19 | 137 | 14 | 46.9% | 50.2% |
+| **Total** | 308 | 142 | 18 | 134 | 14 | 48.3% | 51.4% |
 
 ## Done since the audit
 
@@ -192,7 +192,7 @@ Parameters in brackets are optional in Electron. `webContents` members are in [w
 | `backgroundColor` | `BackgroundColor` | done |  |
 | `hasShadow` | — | missing |  |
 | `opacity` | — | missing |  |
-| `darkTheme` | — | missing |  |
+| `darkTheme` | `DarkTheme` | done | Linux: `_GTK_THEME_VARIANT=dark` at creation, as Electron; Chromium 154 already writes dark when its GTK UI is loaded. |
 | `transparent` | `Transparent` | partial | Windows and macOS; not Linux (W24). |
 | `type` | — | missing |  |
 | `visualEffectState` | — | missing |  |
