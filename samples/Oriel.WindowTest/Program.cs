@@ -3597,6 +3597,13 @@ async Task LinuxTaskbarAsync()
     var skipped = new BrowserWindow(new BrowserWindowOptions { Title = "Oriel window test: skip taskbar", Width = 300, Height = 200, SkipTaskbar = true });
     await Task.Delay(800);
     Check("the SkipTaskbar option applies when the window shows", Eventually(() => LinuxX11.HasState(skipped.GetNativeWindowHandle(), "_NET_WM_STATE_SKIP_TASKBAR"), step));
+    // Electron's darkTheme writes _GTK_THEME_VARIANT=dark at creation. Chromium 154 already writes dark on every window
+    // once its GTK UI is loaded (prefer_dark_theme is set from a pointer), so this checks the value, not a difference.
+    var darkFramed = new BrowserWindow(new BrowserWindowOptions { DarkTheme = true });
+    Check("DarkTheme leaves _GTK_THEME_VARIANT dark, as Electron's",
+        Eventually(() => LinuxX11.StringProperty(darkFramed.GetNativeWindowHandle(), "_GTK_THEME_VARIANT") == "dark", step),
+        LinuxX11.StringProperty(darkFramed.GetNativeWindowHandle(), "_GTK_THEME_VARIANT"));
+    darkFramed.Destroy();
     skipped.Destroy();
     tb.Destroy();
     await Task.Delay(300);
@@ -5028,6 +5035,17 @@ static unsafe class LinuxX11
         var found = new ReadOnlySpan<nint>(data, (int)count).Contains(wanted);
         _ = XFree(data);
         return found;
+    }
+
+    internal static string? StringProperty(nint window, string name)
+    {
+        var display = Display();
+        // AnyPropertyType (0): the reader takes whatever type the writer chose.
+        if (XGetWindowProperty(display, window, XInternAtom(display, name, 0), 0, 256, 0, 0,
+            out var type, out _, out var count, out _, out var data) != 0 || data == null || type == 0) return null;
+        var text = System.Text.Encoding.UTF8.GetString((byte*)data, (int)count);
+        _ = XFree(data);
+        return text;
     }
 
     [System.Runtime.InteropServices.DllImport(Lib)] private static extern nint XOpenDisplay(byte* name);

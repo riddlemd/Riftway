@@ -81,6 +81,9 @@ public sealed record BrowserWindowOptions
     /// Electron's <c>transparent</c>.</summary>
     public bool Transparent { get; init; }
 
+    /// <summary>Linux: asks GTK window managers for the dark variant of the window's frame. Electron's <c>darkTheme</c>.</summary>
+    public bool DarkTheme { get; init; }
+
     /// <summary>A PNG or JPEG for the window and taskbar icon (Windows, Linux). Electron's <c>icon</c> as a path.</summary>
     public string? Icon { get; init; }
 
@@ -1498,6 +1501,9 @@ public sealed unsafe partial class BrowserWindow
             if (_options.BackgroundMaterial is { } material) ApplyBackgroundMaterial(window, material);
         }
         if (_icon is not null) SetIconOn(window, _icon);
+        // Electron sets the variant only when asked, and only at creation.
+        if (_options.DarkTheme && OperatingSystem.IsLinux() && !X11Window.SetGtkThemeVariant(Hwnd(window), dark: true))
+            Console.Error.WriteLine("[Oriel] No X display for DarkTheme.");
 
         if (UsesSimpleFullScreen && OperatingSystem.IsMacOS())
             _routedNSWindow = MacWindow.RouteFullScreenToggle((nint)window->get_window_handle(window), () => SetSimpleFullScreen(!IsSimpleFullScreen));

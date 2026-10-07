@@ -17,13 +17,13 @@ Counted from the Checklist at the end: `BaseWindow` and `BrowserWindow` are one 
 
 | Area | Items | Done | Partial | Missing | n/a | % done | % done + partial/2 |
 |---|---|---|---|---|---|---|---|
-| BaseWindow + BrowserWindow options | 54 | 28 | 2 | 24 | 0 | 51.9% | 53.7% |
+| BaseWindow + BrowserWindow options | 54 | 29 | 2 | 23 | 0 | 53.7% | 55.6% |
 | webPreferences | 46 | 11 | 4 | 24 | 7 | 28.2% | 33.3% |
 | Instance methods | 143 | 73 | 8 | 56 | 6 | 53.3% | 56.2% |
 | Instance properties | 24 | 12 | 0 | 12 | 0 | 50.0% | 50.0% |
 | Events | 35 | 15 | 4 | 16 | 0 | 42.9% | 48.6% |
 | Static methods | 6 | 4 | 0 | 1 | 1 | 80.0% | 80.0% |
-| **Total** | 308 | 143 | 18 | 133 | 14 | 48.6% | 51.7% |
+| **Total** | 308 | 144 | 18 | 132 | 14 | 49.0% | 52.0% |
 
 ## Done since the audit
 
@@ -192,7 +192,7 @@ Parameters in brackets are optional in Electron. `webContents` members are in [w
 | `backgroundColor` | `BackgroundColor` | done |  |
 | `hasShadow` | — | missing |  |
 | `opacity` | — | missing |  |
-| `darkTheme` | — | missing |  |
+| `darkTheme` | `DarkTheme` | done | Linux: `_GTK_THEME_VARIANT=dark` at creation, as Electron; Chromium 154 already writes dark when its GTK UI is loaded. |
 | `transparent` | `Transparent` | partial | Windows and macOS; not Linux (W24). |
 | `type` | — | missing |  |
 | `visualEffectState` | — | missing |  |
