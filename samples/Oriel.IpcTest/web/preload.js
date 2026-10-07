@@ -1,6 +1,13 @@
 // The app preload: runs in Oriel's isolated world and exposes a narrow API to the page.
 const { ipcRenderer, contextBridge } = oriel;
 
+// Lifetime probes: a FinalizationRegistry sees an original only once nothing, the bridge included, holds it.
+const collected = new Set();
+const watched = new FinalizationRegistry((tag) => collected.add(tag));
+let held = null;
+let kept = null;
+let last = null;
+
 contextBridge.exposeInMainWorld('api', {
   version: 1,
   ping: (text) => ipcRenderer.invoke('ping', text),
@@ -12,4 +19,23 @@ contextBridge.exposeInMainWorld('api', {
     ipcRenderer.send('subscribe');
   },
   report: (results) => ipcRenderer.invoke('report', results),
+
+  hold: (fn) => { held = fn; },
+  drop: () => { held = null; },
+  keep: (fn) => { kept = fn; },
+  callKept: (value) => kept(value),
+  make: (tag) => {
+    const made = () => 'made:' + tag;
+    watched.register(made, tag);
+    return made;
+  },
+  collected: (tag) => collected.has(tag),
+  same: (a, b) => a === b,
+  echo: (fn) => fn,
+  sameAsLast: (fn) => {
+    const same = fn === last;
+    last = fn;
+    return same;
+  },
+  forgetLast: () => { last = null; },
 });
