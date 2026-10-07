@@ -334,6 +334,7 @@ async Task RunAsync(BrowserWindow win, BrowserWindow simple)
     await ShellAsync();
     await ClipboardAsync();
     await DebuggerAsync();
+    await WebContentsRowsTest.RunAsync(Check, step, debugPort);
 
     // Closing cancelled once: the window must survive the first close.
     var closingCount = 0;

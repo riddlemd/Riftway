@@ -12,13 +12,13 @@ Percentages are over the non-n/a items; the second counts a partial item as half
 |---|---|---|---|---|---|---|---|
 | Static methods | 5 | 2 | 2 | 1 | 0 | 40.0% | 60.0% |
 | Instance events | 59 | 31 | 18 | 8 | 2 | 54.4% | 70.2% |
-| Instance methods | 118 | 38 | 23 | 49 | 8 | 34.5% | 45.0% |
+| Instance methods | 118 | 42 | 23 | 45 | 8 | 38.2% | 48.6% |
 | Instance properties | 18 | 10 | 1 | 6 | 1 | 58.8% | 61.8% |
 | navigationHistory | 14 | 12 | 0 | 2 | 0 | 85.7% | 85.7% |
 | WebFrameMain events and statics | 3 | 1 | 1 | 1 | 0 | 33.3% | 50.0% |
 | WebFrameMain methods | 9 | 1 | 4 | 4 | 0 | 11.1% | 33.3% |
 | WebFrameMain properties | 15 | 10 | 3 | 2 | 0 | 66.7% | 76.7% |
-| **Total** | 241 | 105 | 52 | 73 | 11 | 45.7% | 57.0% |
+| **Total** | 241 | 109 | 52 | 69 | 11 | 47.4% | 58.7% |
 
 ## Checklist
 
@@ -189,7 +189,7 @@ Percentages are over the non-n/a items; the second counts a partial item as half
 | `startDrag()` | — | missing |  |
 | `savePage()` | — | missing |  |
 | `showDefinitionForSelection()` | — | missing |  |
-| `isOffscreen()` | — | missing |  |
+| `isOffscreen()` | `IsOffscreen` | done | Always false: Oriel has no offscreen rendering (webPreferences `offscreen` is missing). |
 | `startPainting()` | — | missing |  |
 | `stopPainting()` | — | missing |  |
 | `isPainting()` | — | missing |  |
@@ -202,13 +202,13 @@ Percentages are over the non-n/a items; the second counts a partial item as half
 | `setWebRTCUDPPortRange()` | — | missing |  |
 | `getMediaSourceId()` | — | missing |  |
 | `getOrCreateDevToolsTargetId()` | — | missing |  |
-| `getOSProcessId()` | — | missing |  |
-| `getProcessId()` | — | missing |  |
+| `getOSProcessId()` | `GetOSProcessId` | done | 0 once the page has closed. |
+| `getProcessId()` | `GetProcessId` | done | The main frame's, read from CEF's main frame; -1 once the page has closed. |
 | `clone()` | — | missing |  |
 | `takeHeapSnapshot()` | — | missing |  |
 | `getBackgroundThrottling()` | — | missing |  |
 | `setBackgroundThrottling()` | — | missing |  |
-| `getType()` | — | missing |  |
+| `getType()` | `GetWebContentsType` | done | Renamed from .NET's `GetType` (C45); always `window`. |
 | `setImageAnimationPolicy()` | — | missing |  |
 | `canGoBack()` | — | n/a | Deprecated; use navigationHistory. |
 | `canGoForward()` | — | n/a | Deprecated; use navigationHistory. |
