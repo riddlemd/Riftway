@@ -19,11 +19,11 @@ Counted from the Checklist at the end: `BaseWindow` and `BrowserWindow` are one 
 |---|---|---|---|---|---|---|---|
 | BaseWindow + BrowserWindow options | 54 | 29 | 2 | 23 | 0 | 53.7% | 55.6% |
 | webPreferences | 46 | 11 | 4 | 24 | 7 | 28.2% | 33.3% |
-| Instance methods | 143 | 72 | 8 | 57 | 6 | 52.6% | 55.5% |
+| Instance methods | 143 | 72 | 10 | 55 | 6 | 52.6% | 56.2% |
 | Instance properties | 24 | 11 | 0 | 13 | 0 | 45.8% | 45.8% |
 | Events | 35 | 15 | 4 | 16 | 0 | 42.9% | 48.6% |
 | Static methods | 6 | 4 | 0 | 1 | 1 | 80.0% | 80.0% |
-| **Total** | 308 | 142 | 18 | 134 | 14 | 48.3% | 51.4% |
+| **Total** | 308 | 142 | 20 | 132 | 14 | 48.3% | 51.7% |
 
 ## Done since the audit
 
@@ -72,8 +72,8 @@ Counted from the Checklist at the end: `BaseWindow` and `BrowserWindow` are one 
   DevTools `Runtime.evaluate` in the main world; rejects with `JavaScriptException`).
 - `parent`, `modal`, `getParentWindow`, `getChildWindows`, `isModal` (`D.get_parent_window`, `D.is_window_modal_dialog`);
   children close with their parent. The constructor now runs from any thread. A modal window keeps focus from its
-  parent on macOS; on Linux (openbox) it does not, because the window manager ignores the modal hint, and Electron's
-  Linux workaround (disabling the parent's input) has no CEF equivalent yet.
+  parent on macOS; on Linux (openbox) it does not, because the window manager ignores the modal hint. Oriel now
+  disables the parent's input itself there, as Electron does (`SetEnabled`, drift W5).
 - webContents `sendInputEvent` for keyboard events (`keyDown`, `keyUp`, `char`; Electron key names and
   modifiers), through DevTools `Input.dispatchKeyEvent`, so the browser's own shortcuts see them; and for mouse
   events (`mouseDown`, `mouseUp`, `mouseMove`; button, click count, modifiers) through `Input.dispatchMouseEvent`.
@@ -185,7 +185,7 @@ Parameters in brackets are optional in Electron. `webContents` members are in [w
 | `show` | `Show` | done |  |
 | `frame` | `Frame` | done |  |
 | `parent` | `Parent` | done |  |
-| `modal` | `Modal` | partial | Linux parent keeps input under window managers that ignore the modal hint (W5). |
+| `modal` | `Modal` | partial | Linux: Oriel disables the parent itself, as Electron; the pointer crossing into or out of it still reaches its page (W5). |
 | `acceptFirstMouse` | — | missing |  |
 | `disableAutoHideCursor` | — | missing |  |
 | `autoHideMenuBar` | `AutoHideMenuBar` | done |  |
@@ -299,8 +299,8 @@ Parameters in brackets are optional in Electron. `webContents` members are in [w
 | `setContentBounds(bounds, animate)` | `SetContentBounds` | partial | No `animate` argument (macOS-only parameter). |
 | `getContentBounds()` | `GetContentBounds` | done |  |
 | `getNormalBounds()` | — | missing |  |
-| `setEnabled(enable)` | — | missing |  |
-| `isEnabled()` | — | missing |  |
+| `setEnabled(enable)` | `SetEnabled` | partial | Linux only; throws `PlatformNotSupportedException` on Windows and macOS. Crossing events still reach the page (W5). |
+| `isEnabled()` | `IsEnabled` | partial | Linux only, as `SetEnabled`. |
 | `setSize(width, height, animate)` | `SetSize` | partial | No `animate` argument (macOS-only parameter). |
 | `getSize()` | `GetSize` | done |  |
 | `setContentSize(width, height, animate)` | `SetContentSize` | partial | No `animate` argument (macOS-only parameter). |

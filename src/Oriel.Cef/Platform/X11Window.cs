@@ -113,6 +113,78 @@ public static unsafe partial class X11Window
 
     private const long AllWorkspaces = 0xFFFFFFFF;
 
+    // Xlib's XSetWindowAttributes on 64-bit platforms.
+    [StructLayout(LayoutKind.Sequential)]
+    private struct XSetWindowAttributes
+    {
+        public nint BackgroundPixmap;
+        public nuint BackgroundPixel;
+        public nint BorderPixmap;
+        public nuint BorderPixel;
+        public int BitGravity;
+        public int WinGravity;
+        public int BackingStore;
+        public nuint BackingPlanes;
+        public nuint BackingPixel;
+        public int SaveUnder;
+        public long EventMask;
+        public long DoNotPropagateMask;
+        public int OverrideRedirect;
+        public nint Colormap;
+        public nint Cursor;
+    }
+
+    // XIEventMask on 64-bit platforms.
+    [StructLayout(LayoutKind.Sequential)]
+    private struct XIEventMask
+    {
+        public int DeviceId;
+        public int MaskLength;
+        public byte* Mask;
+    }
+
+    private const int InputOnly = 2;
+    private const nuint CWDontPropagate = 1 << 12;
+    // Button and every motion mask: pointer events have a core type, so the server stops them at a window whose
+    // do-not-propagate mask holds them, XI2 deliveries included (dix EventIsDeliverable).
+    private const long BlockedEvents = 0x4 | 0x8 | 0x40 | 0x100 | 0x200 | 0x400 | 0x800 | 0x1000 | 0x2000;
+    private const int XIAllMasterDevices = 1;
+    private const uint CoverSize = 32767;
+
+    /// <summary>Covers the window with an input-only child that keeps pointer, wheel and touch events from the
+    /// window (not keys, which go to the focus window): the X11 stand-in for Chromium's <c>DisableEventListening</c>. Returns the
+    /// child for <see cref="UnblockInput"/>, or 0 without an X display.</summary>
+    public static nint BlockInput(nint window)
+    {
+        var display = Display();
+        if (display == 0 || window == 0) return 0;
+        var attributes = new XSetWindowAttributes { DoNotPropagateMask = BlockedEvents };
+        // Child windows clip to their parent, so one larger than any screen needs no resizing with the window.
+        var cover = XCreateWindow(display, window, 0, 0, CoverSize, CoverSize, 0, 0, InputOnly, 0, CWDontPropagate, &attributes);
+        if (cover == 0) return 0;
+        // Touch has no core type, so it is stopped by taking it: the first window selecting a touch gets it.
+        var mask = stackalloc byte[3];
+        mask[0] = 0;
+        mask[1] = 0;
+        mask[2] = 1 << (18 - 16) | 1 << (19 - 16) | 1 << (20 - 16);
+        var touch = new XIEventMask { DeviceId = XIAllMasterDevices, MaskLength = 3, Mask = mask };
+        try { _ = XISelectEvents(display, cover, &touch, 1); }
+        catch (DllNotFoundException) { }
+        _ = XMapRaised(display, cover);
+        _ = XFlush(display);
+        return cover;
+    }
+
+    /// <summary>Removes a <see cref="BlockInput"/> cover. The window must still exist.</summary>
+    public static void UnblockInput(nint cover)
+    {
+        var display = Display();
+        if (display == 0 || cover == 0) return;
+        _ = XDestroyWindow(display, cover);
+        // Drops the touch events the cover took; nothing else on this connection selects events.
+        _ = XSync(display, 1);
+    }
+
     // An XClientMessageEvent to the root window, inside XEvent's 192 bytes at its 64-bit offsets.
     private static void Send(nint display, nint window, nint type, long l0, long l1, long l2, long l3)
     {
@@ -162,6 +234,12 @@ public static unsafe partial class X11Window
     [LibraryImport(LibX11)] private static partial int XFlush(nint display);
     [LibraryImport(LibX11)] private static partial int XChangeProperty(nint display, nint window, nint property, nint type, int format, int mode, byte* data, int count);
     [LibraryImport(LibX11)] private static partial int XSendEvent(nint display, nint window, int propagate, long eventMask, long* e);
+    [LibraryImport(LibX11)] private static partial nint XCreateWindow(nint display, nint parent, int x, int y, uint width, uint height, uint borderWidth,
+        int depth, uint windowClass, nint visual, nuint valueMask, XSetWindowAttributes* attributes);
+    [LibraryImport(LibX11)] private static partial int XMapRaised(nint display, nint window);
+    [LibraryImport(LibX11)] private static partial int XDestroyWindow(nint display, nint window);
+    [LibraryImport(LibX11)] private static partial int XSync(nint display, int discard);
+    [LibraryImport("libXi.so.6")] private static partial int XISelectEvents(nint display, nint window, XIEventMask* masks, int count);
     [LibraryImport(LibX11)] private static partial int XGetWindowProperty(nint display, nint window, nint property, long offset, long length, int delete,
         nint requestedType, out nint actualType, out int actualFormat, out nuint itemCount, out nuint bytesAfter, out byte* data);
 }

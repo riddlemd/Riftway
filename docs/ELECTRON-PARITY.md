@@ -16,7 +16,7 @@ The 67 rows include `BrowserView` (deprecated, never implemented; counted as not
 
 | Checklist | Applicable items | Done | Partial | Missing | % done | % done + partial/2 |
 |---|---|---|---|---|---|---|
-| [BrowserWindow](parity/browser-window.md) (with `BaseWindow`) | 294 | 142 | 18 | 134 | 48.3% | 51.4% |
+| [BrowserWindow](parity/browser-window.md) (with `BaseWindow`) | 294 | 142 | 20 | 132 | 48.3% | 51.7% |
 | [webContents](parity/web-contents.md) (with `navigationHistory`, `WebFrameMain`) | 230 | 104 | 48 | 78 | 45.2% | 55.7% |
 
 **Source** — where the implementation comes from:
@@ -110,7 +110,7 @@ Detailed item-by-item status, including `navigationHistory` and `WebFrameMain`: 
 | Electron | Oriel | Source | Wave | Status |
 |---|---|---|---|---|
 | `dialog` (file dialogs) | `Dialog` | OS (macOS) + CEF | M2 | partial: macOS matches (NSOpenPanel/NSSavePanel as Electron: every option, sheets, window-less and Sync; bookmarks on any build, G9); Linux and Windows run CEF's dialog with a window, fewer options and async-only on the UI thread (see DRIFT.md G1–G8) |
-| `dialog` (message boxes, error box, certificate trust) | `Dialog` | OS | M5 | partial: Windows message boxes (`ShowMessageBoxAsync`/`Sync` with every option, `Signal`, `ShowErrorBox`) as `message_box_win.cc` builds them, macOS (NSAlert sheets, window-less and Sync boxes, the error box) as `message_box_mac.mm`, and Linux (GtkMessageDialog async and `gtk_dialog_run` Sync boxes, transient for and modal to the window, `Signal`, the error box and its pre-ready stderr form) as `message_box_gtk.cc`, the parent left enabled (MB4); `showCertificateTrustDialog` missing (see DRIFT.md) |
+| `dialog` (message boxes, error box, certificate trust) | `Dialog` | OS | M5 | partial: Windows message boxes (`ShowMessageBoxAsync`/`Sync` with every option, `Signal`, `ShowErrorBox`) as `message_box_win.cc` builds them, macOS (NSAlert sheets, window-less and Sync boxes, the error box) as `message_box_mac.mm`, and Linux (GtkMessageDialog async and `gtk_dialog_run` Sync boxes, transient for and modal to the window, `Signal`, the error box and its pre-ready stderr form) as `message_box_gtk.cc`, the window disabled through `SetEnabled` (MB4: not noted for ATK); `showCertificateTrustDialog` missing (see DRIFT.md) |
 | `Menu` / `MenuItem` (app menu, context menus) | `Menu` / `MenuItem` | OS + CEF | M5 | partial: application and window menus, popups and context menus, roles, accelerators, `click`'s `KeyboardEvent`; no icons, sublabels or tooltips |
 | `Tray` | `Tray` | OS | M5 | — |
 | `Notification` | `Notification` | OS | M5 | — |
