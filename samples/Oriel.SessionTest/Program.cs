@@ -1095,9 +1095,20 @@ async Task RunAsync()
         $"{app.GetPath("userData")} vs {defaultSession.GetStoragePath()}");
     Check("GetPath(home), (temp) and (exe) are the OS's", app.GetPath("home") == Environment.GetFolderPath(Environment.SpecialFolder.UserProfile)
         && app.GetPath("temp") == Path.TrimEndingDirectorySeparator(Path.GetTempPath()) && app.GetPath("exe") == Environment.ProcessPath, app.GetPath("temp"));
+    if (OperatingSystem.IsWindows())
+    {
+        // DIR_ASSETS is DIR_MODULE of the libcef actually loaded, which every Windows layout puts beside the exe.
+        var loadedLibcef = System.Diagnostics.Process.GetCurrentProcess().Modules.Cast<System.Diagnostics.ProcessModule>()
+            .FirstOrDefault(m => string.Equals(m.ModuleName, "libcef.dll", StringComparison.OrdinalIgnoreCase))?.FileName;
+        var assets = app.GetPath("assets");
+        Check("GetPath(assets) is the exe's directory, where libcef and its resources are, on Windows",
+            string.Equals(assets, Path.GetDirectoryName(Environment.ProcessPath), StringComparison.OrdinalIgnoreCase)
+            && string.Equals(assets, Path.GetDirectoryName(loadedLibcef), StringComparison.OrdinalIgnoreCase)
+            && File.Exists(Path.Combine(assets, "resources.pak")), $"{assets} vs exe {Environment.ProcessPath}, libcef {loadedLibcef}");
+    }
     if (OperatingSystem.IsLinux())
     {
-        var userDirs = Path.Combine(app.GetPath("appData"), "user-dirs.dirs");
+        var userDirs =Path.Combine(app.GetPath("appData"), "user-dirs.dirs");
         File.WriteAllText(userDirs, "XDG_DOWNLOAD_DIR=\"$HOME/Fetched\"\n");
         var downloadsDir = app.GetPath("downloads");
         File.Delete(userDirs);
