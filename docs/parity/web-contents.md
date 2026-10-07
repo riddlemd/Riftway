@@ -1,6 +1,6 @@
 # webContents parity
 
-Against Electron **v44.5.1** (`docs/api/web-contents.md`, `navigation-history.md`, `web-frame-main.md`). Audited 2026-10-04, recounted 2026-10-06; update this file as items land.
+Against Electron **v44.5.1** (`docs/api/web-contents.md`, `navigation-history.md`, `web-frame-main.md`). Audited 2026-10-04, recounted 2026-10-07; update this file as items land.
 
 Status: **done**, **partial** (exists with a documented gap; DRIFT.md id in the note), **missing**, or **n/a** (Node/`<webview>` features and deprecated APIs). Window-side items are in [browser-window.md](browser-window.md).
 
@@ -109,7 +109,7 @@ Percentages are over the non-n/a items; the second counts a partial item as half
 | `setUserAgent(userAgent)` | `SetUserAgent` | done |  |
 | `getUserAgent()` | `GetUserAgent` | done | The app's fallback until overridden |
 | `executeJavaScript(code, userGesture)` | `ExecuteJavaScriptAsync` | partial | JSON result only, `JsonNode?` (C6, S3). |
-| `setWindowOpenHandler(handler)` | `SetWindowOpenHandler` | partial | `features` rebuilt, no `referrer`/`postBody`, no `createWindow` (O1, O2, O3). |
+| `setWindowOpenHandler(handler)` | `SetWindowOpenHandler` | partial | `features` rebuilt, no `referrer`/`postBody`; `createWindow` must adopt the page before it returns (O1, O2, O3). |
 | `setZoomFactor(factor)` | `SetZoomFactor` | done |  |
 | `getZoomFactor()` | `GetZoomFactor` | done |  |
 | `setZoomLevel(level)` | `SetZoomLevel` | done |  |

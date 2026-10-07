@@ -997,6 +997,30 @@ public sealed unsafe partial class WebContents
     /// <summary>Windows this page opened that close with it.</summary>
     internal List<BrowserWindow> Popups { get; } = [];
 
+    /// <summary>Pages this page opened into views (by a createWindow callback) that close with it.</summary>
+    internal List<WebContents> PopupPages { get; } = [];
+
+    /// <summary>Set while a createWindow callback may adopt this popup page.</summary>
+    internal PopupGuest? Guest { get; set; }
+
+    /// <summary>Whether the page is an Alloy-style browser: a view's page, or a popup of one (CEF gives a popup its
+    /// opener's style).</summary>
+    internal bool IsAlloyStyle { get; init; }
+
+    /// <summary>UI thread: closes <paramref name="page"/> with this page, as Electron's guest-window-manager destroys it.</summary>
+    internal void ClosePopupPageWithThis(WebContents page)
+    {
+        PopupPages.Add(page);
+        page.Destroyed += (_, _) => PopupPages.Remove(page);
+    }
+
+    /// <summary>A popup page CEF never created a browser for: gone, without events.</summary>
+    internal void DiscardUnborn()
+    {
+        _destroyed.Cancel();
+        UnregisterLifecycle();
+    }
+
     internal void OnBrowserDestroyed()
     {
         _destroyed.Cancel();
@@ -1005,6 +1029,8 @@ public sealed unsafe partial class WebContents
         // As Electron: windows the page opened close with it unless they asked to outlive it.
         foreach (var popup in Popups.ToArray()) popup.Destroy();
         Popups.Clear();
+        foreach (var page in PopupPages.ToArray()) page.Close();
+        PopupPages.Clear();
         _devTools.Detach();
         Debugger.OnTargetDestroyed();
         NativeObject.Release(_browser);

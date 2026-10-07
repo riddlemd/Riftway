@@ -5,7 +5,7 @@ electron/electron). When Electron adds or changes a module, this table changes w
 
 ## Progress
 
-Recounted 2026-10-06 against `src/Oriel`. Update these figures when a row or checklist item changes.
+Recounted 2026-10-07 against `src/Oriel`. Update these figures when a row or checklist item changes.
 
 | Measure | Done | Partial | Not started | Total |
 |---|---|---|---|---|
@@ -57,12 +57,12 @@ Detailed item-by-item status: [parity/browser-window.md](parity/browser-window.m
 | `BaseWindow` | `BaseWindow` | CEF (Views) | M2 | — |
 | `BrowserWindow` | `BrowserWindow` | CEF (Views) | M2 | partial: 143 of 294 applicable items done (48.6%), see parity/browser-window.md |
 | `View` | `View` | CEF (Views panel) | M2 | partial: `addChildView` (index, move to top, reparent), `removeChildView`, `children`, `setBounds`/`getBounds`, `setVisible`/`getVisible`, `setBackgroundColor`, `bounds-changed`; no `setBorderRadius` (DRIFT V1) |
-| `WebContentsView` | `WebContentsView` | CEF (Views browser view) | M2 | partial: `new WebContentsView({ webPreferences })`, `webContents`, child views over the page, in `BrowserWindow.ContentView`; pages outlive their window and the view stays when its page closes, as Electron; popups and `webContents.close()` from view pages; Alloy style (DRIFT V2, V4, V7, V9, V12, V13) |
+| `WebContentsView` | `WebContentsView` | CEF (Views browser view) | M2 | partial: `new WebContentsView({ webPreferences })`, `webContents`, child views over the page, in `BrowserWindow.ContentView`; pages outlive their window and the view stays when its page closes, as Electron; popups and `webContents.close()` from view pages; `webContents` option for a `createWindow` popup (V4); Alloy style (DRIFT V2, V4, V7, V9, V12, V13) |
 | `ImageView` | `ImageView` | CEF + .NET | M5 | — |
 | `win.setSimpleFullScreen` (macOS) | `BrowserWindow.SetSimpleFullScreen` | OS | M2 | done (native full screen blacks out other displays on macOS) |
 | `BrowserView` (deprecated) | not implemented; use `WebContentsView` | — | — | — |
 | `<webview>` tag | `<webview>` | Patch | M7 | — |
-| `window.open` handling | `WebContents.SetWindowOpenHandler` | CEF | M2 | partial: handler (allow/deny, override options, outlivesOpener), `did-create-window`, popups as full `BrowserWindow`s with the opener's preferences and preload, no popup blocker (see DRIFT.md) |
+| `window.open` handling | `WebContents.SetWindowOpenHandler` | CEF | M2 | partial: handler (allow/deny, override options, outlivesOpener, `createWindow` into the app's window or view), `did-create-window`, popups as full `BrowserWindow`s with the opener's preferences and preload, no popup blocker (see DRIFT.md) |
 | `screen` | `Screen` | CEF | M2 | partial: displays with all of Electron's fields (macOS), nearest/matching, cursor point, DIP conversion, display events (polled on Windows and Linux; see DRIFT.md) |
 | `-electron-corner-smoothing` CSS | same CSS property | Patch | M7 | — |
 
