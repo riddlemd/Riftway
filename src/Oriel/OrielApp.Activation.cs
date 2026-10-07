@@ -1,3 +1,5 @@
+using System.Text;
+using System.Text.RegularExpressions;
 using Oriel.Cef;
 using Oriel.Cef.Platform;
 
@@ -173,9 +175,17 @@ public sealed partial class OrielApp
 
     /// <summary>Shows <paramref name="count"/> on the app's badge: the Dock tile on macOS, an overlay drawn on the taskbar
     /// button of every open window on Windows; "99+" past 99 and a dot when null; 0 removes it. Returns whether it is
-    /// shown: true on macOS and Windows, false on Linux, which has no badge yet. Electron's <c>app.setBadgeCount()</c>.</summary>
+    /// shown, false where the OS has no badge. Electron's <c>app.setBadgeCount()</c>.</summary>
+    /// <remarks>Linux: a Unity launcher entry signal on the session bus, matched to the app by
+    /// <see cref="SetDesktopName"/>, which only some desktops show; false for null or without a desktop name.</remarks>
     public bool SetBadgeCount(int? count = null)
     {
+        if (OperatingSystem.IsLinux())
+        {
+            if (count is null || !LinuxLauncherEntry.SetBadgeCount(count.Value)) return false;
+            _badgeCount = count.Value;
+            return true;
+        }
         if (OperatingSystem.IsWindows()) SetWindowsBadge(count);
         else if (OperatingSystem.IsMacOS()) Dock.SetBadge(count == 0 ? "" : BadgeText(count));
         else return false;
@@ -185,6 +195,22 @@ public sealed partial class OrielApp
 
     /// <summary>The count <see cref="SetBadgeCount"/> last set. Electron's <c>app.getBadgeCount()</c>.</summary>
     public int GetBadgeCount() => _badgeCount;
+
+    /// <summary>The name of the app's .desktop file, which Linux desktops match its launcher entry, badge and progress
+    /// to; set by default from <see cref="Name"/>. Does nothing elsewhere. Electron's <c>app.setDesktopName()</c>.</summary>
+    public void SetDesktopName(string desktopName)
+    {
+        ArgumentNullException.ThrowIfNull(desktopName);
+        if (OperatingSystem.IsLinux()) LinuxLauncherEntry.SetDesktopName(desktopName);
+    }
+
+    // Electron's defaultDesktopName (lib/browser/desktop-name.ts): an XDG-valid, lowercase, hyphenated slug.
+    internal static string DefaultDesktopName(string? name)
+    {
+        var slug = string.IsNullOrEmpty(name) ? "" : Regex.Replace(
+            Regex.Replace(name.Normalize(NormalizationForm.FormKD), @"\p{M}", "").ToLowerInvariant(), "[^a-z0-9]+", "-").Trim('-');
+        return slug.Length > 0 ? slug + ".desktop" : Path.GetFileName(Environment.ProcessPath ?? "") + ".desktop";
+    }
 
     // Chromium's badging::BadgeManager::GetBadgeString.
     internal static string BadgeText(int? count) => count switch

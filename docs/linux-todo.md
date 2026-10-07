@@ -11,8 +11,9 @@ General items: [todo.md](todo.md).
 - [ ] Linux sandbox on Ubuntu 24.04+: AppArmor profile, or documented `--no-sandbox` (M4)
 - [ ] Wayland: CEF Views on Wayland is still being fixed upstream; Oriel targets X11/XWayland for now
 - [ ] linux-x64: only linux-arm64 (Docker on Apple Silicon) has been tested
-- [ ] Modal windows (`Modal = true`) don't block the parent under openbox: the parent still takes focus. Electron
-      disables the parent's input itself on Linux; CEF exposes no input filter, so this needs another route.
-      Check GNOME/KDE, which may honour `_NET_WM_STATE_MODAL`.
+- [x] Modal windows (`Modal = true`) block the parent under any window manager, as Electron: an input-only X11 cover
+      plus dropped keys (branch `linux-modal`); the same route serves `SetEnabled`/`IsEnabled` and message boxes (MB4)
+  - [ ] Crossing events still reach a disabled window's page (DRIFT W5); needs a CEF patch
+  - [ ] Check an input method (ibus) composing into a disabled window's focused field
 - [ ] Window-manager behaviour beyond openbox (GNOME/Mutter, KDE/KWin): maximize, minimize, full screen
 - [ ] Screen capture: Chromium's X11 desktop capturer dies with SIGILL under the Docker Xvfb (arm64) when getDisplayMedia starts; SessionTest skips the capture checks there (ORIEL_XVFB). Verify on a real X server; if it crashes there too, find the CHECK with CEF's symbols

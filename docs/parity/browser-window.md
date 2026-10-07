@@ -38,7 +38,8 @@ Counted from the Checklist at the end: `BaseWindow` and `BrowserWindow` are one 
 - Taskbar: `SetProgressBar` (`ProgressBarOptions.Mode`), `FlashFrame`, `SetSkipTaskbar` and the `SkipTaskbar` option,
   `SetOverlayIcon` (`NativeImage`; the path overload is gone, so `null` is unambiguous), `SetThumbarButtons` (Windows: Windows `ITaskbarList3` and `FlashWindowEx` (`WindowsTaskbar`); macOS the Dock tile
   (`MacDock`: a progress bar over the icon, `requestUserAttention:`); Linux X11 (`X11Window`: the urgency hint,
-  `_NET_WM_STATE_SKIP_TASKBAR`). Gaps: Linux progress, macOS error/paused colours (DRIFT W20, W23).
+  `_NET_WM_STATE_SKIP_TASKBAR`) and the Unity launcher entry D-Bus signal for progress (`LinuxLauncherEntry`, DRIFT A20).
+  Gaps: macOS error/paused colours (DRIFT W20, W23).
 - Windows only, as in Electron: `SetAppDetails` (`AppDetailsOptions`: the window property store's
   `PKEY_AppUserModel_*`), `SetThumbnailClip` and `SetThumbnailToolTip` (`ITaskbarList3`; clips run on an STA thread
   because the shell's proxy rejects the NULL clip that clears them), `BackgroundMaterial` option and
@@ -77,8 +78,8 @@ Counted from the Checklist at the end: `BaseWindow` and `BrowserWindow` are one 
   DevTools `Runtime.evaluate` in the main world; rejects with `JavaScriptException`).
 - `parent`, `modal`, `getParentWindow`, `getChildWindows`, `isModal` (`D.get_parent_window`, `D.is_window_modal_dialog`);
   children close with their parent. The constructor now runs from any thread. A modal window keeps focus from its
-  parent on macOS; on Linux (openbox) it does not, because the window manager ignores the modal hint, and Electron's
-  Linux workaround (disabling the parent's input) has no CEF equivalent yet.
+  parent on macOS; on Linux (openbox) it does not, because the window manager ignores the modal hint. Oriel now
+  disables the parent's input itself there, as Electron does (`SetEnabled`, drift W5).
 - webContents `sendInputEvent` for keyboard events (`keyDown`, `keyUp`, `char`; Electron key names and
   modifiers), through DevTools `Input.dispatchKeyEvent`, so the browser's own shortcuts see them; and for mouse
   events (`mouseDown`, `mouseUp`, `mouseMove`; button, click count, modifiers) through `Input.dispatchMouseEvent`.
@@ -223,7 +224,7 @@ Parameters in brackets are optional in Electron. `webContents` members are in [w
 | `show` | `Show` | done |  |
 | `frame` | `Frame` | done |  |
 | `parent` | `Parent` | done |  |
-| `modal` | `Modal` | partial | Linux parent keeps input under window managers that ignore the modal hint (W5). |
+| `modal` | `Modal` | partial | Linux: Oriel disables the parent itself, as Electron; the pointer crossing into or out of it still reaches its page (W5). |
 | `acceptFirstMouse` | — | missing |  |
 | `disableAutoHideCursor` | — | missing |  |
 | `autoHideMenuBar` | `AutoHideMenuBar` | done |  |
@@ -337,8 +338,8 @@ Parameters in brackets are optional in Electron. `webContents` members are in [w
 | `setContentBounds(bounds, animate)` | `SetContentBounds` | partial | No `animate` argument (macOS-only parameter). |
 | `getContentBounds()` | `GetContentBounds` | done |  |
 | `getNormalBounds()` | `GetNormalBounds` | done | Windows: `GetWindowPlacement`; elsewhere the last bounds seen while normal. |
-| `setEnabled(enable)` | `SetEnabled` | partial | Windows `EnableWindow`, kept disabled under a shown modal, as Electron; macOS and Linux not yet (W43). |
-| `isEnabled()` | `IsEnabled` | partial | Windows `IsWindowEnabled`; true elsewhere (W43). |
+| `setEnabled(enable)` | `SetEnabled` | partial | Windows `EnableWindow`, kept disabled under a shown modal; Linux an X11 input cover and dropped keys, the pointer crossing in or out still reaching the page (W5); stored only on macOS (W43). |
+| `isEnabled()` | `IsEnabled` | partial | Windows `IsWindowEnabled`; Linux the state Electron keeps (disabled by `SetEnabled(false)` or a shown modal child); true on macOS (W43). |
 | `setSize(width, height, animate)` | `SetSize` | partial | No `animate` argument (macOS-only parameter). |
 | `getSize()` | `GetSize` | done |  |
 | `setContentSize(width, height, animate)` | `SetContentSize` | partial | No `animate` argument (macOS-only parameter). |
@@ -394,7 +395,7 @@ Parameters in brackets are optional in Electron. `webContents` members are in [w
 | `reload()` | `Reload` | done |  |
 | `setMenu(menu)` | `SetMenu` | done | Drawn by CEF Views on Windows/Linux (W16). |
 | `removeMenu()` | `RemoveMenu` | done |  |
-| `setProgressBar(progress, options)` | `SetProgressBar` | partial | No Linux progress; macOS error/paused show as plain bar (W20). |
+| `setProgressBar(progress, options)` | `SetProgressBar` | partial | macOS error/paused show as plain bar (W20); Linux sends Electron's launcher entry signal (A20). |
 | `setOverlayIcon(overlay, description)` | `SetOverlayIcon` | done | Takes a `NativeImage`. |
 | `invalidateShadow()` | — | missing |  |
 | `setHasShadow(hasShadow)` | `SetHasShadow` | partial | Stored only, as Electron on Windows; macOS and Linux not yet (W31). |

@@ -543,7 +543,7 @@ async Task ParentAndModalAsync(BrowserWindow win)
     await Task.Delay(500);
     win.Focus();
     await Task.Delay(800);
-    // Linux window managers may ignore window-modal hints (openbox does); a known gap there.
+    // On Linux focus is the window manager's, which may ignore the modal hint (openbox does), as under Electron.
     if (!OperatingSystem.IsLinux())
         Check("a modal window keeps focus from its parent", !win.IsFocused && modal.IsFocused, $"parent={win.IsFocused} modal={modal.IsFocused}");
     child.Focus();
@@ -558,6 +558,93 @@ async Task ParentAndModalAsync(BrowserWindow win)
     Check("closed child leaves GetChildWindows", win.GetChildWindows() is [var left] && left == child, win.GetChildWindows().Count);
     await Task.Delay(200);
     childAlive = child;
+    if (OperatingSystem.IsLinux() && File.Exists("/usr/bin/xdotool")) await LinuxDisabledInputAsync(child);
+}
+
+// Electron disables a modal's parent itself on Linux (Chromium's DisableEventListening), whatever the window manager
+// makes of the modal hint; openbox ignores it. Real X input, through xdotool.
+async Task LinuxDisabledInputAsync(BrowserWindow focusAfter)
+{
+    static void Xdo(string args) => System.Diagnostics.Process.Start("/usr/bin/timeout", "10 /usr/bin/xdotool " + args)!.WaitForExit();
+    const string counting = "data:text/html,<body style='margin:0;height:300vh'><script>window.c={mousedown:0,mousemove:0,wheel:0,keydown:0};"
+        + "for(const k in c)addEventListener(k,()=>c[k]++,{capture:true,passive:true})</script>";
+    var parent = new BrowserWindow(new BrowserWindowOptions { Title = "Oriel window test: modal parent", Width = 640, Height = 480, X = 100, Y = 100 });
+    await parent.LoadUrl(counting);
+    await Task.Delay(500);
+    var content = parent.GetContentBounds();
+    var (px, py) = (content.X + content.Width - 60, content.Y + content.Height - 60);
+    // Off every window: keys then go to the X focus window itself, not to a cover under the pointer.
+    const string offWindows = "mousemove 1550 980";
+    async Task<string> Counts(string? key = null) => (await Js(parent, key is null ? "JSON.stringify(c)" : $"c.{key}"))?.ToString() ?? "null";
+    // Each act runs alone, so a count that moved names the event that got through.
+    async Task<bool> Reaches(string key, string act)
+    {
+        var before = await Counts(key);
+        Xdo(act);
+        await Task.Delay(400);
+        return await Counts(key) != before;
+    }
+    string Click() => $"mousemove {px} {py} click 1";
+    string Move() => $"mousemove {px - 30} {py - 30} mousemove {px} {py}";
+    string Wheel() => $"mousemove {px} {py} click 5";
+
+    Check("Linux: a window starts enabled", parent.IsEnabled);
+    Check("Linux: a click on a window reaches its page", await Reaches("mousedown", Click()) && parent.IsFocused, await Counts());
+
+    var modal = new BrowserWindow(new BrowserWindowOptions { Title = "Oriel window test: modal on Linux", Width = 200, Height = 150, Parent = parent, Modal = true, X = 900, Y = 650 });
+    Check("Linux: a shown modal disables its parent", Eventually(() => !parent.IsEnabled, step) && modal.IsEnabled);
+    await Task.Delay(800);
+    Check("Linux: a click on a disabled parent reaches no page handler", !await Reaches("mousedown", Click()), await Counts());
+    Check("Linux: the window manager still activates a disabled parent, as Electron leaves it", Eventually(() => parent.IsFocused, step), $"parent={parent.IsFocused} modal={modal.IsFocused}");
+    Check("Linux: pointer moves over a disabled parent reach no page handler", !await Reaches("mousemove", Move()), await Counts());
+    Check("Linux: the wheel over a disabled parent reaches no page handler", !await Reaches("wheel", Wheel()), await Counts());
+    Check("Linux: a key with the pointer over a disabled parent reaches no page handler", !await Reaches("keydown", $"mousemove {px} {py} key a"), await Counts());
+    Check("Linux: a key with the pointer elsewhere reaches no page handler of a focused, disabled parent",
+        parent.IsFocused && !await Reaches("keydown", $"{offWindows} key b"), $"focused={parent.IsFocused} {await Counts()}");
+    modal.Focus();
+    Eventually(() => modal.IsFocused, step);
+    parent.Focus();
+    Check("Linux: Focus activates the disabled parent itself, as Electron", Eventually(() => parent.IsFocused, step) && !modal.IsFocused, $"parent={parent.IsFocused} modal={modal.IsFocused}");
+
+    // Electron enables the parent on any hide of a modal and disables it again on show.
+    modal.Hide();
+    Check("Linux: hiding the modal enables its parent", Eventually(() => parent.IsEnabled, step));
+    modal.Show();
+    Check("Linux: showing it again disables the parent", Eventually(() => !parent.IsEnabled, step));
+    using (var closed = new ManualResetEventSlim())
+    {
+        modal.Closed += (_, _) => closed.Set();
+        // Another window holds focus, so only the parent's own activation, not openbox's, can bring it back.
+        focusAfter.Focus();
+        Eventually(() => focusAfter.IsFocused, step);
+        modal.Close();
+        closed.Wait(step);
+    }
+    Check("Linux: closing the modal enables its parent", Eventually(() => parent.IsEnabled, step));
+    Check("Linux: closing the modal focuses its parent, as Electron", Eventually(() => parent.IsFocused, step), $"parent={parent.IsFocused} other={focusAfter.IsFocused}");
+    await Task.Delay(300);
+    Check("Linux: after the modal closes a click reaches the page", await Reaches("mousedown", Click()), await Counts());
+    Check("Linux: after the modal closes pointer moves reach the page", await Reaches("mousemove", Move()), await Counts());
+    Check("Linux: after the modal closes the wheel reaches the page", await Reaches("wheel", Wheel()), await Counts());
+    Check("Linux: after the modal closes a key reaches the page", await Reaches("keydown", $"{offWindows} key c"), await Counts());
+
+    // The same path serves SetEnabled on any window.
+    parent.SetEnabled(false);
+    Check("Linux: SetEnabled(false) disables a window", Eventually(() => !parent.IsEnabled, step));
+    Check("Linux: SetEnabled(false) keeps clicks and keys from the page",
+        !await Reaches("mousedown", Click()) && !await Reaches("keydown", $"{offWindows} key d"), await Counts());
+    parent.SetEnabled(true);
+    Check("Linux: SetEnabled(true) enables it again", Eventually(() => parent.IsEnabled, step));
+    Check("Linux: after SetEnabled(true) clicks and keys reach the page",
+        await Reaches("mousedown", Click()) && await Reaches("keydown", $"{offWindows} key e"), await Counts());
+    using (var closed = new ManualResetEventSlim())
+    {
+        parent.Closed += (_, _) => closed.Set();
+        parent.Destroy();
+        closed.Wait(step);
+    }
+    focusAfter.Focus();
+    Eventually(() => focusAfter.IsFocused, step);
 }
 
 async Task ScreenAsync(BrowserWindow win)
@@ -5034,6 +5121,28 @@ async Task LinuxTaskbarAsync()
         LinuxX11.StringProperty(darkFramed.GetNativeWindowHandle(), "_GTK_THEME_VARIANT"));
     darkFramed.Destroy();
     skipped.Destroy();
+
+    // setProgressBar: Electron sends the raw value whatever the mode, shown only inside (0, 1).
+    using (var monitor = Oriel.Samples.LauncherEntryMonitor.Start())
+    {
+        Check("a session bus and dbus-monitor are there to see the launcher entry", monitor is not null, Environment.GetEnvironmentVariable("DBUS_SESSION_BUS_ADDRESS"));
+        if (monitor is not null)
+        {
+            static string Progress(string value, bool visible) => Oriel.Samples.LauncherEntryMonitor.Update("application://oriel-windowtest.desktop",
+                ("progress", "double " + value), ("progress-visible", visible ? "boolean true" : "boolean false"));
+            tb.SetProgressBar(0.5);
+            tb.SetProgressBar(0.25, new ProgressBarOptions { Mode = ProgressBarMode.Error });
+            tb.SetProgressBar(0.75, new ProgressBarOptions { Mode = ProgressBarMode.None });
+            tb.SetProgressBar(2);
+            tb.SetProgressBar(-1);
+            tb.SetProgressBar(0);
+            tb.SetProgressBar(1);
+            var synced = Eventually(() => monitor.Updates().Count >= 7, step) && monitor.Sync();
+            Check("SetProgressBar sends Update(application://<desktop name>, {progress: d, progress-visible: b}) for the app",
+                synced && monitor.Updates().SequenceEqual([Progress("0.5", true), Progress("0.25", true), Progress("0.75", true),
+                    Progress("2", false), Progress("-1", false), Progress("0", false), Progress("1", false)]), string.Join(" / ", monitor.Updates()));
+        }
+    }
     tb.Destroy();
     await Task.Delay(300);
 }

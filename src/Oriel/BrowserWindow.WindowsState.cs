@@ -58,7 +58,6 @@ public sealed unsafe partial class BrowserWindow
     // Windows: Electron's NativeWindowViews state that PreHandleMSG reads, kept in a subclass of the HWND.
     private readonly WindowsMessageHooks _windowsHooks = new();
     private bool? _focusable;
-    private bool _enabled = true;
 
     /// <summary>The user finished moving the window (Windows). Electron's <c>moved</c>.</summary>
     public event EventHandler? MoveFinished;
@@ -109,19 +108,6 @@ public sealed unsafe partial class BrowserWindow
     /// <summary>Whether the user can move the window; always true off Windows, as Electron on Linux.
     /// Electron's <c>win.isMovable()</c> and <c>win.movable</c>.</summary>
     public bool IsMovable => !OperatingSystem.IsWindows() || Query(_ => _windowsHooks.Movable, false);
-
-    /// <summary>Enables or disables the window's input (<c>EnableWindow</c>); it stays disabled while a modal child is
-    /// shown. Windows only for now. Electron's <c>win.setEnabled()</c>.</summary>
-    public void SetEnabled(bool enable) => Command(w =>
-    {
-        if (enable == _enabled) return;
-        _enabled = enable;
-        if (OperatingSystem.IsWindows()) ApplyEnabled(w);
-    });
-
-    /// <summary>Whether the window takes input (<c>IsWindowEnabled</c>); always true off Windows for now.
-    /// Electron's <c>win.isEnabled()</c>.</summary>
-    public bool IsEnabled => !OperatingSystem.IsWindows() || Query(w => WindowsWindowOps.IsEnabled(Hwnd(w)), false);
 
     /// <summary>Raises the window to the top of the z-order without focusing it. Windows only for now.
     /// Electron's <c>win.moveTop()</c>.</summary>
@@ -212,11 +198,13 @@ public sealed unsafe partial class BrowserWindow
         return (fitted.Left, fitted.Top, fitted.Right, fitted.Bottom);
     }
 
+    private bool IsWindowsEnabled => Query(w => WindowsWindowOps.IsEnabled(Hwnd(w)), false);
+
     [System.Runtime.Versioning.SupportedOSPlatform("windows")]
-    private void ApplyEnabled(cef_window_t* w)
+    private void ApplyWindowsEnabled(cef_window_t* w)
     {
-        var shouldBe = _enabled && !_children.Any(c => c._options.Modal && c._window is not null && c._window->@base.@base.is_visible(&c._window->@base.@base) != 0);
-        _windowsHooks.KeepDisabled = !_enabled;
+        var shouldBe = _enabled.Requested && !_children.Any(c => c._options.Modal && c._window is not null && c._window->@base.@base.is_visible(&c._window->@base.@base) != 0);
+        _windowsHooks.KeepDisabled = !_enabled.Requested;
         if (shouldBe != WindowsWindowOps.IsEnabled(Hwnd(w))) WindowsWindowOps.Enable(Hwnd(w), shouldBe);
     }
 

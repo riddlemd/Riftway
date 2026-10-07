@@ -26,14 +26,15 @@ sleep 1
 openbox > /dev/null 2>&1 &
 sleep 1
 
+# A session bus of the run's own, as a desktop has: the launcher entry checks read its signals back.
 status=0
 if [ "$sandbox" = 1 ]; then
   chown root:root /work/out/app/chrome-sandbox
   chmod 4755 /work/out/app/chrome-sandbox
   chmod -R a+rX /work/out
-  runuser -u oriel -- env DISPLAY=:99 ORIEL_XVFB=1 ORIEL_TRACE_DEVTOOLS="${ORIEL_TRACE_DEVTOOLS:-}" "/work/out/app/$exe" --enable-sandbox ${ORIEL_EXTRA_ARGS:-} 2> /work/app.err || status=$?
+  runuser -u oriel -- env DISPLAY=:99 ORIEL_XVFB=1 ORIEL_TRACE_DEVTOOLS="${ORIEL_TRACE_DEVTOOLS:-}" dbus-run-session -- "/work/out/app/$exe" --enable-sandbox ${ORIEL_EXTRA_ARGS:-} 2> /work/app.err || status=$?
 else
-  "/work/out/app/$exe" ${ORIEL_EXTRA_ARGS:-} 2> /work/app.err || status=$?
+  dbus-run-session -- "/work/out/app/$exe" ${ORIEL_EXTRA_ARGS:-} 2> /work/app.err || status=$?
 fi
 
 mkdir -p /src/artifacts/linux && cp /work/app.err "/src/artifacts/linux/$exe.err"

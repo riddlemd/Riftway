@@ -93,8 +93,7 @@ public static partial class Dialog
     /// <c>dialog.showMessageBox()</c>.</summary>
     /// <remarks>With a window the box is modal to it and the window is disabled until it closes; without one it stands
     /// alone. A window that already shows a modal box is disabled, so a second box for it stands alone too, as in
-    /// Electron. On Windows each box runs on its own thread; on macOS and Linux on the UI thread, which keeps running.
-    /// On Linux the window stays usable (drift MB4).</remarks>
+    /// Electron. On Windows each box runs on its own thread; on macOS and Linux on the UI thread, which keeps running.</remarks>
     /// <exception cref="InvalidOperationException">Before <see cref="OrielApp.Ready"/>.</exception>
     /// <exception cref="ArgumentException">An option Electron rejects, such as <see cref="MessageBoxOptions.CheckboxChecked"/>
     /// without a label.</exception>
@@ -116,7 +115,7 @@ public static partial class Dialog
     /// <summary>Shows a message box and waits: the index of the button chosen, or the cancel id. Electron's
     /// <c>dialog.showMessageBoxSync()</c>.</summary>
     /// <remarks>As in Electron the box runs on the UI thread, which waits in it: windows still paint and the owner stays
-    /// disabled (not on Linux: drift MB4), but no other UI-thread work runs until it closes. From another thread the call
+    /// disabled, but no other UI-thread work runs until it closes. From another thread the call
     /// waits for the UI thread, so it must not come from a thread the UI thread is itself waiting on.</remarks>
     /// <exception cref="InvalidOperationException">Before <see cref="OrielApp.Ready"/>.</exception>
     /// <exception cref="ArgumentException">See <see cref="ShowMessageBoxAsync(BrowserWindow?, MessageBoxOptions)"/>.</exception>
@@ -419,8 +418,11 @@ public static partial class Dialog
                 return;
             }
             var registration = options.Signal.Register(() => LinuxMessageBox.PostToMainLoop(box.Close));
+            // Electron's GtkMessageBox goes through SetEnabled, so closing the box also re-enables a window the app disabled.
+            window?.SetEnabledOnUi(false);
             box.RunAsynchronous((response, checkboxChecked) =>
             {
+                window?.SetEnabledOnUi(true);
                 registration.Dispose();
                 done.TrySetResult(new MessageBoxResult(response, checkboxChecked));
             });
@@ -438,7 +440,9 @@ public static partial class Dialog
         {
             var box = new LinuxMessageBox(gtk);
             using var registration = options.Signal.Register(() => LinuxMessageBox.PostToMainLoop(box.Close));
-            return box.RunSynchronous();
+            window?.SetEnabledOnUi(false);
+            try { return box.RunSynchronous(); }
+            finally { window?.SetEnabledOnUi(true); }
         });
     }
 }

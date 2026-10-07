@@ -5,8 +5,15 @@
   // its value before dispatchEvent does, as Electron's proxied functions do.
   const bridgeEnd = (inbound, outbound, handlers) => {
     const MARK = '__orielBridge';
+    // A proxy holds its original only through the other world's localFunctions entry, so the entry lives until the
+    // proxy is collected, as Electron's proxy holds its original in its own V8 function data.
     const localFunctions = new Map();
     const remoteFunctions = new Map();
+    const proxyIds = new WeakMap();
+    const proxies = new FinalizationRegistry((id) => {
+      remoteFunctions.delete(id);
+      send({ op: 'release', id });
+    });
     const pendingPromises = new Map();
     const results = new Map();
     const incomingNodes = [];
@@ -16,11 +23,19 @@
       || value instanceof ArrayBuffer || ArrayBuffer.isView(value) || value instanceof Error || value instanceof Blob
       || (typeof ImageData !== 'undefined' && value instanceof ImageData) || (typeof DOMException !== 'undefined' && value instanceof DOMException);
 
-    const encode = (value, nodes, depth = 0) => {
+    // `functions` is one crossing's cache: Electron's ObjectCache gives a function one proxy per crossing, not per use.
+    const encode = (value, nodes, functions, depth = 0) => {
       if (depth > 1000) throw new Error('Object has too much nesting');
       if (typeof value === 'function') {
-        const id = nextId++;
-        localFunctions.set(id, value);
+        // A proxy going back to its original's world arrives as the original (Electron's kOriginalFunctionPrivateKey).
+        const original = proxyIds.get(value);
+        if (original !== undefined) return { [MARK]: 'o', id: original };
+        let id = functions.get(value);
+        if (id === undefined) {
+          id = nextId++;
+          functions.set(value, id);
+          localFunctions.set(id, value);
+        }
         return { [MARK]: 'f', id };
       }
       if (value === null || typeof value !== 'object') return value;
@@ -36,22 +51,26 @@
         return { [MARK]: 'n', index: nodes.length - 1 };
       }
       if (cloneable(value)) return value;
-      if (Array.isArray(value)) return value.map((item) => encode(item, nodes, depth + 1));
+      if (Array.isArray(value)) return value.map((item) => encode(item, nodes, functions, depth + 1));
       // Any other object, a class instance too, crosses as its own string-keyed values; symbols are dropped.
       const copy = {};
       for (const [key, item] of Object.entries(value)) {
-        if (typeof item !== 'symbol') copy[key] = encode(item, nodes, depth + 1);
+        if (typeof item !== 'symbol') copy[key] = encode(item, nodes, functions, depth + 1);
       }
       return copy;
     };
 
     const decode = (value, nodes, freeze) => {
       if (value === null || typeof value !== 'object' || cloneable(value)) return value;
+      if (value[MARK] === 'o') return freeze ? Object.freeze(localFunctions.get(value.id)) : localFunctions.get(value.id);
       if (value[MARK] === 'f') {
-        let proxy = remoteFunctions.get(value.id);
+        const id = value.id;
+        let proxy = remoteFunctions.get(id)?.deref();
         if (!proxy) {
-          proxy = (...args) => call(value.id, args);
-          remoteFunctions.set(value.id, proxy);
+          proxy = (...args) => call(id, args);
+          remoteFunctions.set(id, new WeakRef(proxy));
+          proxyIds.set(proxy, id);
+          proxies.register(proxy, id);
         }
         return freeze ? Object.freeze(proxy) : proxy;
       }
@@ -67,7 +86,8 @@
 
     function send(message) {
       const nodes = [];
-      const detail = { ...message, value: encode(message.value, nodes), args: message.args && encode(message.args, nodes) };
+      const functions = new Map();
+      const detail = { ...message, value: encode(message.value, nodes, functions), args: message.args && encode(message.args, nodes, functions) };
       for (const node of nodes) document.dispatchEvent(new FocusEvent(outbound + '-node', { relatedTarget: node }));
       detail.nodes = nodes.length;
       document.dispatchEvent(new CustomEvent(outbound, { detail }));
@@ -98,6 +118,8 @@
         }
       } else if (message.op === 'return') {
         results.set(message.callId, { ok: message.ok, value: decode(message.value, nodes, false) });
+      } else if (message.op === 'release') {
+        localFunctions.delete(message.id);
       } else if (message.op === 'settle') {
         const pending = pendingPromises.get(message.id);
         pendingPromises.delete(message.id);

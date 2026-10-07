@@ -156,8 +156,8 @@ public sealed partial record BrowserWindowOptions
     public BrowserWindow? Parent { get; init; }
 
     /// <summary>Disables <see cref="Parent"/> while this window is shown; requires a parent. Electron's <c>modal</c>.</summary>
-    /// <remarks>On Linux the parent stays usable under window managers that ignore modal hints (openbox does);
-    /// Electron disables the parent's input itself there, which Oriel does not yet.</remarks>
+    /// <remarks>On Linux Oriel disables the parent's input itself, as Electron does, whatever the window manager makes
+    /// of the modal hint; the pointer crossing into or out of the parent still reaches its page (drift W5).</remarks>
     public bool Modal { get; init; }
 
     /// <summary>Hides the menu bar until Alt is pressed (Windows, Linux). Electron's <c>autoHideMenuBar</c>.</summary>
@@ -327,6 +327,9 @@ public sealed unsafe partial class BrowserWindow
     private Rectangle? _restoreBounds;
     // macOS: the NSWindow whose full-screen toggle routes to simple full screen, or 0.
     private nint _routedNSWindow;
+    // Whether the window takes input (every OS), and Linux's X11 cover that blocks it while it does not; UI thread only.
+    private readonly WindowEnabledState _enabled = new();
+    private nint _inputCover;
     // Touched only on the UI thread.
     private readonly List<BrowserWindow> _children = [];
     // The option until SetParentWindow changes it.
@@ -390,7 +393,7 @@ public sealed unsafe partial class BrowserWindow
             ReadyToShow?.Invoke(this, EventArgs.Empty);
         };
         _client = new ClientHandler(WebContents.Display, WebContents.Load, WebContents.JsDialog, WebContents.Request, WebContents.Command,
-            WebContents.ContextMenuRequests, new KeyboardHandler(keyEvent => WebContents.OnPreKeyEvent(keyEvent) || (!WebContents.IgnoresMenuShortcuts && (_menuBar?.OnKeyEvent(keyEvent) ?? false))),
+            WebContents.ContextMenuRequests, new KeyboardHandler(keyEvent => BlocksInput || WebContents.OnPreKeyEvent(keyEvent) || (!WebContents.IgnoresMenuShortcuts && (_menuBar?.OnKeyEvent(keyEvent) ?? false))),
             new LifeSpanHandler { BeforePopup = OnBeforePopup, PopupAborted = OnPopupAborted },
             new DragHandler(regions => Command(w => SetDraggableRegionsOn(w, regions))))
         {
@@ -434,8 +437,8 @@ public sealed unsafe partial class BrowserWindow
             MaximumSize = new cef_size_t { width = _options.MaxWidth, height = _options.MaxHeight },
             Parent = _parent is { } parent ? () => (nint)parent._window : null,
             Modal = _options.Modal,
-            Accelerator = commandId => !WebContents.IgnoresMenuShortcuts && (_menuBar?.OnAccelerator(commandId) ?? false),
-            KeyEvent = keyEvent => _menuBar?.OnKeyEvent(keyEvent) ?? false,
+            Accelerator = commandId => BlocksInput || (!WebContents.IgnoresMenuShortcuts && (_menuBar?.OnAccelerator(commandId) ?? false)),
+            KeyEvent = keyEvent => BlocksInput || (_menuBar?.OnKeyEvent(keyEvent) ?? false),
         };
 
         OrielApp.CurrentOrNull?.RaiseBrowserWindowCreated(this);
@@ -661,6 +664,54 @@ public sealed unsafe partial class BrowserWindow
     /// <summary>Whether this window disables its parent while shown. Electron's <c>win.isModal()</c>.</summary>
     public bool IsModal => _options.Modal;
 
+    /// <summary>Lets the window take mouse, keyboard and touch input, or stops it; it stays disabled while a modal
+    /// child is shown. Windows: <c>EnableWindow</c>. Linux: an X11 cover over the window, and its keys dropped. Stored
+    /// only on macOS for now. Electron's <c>win.setEnabled()</c>.</summary>
+    /// <remarks>The window manager can still activate a disabled window, as in Electron. On Linux the pointer crossing
+    /// into or out of a disabled window still reaches its page (drift W5).</remarks>
+    public void SetEnabled(bool enable) => CefThread.RunOnUi(() => SetEnabledOnUi(enable));
+
+    // UI thread.
+    internal void SetEnabledOnUi(bool enable)
+    {
+        if (OperatingSystem.IsWindows())
+        {
+            // Windows ignores the call while the window does not exist.
+            if (_window is null || enable == _enabled.Requested) return;
+            _enabled.SetEnabled(enable);
+            ApplyWindowsEnabled(_window);
+            return;
+        }
+        if (_enabled.SetEnabled(enable)) ApplyLinuxEnabled();
+    }
+
+    /// <summary>Whether the window takes input: false after <see cref="SetEnabled"/>(false) or while a modal child is
+    /// shown. Windows: <c>IsWindowEnabled</c>. Always true on macOS for now. Electron's <c>win.isEnabled()</c>.</summary>
+    public bool IsEnabled => OperatingSystem.IsWindows()
+        ? IsWindowsEnabled
+        : !OperatingSystem.IsLinux() || CefThread.InvokeOnUi(() => _enabled.Enabled);
+
+    // Linux only: Chromium disables a modal's parent itself on Windows, which ApplyWindowsEnabled reads back.
+    private void ChangeChildModals(bool increment)
+    {
+        if (!OperatingSystem.IsLinux()) return;
+        if (increment ? _enabled.IncrementChildModals() : _enabled.DecrementChildModals()) ApplyLinuxEnabled();
+    }
+
+    // Keys go to the X focus window, past the input cover, so the keyboard handlers drop them while disabled.
+    private bool BlocksInput => OperatingSystem.IsLinux() && !_enabled.Enabled;
+
+    private void ApplyLinuxEnabled()
+    {
+        if (!OperatingSystem.IsLinux() || _window is null) return;
+        if (!_enabled.Enabled && _inputCover == 0) _inputCover = X11Window.BlockInput(Hwnd(_window));
+        else if (_enabled.Enabled && _inputCover != 0)
+        {
+            X11Window.UnblockInput(_inputCover);
+            _inputCover = 0;
+        }
+    }
+
     /// <summary>Sets the window's menu bar, replacing the application menu for this window; null removes it
     /// (Windows, Linux). Electron's <c>win.setMenu()</c>.</summary>
     /// <remarks>On macOS the menu bar belongs to the application: use <see cref="Menu.SetApplicationMenu"/>.</remarks>
@@ -814,6 +865,7 @@ public sealed unsafe partial class BrowserWindow
     {
         var wasVisible = w->@base.@base.is_visible(&w->@base.@base) != 0;
         _meantVisible = true;
+        if (!wasVisible && _options.Modal) _options.Parent?.ChangeChildModals(increment: true);
         FlushPendingDisplayMode(w);
         ShowThroughCef(w, activate: _focusable ?? _options.Focusable);
         ApplySkipTaskbar(w);
@@ -825,6 +877,8 @@ public sealed unsafe partial class BrowserWindow
     {
         var wasVisible = w->@base.@base.is_visible(&w->@base.@base) != 0;
         _meantVisible = false;
+        // Electron re-enables the parent on every hide of a modal, shown or not.
+        if (_options.Modal) _options.Parent?.ChangeChildModals(increment: false);
         w->hide(w);
         if (wasVisible) Hidden?.Invoke(this, EventArgs.Empty);
     });
@@ -835,9 +889,10 @@ public sealed unsafe partial class BrowserWindow
     /// <summary>Brings the window to the front and gives it focus. Electron's <c>win.focus()</c>.</summary>
     public void Focus() => CefThread.RunOnUi(() =>
     {
-        // Windows disables a modal's parent, but SetForegroundWindow still activates a disabled window.
+        // Windows disables a modal's parent, but SetForegroundWindow still activates a disabled window. Electron on
+        // Linux activates the disabled parent itself.
         var target = this;
-        while (target._children.FirstOrDefault(c => c._options.Modal && c._window is not null && c._window->@base.@base.is_visible(&c._window->@base.@base) != 0) is { } modal)
+        while (!OperatingSystem.IsLinux() && target._children.FirstOrDefault(c => c._options.Modal && c._window is not null && c._window->@base.@base.is_visible(&c._window->@base.@base) != 0) is { } modal)
             target = modal;
         if (target._window is not null) target._window->activate(target._window);
     });
@@ -1522,7 +1577,8 @@ public sealed unsafe partial class BrowserWindow
     /// <summary>Shows progress on the taskbar button, from 0 to 1; below 0 removes it and above 1 shows it as
     /// indeterminate. Electron's <c>win.setProgressBar()</c>.</summary>
     /// <remarks>macOS: on the Dock icon, which all windows share; error and paused show as the plain bar.
-    /// Linux: not shown yet (desktop-specific).</remarks>
+    /// Linux: a Unity launcher entry signal for the whole app, as Electron's: the raw value, shown only inside (0, 1),
+    /// whatever the mode; only some desktops show it.</remarks>
     public void SetProgressBar(double progress, ProgressBarOptions? options = null)
     {
         var (state, percent) = ProgressBar.Map(progress, options?.Mode ?? ProgressBarMode.Normal);
@@ -1533,6 +1589,7 @@ public sealed unsafe partial class BrowserWindow
             // One Dock tile for the whole application; error and paused show as the plain bar.
             if (OperatingSystem.IsMacOS())
                 MacDock.SetProgress(state == TaskbarProgressState.None ? null : percent / 100.0, state == TaskbarProgressState.Indeterminate);
+            if (OperatingSystem.IsLinux()) _ = LinuxLauncherEntry.SetProgress(progress);
         });
     }
 
@@ -1903,8 +1960,10 @@ public sealed unsafe partial class BrowserWindow
         // OnBoundsChanged ignores bounds set before _window exists, and a window maximized on its first show is never normal.
         _normalBounds = OuterBoundsOn(window);
         SaveWindowState(window);
+        ApplyLinuxEnabled();
         if (_options.Show)
         {
+            if (_options.Modal) _options.Parent?.ChangeChildModals(increment: true);
             FlushPendingDisplayMode(window);
             ShowThroughCef(window, activate: _options.Focusable);
             ApplySkipTaskbar(window);
@@ -2070,6 +2129,14 @@ public sealed unsafe partial class BrowserWindow
         lock (s_openGate) s_open.Remove(this);
         ReleaseName();
         _parent?._children.Remove(this);
+        // The cover went with the X window.
+        _inputCover = 0;
+        if (_options is { Modal: true, Parent: { } parent } && OperatingSystem.IsLinux())
+        {
+            parent.ChangeChildModals(increment: false);
+            // Electron focuses the parent once its modal closes (NativeWindowViews::OnWidgetDestroying).
+            if (parent._window is not null) parent._window->activate(parent._window);
+        }
         // macOS closes child windows with their parent; Linux does not. Destroy, as Windows does with owned
         // windows: a child that vetoed would outlive its parent.
         foreach (var child in _children.ToArray()) child.Destroy();
