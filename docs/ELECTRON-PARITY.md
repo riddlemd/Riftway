@@ -9,15 +9,15 @@ Recounted 2026-10-06 against `src/Oriel`. Update these figures when a row or che
 
 | Measure | Done | Partial | Not started | Total |
 |---|---|---|---|---|
-| Module rows below | 3 | 22 | 42 | 67 |
-| M2 rows | 2 | 14 | 5 | 21 |
+| Module rows below | 3 | 26 | 38 | 67 |
+| M2 rows | 2 | 15 | 4 | 21 |
 
 The 67 rows include `BrowserView` (deprecated, never implemented; counted as not started).
 
 | Checklist | Applicable items | Done | Partial | Missing | % done | % done + partial/2 |
 |---|---|---|---|---|---|---|
-| [BrowserWindow](parity/browser-window.md) (with `BaseWindow`) | 294 | 138 | 19 | 137 | 46.9% | 50.2% |
-| [webContents](parity/web-contents.md) (with `navigationHistory`, `WebFrameMain`) | 230 | 104 | 47 | 79 | 45.2% | 55.4% |
+| [BrowserWindow](parity/browser-window.md) (with `BaseWindow`) | 294 | 142 | 18 | 134 | 48.3% | 51.4% |
+| [webContents](parity/web-contents.md) (with `navigationHistory`, `WebFrameMain`) | 230 | 104 | 48 | 78 | 45.2% | 55.7% |
 
 **Source** — where the implementation comes from:
 
@@ -55,7 +55,7 @@ Detailed item-by-item status: [parity/browser-window.md](parity/browser-window.m
 | Electron | Oriel | Source | Wave | Status |
 |---|---|---|---|---|
 | `BaseWindow` | `BaseWindow` | CEF (Views) | M2 | — |
-| `BrowserWindow` | `BrowserWindow` | CEF (Views) | M2 | partial: 138 of 294 applicable items done (46.9%), see parity/browser-window.md |
+| `BrowserWindow` | `BrowserWindow` | CEF (Views) | M2 | partial: 142 of 294 applicable items done (48.3%), see parity/browser-window.md |
 | `View` | `View` | CEF (Views panel) | M2 | — |
 | `WebContentsView` | `WebContentsView` | CEF (Views browser view) | M2 | — |
 | `ImageView` | `ImageView` | CEF + .NET | M5 | — |
