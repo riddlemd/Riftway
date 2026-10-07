@@ -74,6 +74,19 @@ public static unsafe partial class X11Window
         return sent;
     }
 
+    /// <summary>Asks GTK window managers for the dark or light theme variant of the window's frame
+    /// (<c>_GTK_THEME_VARIANT</c>, a UTF8_STRING), as Electron's darkTheme does. False without an X display.</summary>
+    public static bool SetGtkThemeVariant(nint window, bool dark)
+    {
+        var display = Display();
+        if (display == 0 || window == 0) return false;
+        var value = dark ? "dark"u8 : "light"u8;
+        // Format 8, PropModeReplace.
+        fixed (byte* p = value) _ = XChangeProperty(display, window, Atom(display, "_GTK_THEME_VARIANT"u8), Atom(display, "UTF8_STRING"u8), 8, 0, p, value.Length);
+        _ = XFlush(display);
+        return true;
+    }
+
     /// <summary>Puts the window on every workspace, or back on the current one, as Chromium's X11Window does: the sticky
     /// state, then <c>_NET_WM_DESKTOP</c>. False without an X display.</summary>
     public static bool SetVisibleOnAllWorkspaces(nint window, bool visible)
@@ -147,6 +160,7 @@ public static unsafe partial class X11Window
     [LibraryImport(LibX11)] private static partial int XSetWMHints(nint display, nint window, XWMHints* hints);
     [LibraryImport(LibX11)] private static partial int XFree(void* data);
     [LibraryImport(LibX11)] private static partial int XFlush(nint display);
+    [LibraryImport(LibX11)] private static partial int XChangeProperty(nint display, nint window, nint property, nint type, int format, int mode, byte* data, int count);
     [LibraryImport(LibX11)] private static partial int XSendEvent(nint display, nint window, int propagate, long eventMask, long* e);
     [LibraryImport(LibX11)] private static partial int XGetWindowProperty(nint display, nint window, nint property, long offset, long length, int delete,
         nint requestedType, out nint actualType, out int actualFormat, out nuint itemCount, out nuint bytesAfter, out byte* data);

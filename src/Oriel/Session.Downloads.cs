@@ -15,7 +15,7 @@ public sealed partial class Session
     // A null page is a download the session started itself (DownloadUrl), as Electron's will-download without webContents.
     internal void OnBeforeDownload(WebContents? page, DownloadSnapshot snapshot, BeforeDownload before)
     {
-        var item = new DownloadItem(snapshot, before) { Finished = done => _downloads.Remove(done.Id) };
+        var item = new DownloadItem(snapshot, before) { Finished = done => _downloads.Remove(done.Id), Session = this };
         _downloads[snapshot.Id] = item;
         if (_earlyControls.Remove(snapshot.Id, out var early)) early.Release();
         var args = new WillDownloadEventArgs(item, page);

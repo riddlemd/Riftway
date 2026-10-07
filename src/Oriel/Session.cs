@@ -29,6 +29,7 @@ public sealed unsafe partial class Session
         _handler = handler;
         Cookies = new Cookies(this);
         Protocol = new SessionProtocol(this);
+        _downloadsAtCreation = OrielApp.CurrentOrNull?.GetPath("downloads");
         s_justCreated.Add(this);
     }
 

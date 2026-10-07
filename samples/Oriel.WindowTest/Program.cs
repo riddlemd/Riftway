@@ -305,6 +305,7 @@ async Task RunAsync(BrowserWindow win, BrowserWindow simple)
     await NavigationAsync();
     await FramesAsync();
     await TaskbarAsync(win);
+    await DownloadFolderAsync();
     await CommandLineAsync();
     await ProcessChildrenAsync();
     await BadgeAsync(win);
@@ -5023,6 +5024,13 @@ async Task LinuxTaskbarAsync()
     var skipped = new BrowserWindow(new BrowserWindowOptions { Title = "Oriel window test: skip taskbar", Width = 300, Height = 200, SkipTaskbar = true });
     await Task.Delay(800);
     Check("the SkipTaskbar option applies when the window shows", Eventually(() => LinuxX11.HasState(skipped.GetNativeWindowHandle(), "_NET_WM_STATE_SKIP_TASKBAR"), step));
+    // Electron's darkTheme writes _GTK_THEME_VARIANT=dark at creation. Chromium 154 already writes dark on every window
+    // once its GTK UI is loaded (prefer_dark_theme is set from a pointer), so this checks the value, not a difference.
+    var darkFramed = new BrowserWindow(new BrowserWindowOptions { DarkTheme = true });
+    Check("DarkTheme leaves _GTK_THEME_VARIANT dark, as Electron's",
+        Eventually(() => LinuxX11.StringProperty(darkFramed.GetNativeWindowHandle(), "_GTK_THEME_VARIANT") == "dark", step),
+        LinuxX11.StringProperty(darkFramed.GetNativeWindowHandle(), "_GTK_THEME_VARIANT"));
+    darkFramed.Destroy();
     skipped.Destroy();
     tb.Destroy();
     await Task.Delay(300);
@@ -5377,6 +5385,42 @@ static int FreePort()
     var port = ((System.Net.IPEndPoint)listener.LocalEndpoint).Port;
     listener.Stop();
     return port;
+}
+
+// Electron's CreateDownloadPath: the save dialog starts in the last folder saved to, else the profile's download folder.
+async Task DownloadFolderAsync()
+{
+    var root = Directory.CreateTempSubdirectory("oriel-download-folder-").FullName;
+    var original = app.GetPath("downloads");
+    var first = Path.Combine(root, "first");
+    Directory.CreateDirectory(first);
+    app.SetPath("downloads", first);
+    var made = Session.FromPartition("download-folder-a");
+    string Folder(Session s) => Oriel.Cef.CefThread.InvokeOnUi(s.DownloadDirectoryForDialog);
+    var initial = Folder(made);
+    var later = Path.Combine(root, "later");
+    Directory.CreateDirectory(later);
+    app.SetPath("downloads", later);
+    var keeps = Folder(made);
+    var newer = Folder(Session.FromPartition("download-folder-b"));
+    Check("a session's download folder is app.getPath('downloads') when it was made, as Electron registers the preference",
+        initial == first && keeps == first && newer == later, $"{initial} | {keeps} | {newer}");
+    var chosen = Path.Combine(root, "chosen", "nested");
+    made.SetDownloadPath(chosen);
+    var set = Folder(made);
+    Check("SetDownloadPath wins, and a missing folder is made", set == chosen && Directory.Exists(chosen), set);
+    var saved = Path.Combine(root, "saved");
+    Directory.CreateDirectory(saved);
+    Oriel.Cef.CefThread.InvokeOnUi(() => { made.NoteSavedDirectory(saved); return true; });
+    var afterSave = Folder(made);
+    Directory.Delete(saved);
+    var afterDelete = Folder(made);
+    Check("the folder last saved to wins while it exists", afterSave == saved && afterDelete == chosen, $"{afterSave} | {afterDelete}");
+    // setPath refuses a folder that does not exist, as Electron's; a fresh Linux home may have no Downloads yet.
+    Directory.CreateDirectory(original);
+    app.SetPath("downloads", original);
+    Directory.Delete(root, recursive: true);
+    await Task.CompletedTask;
 }
 
 async Task CommandLineAsync()
@@ -5848,6 +5892,17 @@ static unsafe class LinuxX11
         var found = new ReadOnlySpan<nint>(data, (int)count).Contains(wanted);
         _ = XFree(data);
         return found;
+    }
+
+    internal static string? StringProperty(nint window, string name)
+    {
+        var display = Display();
+        // AnyPropertyType (0): the reader takes whatever type the writer chose.
+        if (XGetWindowProperty(display, window, XInternAtom(display, name, 0), 0, 256, 0, 0,
+            out var type, out _, out var count, out _, out var data) != 0 || data == null || type == 0) return null;
+        var text = System.Text.Encoding.UTF8.GetString((byte*)data, (int)count);
+        _ = XFree(data);
+        return text;
     }
 
     [System.Runtime.InteropServices.DllImport(Lib)] private static extern nint XOpenDisplay(byte* name);

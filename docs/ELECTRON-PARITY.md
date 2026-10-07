@@ -16,7 +16,7 @@ The 67 rows include `BrowserView` (deprecated, never implemented; counted as not
 
 | Checklist | Applicable items | Done | Partial | Missing | % done | % done + partial/2 |
 |---|---|---|---|---|---|---|
-| [BrowserWindow](parity/browser-window.md) (with `BaseWindow`) | 294 | 159 | 56 | 79 | 54.1% | 63.6% |
+| [BrowserWindow](parity/browser-window.md) (with `BaseWindow`) | 294 | 160 | 56 | 78 | 54.4% | 63.9% |
 | [webContents](parity/web-contents.md) (with `navigationHistory`, `WebFrameMain`) | 230 | 105 | 51 | 74 | 45.7% | 56.7% |
 
 **Source** — where the implementation comes from:
@@ -55,7 +55,7 @@ Detailed item-by-item status: [parity/browser-window.md](parity/browser-window.m
 | Electron | Oriel | Source | Wave | Status |
 |---|---|---|---|---|
 | `BaseWindow` | `BaseWindow` | CEF (Views) | M2 | — |
-| `BrowserWindow` | `BrowserWindow` | CEF (Views) | M2 | partial: 159 of 294 applicable items done (54.1%), see parity/browser-window.md |
+| `BrowserWindow` | `BrowserWindow` | CEF (Views) | M2 | partial: 160 of 294 applicable items done (54.4%), see parity/browser-window.md |
 | `View` | `View` | CEF (Views panel) | M2 | — |
 | `WebContentsView` | `WebContentsView` | CEF (Views browser view) | M2 | — |
 | `ImageView` | `ImageView` | CEF + .NET | M5 | — |
@@ -93,7 +93,7 @@ Detailed item-by-item status, including `navigationHistory` and `WebFrameMain`: 
 
 | Electron | Oriel | Source | Wave | Status |
 |---|---|---|---|---|
-| `session` | `Session` | CEF | M2 core, M6 rest | partial: core done (`setUserAgent`/`getUserAgent`, `defaultSession`, `fromPartition`, `fromPath`, `persist:` partitions, `WebPreferences.Session`/`Partition`, `WebContents.Session`, per-session `protocol`, `flushStorageData`, `webRequest`, `setPermissionRequestHandler`, `setPermissionCheckHandler` (`navigator.permissions.query` only, E28), `setDisplayMediaRequestHandler` (whole desktop, E30), `clearCache`, `clearAuthCache`, `closeAllConnections`, `setProxy`, `resolveHost` (no options, E38), `clearStorageData`, `clearData` (E35), `getCacheSize` (sessions on disk, E34), `downloadURL` with `headers` (hidden page, E37), `will-download`); no device permission handlers (E31), `clearHostResolverCache`, `resolveProxy`, `clearCodeCaches` (E8), `createInterruptedDownload` (E16) (see DRIFT.md E1-E38) |
+| `session` | `Session` | CEF | M2 core, M6 rest | partial: core done (`setUserAgent`/`getUserAgent`, `defaultSession`, `fromPartition`, `fromPath`, `persist:` partitions, `WebPreferences.Session`/`Partition`, `WebContents.Session`, per-session `protocol`, `flushStorageData`, `webRequest`, `setPermissionRequestHandler`, `setPermissionCheckHandler` (`navigator.permissions.query` only, E28), `setDisplayMediaRequestHandler` (whole desktop, E30), `setDownloadPath`, `clearCache`, `clearAuthCache`, `closeAllConnections`, `setProxy`, `resolveHost` (no options, E38), `clearStorageData`, `clearData` (E35), `getCacheSize` (sessions on disk, E34), `downloadURL` with `headers` (hidden page, E37), `will-download`); no device permission handlers (E31), `clearHostResolverCache`, `resolveProxy`, `clearCodeCaches` (E8), `createInterruptedDownload` (E16) (see DRIFT.md E1-E38) |
 | `protocol` | `Protocol` | CEF | M2 | partial: `handle`, `unhandle`, `isProtocolHandled`, `registerSchemesAsPrivileged`; global, not per session; no `intercept*` or legacy `register*Protocol` (see DRIFT.md) |
 | `Cookies` | `Cookies` | CEF | M6 | partial: `get`, `set` (Electron's rejection messages), `remove`, `flushStore`, `changed` (read from the store, see DRIFT E4, E5) |
 | `WebRequest` | `WebRequest` | CEF | M6 | partial: all eight events with `urls`/`excludeUrls`/`types` filters, cancel and `redirectURL`, request header changes, `uploadData` (bytes and file paths), `frame`, `webContentsId`, custom-scheme requests, service and shared worker requests without a page; `onHeadersReceived` cannot change or cancel the response, no `fromCache`/`ip`/`initiatorOrigin`, a `net` module's requests unseen (see DRIFT.md E17-E19, E27) |
