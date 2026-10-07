@@ -234,21 +234,8 @@ public unsafe class View
             NativeView->set_bounds(NativeView, &target);
             // Chromium lays a resized view out later; Linux may never, leaving its page at the parent's full size.
             _panel->layout(_panel);
-            if (OperatingSystem.IsLinux() && _page is not null && (current.width == 0 || current.height == 0) && target.width > 0 && target.height > 0)
-                CefThread.PostUiDelayed(NudgePage, TimeSpan.FromMilliseconds(100));
         }
         RaiseIfMoved(target);
-    }
-
-    // On Linux a page whose view was empty since its browser started misses its first size; a second one gets through.
-    private void NudgePage()
-    {
-        if (_page is null || NativeView is null) return;
-        var bounds = NativeView->get_bounds(NativeView);
-        var smaller = new cef_rect_t { width = Math.Max(0, bounds.width - 1), height = bounds.height };
-        var full = new cef_rect_t { width = bounds.width, height = bounds.height };
-        _page->set_bounds(_page, &smaller);
-        _page->set_bounds(_page, &full);
     }
 
     private void RaiseIfMoved(cef_rect_t bounds)
