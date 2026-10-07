@@ -5,19 +5,19 @@ electron/electron). When Electron adds or changes a module, this table changes w
 
 ## Progress
 
-Recounted 2026-10-06 against `src/Oriel`. Update these figures when a row or checklist item changes.
+Recounted 2026-10-07 against `src/Oriel`. Update these figures when a row or checklist item changes.
 
 | Measure | Done | Partial | Not started | Total |
 |---|---|---|---|---|
-| Module rows below | 3 | 22 | 42 | 67 |
-| M2 rows | 2 | 14 | 5 | 21 |
+| Module rows below | 3 | 26 | 38 | 67 |
+| M2 rows | 2 | 15 | 4 | 21 |
 
 The 67 rows include `BrowserView` (deprecated, never implemented; counted as not started).
 
 | Checklist | Applicable items | Done | Partial | Missing | % done | % done + partial/2 |
 |---|---|---|---|---|---|---|
-| [BrowserWindow](parity/browser-window.md) (with `BaseWindow`) | 294 | 138 | 19 | 137 | 46.9% | 50.2% |
-| [webContents](parity/web-contents.md) (with `navigationHistory`, `WebFrameMain`) | 230 | 104 | 47 | 79 | 45.2% | 55.4% |
+| [BrowserWindow](parity/browser-window.md) (with `BaseWindow`) | 294 | 141 | 18 | 135 | 48.0% | 51.0% |
+| [webContents](parity/web-contents.md) (with `navigationHistory`, `WebFrameMain`) | 230 | 104 | 48 | 78 | 45.2% | 55.7% |
 
 **Source** — where the implementation comes from:
 
@@ -35,7 +35,7 @@ Where an implemented module differs from Electron, the difference and its reason
 
 | Electron | Oriel | Source | Wave | Status |
 |---|---|---|---|---|
-| `app` | `OrielApp` | CEF + OS | M2 | partial: `ready`, `window-all-closed`, `second-instance`, `before-quit`, `will-quit`, `quit()`, `exit()`, `enableSandbox`, `isReady`, `name`, `quit` (as `Exited`), `userAgentFallback`, `browser-window-created`, `web-contents-created`, `session-created`, `browser-window-focus`, `browser-window-blur`, `getVersion` (as `Version`), `hide`, `show`, `isHidden`, `focus`, `setBadgeCount`, `getBadgeCount`, `getAppMetrics` (A18), `getPath`, `setPath`, `getPreferredSystemLanguages`, `getSystemLocale`, `getLocaleCountryCode`, `certificate-error`, `login`, `select-client-certificate` (see DRIFT.md) |
+| `app` | `OrielApp` | CEF + OS | M2 | partial: `ready`, `window-all-closed`, `second-instance`, `before-quit`, `will-quit`, `quit()`, `exit()`, `enableSandbox`, `isReady`, `name`, `quit` (as `Exited`), `userAgentFallback`, `browser-window-created`, `web-contents-created`, `session-created`, `browser-window-focus`, `browser-window-blur`, `getVersion` (as `Version`), `hide`, `show`, `isHidden`, `focus`, `setBadgeCount`, `getBadgeCount` (A17, A20), `setDesktopName`, `getAppMetrics` (A18), `getPath`, `setPath`, `getPreferredSystemLanguages`, `getSystemLocale`, `getLocaleCountryCode`, `certificate-error`, `login`, `select-client-certificate` (see DRIFT.md) |
 | `process` | `OrielProcess` | .NET + CEF | M2 | partial: `type`, `versions` (`chrome`, `oriel`), `getCreationTime`, `getCPUUsage`, `getSystemMemoryInfo`, `getSystemVersion`, `setFdLimit`, `getProcessMemoryInfo` (`shared` is 0, P8), `windowsStore` (P10), `resourcesPath` (P17), `crash`, `hang` (P18); no `mas`; V8/Blink-only members are P7 |
 | `CommandLine` (`app.commandLine`) | `OrielApp.CommandLine` | CEF | M2 | done: `appendSwitch`, `appendArgument`, `hasSwitch`, `getSwitchValue`, `removeSwitch`, in Chromium's switch syntax, applied before Chromium starts (DRIFT A19) |
 | Command-line switches | same switches | CEF | M2 | partial: Chromium's switches pass through from the process's arguments and `CommandLine`; `--enable-logging`, `--log-file`, `--log-level` work (DRIFT A6); Node's (`--inspect`, ...) do not apply; the rest not checked one by one |
@@ -55,7 +55,7 @@ Detailed item-by-item status: [parity/browser-window.md](parity/browser-window.m
 | Electron | Oriel | Source | Wave | Status |
 |---|---|---|---|---|
 | `BaseWindow` | `BaseWindow` | CEF (Views) | M2 | — |
-| `BrowserWindow` | `BrowserWindow` | CEF (Views) | M2 | partial: 138 of 294 applicable items done (46.9%), see parity/browser-window.md |
+| `BrowserWindow` | `BrowserWindow` | CEF (Views) | M2 | partial: 141 of 294 applicable items done (48.0%), see parity/browser-window.md |
 | `View` | `View` | CEF (Views panel) | M2 | — |
 | `WebContentsView` | `WebContentsView` | CEF (Views browser view) | M2 | — |
 | `ImageView` | `ImageView` | CEF + .NET | M5 | — |

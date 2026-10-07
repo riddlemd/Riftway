@@ -17,13 +17,13 @@ Counted from the Checklist at the end: `BaseWindow` and `BrowserWindow` are one 
 
 | Area | Items | Done | Partial | Missing | n/a | % done | % done + partial/2 |
 |---|---|---|---|---|---|---|---|
-| BaseWindow + BrowserWindow options | 54 | 27 | 2 | 25 | 0 | 50.0% | 51.9% |
+| BaseWindow + BrowserWindow options | 54 | 28 | 2 | 24 | 0 | 51.9% | 53.7% |
 | webPreferences | 46 | 11 | 4 | 24 | 7 | 28.2% | 33.3% |
-| Instance methods | 143 | 71 | 9 | 57 | 6 | 51.8% | 55.1% |
+| Instance methods | 143 | 72 | 8 | 57 | 6 | 52.6% | 55.5% |
 | Instance properties | 24 | 11 | 0 | 13 | 0 | 45.8% | 45.8% |
-| Events | 35 | 14 | 4 | 17 | 0 | 40.0% | 45.7% |
+| Events | 35 | 15 | 4 | 16 | 0 | 42.9% | 48.6% |
 | Static methods | 6 | 4 | 0 | 1 | 1 | 80.0% | 80.0% |
-| **Total** | 308 | 138 | 19 | 137 | 14 | 46.9% | 50.2% |
+| **Total** | 308 | 141 | 18 | 135 | 14 | 48.0% | 51.0% |
 
 ## Done since the audit
 
@@ -38,7 +38,8 @@ Counted from the Checklist at the end: `BaseWindow` and `BrowserWindow` are one 
 - Taskbar: `SetProgressBar` (`ProgressBarOptions.Mode`), `FlashFrame`, `SetSkipTaskbar` and the `SkipTaskbar` option,
   `SetOverlayIcon` (`NativeImage`; the path overload is gone, so `null` is unambiguous), `SetThumbarButtons` (Windows: Windows `ITaskbarList3` and `FlashWindowEx` (`WindowsTaskbar`); macOS the Dock tile
   (`MacDock`: a progress bar over the icon, `requestUserAttention:`); Linux X11 (`X11Window`: the urgency hint,
-  `_NET_WM_STATE_SKIP_TASKBAR`). Gaps: Linux progress, macOS error/paused colours (DRIFT W20, W23).
+  `_NET_WM_STATE_SKIP_TASKBAR`) and the Unity launcher entry D-Bus signal for progress (`LinuxLauncherEntry`, DRIFT A20).
+  Gaps: macOS error/paused colours (DRIFT W20, W23).
 - Windows only, as in Electron: `SetAppDetails` (`AppDetailsOptions`: the window property store's
   `PKEY_AppUserModel_*`), `SetThumbnailClip` and `SetThumbnailToolTip` (`ITaskbarList3`; clips run on an STA thread
   because the shell's proxy rejects the NULL clip that clears them), `BackgroundMaterial` option and
@@ -355,7 +356,7 @@ Parameters in brackets are optional in Electron. `webContents` members are in [w
 | `reload()` | `Reload` | done |  |
 | `setMenu(menu)` | `SetMenu` | done | Drawn by CEF Views on Windows/Linux (W16). |
 | `removeMenu()` | `RemoveMenu` | done |  |
-| `setProgressBar(progress, options)` | `SetProgressBar` | partial | No Linux progress; macOS error/paused show as plain bar (W20). |
+| `setProgressBar(progress, options)` | `SetProgressBar` | partial | macOS error/paused show as plain bar (W20); Linux sends Electron's launcher entry signal (A20). |
 | `setOverlayIcon(overlay, description)` | `SetOverlayIcon` | done | Takes a `NativeImage`. |
 | `invalidateShadow()` | — | missing |  |
 | `setHasShadow(hasShadow)` | — | missing |  |

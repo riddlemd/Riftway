@@ -3294,6 +3294,28 @@ async Task LinuxTaskbarAsync()
     await Task.Delay(800);
     Check("the SkipTaskbar option applies when the window shows", Eventually(() => LinuxX11.HasState(skipped.GetNativeWindowHandle(), "_NET_WM_STATE_SKIP_TASKBAR"), step));
     skipped.Destroy();
+
+    // setProgressBar: Electron sends the raw value whatever the mode, shown only inside (0, 1).
+    using (var monitor = Oriel.Samples.LauncherEntryMonitor.Start())
+    {
+        Check("a session bus and dbus-monitor are there to see the launcher entry", monitor is not null, Environment.GetEnvironmentVariable("DBUS_SESSION_BUS_ADDRESS"));
+        if (monitor is not null)
+        {
+            static string Progress(string value, bool visible) => Oriel.Samples.LauncherEntryMonitor.Update("application://oriel-windowtest.desktop",
+                ("progress", "double " + value), ("progress-visible", visible ? "boolean true" : "boolean false"));
+            tb.SetProgressBar(0.5);
+            tb.SetProgressBar(0.25, new ProgressBarOptions { Mode = ProgressBarMode.Error });
+            tb.SetProgressBar(0.75, new ProgressBarOptions { Mode = ProgressBarMode.None });
+            tb.SetProgressBar(2);
+            tb.SetProgressBar(-1);
+            tb.SetProgressBar(0);
+            tb.SetProgressBar(1);
+            var synced = Eventually(() => monitor.Updates().Count >= 7, step) && monitor.Sync();
+            Check("SetProgressBar sends Update(application://<desktop name>, {progress: d, progress-visible: b}) for the app",
+                synced && monitor.Updates().SequenceEqual([Progress("0.5", true), Progress("0.25", true), Progress("0.75", true),
+                    Progress("2", false), Progress("-1", false), Progress("0", false), Progress("1", false)]), string.Join(" / ", monitor.Updates()));
+        }
+    }
     tb.Destroy();
     await Task.Delay(300);
 }
