@@ -355,13 +355,14 @@ public sealed unsafe partial class BrowserWindow
         if (_options.WebPreferences.DefaultEncoding is not null) throw new NotSupportedException("DefaultEncoding is not supported: CEF applies the profile's value to every window.");
         if (_options.WebPreferences.ZoomFactor <= 0) throw new ArgumentOutOfRangeException(nameof(options), "ZoomFactor must be greater than 0.");
 
+        ClaimName();
         Id = Interlocked.Increment(ref s_nextId);
         _parent = _options.Parent;
         _closable = _options.Closable;
         _skipTaskbar = _options.SkipTaskbar;
         _opacity = WindowPolish.ClampOpacity(_options.Opacity);
         _hasShadow = _options.HasShadow;
-        _kiosk = _options.Kiosk;
+        _kiosk = _options.Kiosk && !_restoreDisplayMode;
         _accent = WindowsFrame.FromOption(_options.AccentColor);
         _icon = _options.IconImage ?? (_options.Icon is { } iconPath ? NativeImage.CreateFromBuffer(File.ReadAllBytes(iconPath)) : null);
         _transparent = _options.Transparent && OperatingSystem.IsWindows();
@@ -446,7 +447,11 @@ public sealed unsafe partial class BrowserWindow
         profile.WaitUntilInitialized();
         CefThread.InvokeOnUi(() =>
         {
-            if (_options.Parent is { _window: null }) throw new InvalidOperationException("The parent window is closed.");
+            if (_options.Parent is { _window: null })
+            {
+                ReleaseName();
+                throw new InvalidOperationException("The parent window is closed.");
+            }
             if (profile.Initialized.IsCompleted) CreateNative();
             else profile.Initialized.ContinueWith(_ => CefThread.RunOnUi(CreateNative), TaskScheduler.Default);
             return true;
@@ -513,7 +518,11 @@ public sealed unsafe partial class BrowserWindow
     private static void OnPopupAborted(int popupId)
     {
         foreach (var (client, pending) in s_pendingPopups.ToArray())
-            if (pending.PopupId == popupId) s_pendingPopups.Remove(client);
+            if (pending.PopupId == popupId)
+            {
+                s_pendingPopups.Remove(client);
+                pending.Window.ReleaseName();
+            }
     }
 
     // The popup's view arrives with the delegate PopupDelegate chose, which identifies the waiting window.
@@ -802,6 +811,7 @@ public sealed unsafe partial class BrowserWindow
     {
         var wasVisible = w->@base.@base.is_visible(&w->@base.@base) != 0;
         _meantVisible = true;
+        FlushPendingDisplayMode(w);
         ShowThroughCef(w, activate: _focusable ?? _options.Focusable);
         ApplySkipTaskbar(w);
         if (!wasVisible) Shown?.Invoke(this, EventArgs.Empty);
@@ -838,7 +848,9 @@ public sealed unsafe partial class BrowserWindow
     /// <summary>Maximizes the window. Electron's <c>win.maximize()</c>.</summary>
     /// <remarks>A <see cref="BrowserWindowOptions.Transparent"/> window fills its display's work area instead, as in
     /// Electron.</remarks>
-    public void Maximize() => Command(w =>
+    public void Maximize() => Command(MaximizeOn);
+
+    private void MaximizeOn(cef_window_t* w)
     {
         if (!_transparent)
         {
@@ -850,7 +862,7 @@ public sealed unsafe partial class BrowserWindow
         ApplyOuterBounds(w, WorkAreaOf(w), animate: false);
         // Electron's emulated maximize notifies itself; WM_SIZE only says the window was resized.
         RaiseEmulated(Maximized);
-    });
+    }
 
     /// <summary>Leaves the maximized state. Electron's <c>win.unmaximize()</c>.</summary>
     public void Unmaximize() => Command(w =>
@@ -1107,6 +1119,7 @@ public sealed unsafe partial class BrowserWindow
     {
         var wasVisible = w->@base.@base.is_visible(&w->@base.@base) != 0;
         _meantVisible = true;
+        FlushPendingDisplayMode(w);
         ShowThroughCef(w, activate: false);
         ApplySkipTaskbar(w);
         if (!wasVisible) Shown?.Invoke(this, EventArgs.Empty);
@@ -1879,14 +1892,20 @@ public sealed unsafe partial class BrowserWindow
         if (OperatingSystem.IsWindows()) ApplyFrameStyles(window);
         if (TitleBar.HasOverlay(_options.TitleBarStyle, _options.TitleBarOverlay, OperatingSystem.IsMacOS())) AttachTitleBarOverlay(window, _options.TitleBarOverlay!);
         AttachWindowsState(window);
+        // After the size and position options, before full screen and the show, as Electron's InitFromOptions.
+        RestoreWindowState(window);
+        // OnBoundsChanged ignores bounds set before _window exists, and a window maximized on its first show is never normal.
+        _normalBounds = OuterBoundsOn(window);
+        SaveWindowState(window);
         if (_options.Show)
         {
+            FlushPendingDisplayMode(window);
             ShowThroughCef(window, activate: _options.Focusable);
             ApplySkipTaskbar(window);
         }
         if (_options.HiddenInMissionControl && OperatingSystem.IsMacOS())
             MacWindow.SetCollectionBehavior((nint)window->get_window_handle(window), MacWindow.Transient, true);
-        if (_options.FullScreen || _kiosk)
+        if ((_options.FullScreen && !_restoreDisplayMode) || _kiosk)
         {
             if (UsesSimpleFullScreen && OperatingSystem.IsMacOS()) MacWindow.SetSimpleFullScreen((nint)window->get_window_handle(window), true);
             else window->set_fullscreen(window, 1);
@@ -1920,7 +1939,11 @@ public sealed unsafe partial class BrowserWindow
     {
         var browser = WebContents.Browser;
         // CEF asks again once the browser is gone; by then the close was already approved.
-        if (browser is null) return true;
+        if (browser is null)
+        {
+            FlushWindowState(window);
+            return true;
+        }
 
         var fromCode = _closeFromCode;
         _closeFromCode = false;
@@ -1942,6 +1965,8 @@ public sealed unsafe partial class BrowserWindow
         var host = browser->get_host(browser);
         var canClose = host->try_close_browser(host) != 0;
         NativeObject.Release(host);
+        // Electron saves from OnWindowClosed; by on_window_destroyed CEF reports empty bounds.
+        if (canClose) FlushWindowState(window);
         return canClose;
     }
 
@@ -2011,6 +2036,7 @@ public sealed unsafe partial class BrowserWindow
 
     private void OnFullscreenTransition(bool completed)
     {
+        _fullscreenTransitioning = !completed;
         if (!completed || _window is null) return;
         var fullscreen = _window->is_fullscreen(_window) != 0;
         if (fullscreen) _sizeState?.SetFullScreen(true);
@@ -2036,6 +2062,7 @@ public sealed unsafe partial class BrowserWindow
         _window = null;
 
         lock (s_openGate) s_open.Remove(this);
+        ReleaseName();
         _parent?._children.Remove(this);
         // macOS closes child windows with their parent; Linux does not. Destroy, as Windows does with owned
         // windows: a child that vetoed would outlive its parent.

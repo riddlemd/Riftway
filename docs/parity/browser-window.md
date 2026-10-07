@@ -17,13 +17,13 @@ Counted from the Checklist at the end: `BaseWindow` and `BrowserWindow` are one 
 
 | Area | Items | Done | Partial | Missing | n/a | % done | % done + partial/2 |
 |---|---|---|---|---|---|---|---|
-| BaseWindow + BrowserWindow options | 54 | 29 | 12 | 13 | 0 | 53.7% | 64.8% |
+| BaseWindow + BrowserWindow options | 54 | 31 | 12 | 11 | 0 | 57.4% | 68.5% |
 | webPreferences | 46 | 11 | 4 | 24 | 7 | 28.2% | 33.3% |
 | Instance methods | 143 | 86 | 26 | 25 | 6 | 62.8% | 72.3% |
 | Instance properties | 24 | 12 | 4 | 8 | 0 | 50.0% | 58.3% |
-| Events | 35 | 17 | 10 | 8 | 0 | 48.6% | 62.9% |
-| Static methods | 6 | 4 | 0 | 1 | 1 | 80.0% | 80.0% |
-| **Total** | 308 | 159 | 56 | 79 | 14 | 54.1% | 63.6% |
+| Events | 35 | 18 | 10 | 7 | 0 | 51.4% | 65.7% |
+| Static methods | 6 | 5 | 0 | 0 | 1 | 100.0% | 100.0% |
+| **Total** | 308 | 163 | 56 | 75 | 14 | 55.4% | 65.0% |
 
 ## Done since the audit
 
@@ -158,8 +158,7 @@ Counted from the Checklist at the end: `BaseWindow` and `BrowserWindow` are one 
    `XSetTransientForHint` (W8).
 3. `titleBarStyle` on macOS, `trafficLightPosition`, the Window Controls Overlay page API (W34, W37) — OS, Patch.
 4. `showInactive`, `opacity`, `setIgnoreMouseEvents`, content protection, `will-resize`/`will-move` on macOS and Linux (W30) — OS.
-5. Window state persistence (`windowStatePersistence`, `getNormalBounds`, `persisted-state-restored`) — Oriel.
-6. `hasShadow` on macOS and Linux (W31), kiosk presentation options on macOS (W33), the Windows window state on macOS and Linux (W43) — OS.
+5. `hasShadow` on macOS and Linux (W31), kiosk presentation options on macOS (W33), the Windows window state on macOS and Linux (W43) — OS.
 
 Accuracy gaps in done items: `Shown`/`Hidden` fire only from `Show()`/`Hide()`, not when the OS shows or hides the
 window; `devTools: false` blocks
@@ -217,8 +216,8 @@ Parameters in brackets are optional in Electron. `webContents` members are in [w
 | `skipTaskbar` | `SkipTaskbar` | done |  |
 | `hiddenInMissionControl` | `HiddenInMissionControl` | done | macOS. |
 | `kiosk` | `Kiosk` | partial | Full screen; macOS presentation options not yet (W33). |
-| `name` | — | missing |  |
-| `windowStatePersistence` | — | missing |  |
+| `name` | `Name` | done | Unique among open windows; reuse throws `ArgumentException` with Electron's message, free again once destroyed. |
+| `windowStatePersistence` | `WindowStatePersistence` | done | `true` or `{ Bounds, DisplayMode }`; Electron's `windowStates` entry in `Local State` (sessionData), same keys, restore and clamp rules (W51). |
 | `title` | `Title` | done |  |
 | `icon` | `Icon`, `IconImage` | done | Two options, `IconImage` (`NativeImage`) wins (W26). |
 | `show` | `Show` | done |  |
@@ -515,7 +514,7 @@ Parameters in brackets are optional in Electron. `webContents` members are in [w
 | `sheet-end` | — | missing |  |
 | `new-window-for-tab` | — | missing |  |
 | `system-context-menu` | `SystemContextMenu` | partial | Windows: framed windows (`WM_CONTEXTMENU`) and a right click on a frameless window's drag region, as Electron. |
-| `persisted-state-restored` | — | missing |  |
+| `persisted-state-restored` | `PersistedStateRestored` | done | Posted to the UI thread, as Electron's `EmitEventSoon` (W51). |
 
 ### Static methods
 
@@ -526,4 +525,4 @@ Parameters in brackets are optional in Electron. `webContents` members are in [w
 | `fromId(id)` | `FromId` | done |  |
 | `fromWebContents(webContents)` | `FromWebContents` | done |  |
 | `fromBrowserView(browserView)` | — | n/a | Deprecated. |
-| `clearPersistedState(name)` | — | missing |  |
+| `clearPersistedState(name)` | `BrowserWindow.ClearPersistedState` | done |  |

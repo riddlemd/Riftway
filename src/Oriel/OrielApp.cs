@@ -209,6 +209,7 @@ public sealed unsafe partial class OrielApp
             {
                 ContextInitialized = OnContextInitialized,
                 AlreadyRunningAppRelaunch = OnSecondInstance,
+                RegisterPreferences = WindowStateStore.Register,
                 // Every child (the Linux zygote included) must register the same schemes as this process.
                 BeforeChildProcessLaunch = commandLine =>
                 {
