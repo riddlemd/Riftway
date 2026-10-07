@@ -2264,6 +2264,23 @@ async Task MacMenusAsync(BrowserWindow win, Menu menu, MenuItem save, MenuItem c
     Choose("File", "Save");
     Check("choosing an item runs Click with the focused window", Eventually(() => clicks.Contains("save:True"), step), string.Join(",", clicks));
 
+    // A real Cmd+Shift+K: the menu matches the NSEvent of a key the page left unhandled, which DevTools input lacks.
+    async Task<bool> SaveByKeys()
+    {
+        clicks.Clear();
+        MacKeys.Press(Environment.ProcessId, 40, MacKeys.Command | MacKeys.Shift);
+        await Task.Delay(700);
+        return clicks.Contains("save:True");
+    }
+    await win.WebContents.ExecuteJavaScriptAsync("document.body.focus(); 1");
+    var byKeys = await SaveByKeys();
+    win.WebContents.SetIgnoreMenuShortcuts(true);
+    var ignored = await SaveByKeys();
+    win.WebContents.SetIgnoreMenuShortcuts(false);
+    var restored = await SaveByKeys();
+    Check("macOS: SetIgnoreMenuShortcuts keeps the page's keys from the app menu until cleared, as Electron's",
+        byKeys && !ignored && restored, $"{byKeys} {ignored} {restored}");
+
     Choose("File", "Check");
     Check("a checkbox toggles when chosen", check.Checked);
     Check("the native item shows the check", Eventually(() => OnItem("File", "Check", MacMenu.IsChecked, false), step));
@@ -4134,6 +4151,30 @@ static class WinDialog
     [System.Runtime.InteropServices.DllImport("user32.dll", CharSet = System.Runtime.InteropServices.CharSet.Unicode)] internal static extern nint FindWindowW(string? className, string title);
     [System.Runtime.InteropServices.DllImport("user32.dll")] internal static extern bool IsWindowVisible(nint hwnd);
     [System.Runtime.InteropServices.DllImport("user32.dll")] internal static extern bool PostMessageW(nint hwnd, uint message, nint wParam, nint lParam);
+}
+
+static class MacKeys
+{
+    private const string CoreGraphics = "/System/Library/Frameworks/CoreGraphics.framework/CoreGraphics";
+    public const ulong Command = 1 << 20;
+    public const ulong Shift = 1 << 17;
+
+    [System.Runtime.InteropServices.DllImport(CoreGraphics)] private static extern nint CGEventCreateKeyboardEvent(nint source, ushort key, [System.Runtime.InteropServices.MarshalAs(System.Runtime.InteropServices.UnmanagedType.U1)] bool down);
+    [System.Runtime.InteropServices.DllImport(CoreGraphics)] private static extern void CGEventSetFlags(nint e, ulong flags);
+    [System.Runtime.InteropServices.DllImport(CoreGraphics)] private static extern void CGEventPostToPid(int pid, nint e);
+    [System.Runtime.InteropServices.DllImport("/System/Library/Frameworks/CoreFoundation.framework/CoreFoundation")] private static extern void CFRelease(nint value);
+
+    /// <summary>Posts a key press and release with <paramref name="flags"/> to <paramref name="pid"/>.</summary>
+    public static void Press(int pid, ushort key, ulong flags)
+    {
+        foreach (var down in new[] { true, false })
+        {
+            var e = CGEventCreateKeyboardEvent(0, key, down);
+            CGEventSetFlags(e, flags);
+            CGEventPostToPid(pid, e);
+            CFRelease(e);
+        }
+    }
 }
 
 static unsafe class LinuxX11

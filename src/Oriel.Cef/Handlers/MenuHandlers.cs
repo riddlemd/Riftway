@@ -117,17 +117,31 @@ public sealed unsafe class ContextMenuHandler
 /// <summary><c>cef_keyboard_handler_t</c>: the page's keys before the renderer sees them.</summary>
 public sealed unsafe class KeyboardHandler
 {
-    public KeyboardHandler(KeyEventPredicate preKeyEvent)
+    public KeyboardHandler(KeyEventPredicate preKeyEvent, KeyEventPredicate? unhandledKeyEvent = null)
     {
         PreKeyEvent = preKeyEvent;
+        UnhandledKeyEvent = unhandledKeyEvent;
         Native = NativeObject.Create<cef_keyboard_handler_t>(this);
         Native->on_pre_key_event = &OnPreKeyEvent;
+        Native->on_key_event = &OnKeyEvent;
     }
 
     public cef_keyboard_handler_t* Native { get; }
 
     /// <summary>A key about to reach the page; true consumes it.</summary>
     public KeyEventPredicate PreKeyEvent { get; }
+
+    /// <summary>A key the page left unhandled, before Chrome passes it on (on macOS, to the app menu); true consumes it.</summary>
+    public KeyEventPredicate? UnhandledKeyEvent { get; }
+
+    [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])]
+    private static int OnKeyEvent(cef_keyboard_handler_t* self, cef_browser_t* browser, cef_key_event_t* keyEvent, void* osEvent)
+    {
+        var owner = NativeObject.Owner<KeyboardHandler>(self);
+        var consumed = owner.UnhandledKeyEvent is { } unhandled && Guard.Run(() => unhandled(keyEvent), false);
+        NativeObject.Release(browser);
+        return consumed ? 1 : 0;
+    }
 
     [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])]
     private static int OnPreKeyEvent(cef_keyboard_handler_t* self, cef_browser_t* browser, cef_key_event_t* keyEvent, void* osEvent, int* isKeyboardShortcut)

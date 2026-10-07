@@ -328,7 +328,10 @@ public sealed unsafe partial class BrowserWindow
             ReadyToShow?.Invoke(this, EventArgs.Empty);
         };
         _client = new ClientHandler(WebContents.Display, WebContents.Load, WebContents.JsDialog, WebContents.Request, WebContents.Command,
-            WebContents.ContextMenuRequests, new KeyboardHandler(keyEvent => WebContents.OnPreKeyEvent(keyEvent) || (!WebContents.IgnoresMenuShortcuts && (_menuBar?.OnKeyEvent(keyEvent) ?? false))),
+            WebContents.ContextMenuRequests, new KeyboardHandler(keyEvent => WebContents.OnPreKeyEvent(keyEvent) || (!WebContents.IgnoresMenuShortcuts && (_menuBar?.OnKeyEvent(keyEvent) ?? false)),
+                // Electron's macOS PlatformHandleKeyboardEvent returns before the app menu's performKeyEquivalent: for a page
+                // that ignores menu shortcuts; char events never reach the menu.
+                keyEvent => OperatingSystem.IsMacOS() && WebContents.IgnoresMenuShortcuts && keyEvent->type != cef_key_event_type_t.KEYEVENT_CHAR),
             new LifeSpanHandler { BeforePopup = OnBeforePopup, PopupAborted = OnPopupAborted })
         {
             Permission = WebContents.Permissions,
