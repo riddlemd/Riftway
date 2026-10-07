@@ -13,9 +13,14 @@ project="$1"; exe="$2"
 rsync -a --delete --exclude bin --exclude obj --exclude artifacts --exclude .git /src/ /work/
 cd /work
 
-src/Oriel.Subprocess.Native/build.sh /work/out/subprocess/Oriel.Subprocess linuxarm64 > /dev/null
-dotnet publish "$project" -r linux-arm64 -c Release --self-contained -o /work/out/app > /work/publish.log 2>&1 || { cat /work/publish.log; exit 1; }
-eng/layout-linux.sh /work/out/app /work/out/subprocess/Oriel.Subprocess linuxarm64 > /dev/null
+case "$(uname -m)" in
+  x86_64) cef_platform=linux64; rid=linux-x64 ;;
+  *) cef_platform=linuxarm64; rid=linux-arm64 ;;
+esac
+
+src/Oriel.Subprocess.Native/build.sh /work/out/subprocess/Oriel.Subprocess "$cef_platform" > /dev/null
+dotnet publish "$project" -r "$rid" -c Release --self-contained -o /work/out/app > /work/publish.log 2>&1 || { cat /work/publish.log; exit 1; }
+eng/layout-linux.sh /work/out/app /work/out/subprocess/Oriel.Subprocess "$cef_platform" > /dev/null
 
 Xvfb :99 -screen 0 1600x1000x24 > /dev/null 2>&1 &
 export DISPLAY=:99

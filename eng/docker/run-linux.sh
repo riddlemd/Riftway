@@ -18,9 +18,14 @@ mkdir -p "$out"
 rsync -a --delete --exclude bin --exclude obj --exclude artifacts --exclude .git /src/ /work/
 cd /work
 
-src/Oriel.Subprocess.Native/build.sh /work/out/subprocess/Oriel.Subprocess linuxarm64 > "$out/build-subprocess.log" 2>&1
-dotnet publish samples/Oriel.Sample -r linux-arm64 -c Release --self-contained -o /work/out/sample > "$out/publish-sample.log" 2>&1
-eng/layout-linux.sh /work/out/sample /work/out/subprocess/Oriel.Subprocess linuxarm64 > /dev/null
+case "$(uname -m)" in
+  x86_64) cef_platform=linux64; rid=linux-x64 ;;
+  *) cef_platform=linuxarm64; rid=linux-arm64 ;;
+esac
+
+src/Oriel.Subprocess.Native/build.sh /work/out/subprocess/Oriel.Subprocess "$cef_platform" > "$out/build-subprocess.log" 2>&1
+dotnet publish samples/Oriel.Sample -r "$rid" -c Release --self-contained -o /work/out/sample > "$out/publish-sample.log" 2>&1
+eng/layout-linux.sh /work/out/sample /work/out/subprocess/Oriel.Subprocess "$cef_platform" > /dev/null
 
 Xvfb :99 -screen 0 1600x1000x24 > "$out/xvfb.log" 2>&1 &
 export DISPLAY=:99
