@@ -466,6 +466,65 @@ internal static class ClipboardFormats
         }
     }
 
+    /// <summary>Chromium's X11 selection targets: the MIME names <c>ClipboardOzone</c> offers and the Aura
+    /// <c>ClipboardFormatType</c> names, from <c>clipboard_constants.h</c> and <c>clipboard_format_type_aura.cc</c>.</summary>
+    internal static class Linux
+    {
+        /// <summary><c>ClipboardOzone::WriteText</c>'s names for one UTF-8 text, in its order.</summary>
+        internal static readonly string[] TextMimeTypes = ["text/plain", "TEXT", "STRING", "text/plain;charset=utf-8", "UTF8_STRING"];
+
+        /// <summary><c>kMimeTypeMozillaUrl</c>, the bookmark target.</summary>
+        internal const string MozUrl = "text/x-moz-url";
+
+        /// <summary><c>ClipboardFormatType::WebCustomFormatMap</c>.</summary>
+        internal const string WebCustomFormatMap = "application/web;type=\"custom/formatmap\"";
+
+        // Electron's IsStandardClipboardFormat on Linux: listed under a MIME already (BitmapType is PngType).
+        private static readonly string[] s_standard = ["text/plain", "text/html", "image/svg+xml", "text/rtf", "image/png", "text/uri-list"];
+
+        /// <summary><c>ClipboardFormatType::WebCustomFormatName</c>.</summary>
+        internal static string WebCustomFormatName(int index) => $"application/web;type=\"custom/format{index}\"";
+
+        /// <summary><c>ClipboardOzone::WriteURL</c>: UTF-16 "url\ntitle", the Mozilla URL format.</summary>
+        internal static byte[] MozUrlBytes(string url, string title) => Encoding.Unicode.GetBytes(url + "\n" + title);
+
+        /// <summary><c>GetStandardFormatsFromMimeTypes</c>: the standard MIME types in the order their names come in
+        /// <paramref name="mimeTypes"/>, <c>text/plain</c> once for any of the text names.</summary>
+        internal static List<string> StandardTypes(IEnumerable<string> mimeTypes)
+        {
+            var types = new List<string>();
+            foreach (var mime in mimeTypes)
+            {
+                if (mime is "text/html" or "image/svg+xml" or "text/rtf" or "image/png" or "text/uri-list") types.Add(mime);
+                else if (Array.IndexOf(TextMimeTypes, mime) >= 0 && !types.Contains("text/plain")) types.Add("text/plain");
+            }
+            return types;
+        }
+
+        /// <summary>What <c>clipboard.read()[0].types</c> holds on Linux: the W3C custom formats, the standard MIME
+        /// types, then each other ASCII target as <c>electron application/osclipboard</c>, in byte order. Linux has no
+        /// bookmark entry.</summary>
+        /// <param name="customFormats">The <c>web </c> names from the custom format map.</param>
+        /// <param name="standard">From <see cref="StandardTypes"/>.</param>
+        /// <param name="mimeTypes">Every target name on the selection.</param>
+        internal static List<string> AvailableTypes(IEnumerable<string> customFormats, IEnumerable<string> standard, IEnumerable<string> mimeTypes)
+        {
+            var types = customFormats.OrderBy(name => name, StringComparer.Ordinal).ToList();
+            types.AddRange(standard);
+            // ClipboardOzone::GetAllAvailableFormats keeps ASCII names in a flat_set, so in byte order.
+            foreach (var name in mimeTypes.Where(m => m.All(char.IsAscii)).Distinct().Order(StringComparer.Ordinal))
+            {
+                if (Array.IndexOf(s_standard, name) >= 0 || name.Length == 0) continue;
+                var mime = name.StartsWith(WebPrefix, StringComparison.Ordinal) ? name : WrapOsFormat(name);
+                if (!types.Contains(mime)) types.Add(mime);
+            }
+            return types;
+        }
+
+        /// <summary>The ASCII target names, as <c>GetAllAvailableFormats</c> keeps them.</summary>
+        internal static bool HasFormat(IEnumerable<string> mimeTypes, string name) => name.All(char.IsAscii) && mimeTypes.Contains(name);
+    }
+
     /// <summary>Chromium's <c>CreateStorageForFileNames</c>: a 20-byte <c>DROPFILES</c> (wide) then each path and its NUL,
     /// then a final NUL; null for no paths.</summary>
     internal static byte[]? BuildDropFiles(IReadOnlyList<string> paths)

@@ -10,6 +10,7 @@ General items: [todo.md](todo.md).
   - [ ] Build-check `Oriel.Subprocess.Native` on linux-x64 (`--export-dynamic-symbol` link flag)
 - [ ] Linux sandbox on Ubuntu 24.04+: AppArmor profile, or documented `--no-sandbox` (M4)
 - [ ] Wayland: CEF Views on Wayland is still being fixed upstream; Oriel targets X11/XWayland for now
+- [ ] Clipboard: the Wayland data device with Wayland, and the XDG portal file targets (DRIFT K1)
 - [ ] linux-x64: only linux-arm64 (Docker on Apple Silicon) has been tested
 - [ ] Modal windows (`Modal = true`) don't block the parent under openbox: the parent still takes focus. Electron
       disables the parent's input itself on Linux; CEF exposes no input filter, so this needs another route.

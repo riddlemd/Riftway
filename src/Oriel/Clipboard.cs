@@ -18,6 +18,7 @@ public sealed class ClipboardItem
 {
     private readonly KeyValuePair<string, object?>[]? _data;
     private readonly IReadOnlyList<string>? _readTypes;
+    private readonly ClipboardApi? _source;
 
     /// <summary>An entry for <see cref="Clipboard.WriteAsync"/>, keyed by MIME type. Electron's
     /// <c>new ClipboardItem(items)</c>.</summary>
@@ -31,9 +32,9 @@ public sealed class ClipboardItem
         _data = [.. items];
     }
 
-    private ClipboardItem(IReadOnlyList<string> types) => _readTypes = types;
+    private ClipboardItem(IReadOnlyList<string> types, ClipboardApi source) => (_readTypes, _source) = (types, source);
 
-    internal static ClipboardItem ForRead(IReadOnlyList<string> types) => new(types);
+    internal static ClipboardItem ForRead(IReadOnlyList<string> types, ClipboardApi source) => new(types, source);
 
     internal bool IsReadSide => _readTypes is not null;
 
@@ -50,7 +51,7 @@ public sealed class ClipboardItem
         if (_readTypes is { } types)
         {
             if (!types.Contains(type)) throw NotFound(type);
-            return await Clipboard.ReadTypeAsync(type).ConfigureAwait(false);
+            return await _source!.ReadTypeAsync(type).ConfigureAwait(false);
         }
         var entry = _data!.FirstOrDefault(p => p.Key == type);
         if (entry.Key is null) throw NotFound(type);
@@ -83,32 +84,96 @@ public sealed class ClipboardItem
 /// on the clipboard. A clipboard another process holds reads as empty and drops a write, as in Chromium.</remarks>
 public static class Clipboard
 {
-    private static readonly IClipboardBackend s_backend =
-        OperatingSystem.IsWindows() ? new WindowsClipboardBackend() : OperatingSystem.IsMacOS() ? new MacClipboardBackend() : new UnsupportedClipboardBackend();
+    private static readonly ClipboardApi s_api = new(
+        OperatingSystem.IsWindows() ? new WindowsClipboardBackend()
+        : OperatingSystem.IsMacOS() ? new MacClipboardBackend()
+        : OperatingSystem.IsLinux() ? new LinuxClipboardBackend(primary: false)
+        : new UnsupportedClipboardBackend());
+
+    /// <summary>The X11 PRIMARY selection on Linux, with the same methods; null on other OSes. Electron's
+    /// <c>clipboard.selection</c>.</summary>
+    /// <remarks>Writing text to the clipboard also puts it on PRIMARY, as Chromium does; the custom format map of a
+    /// selection read comes from the clipboard (Chromium reads raw formats from the clipboard only).</remarks>
+    public static SelectionClipboard? Selection { get; } = OperatingSystem.IsLinux() ? new SelectionClipboard(new ClipboardApi(new LinuxClipboardBackend(primary: true))) : null;
 
     /// <summary>The plain text, or "". Electron's <c>clipboard.readText()</c>.</summary>
-    public static Task<string> ReadTextAsync() => Task.Run(() => ClipboardReader.ReadText(s_backend));
+    public static Task<string> ReadTextAsync() => s_api.ReadTextAsync();
 
     /// <summary>Replaces the clipboard with <paramref name="text"/>. Electron's <c>clipboard.writeText()</c>.</summary>
-    public static Task WriteTextAsync(string text)
-    {
-        ArgumentNullException.ThrowIfNull(text);
-        var writer = new ClipboardWriter();
-        writer.WriteText(text);
-        Commit(writer);
-        return Task.CompletedTask;
-    }
+    public static Task WriteTextAsync(string text) => s_api.WriteTextAsync(text);
 
     /// <summary>One <see cref="ClipboardItem"/> whose <see cref="ClipboardItem.Types"/> lists what the clipboard holds.
     /// Electron's <c>clipboard.read()</c>.</summary>
-    public static async Task<IReadOnlyList<ClipboardItem>> ReadAsync()
-        => [ClipboardItem.ForRead(await Task.Run(s_backend.AvailableTypes).ConfigureAwait(false))];
+    public static Task<IReadOnlyList<ClipboardItem>> ReadAsync() => s_api.ReadAsync();
 
     /// <summary>Replaces the clipboard with every entry of <paramref name="data"/>, in one clipboard session. Electron's
     /// <c>clipboard.write()</c>.</summary>
     /// <exception cref="ArgumentException">An entry is null, came from <see cref="ReadAsync"/>, or has a payload of the
     /// wrong type; nothing is written. Electron rejects with a <c>TypeError</c>.</exception>
-    public static async Task WriteAsync(IReadOnlyList<ClipboardItem> data)
+    public static Task WriteAsync(IReadOnlyList<ClipboardItem> data) => s_api.WriteAsync(data);
+
+    /// <summary>Whether <see cref="ReadAsync"/> would list <paramref name="mimetype"/>. Electron's
+    /// <c>clipboard.has()</c>.</summary>
+    public static Task<bool> HasAsync(string mimetype) => s_api.HasAsync(mimetype);
+
+    /// <summary>Empties the clipboard. Electron's <c>clipboard.clear()</c>.</summary>
+    public static void Clear() => s_api.Clear();
+}
+
+/// <summary>The X11 PRIMARY selection: the text last selected, pasted with the middle button. Electron's
+/// <c>clipboard.selection</c>, with the same methods as <see cref="Clipboard"/>.</summary>
+/// <remarks>Electron documents that the selection does not support W3C web custom formats: they are written, but read
+/// back through the clipboard's custom format map.</remarks>
+public sealed class SelectionClipboard
+{
+    private readonly ClipboardApi _api;
+
+    internal SelectionClipboard(ClipboardApi api) => _api = api;
+
+    /// <summary>The plain text, or "". Electron's <c>clipboard.selection.readText()</c>.</summary>
+    public Task<string> ReadTextAsync() => _api.ReadTextAsync();
+
+    /// <summary>Replaces the selection with <paramref name="text"/>. Electron's
+    /// <c>clipboard.selection.writeText()</c>.</summary>
+    public Task WriteTextAsync(string text) => _api.WriteTextAsync(text);
+
+    /// <summary>One <see cref="ClipboardItem"/> listing what the selection holds; its <see cref="ClipboardItem.GetTypeAsync"/>
+    /// reads the selection. Electron's <c>clipboard.selection.read()</c>.</summary>
+    public Task<IReadOnlyList<ClipboardItem>> ReadAsync() => _api.ReadAsync();
+
+    /// <summary>Replaces the selection with every entry of <paramref name="data"/>. Electron's
+    /// <c>clipboard.selection.write()</c>.</summary>
+    /// <exception cref="ArgumentException">As <see cref="Clipboard.WriteAsync"/>.</exception>
+    public Task WriteAsync(IReadOnlyList<ClipboardItem> data) => _api.WriteAsync(data);
+
+    /// <summary>Whether <see cref="ReadAsync"/> would list <paramref name="mimetype"/>. Electron's
+    /// <c>clipboard.selection.has()</c>.</summary>
+    public Task<bool> HasAsync(string mimetype) => _api.HasAsync(mimetype);
+
+    /// <summary>Empties the selection. Electron's <c>clipboard.selection.clear()</c>.</summary>
+    public void Clear() => _api.Clear();
+}
+
+/// <summary>Electron's clipboard methods bound to one buffer, as its <c>PopulateClipboardObject</c> binds them.</summary>
+/// <remarks>Reads run off the calling thread, as Chromium's non-blocking clipboard reads do. Writes replace everything
+/// on the buffer. A clipboard another process holds reads as empty and drops a write, as in Chromium.</remarks>
+internal sealed class ClipboardApi(IClipboardBackend backend)
+{
+    internal Task<string> ReadTextAsync() => Task.Run(() => ClipboardReader.ReadText(backend));
+
+    internal Task WriteTextAsync(string text)
+    {
+        ArgumentNullException.ThrowIfNull(text);
+        var writer = new ClipboardWriter();
+        writer.WriteText(text);
+        backend.Write(writer);
+        return Task.CompletedTask;
+    }
+
+    internal async Task<IReadOnlyList<ClipboardItem>> ReadAsync()
+        => [ClipboardItem.ForRead(await Task.Run(backend.AvailableTypes).ConfigureAwait(false), this)];
+
+    internal async Task WriteAsync(IReadOnlyList<ClipboardItem> data)
     {
         if (data is null) throw new ArgumentException("clipboard.write expects an array of ClipboardItem", nameof(data));
         var natives = new List<IReadOnlyList<(string, object)>>();
@@ -118,26 +183,19 @@ public static class Clipboard
             natives.Add(await item.ToNativeAsync().ConfigureAwait(false));
         }
         var writer = new ClipboardWriter();
-        foreach (var native in natives) ClipboardPayloads.WriteTo(writer, native, Decode, s_backend.WriteFindText);
-        Commit(writer);
+        foreach (var native in natives) ClipboardPayloads.WriteTo(writer, native, ImageCodec.Decode, backend.WriteFindText);
+        backend.Write(writer);
     }
 
-    /// <summary>Whether <see cref="ReadAsync"/> would list <paramref name="mimetype"/>. Electron's
-    /// <c>clipboard.has()</c>.</summary>
-    public static async Task<bool> HasAsync(string mimetype)
+    internal async Task<bool> HasAsync(string mimetype)
     {
         ArgumentNullException.ThrowIfNull(mimetype);
-        return (await Task.Run(s_backend.AvailableTypes).ConfigureAwait(false)).Contains(mimetype);
+        return (await Task.Run(backend.AvailableTypes).ConfigureAwait(false)).Contains(mimetype);
     }
 
-    /// <summary>Empties the clipboard. Electron's <c>clipboard.clear()</c>.</summary>
-    public static void Clear() => s_backend.Clear();
+    internal void Clear() => backend.Clear();
 
-    internal static Task<object> ReadTypeAsync(string mime) => Task.Run(() => ClipboardReader.ReadType(s_backend, mime, () => OrielApp.CurrentOrNull is { IsReady: true }));
-
-    private static void Commit(ClipboardWriter writer) => s_backend.Write(writer);
-
-    private static ImageBitmap? Decode(byte[] bytes) => ImageCodec.Decode(bytes);
+    internal Task<object> ReadTypeAsync(string mime) => Task.Run(() => ClipboardReader.ReadType(backend, mime, () => OrielApp.CurrentOrNull is { IsReady: true }));
 }
 
 /// <summary>Electron's payload handling for <c>ClipboardItem</c>: resolving promises, the native constructor's type
@@ -550,4 +608,66 @@ internal sealed class MacClipboardBackend : IClipboardBackend
     private static bool Ready => OrielApp.CurrentOrNull is { IsReady: true };
 
     private static T OnUi<T>(Func<T> body) => Ready ? CefThread.InvokeOnUi(body) : body();
+}
+
+/// <summary>The Linux clipboard: Chromium's <c>ClipboardOzone</c> reads and writes on top of
+/// <see cref="X11Clipboard"/>, for CLIPBOARD or the PRIMARY selection.</summary>
+/// <remarks>Raw formats, the custom format map among them, are read from CLIPBOARD whichever buffer asks, because
+/// <c>ClipboardOzone::ReadData</c> takes no buffer. Chromium's Linux clipboard has no bookmark: it reads as empty.</remarks>
+[SupportedOSPlatform("linux")]
+internal sealed class LinuxClipboardBackend(bool primary) : IClipboardBackend
+{
+    public IReadOnlyList<string> AvailableTypes()
+    {
+        var mimeTypes = X11Clipboard.MimeTypes(primary);
+        return ClipboardFormats.Linux.AvailableTypes(CustomFormatNames(mimeTypes).Keys, ClipboardFormats.Linux.StandardTypes(mimeTypes), mimeTypes);
+    }
+
+    public string ReadText() => X11Clipboard.Read(primary, "text/plain") is { } bytes ? Encoding.UTF8.GetString(bytes) : "";
+
+    // Electron reads ASCII text on Windows only.
+    public byte[] ReadAsciiText() => [];
+
+    // ClipboardOzone::ReadHTML: the whole markup is the fragment.
+    public string ReadHtmlFragment() => X11Clipboard.Read(primary, "text/html") is { } bytes ? Encoding.UTF8.GetString(bytes) : "";
+
+    public byte[] ReadRtf() => X11Clipboard.Read(primary, "text/rtf") ?? [];
+
+    public byte[] ReadPng() => X11Clipboard.Read(primary, "image/png") ?? [];
+
+    public ImageBitmap? DecodePng(byte[] png) => png is [0x89, 0x50, 0x4E, 0x47, ..] ? ImageCodec.Decode(png) : null;
+
+    public byte[] EncodeJpeg(ImageBitmap bitmap) => ImageCodec.EncodeJpeg(bitmap, 100);
+
+    public ClipboardBookmark ReadBookmark() => new("", "");
+
+    public IReadOnlyList<string> ReadFilenames()
+        => X11Clipboard.Read(primary, "text/uri-list") is { } bytes ? ClipboardFormats.UriListToPaths(Encoding.UTF8.GetString(bytes), posix: true) : [];
+
+    public bool PosixPaths => true;
+
+    public string? ReadFindText() => null;
+
+    public void WriteFindText(string text) { }
+
+    public IReadOnlyDictionary<string, string> CustomFormatNames() => CustomFormatNames(X11Clipboard.MimeTypes(primary));
+
+    public byte[] ReadData(string name) => X11Clipboard.Read(false, name) ?? [];
+
+    public void Write(ClipboardWriter writer)
+    {
+        if (writer.CommitLinux(ImageCodec.EncodePng) is not var (offer, text)) return;
+        X11Clipboard.Offer(primary, offer);
+        // ClipboardOzone::WritePortableTextRepresentation: a clipboard write's text becomes the selection too.
+        if (!primary && text is not null)
+            X11Clipboard.Offer(true, [.. ClipboardFormats.Linux.TextMimeTypes.Select(mime => KeyValuePair.Create(mime, text))]);
+    }
+
+    // ClipboardOzone::Clear offers nothing: the selection stays owned, empty.
+    public void Clear() => X11Clipboard.Offer(primary, []);
+
+    private static SortedDictionary<string, string> CustomFormatNames(IReadOnlyList<string> mimeTypes)
+        => ClipboardFormats.Linux.HasFormat(mimeTypes, ClipboardFormats.Linux.WebCustomFormatMap)
+            ? ClipboardFormats.ParseWebCustomFormatMap(X11Clipboard.Read(false, ClipboardFormats.Linux.WebCustomFormatMap) ?? [])
+            : new SortedDictionary<string, string>(StringComparer.Ordinal);
 }

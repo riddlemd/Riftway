@@ -86,9 +86,9 @@ internal sealed class ClipboardWriter
 
     private bool IsEmpty => _text is null && _html is null && _rtf is null && _url is null && _uriList is null && _image is null && _platform.Count == 0 && _registered.Count == 0;
 
-    private string PlatformName((string? Raw, int Custom, byte[] Data) p, string customPrefix) => p.Raw ?? customPrefix + p.Custom;
+    private static string PlatformName((string? Raw, int Custom, byte[] Data) p, Func<int, string> customName) => p.Raw ?? customName(p.Custom);
 
-    private string MapJson(string customPrefix) => ClipboardFormats.WebCustomFormatMapJson(_registered.Select(p => KeyValuePair.Create(p.Key, customPrefix + p.Value)));
+    private string MapJson(Func<int, string> customName) => ClipboardFormats.WebCustomFormatMapJson(_registered.Select(p => KeyValuePair.Create(p.Key, customName(p.Value))));
 
     /// <summary>The blocks to put on the Windows clipboard, in Chromium's order (raw and custom formats, then image,
     /// HTML, RTF, URL, text, files, custom format map); null when nothing was written, so the clipboard is left alone.
@@ -96,7 +96,7 @@ internal sealed class ClipboardWriter
     internal List<(ClipboardFormat Format, byte[] Data)>? Commit(Func<ImageBitmap, byte[]> encodePng)
     {
         if (IsEmpty) return null;
-        const string Custom = "Web Custom Format";
+        static string Custom(int index) => "Web Custom Format" + index;
         var blocks = _platform.Select(p => (ClipboardFormat.Registered(PlatformName(p, Custom)), p.Data)).ToList();
         if (_image is { } image)
         {
@@ -121,8 +121,8 @@ internal sealed class ClipboardWriter
     internal List<MacPasteboardWrite>? CommitMac()
     {
         if (IsEmpty) return null;
-        var mac = ClipboardFormats.Mac.WebCustomFormatPrefix;
-        var writes = _platform.Select(p => (MacPasteboardWrite)new MacPasteboardWrite.Data(PlatformName(p, mac), p.Data)).ToList();
+        static string MacName(int index) => ClipboardFormats.Mac.WebCustomFormatPrefix + index;
+        var writes = _platform.Select(p => (MacPasteboardWrite)new MacPasteboardWrite.Data(PlatformName(p, MacName), p.Data)).ToList();
         if (_image is { } image) writes.Add(new MacPasteboardWrite.Image(image));
         if (_html is { Length: > 0 } html) writes.Add(new MacPasteboardWrite.Text(ClipboardFormats.Mac.Html, ClipboardFormats.Mac.HtmlCharsetPrefix + html));
         if (_rtf is { Length: > 0 } rtf) writes.Add(new MacPasteboardWrite.Data(ClipboardFormats.Mac.Rtf, Encoding.UTF8.GetBytes(rtf)));
@@ -131,8 +131,32 @@ internal sealed class ClipboardWriter
         if (_uriList is { Length: > 0 } uriList && ClipboardFormats.UriListToPaths(uriList, posix: true) is { Count: > 0 } paths)
             writes.Add(new MacPasteboardWrite.Files(paths));
         if (_registered.Count > 0)
-            writes.Add(new MacPasteboardWrite.Data(ClipboardFormats.Mac.WebCustomFormatMap, Encoding.UTF8.GetBytes(MapJson(mac))));
+            writes.Add(new MacPasteboardWrite.Data(ClipboardFormats.Mac.WebCustomFormatMap, Encoding.UTF8.GetBytes(MapJson(MacName))));
         return writes;
+    }
+
+    /// <summary>What Chromium's <c>ClipboardOzone</c> offers on X11, in the order it inserts it: platform representations,
+    /// then the object map in <c>Clipboard::Data</c> order (bitmap as PNG, HTML, RTF, URL, text under its five names, files,
+    /// custom format map), a later entry replacing an earlier one of the same name; and the text it copies to PRIMARY
+    /// after a CLIPBOARD write. Null when nothing was written, so the selection is left alone; empty parts add nothing,
+    /// so the selection is taken empty.</summary>
+    internal (List<KeyValuePair<string, byte[]>> Offer, byte[]? PrimaryText)? CommitLinux(Func<ImageBitmap, byte[]> encodePng)
+    {
+        if (IsEmpty) return null;
+        var offer = _platform.Select(p => KeyValuePair.Create(PlatformName(p, ClipboardFormats.Linux.WebCustomFormatName), p.Data)).ToList();
+        void Add(string mime, byte[] data) => offer.Add(KeyValuePair.Create(mime, data));
+        if (_image is { } image && encodePng(image) is { Length: > 0 } png) Add("image/png", png);
+        if (_html is { Length: > 0 } html) Add("text/html", Encoding.UTF8.GetBytes(html));
+        if (_rtf is { Length: > 0 } rtf) Add("text/rtf", Encoding.UTF8.GetBytes(rtf));
+        if (_url is { } url) Add(ClipboardFormats.Linux.MozUrl, ClipboardFormats.Linux.MozUrlBytes(url.Url, url.Title));
+        byte[]? text = _text is { Length: > 0 } t ? Encoding.UTF8.GetBytes(t) : null;
+        if (text is not null)
+            foreach (var mime in ClipboardFormats.Linux.TextMimeTypes) Add(mime, text);
+        // ClipboardOzone::WriteFilenames re-serializes the parsed paths, so a list without file URLs is offered empty.
+        if (_uriList is { Length: > 0 } uriList)
+            Add("text/uri-list", Encoding.UTF8.GetBytes(ClipboardFormats.PathsToUriList(ClipboardFormats.UriListToPaths(uriList, posix: true), posix: true)));
+        if (_registered.Count > 0) Add(ClipboardFormats.Linux.WebCustomFormatMap, Encoding.UTF8.GetBytes(MapJson(ClipboardFormats.Linux.WebCustomFormatName)));
+        return (offer, text);
     }
 
     private static byte[] Nul(byte[] bytes, int width) => [.. bytes, .. new byte[width]];

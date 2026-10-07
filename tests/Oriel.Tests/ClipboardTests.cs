@@ -260,7 +260,7 @@ public sealed class ClipboardTests
     {
         var native = await new ClipboardItem(new Dictionary<string, object?> { ["x/y"] = Task.FromResult<object>(new byte[] { 4 }) }).ToNativeAsync();
         Assert.Equal(new byte[] { 4 }, native.Single().Payload);
-        var read = ClipboardItem.ForRead(["text/plain"]);
+        var read = ClipboardItem.ForRead(["text/plain"], new ClipboardApi(new FakeBackend()));
         Assert.Equal("clipboard.write cannot accept a ClipboardItem returned from clipboard.read() — construct a new ClipboardItem to write.",
             (await Assert.ThrowsAsync<ArgumentException>(read.ToNativeAsync)).Message);
         Assert.Equal("The type 'text/html' was not found in the ClipboardItem", (await Assert.ThrowsAsync<InvalidOperationException>(() => read.GetTypeAsync("text/html"))).Message);
@@ -270,7 +270,7 @@ public sealed class ClipboardTests
     public async Task WriteAsync_refuses_a_missing_item_before_touching_the_clipboard()
     {
         await Assert.ThrowsAsync<ArgumentException>(() => Clipboard.WriteAsync(null!));
-        await Assert.ThrowsAsync<ArgumentException>(() => Clipboard.WriteAsync([ClipboardItem.ForRead(["text/plain"])]));
+        await Assert.ThrowsAsync<ArgumentException>(() => Clipboard.WriteAsync([ClipboardItem.ForRead(["text/plain"], new ClipboardApi(new FakeBackend()))]));
         Assert.Equal("clipboard.write expects an array of ClipboardItem (Parameter 'data')", (await Assert.ThrowsAsync<ArgumentException>(() => Clipboard.WriteAsync([null!]))).Message);
     }
 
