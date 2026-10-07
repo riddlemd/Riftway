@@ -5,7 +5,7 @@ electron/electron). When Electron adds or changes a module, this table changes w
 
 ## Progress
 
-Recounted 2026-10-06 against `src/Oriel`. Update these figures when a row or checklist item changes.
+These figures are counted from the rows: after changing a row or checklist item, run `node tools/recount-parity.js`. The unit tests (`ParityCountTests`) fail while they are stale.
 
 | Measure | Done | Partial | Not started | Total |
 |---|---|---|---|---|
