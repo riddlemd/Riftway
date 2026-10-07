@@ -18,7 +18,7 @@ public enum ThemeSource
 
 /// <summary>The app's colour scheme: pages' <c>prefers-color-scheme</c>, Chromium's own UI and (on macOS) native menus and
 /// dialogs. Electron's <c>nativeTheme</c>.</summary>
-public static unsafe class NativeTheme
+public static unsafe partial class NativeTheme
 {
     private static readonly Lock s_gate = new();
     private static ThemeSource s_source;
@@ -32,7 +32,8 @@ public static unsafe class NativeTheme
 
     /// <summary>Overrides the system's light or dark choice for the app's pages and UI, or follows it again.
     /// Electron's <c>nativeTheme.themeSource</c>.</summary>
-    /// <remarks>Raises <see cref="Updated"/>. Set before the app is ready, it applies when it is.</remarks>
+    /// <remarks>Raises <see cref="Updated"/> when <see cref="ShouldUseDarkColors"/> changes, as Electron's
+    /// <c>set_theme_source</c> patch. Set before the app is ready, it applies when it is.</remarks>
     public static ThemeSource ThemeSource
     {
         get
@@ -41,16 +42,19 @@ public static unsafe class NativeTheme
         }
         set
         {
-            lock (s_gate) s_source = value;
-            if (OrielApp.CurrentOrNull is { IsReady: true })
+            if (OrielApp.CurrentOrNull is not { IsReady: true })
             {
-                CefThread.InvokeOnUi(() =>
-                {
-                    ApplyEverywhere();
-                    return true;
-                });
-                Raise();
+                lock (s_gate) s_source = value;
+                return;
             }
+            var wasDark = ShouldUseDarkColors;
+            lock (s_gate) s_source = value;
+            CefThread.InvokeOnUi(() =>
+            {
+                ApplyEverywhere();
+                return true;
+            });
+            if (ShouldUseDarkColors != wasDark) Raise();
         }
     }
 
@@ -65,22 +69,28 @@ public static unsafe class NativeTheme
 
     /// <summary>Whether the system asks for high contrast (macOS "Increase contrast", Windows contrast themes, a GTK theme
     /// named high contrast on Linux). Electron's <c>nativeTheme.shouldUseHighContrastColors</c>.</summary>
+    /// <remarks>On Windows, a contrast theme whose window text contrasts with its window at 7:1 or more.</remarks>
     public static bool ShouldUseHighContrastColors
         => OperatingSystem.IsMacOS() ? MacFlag(MacSetting.IncreaseContrast)
-            : OperatingSystem.IsWindows() ? WindowsHighContrast()
+            : OperatingSystem.IsWindows() ? WindowsTheme.ShouldUseHighContrastColors(WindowsVariables())
             : OperatingSystem.IsLinux() && LinuxFlag(dark: false);
 
-    /// <summary>Whether macOS inverts colours. Electron's <c>nativeTheme.shouldUseInvertedColorScheme</c>.</summary>
-    public static bool ShouldUseInvertedColorScheme => OperatingSystem.IsMacOS() && MacFlag(MacSetting.InvertColors);
+    /// <summary>Whether macOS inverts colours, or on Windows whether a dark contrast theme is on.
+    /// Electron's <c>nativeTheme.shouldUseInvertedColorScheme</c>.</summary>
+    public static bool ShouldUseInvertedColorScheme
+        => OperatingSystem.IsMacOS() ? MacFlag(MacSetting.InvertColors)
+            : OperatingSystem.IsWindows() && WindowsTheme.ShouldUseInvertedColorScheme(ThemeSource, WindowsVariables());
 
     /// <summary>Whether Windows forces a contrast theme's colours. Electron's <c>nativeTheme.inForcedColorsMode</c>.</summary>
-    public static bool InForcedColorsMode => OperatingSystem.IsWindows() && WindowsHighContrast();
+    public static bool InForcedColorsMode => OperatingSystem.IsWindows() && WindowsVariables().ForcedColors;
 
-    /// <summary>Whether macOS asks for less transparency. Electron's <c>nativeTheme.prefersReducedTransparency</c>.</summary>
-    public static bool PrefersReducedTransparency => OperatingSystem.IsMacOS() && MacFlag(MacSetting.ReduceTransparency);
+    /// <summary>Whether macOS asks for less transparency, or Windows' transparency effects are off.
+    /// Electron's <c>nativeTheme.prefersReducedTransparency</c>.</summary>
+    public static bool PrefersReducedTransparency
+        => OperatingSystem.IsMacOS() ? MacFlag(MacSetting.ReduceTransparency) : OperatingSystem.IsWindows() && WindowsVariables().ReducedTransparency;
 
     /// <summary>Something above changed: <see cref="ThemeSource"/> was set, or the system's settings changed (at once on
-    /// macOS and Linux; on Windows checked once a second while there are handlers, DRIFT Y1). Electron's <c>updated</c> event.</summary>
+    /// macOS, Windows and Linux; DRIFT Y1). Electron's <c>updated</c> event.</summary>
     public static event EventHandler? Updated
     {
         add
@@ -88,7 +98,8 @@ public static unsafe class NativeTheme
             lock (s_gate)
             {
                 s_updated += value;
-                if (s_polling || OrielApp.CurrentOrNull is not { IsReady: true }) return;
+                // Windows watches from OnReady on, handlers or not, as Chromium's OsSettingsProviderWin.
+                if (s_polling || OperatingSystem.IsWindows() || OrielApp.CurrentOrNull is not { IsReady: true }) return;
                 s_polling = true;
             }
             StartWatching();
@@ -108,6 +119,11 @@ public static unsafe class NativeTheme
     {
         if (OperatingSystem.IsLinux()) ObserveLinux();
         ApplyEverywhere();
+        if (OperatingSystem.IsWindows())
+        {
+            StartWindows();
+            return;
+        }
         bool start;
         lock (s_gate)
         {
@@ -204,14 +220,10 @@ public static unsafe class NativeTheme
     private static bool SystemPrefersDark()
     {
         if (OperatingSystem.IsMacOS()) return MacFlag(MacSetting.Dark);
-        if (OperatingSystem.IsWindows()) return WindowsAppsUseDark();
+        if (OperatingSystem.IsWindows()) return WindowsVariables().Dark;
         if (OperatingSystem.IsLinux()) return LinuxFlag(dark: true);
         return false;
     }
-
-    [System.Runtime.Versioning.SupportedOSPlatform("windows")]
-    private static bool WindowsAppsUseDark()
-        => Microsoft.Win32.Registry.GetValue(@"HKEY_CURRENT_USER\Software\Microsoft\Windows\CurrentVersion\Themes\Personalize", "AppsUseLightTheme", 1) is 0;
 
     /// <summary>Chromium 154 on Linux: no GTK UI, no system theme at all (the portal's preference is pushed only into GTK's
     /// settings provider); else the portal's dark or light; else whether GTK's window background is dark.</summary>
@@ -261,23 +273,4 @@ public static unsafe class NativeTheme
         }
         Check();
     }
-
-    [StructLayout(LayoutKind.Sequential)]
-    private struct HighContrast
-    {
-        public uint Size;
-        public uint Flags;
-        public nint DefaultScheme;
-    }
-
-    private static bool WindowsHighContrast()
-    {
-        var info = new HighContrast { Size = (uint)sizeof(HighContrast) };
-        // SPI_GETHIGHCONTRAST; HCF_HIGHCONTRASTON
-        return SystemParametersInfoW(0x0042, info.Size, &info, 0) && (info.Flags & 0x1) != 0;
-    }
-
-    [DllImport("user32.dll")]
-    [return: MarshalAs(UnmanagedType.Bool)]
-    private static extern bool SystemParametersInfoW(uint action, uint param, void* data, uint winIni);
 }
