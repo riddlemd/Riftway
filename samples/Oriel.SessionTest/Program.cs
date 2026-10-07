@@ -1032,6 +1032,7 @@ async Task RunAsync()
         Check("callback() with none continues without a certificate", none.Body == "tls ok client=none", none.Body);
         mutualListener.Stop();
     }
+    if (OperatingSystem.IsWindows() && !mediaChild) await WindowsClientCertificateChecks(tlsCert);
 
     // app events, as Electron's: creations in order, sessions once each, window focus.
     static bool Until(Func<bool> condition, TimeSpan timeout)
@@ -1743,7 +1744,8 @@ static async Task<T?> WaitFor<T>(Func<T?> probe) where T : class
 
 // Serves "tls ok" over TLS with the given certificate, to every connection; with requireClient, says which client
 // certificate came.
-static async Task ServeTls(TcpListener listener, System.Security.Cryptography.X509Certificates.X509Certificate2 certificate, bool requireClient = false)
+static async Task ServeTls(TcpListener listener, System.Security.Cryptography.X509Certificates.X509Certificate2 certificate, bool requireClient = false,
+    Action<string>? receivedThumbprint = null)
 {
     while (true)
     {
@@ -1761,6 +1763,7 @@ static async Task ServeTls(TcpListener listener, System.Security.Cryptography.X5
                         (_, _, _, errors) => (errors & ~(System.Net.Security.SslPolicyErrors.RemoteCertificateChainErrors | System.Net.Security.SslPolicyErrors.RemoteCertificateNotAvailable)) == 0);
                     await tls.AuthenticateAsServerAsync(certificate, requireClient, false);
                     var who = tls.RemoteCertificate is { } remote ? new System.Security.Cryptography.X509Certificates.X509Certificate2(remote).GetNameInfo(System.Security.Cryptography.X509Certificates.X509NameType.SimpleName, false) : "none";
+                    receivedThumbprint?.Invoke(tls.RemoteCertificate is { } sent ? new System.Security.Cryptography.X509Certificates.X509Certificate2(sent).Thumbprint : "none");
                     await Respond(tls, 200, "OK", "", requireClient ? $"tls ok client={who}" : "tls ok");
                 }
                 catch (Exception) { }
@@ -2097,6 +2100,128 @@ async Task PermissionChecks(bool mediaOnly = false)
     var cleared = await Run(checkWin, Query("{ name: 'geolocation' }"));
     Check("SetPermissionCheckHandler(null) goes back to granting every check", cleared == "granted", cleared);
     checkWin.Destroy();
+}
+
+// select-client-certificate with the Windows certificate store: two throwaway client certificates in CurrentUser\My
+// only, removed with their keys however the checks end. The user's own certificates may be listed too.
+async Task WindowsClientCertificateChecks(System.Security.Cryptography.X509Certificates.X509Certificate2 serverCert)
+{
+    var tag = Guid.NewGuid().ToString("N");
+    // Chromium's ClientCertIdentitySorter puts the later expiry first, so A should lead the list and B follow.
+    var certA = AddWindowsClientCertificate($"Oriel E25 Test A {tag}", DateTimeOffset.UtcNow.AddYears(20));
+    var certB = AddWindowsClientCertificate($"Oriel E25 Test B {tag}", DateTimeOffset.UtcNow.AddYears(19));
+    AppDomain.CurrentDomain.ProcessExit += (_, _) => { RemoveWindowsClientCertificate(certA); RemoveWindowsClientCertificate(certB); };
+    Console.WriteLine($"E25 added {certA.Thumbprint} and {certB.Thumbprint}");
+    try
+    {
+        using var listener = new TcpListener(IPAddress.Loopback, 0);
+        listener.Start();
+        var port = ((IPEndPoint)listener.LocalEndpoint).Port;
+        var received = new System.Collections.Concurrent.ConcurrentQueue<string>();
+        _ = ServeTls(listener, serverCert, requireClient: true, received.Enqueue);
+        static string Fingerprint(System.Security.Cryptography.X509Certificates.X509Certificate2 c) => "sha256/" + Convert.ToBase64String(System.Security.Cryptography.SHA256.HashData(c.RawData));
+        static string Thumbprint(Certificate c) => System.Security.Cryptography.X509Certificates.X509CertificateLoader.LoadCertificate(Convert.FromBase64String(string.Concat(
+            c.Data.Split('\n').Where(l => l.Length > 0 && !l.StartsWith("-----", StringComparison.Ordinal))))).Thumbprint;
+        async Task<(string? Body, string? Sent, List<string> Order, SelectClientCertificateEventArgs? Args)> Visit(Action<SelectClientCertificateEventArgs>? decide)
+        {
+            received.Clear();
+            var order = new List<string>();
+            SelectClientCertificateEventArgs? seenArgs = null;
+            var w = new BrowserWindow(new BrowserWindowOptions { Show = false, WebPreferences = new WebPreferences { Partition = "win-mutual-" + Guid.NewGuid() } });
+            // Trusts the self-signed server certificate for this server only.
+            w.WebContents.CertificateError += (_, e) => { e.Cancel = true; e.Callback(e.Url.StartsWith($"https://127.0.0.1:{port}/", StringComparison.Ordinal)); };
+            w.WebContents.SelectClientCertificate += (_, e) => { order.Add("page"); seenArgs = e; decide?.Invoke(e); };
+            EventHandler<SelectClientCertificateEventArgs> onApp = (sender, e) => order.Add(ReferenceEquals(sender, app) && ReferenceEquals(e, seenArgs) ? "app" : "app?");
+            app.SelectClientCertificate += onApp;
+            var failed = await Throws(() => w.LoadUrl($"https://127.0.0.1:{port}/").WaitAsync(TimeSpan.FromSeconds(20)));
+            var body = failed is null ? (await w.WebContents.ExecuteJavaScriptAsync("document.body.innerText"))?.ToString() : failed.Message;
+            app.SelectClientCertificate -= onApp;
+            w.Destroy();
+            return (body, received.LastOrDefault(), order, seenArgs);
+        }
+
+        var first = await Visit(null);
+        var list = first.Args?.CertificateList ?? [];
+        var a = list.FirstOrDefault(c => c.Fingerprint == Fingerprint(certA));
+        var b = list.FirstOrDefault(c => c.Fingerprint == Fingerprint(certB));
+        Check("Windows: select-client-certificate lists the store's certificates, with host:port, page then app", first.Args?.Url == $"127.0.0.1:{port}"
+            && a is not null && b is not null && first.Order.SequenceEqual(["page", "app"]),
+            $"{first.Args?.Url} [{string.Join(",", first.Order)}] {string.Join(" | ", list.Select(c => c.SubjectName))}");
+        Check("Windows: a listed certificate carries Electron's fields", a is { IssuerName: var issuer, SubjectName: var subject, Data: var pem, IssuerCert: null }
+            && subject == $"Oriel E25 Test A {tag}" && issuer == subject && a.SerialNumber == certA.SerialNumber && pem.StartsWith("-----BEGIN CERTIFICATE-----\n", StringComparison.Ordinal)
+            && Thumbprint(a) == certA.Thumbprint && a.ValidExpiry == new DateTimeOffset(certA.NotAfter.ToUniversalTime()).ToUnixTimeSeconds(),
+            $"{a?.SubjectName} {a?.IssuerName} {a?.SerialNumber}");
+        Check("Windows: the later-expiring certificate leads, as Chromium sorts them", list.Count > 1 && ReferenceEquals(list[0], a), list.FirstOrDefault()?.SubjectName);
+        Check("Windows: with no choice, the server gets the first listed certificate, as Electron's", list.Count > 0 && first.Sent == Thumbprint(list[0])
+            && first.Body == $"tls ok client={list[0].Subject.CommonName}", $"{first.Sent} {first.Body}");
+
+        var chosen = await Visit(e => { e.Cancel = true; e.Callback(e.CertificateList.First(c => c.Fingerprint == Fingerprint(certB))); });
+        Check("Windows: preventDefault and callback(B) send B, not the first", chosen.Sent == certB.Thumbprint && chosen.Body == $"tls ok client=Oriel E25 Test B {tag}",
+            $"{chosen.Sent} {chosen.Body}");
+
+        var none = await Visit(e => { e.Cancel = true; _ = Task.Delay(200).ContinueWith(_ => e.Callback()); });
+        Check("Windows: callback() with none sends no certificate", none.Sent == "none" && none.Body == "tls ok client=none", $"{none.Sent} {none.Body}");
+        listener.Stop();
+    }
+    finally
+    {
+        var goneA = RemoveWindowsClientCertificate(certA);
+        var goneB = RemoveWindowsClientCertificate(certB);
+        Console.WriteLine($"E25 removed {certA.Thumbprint}={goneA} {certB.Thumbprint}={goneB}");
+        Check("Windows: the test client certificates are removed from CurrentUser\\My with their keys", goneA && goneB);
+    }
+}
+
+// A self-signed client-auth certificate whose key persists, added to CurrentUser\My and nowhere else.
+static System.Security.Cryptography.X509Certificates.X509Certificate2 AddWindowsClientCertificate(string subject, DateTimeOffset notAfter)
+{
+    using var key = System.Security.Cryptography.RSA.Create(2048);
+    var request = new System.Security.Cryptography.X509Certificates.CertificateRequest($"CN={subject}", key,
+        System.Security.Cryptography.HashAlgorithmName.SHA256, System.Security.Cryptography.RSASignaturePadding.Pkcs1);
+    request.CertificateExtensions.Add(new System.Security.Cryptography.X509Certificates.X509EnhancedKeyUsageExtension([new("1.3.6.1.5.5.7.3.2")], false));
+    using var made = request.CreateSelfSigned(DateTimeOffset.UtcNow.AddDays(-1), notAfter);
+    var persisted = System.Security.Cryptography.X509Certificates.X509CertificateLoader.LoadPkcs12(
+        made.Export(System.Security.Cryptography.X509Certificates.X509ContentType.Pkcs12, "pw"), "pw",
+        System.Security.Cryptography.X509Certificates.X509KeyStorageFlags.UserKeySet | System.Security.Cryptography.X509Certificates.X509KeyStorageFlags.PersistKeySet);
+    using var store = new System.Security.Cryptography.X509Certificates.X509Store(System.Security.Cryptography.X509Certificates.StoreName.My,
+        System.Security.Cryptography.X509Certificates.StoreLocation.CurrentUser);
+    store.Open(System.Security.Cryptography.X509Certificates.OpenFlags.ReadWrite);
+    store.Add(persisted);
+    return persisted;
+}
+
+// Removes the certificate from CurrentUser\My and deletes its persisted key; true when it is no longer in the store.
+static bool RemoveWindowsClientCertificate(System.Security.Cryptography.X509Certificates.X509Certificate2 certificate)
+{
+    try
+    {
+        using var store = new System.Security.Cryptography.X509Certificates.X509Store(System.Security.Cryptography.X509Certificates.StoreName.My,
+            System.Security.Cryptography.X509Certificates.StoreLocation.CurrentUser);
+        store.Open(System.Security.Cryptography.X509Certificates.OpenFlags.ReadWrite);
+        foreach (var found in store.Certificates.Find(System.Security.Cryptography.X509Certificates.X509FindType.FindByThumbprint, certificate.Thumbprint, false))
+            store.Remove(found);
+        if (certificate.HasPrivateKey)
+        {
+            try
+            {
+                switch (System.Security.Cryptography.X509Certificates.RSACertificateExtensions.GetRSAPrivateKey(certificate))
+                {
+                    case System.Security.Cryptography.RSACng cng: cng.Key.Delete(); break;
+                    case System.Security.Cryptography.RSACryptoServiceProvider csp: csp.PersistKeyInCsp = false; csp.Clear(); break;
+                }
+            }
+            // Already deleted by an earlier call.
+            catch (System.Security.Cryptography.CryptographicException) { }
+        }
+        store.Close();
+        store.Open(System.Security.Cryptography.X509Certificates.OpenFlags.ReadOnly);
+        return store.Certificates.Find(System.Security.Cryptography.X509Certificates.X509FindType.FindByThumbprint, certificate.Thumbprint, false).Count == 0;
+    }
+    catch (Exception e)
+    {
+        Console.Error.WriteLine($"E25 removal of {certificate.Thumbprint} failed: {e}");
+        return false;
+    }
 }
 
 // Two self-signed client certificates, imported into a fresh NSS store in the home directory.
