@@ -32,6 +32,9 @@ public sealed unsafe class WebContentsView : View
     // Keep the handlers alive while CEF may still call them.
     private readonly ClientHandler? _client;
     private readonly BrowserViewDelegate? _viewDelegate;
+    // The page's background, Electron's background_color_: transparent from webPreferences.transparent, or what
+    // SetBackgroundColor gave; null leaves Chromium's white.
+    private uint? _pageColor;
 
     /// <summary>Creates a view with a new page. Electron's <c>new WebContentsView()</c>.</summary>
     /// <exception cref="InvalidOperationException">The app is not ready.</exception>
@@ -50,6 +53,7 @@ public sealed unsafe class WebContentsView : View
                 throw new NotSupportedException("A popup of a window's own page can only be shown as a BrowserWindow's page: CEF gives it the opener's Chrome style.");
             PopupGuest.Adopt(adopted, this);
         }
+        _pageColor = WindowTransparency.PageBackgroundColor(null, preferences.Transparent) is { } page ? BrowserWindow.ParseColor(page) : null;
         var session = options.WebContents?.Session ?? preferences.ResolveSession();
         WebContents = options.WebContents ?? new WebContents(preferences.Preload, preferences, session) { IsAlloyStyle = true };
         var lifeSpan = new LifeSpanHandler
@@ -79,7 +83,10 @@ public sealed unsafe class WebContentsView : View
             {
                 s_live.Add(this);
                 WebContents.OnBrowserCreated(browser);
+                ApplyPageColor();
             },
+            // CEF resets the browser view's colour whenever the theme applies.
+            ThemeChanged = ApplyPageColor,
             BrowserDestroyed = _ =>
             {
                 WebContents.OnBrowserDestroyed();
@@ -93,8 +100,12 @@ public sealed unsafe class WebContentsView : View
             PopupDelegate = BrowserWindow.PopupDelegateFor,
             PopupViewCreated = (view, popupDelegate) => BrowserWindow.AdoptPopupView(WebContents, view, popupDelegate),
         };
-        // A popup's browser view comes from CEF (AdoptPopupPage).
-        if (options.WebContents is not null) return;
+        // A popup's browser view comes from CEF (AdoptPopupPage); its page may already exist.
+        if (options.WebContents is not null)
+        {
+            CefThread.RunOnUi(ApplyPageColor);
+            return;
+        }
         // CEF refuses a browser view while its profile is still loading, as for a window's page.
         session.WaitUntilInitialized();
         CefThread.InvokeOnUi(() =>
@@ -103,6 +114,21 @@ public sealed unsafe class WebContentsView : View
             else session.Initialized.ContinueWith(_ => CefThread.RunOnUi(() => CreatePage(preferences, session)), TaskScheduler.Default);
             return true;
         });
+    }
+
+    // UI thread.
+    private void ApplyPageColor()
+    {
+        if (_pageColor is not { } argb) return;
+        if (Page is not null) Page->set_background_color(Page, WindowTransparency.BrowserViewColor(argb));
+        BrowserWindow.SendPageBackground(WebContents, argb);
+    }
+
+    // As Electron's WebContentsView::SetBackgroundColor: the page's background follows the view's.
+    private protected override void OnBackgroundColorSet(uint argb)
+    {
+        _pageColor = argb;
+        ApplyPageColor();
     }
 
     // UI thread, once the session's profile has loaded.

@@ -195,6 +195,13 @@ public sealed record WebPreferences
     /// Electron's <c>partition</c>.</summary>
     public string? Partition { get; init; }
 
+    /// <summary>Whether the page's default background is transparent instead of white, so what lies behind the page
+    /// shows where the page paints nothing. A window's <see cref="BrowserWindowOptions.BackgroundColor"/>, and a transparent
+    /// or material window, decide its page's background over this. Electron's <c>transparent</c>, which for a window's
+    /// or a <see cref="WebContentsView"/>'s page acts only when true (its documented default of true is a
+    /// <c>&lt;webview&gt;</c>'s).</summary>
+    public bool Transparent { get; init; }
+
     internal void Validate(string paramName)
     {
         // Chrome-style browsers take these from the profile's preferences, over the browser settings.
@@ -1158,21 +1165,29 @@ public sealed unsafe partial class BrowserWindow
     // joining its window, so on_theme_changed calls this again.
     private void ApplyBackgroundColor(cef_window_t* w)
     {
-        if (_backgroundColor is null) return;
-        var argb = ParseColor(_backgroundColor);
-        w->@base.@base.set_background_color(&w->@base.@base, argb);
-        if (_browserView is not null) _browserView->@base.set_background_color(&_browserView->@base, WindowTransparency.BrowserViewColor(argb));
+        var transparentPage = _options.WebPreferences.Transparent;
+        if (WindowTransparency.WindowFill(_backgroundColor, transparentPage) is not { } fill
+            || WindowTransparency.PageBackgroundColor(_backgroundColor, transparentPage) is not { } page) return;
+        w->@base.@base.set_background_color(&w->@base.@base, ParseColor(fill));
+        var under = WindowTransparency.BrowserViewColor(ParseColor(page));
+        if (_browserView is not null) _browserView->@base.set_background_color(&_browserView->@base, under);
         // The content view sits between the window and the page; a themed panel colour there would hide a transparent window.
-        ContentView.SetBackgroundArgb(WindowTransparency.BrowserViewColor(argb));
+        ContentView.SetBackgroundArgb(under);
+    }
+
+    private void ApplyPageBackground()
+    {
+        if (WindowTransparency.PageBackgroundColor(_backgroundColor, _options.WebPreferences.Transparent) is { } page)
+            SendPageBackground(WebContents, ParseColor(page));
     }
 
     // CEF takes only opaque colours for a windowed browser (GetColor in libcef/browser/context.cc) and cannot change the
     // page's after creation; DevTools' default background override can, and lasts across navigations.
-    private void ApplyPageBackground()
+    internal static void SendPageBackground(WebContents page, uint argb)
     {
-        if (_backgroundColor is null || WebContents.Browser is null) return;
-        var (r, g, b, a) = WindowTransparency.PageColor(ParseColor(_backgroundColor));
-        WebContents.DevTools.Send("Emulation.setDefaultBackgroundColorOverride", w =>
+        if (page.Browser is null) return;
+        var (r, g, b, a) = WindowTransparency.PageColor(argb);
+        page.DevTools.Send("Emulation.setDefaultBackgroundColorOverride", w =>
         {
             w.WritePropertyName("color");
             w.WriteStartObject();

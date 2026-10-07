@@ -107,7 +107,7 @@ Counted from the Checklist at the end: `BaseWindow` and `BrowserWindow` are one 
 
 1. Remaining webPreferences:
    - Need other modules: `spellcheck` (no per-page switch, E22), `offscreen` (offscreen
-     rendering), `transparent`. `session`/`partition` landed with the `Session` module (DRIFT E1-E11).
+     rendering). `session`/`partition` landed with the `Session` module (DRIFT E1-E11).
    - Process-wide in CEF (Chromium switches, not per window): `webSecurity`, `allowRunningInsecureContent`,
      `experimentalFeatures`, `enableBlinkFeatures`/`disableBlinkFeatures`, `autoplayPolicy`, `sandbox`. Decide between
      an app-level option and a per-window gap.
@@ -256,7 +256,7 @@ Parameters in brackets are optional in Electron. `webContents` members are in [w
 | `enableWebSQL` | — | n/a | Not applicable (listed in "Not applicable"). |
 | `v8CacheOptions` | — | n/a | Node/V8 option. |
 | `enablePreferredSizeMode` | `EnablePreferredSizeMode` | partial | Turns on `PreferredSizeChanged`, measured in the page (C42). |
-| `transparent` | — | missing |  |
+| `transparent` | `Transparent` | done | Only an explicit true acts, as Electron for a window's or view's page; the window's `backgroundColor` wins (V14). Screen-pixel checks on Windows. |
 | `enableDeprecatedPaste` | — | n/a | Deprecated. |
 | `focusOnNavigation` | — | missing |  |
 
