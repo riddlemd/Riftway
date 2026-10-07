@@ -82,8 +82,8 @@ public sealed record OpenDialogOptions
     /// <summary>The dialog's title. Most macOS versions do not show it.</summary>
     public string? Title { get; init; }
 
-    /// <summary>The directory to start in, or a file to select there. On macOS, empty starts in Downloads (else
-    /// the home directory), as Electron.</summary>
+    /// <summary>The directory to start in, or a file to select there. On macOS and Windows, empty starts in
+    /// <c>GetPath("downloads")</c> (else <c>GetPath("home")</c>), as Electron.</summary>
     public string? DefaultPath { get; init; }
 
     /// <summary>The file types offered; empty for any file. On macOS the first applies, and several add a Format popup.</summary>
@@ -111,8 +111,8 @@ public sealed record SaveDialogOptions
     /// <summary>The dialog's title. Most macOS versions do not show it.</summary>
     public string? Title { get; init; }
 
-    /// <summary>The directory to start in, the file name to suggest, or both as a path. On macOS, empty starts in
-    /// Downloads (else the home directory), as Electron.</summary>
+    /// <summary>The directory to start in, the file name to suggest, or both as a path. On macOS and Windows, empty
+    /// starts in <c>GetPath("downloads")</c> (else <c>GetPath("home")</c>), as Electron.</summary>
     public string? DefaultPath { get; init; }
 
     /// <summary>The file types offered; empty for any file. On macOS the first applies, and several add a Format popup.</summary>
@@ -321,9 +321,14 @@ public static unsafe partial class Dialog
         return slash < 0 ? "." : slash == 0 ? "/" : StripTrailingSeparators(stripped[..slash]);
     }
 
-    // Electron's GetDefaultPath: the downloads directory when it exists, else home.
-    private static string MacFallbackPath()
-        => Directory.Exists(DownloadItem.DownloadsDirectory) ? DownloadItem.DownloadsDirectory : Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
+    private static string DefaultDialogFolder() => DefaultFolderOf(AppPath, Directory.Exists);
+
+    /// <summary>Electron's <c>GetDefaultPath</c>: PathService's <c>DIR_DEFAULT_DOWNLOADS</c> when that directory exists,
+    /// else <c>DIR_HOME</c>, which <c>app.setPath('downloads')</c> and <c>('home')</c> override.</summary>
+    internal static string DefaultFolderOf(Func<string, string> getPath, Func<string, bool> directoryExists)
+        => getPath("downloads") is var downloads && directoryExists(downloads) ? downloads : getPath("home");
+
+    private static string AppPath(string name) => OrielApp.CurrentOrNull?.GetPath(name) ?? OrielApp.DefaultPath(name, string.Empty)!;
 
     private static nint ContentViewOf(BrowserWindow? window) => window is null || window.IsDestroyed ? 0 : window.GetNativeWindowHandle();
 
@@ -332,7 +337,7 @@ public static unsafe partial class Dialog
     {
         ArgumentNullException.ThrowIfNull(options);
         RequireReady();
-        var settings = MacOpenSettingsOf(options, Directory.Exists, MacFallbackPath);
+        var settings = MacOpenSettingsOf(options, Directory.Exists, DefaultDialogFolder);
         return CefThread.InvokeOnUi(() =>
         {
             var panel = MacFileDialog.CreateOpenPanel(settings);
@@ -346,7 +351,7 @@ public static unsafe partial class Dialog
     {
         ArgumentNullException.ThrowIfNull(options);
         RequireReady();
-        var settings = MacSaveSettingsOf(options, Directory.Exists, MacFallbackPath, async: false);
+        var settings = MacSaveSettingsOf(options, Directory.Exists, DefaultDialogFolder, async: false);
         return CefThread.InvokeOnUi(() =>
         {
             var panel = MacFileDialog.CreateSavePanel(settings);
@@ -359,7 +364,7 @@ public static unsafe partial class Dialog
     private static Task<OpenDialogReturnValue> MacOpenAsync(BrowserWindow? window, OpenDialogOptions options)
     {
         RequireReady();
-        var settings = MacOpenSettingsOf(options, Directory.Exists, MacFallbackPath);
+        var settings = MacOpenSettingsOf(options, Directory.Exists, DefaultDialogFolder);
         var bookmarks = options.SecurityScopedBookmarks;
         return MacBegin(window, () => MacFileDialog.CreateOpenPanel(settings), (panel, accepted) =>
         {
@@ -373,7 +378,7 @@ public static unsafe partial class Dialog
     private static Task<SaveDialogReturnValue> MacSaveAsync(BrowserWindow? window, SaveDialogOptions options)
     {
         RequireReady();
-        var settings = MacSaveSettingsOf(options, Directory.Exists, MacFallbackPath, async: true);
+        var settings = MacSaveSettingsOf(options, Directory.Exists, DefaultDialogFolder, async: true);
         var bookmark = options.SecurityScopedBookmarks;
         return MacBegin(window, () => MacFileDialog.CreateSavePanel(settings), (panel, accepted) => accepted
             ? new SaveDialogReturnValue(false, MacFileDialog.UrlPath(panel) ?? "") { Bookmark = bookmark ? MacFileDialog.SaveBookmark(panel) : null }

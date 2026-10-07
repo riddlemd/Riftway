@@ -77,7 +77,7 @@ Percentages are over the non-n/a items; the second counts a partial item as half
 | `devtools-closed` | `DevToolsClosed` | partial | Watched, within a quarter second (C36). |
 | `devtools-focused` | — | missing | Chrome style's DevTools window is not CEF's (C36). |
 | `certificate-error` | `CertificateError` | done | The app's `CertificateError` follows, with the same arguments. |
-| `select-client-certificate` | `SelectClientCertificate` | done | The app's follows with the same arguments; checked on Linux (E25). |
+| `select-client-certificate` | `SelectClientCertificate` | done | The app's follows with the same arguments; checked on Linux and Windows (E25). |
 | `login` | `Login` | done | The app's `Login` follows, with the same arguments. |
 | `found-in-page` | `FoundInPage` | done |  |
 | `media-started-playing` | `MediaStartedPlaying` | partial | From the page's media events (C33). |

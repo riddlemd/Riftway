@@ -101,17 +101,11 @@ public static partial class Dialog
         return (fileName, folder);
     }
 
-    // Electron's GetDefaultPath: the downloads directory if it exists, else home.
-    [SupportedOSPlatform("windows")]
-    private static string DefaultFolder()
-        => WindowsFileDialog.DownloadsFolder() is var downloads && Directory.Exists(downloads)
-            ? downloads
-            : Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
 
     [SupportedOSPlatform("windows")]
     private static WindowsFileDialogSettings SettingsOf(uint options, string? title, string? buttonLabel, string? defaultPath, IReadOnlyList<FileFilter> filters)
     {
-        var (fileName, folder) = DefaultPathOf(defaultPath, DefaultFolder);
+        var (fileName, folder) = DefaultPathOf(defaultPath, DefaultDialogFolder);
         var fileTypes = FileTypesOf(filters);
         var (index, extension) = DefaultExtensionOf(fileTypes);
         return new WindowsFileDialogSettings(options, fileName, title, buttonLabel, fileTypes, index, extension, folder);

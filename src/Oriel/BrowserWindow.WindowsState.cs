@@ -263,7 +263,12 @@ public sealed unsafe partial class BrowserWindow
     private void ApplyAlwaysOnTopLevel(cef_window_t* w, bool onTop, string level)
     {
         if (!OperatingSystem.IsWindows()) return;
-        _windowsHooks.BehindTaskbar = onTop && level is "floating" or "torn-off-menu" or "modal-panel" or "main-menu" or "status";
+        _windowsHooks.BehindTaskbar = PlacedBehindTaskbar(onTop, level);
         if (_windowsHooks.BehindTaskbar) WindowsWindowOps.MoveBehindTaskbar(Hwnd(w));
     }
+
+    /// <summary>Whether Windows keeps an on-top window under the taskbar: only for the macOS levels below <c>pop-up-menu</c>,
+    /// so an unknown level stays above it, as Electron's <c>NativeWindowViews::SetAlwaysOnTop</c>.</summary>
+    internal static bool PlacedBehindTaskbar(bool onTop, string level)
+        => onTop && level is "floating" or "torn-off-menu" or "modal-panel" or "main-menu" or "status";
 }
