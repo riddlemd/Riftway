@@ -14,6 +14,9 @@ public sealed class AppPathTests
         Assert.Equal(Environment.ProcessPath, OrielApp.DefaultPath("exe", "App"));
         Assert.Equal(Path.Combine(OrielApp.AppDataDirectory(), "App", "Crashpad"), OrielApp.DefaultPath("crashDumps", "App"));
         Assert.Null(OrielApp.DefaultPath("nope", "App"));
+        // Chromium's DIR_DEFAULT_DOWNLOADS on Windows is the Downloads known folder, which the user can move.
+        if (OperatingSystem.IsWindows())
+            Assert.Equal(Oriel.Cef.Platform.WindowsFileDialog.DownloadsFolder(), OrielApp.DefaultPath("downloads", "App"));
         if (OperatingSystem.IsMacOS())
         {
             Assert.Equal(Path.Combine(Home, "Library", "Application Support"), OrielApp.DefaultPath("appData", "App"));

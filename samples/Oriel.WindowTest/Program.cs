@@ -2458,8 +2458,39 @@ async Task WindowsDialogsAsync(BrowserWindow win, string dir)
     Press(d, accept: false);
     Check("ShowOpenDialogSync off the UI thread returns null when cancelled", await Task.WhenAny(worker, Task.Delay(step)) == worker && worker.Result is null);
 
+    // No defaultPath: Electron's GetDefaultPath, so app.setPath('downloads') moves where the dialog starts, and a
+    // downloads directory that is gone falls back to app.getPath('home').
+    var previousDownloads = app.GetPath("downloads");
+    var previousHome = app.GetPath("home");
+    var movedDownloads = Path.Combine(dir, "sub1");
+    var goneDownloads = Directory.CreateDirectory(Path.Combine(dir, "gone")).FullName;
+    try
+    {
+        app.SetPath("downloads", movedDownloads);
+        var moved = Dialog.ShowOpenDialogAsync(new OpenDialogOptions { Title = "Oriel moved downloads" });
+        d = Find("Oriel moved downloads");
+        Check("no defaultPath: the dialog opens in GetPath(\"downloads\") after SetPath, as Electron", Same(WindowsShell.Address(d), movedDownloads), WindowsShell.Address(d));
+        Press(d, accept: false);
+        await Result(moved);
+
+        app.SetPath("downloads", goneDownloads);
+        Directory.Delete(goneDownloads);
+        app.SetPath("home", Path.Combine(dir, "sub2"));
+        var homeSave = Dialog.ShowSaveDialogAsync(win, new SaveDialogOptions { Title = "Oriel moved home" });
+        d = Find("Oriel moved home");
+        Check("no defaultPath and no downloads directory: the dialog opens in GetPath(\"home\"), as Electron",
+            Same(WindowsShell.Address(d), Path.Combine(dir, "sub2")), WindowsShell.Address(d));
+        Press(d, accept: false);
+        await Result(homeSave);
+    }
+    finally
+    {
+        if (Directory.Exists(previousDownloads)) app.SetPath("downloads", previousDownloads);
+        app.SetPath("home", previousHome);
+    }
+
     // Nothing left open.
-    foreach (var title in new[] { "Oriel windowless open", "Oriel pair one", "Oriel pair two", "Oriel owned open", "Oriel multi open", "Oriel folders open", "Oriel folder open", "Oriel plain list", "Oriel hidden list", "Oriel any filter", "Oriel text filter", "Oriel save", "Oriel save path", "Oriel sync save", "Oriel sync worker" })
+    foreach (var title in new[] { "Oriel moved downloads", "Oriel moved home", "Oriel windowless open", "Oriel pair one", "Oriel pair two", "Oriel owned open", "Oriel multi open", "Oriel folders open", "Oriel folder open", "Oriel plain list", "Oriel hidden list", "Oriel any filter", "Oriel text filter", "Oriel save", "Oriel save path", "Oriel sync save", "Oriel sync worker" })
         if (WindowsShell.FileDialog(title) is var left and not 0) Press(left, accept: false);
     File.SetAttributes(secret, FileAttributes.Normal);
 }

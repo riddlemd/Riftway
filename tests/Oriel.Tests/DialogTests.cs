@@ -249,12 +249,26 @@ public sealed class DialogTests
             var missing = Path.Combine(dir, "missing") + Path.DirectorySeparatorChar;
             Assert.Equal((string.Empty, missing), Dialog.DefaultPathOf(missing, Fallback));
             Assert.Equal(("b.txt", (string?)null), Dialog.DefaultPathOf(Path.Combine("nowhere-a", "b.txt"), Fallback));
+            Assert.Equal(("bare.txt", (string?)null), Dialog.DefaultPathOf("bare.txt", Fallback));
             Assert.Equal(0, calls);
             Assert.Equal((string.Empty, dir), Dialog.DefaultPathOf(null, Fallback));
             Assert.Equal((string.Empty, dir), Dialog.DefaultPathOf("", Fallback));
             Assert.Equal(2, calls);
         }
         finally { Directory.Delete(dir, recursive: true); }
+    }
+
+    [Theory]
+    [InlineData(true, @"C:\moved\dl")]
+    [InlineData(false, @"C:\moved\home")]
+    public void DefaultFolderOf_DownloadsWhenItExists_ElseHome(bool downloadsExists, string expected)
+    {
+        var paths = new Dictionary<string, string> { ["downloads"] = @"C:\moved\dl", ["home"] = @"C:\moved\home" };
+        var asked = new List<string>();
+        bool Exists(string p) { asked.Add(p); return downloadsExists && p == @"C:\moved\dl"; }
+        Assert.Equal(expected, Dialog.DefaultFolderOf(n => paths[n], Exists));
+        // Chromium checks only the downloads directory; home is taken as it is.
+        Assert.Equal([@"C:\moved\dl"], asked);
     }
 
     [Theory]
