@@ -5,7 +5,7 @@ electron/electron). When Electron adds or changes a module, this table changes w
 
 ## Progress
 
-Recounted 2026-10-06 against `src/Oriel`. Update these figures when a row or checklist item changes.
+Recounted 2026-10-07 against `src/Oriel`. Update these figures when a row or checklist item changes.
 
 | Measure | Done | Partial | Not started | Total |
 |---|---|---|---|---|
@@ -122,7 +122,7 @@ Detailed item-by-item status, including `navigationHistory` and `WebFrameMain`: 
 | `nativeTheme` | `NativeTheme` | OS + CEF | M5 | — |
 | `powerMonitor` | `PowerMonitor` | OS | M5 | partial: Windows (suspend, resume, on-ac, on-battery, lock and unlock, speed-limit-change, idle time and state, battery); macOS and Linux throw (branch `power-shortcuts`) |
 | `powerSaveBlocker` | `PowerSaveBlocker` | OS | M5 | partial: Windows (one process-wide power request at the highest active type, as Chromium and Electron); macOS and Linux throw (branch `power-shortcuts`) |
-| `safeStorage` | `SafeStorage` | OS | M5 | partial: Windows os_crypt (`v10` AES-256-GCM under CEF's `Local State` key; `isEncryptionAvailable`, `encryptString`, `decryptString`, `isAsyncEncryptionAvailable`, `encryptStringAsync`, `decryptStringAsync`, `setUsePlainTextEncryption`); no macOS or Linux (DRIFT D1-D2) |
+| `safeStorage` | `SafeStorage` | OS | M5 | partial: all methods (`isEncryptionAvailable`, `encryptString`, `decryptString`, `isAsyncEncryptionAvailable`, `encryptStringAsync`, `decryptStringAsync`, `setUsePlainTextEncryption`, `getSelectedStorageBackend`) in Chromium os_crypt's formats: Windows `v10` AES-256-GCM under CEF's `Local State` key; macOS `v10` AES-128-CBC under the "`{name} Safe Storage`" Keychain item; Linux `v11` from the Secret Service (libsecret) or `v10` `basic_text`; no KWallet or Secret portal (DRIFT D1-D5) |
 | `systemPreferences` | `SystemPreferences` | OS | M5 | partial: Windows `getAccentColor`, `getColor` (all 30 Windows names), `getMediaAccessStatus`, `getAnimationSettings`, `accent-color-changed`, `color-changed`; macOS and Linux not yet (DRIFT SP1); macOS-only members not ported: notifications (`post*`/`subscribe*`/`unsubscribe*`), user defaults, `isSwipeTrackingFromScrollEventsEnabled`, `getEffectiveAppearance`/`effectiveAppearance`, `getSystemColor`, `canPromptTouchID`/`promptTouchID`, `isTrustedAccessibilityClient`, `askForMediaAccess`, `accessibilityDisplayShouldReduceTransparency` |
 | `desktopCapturer` | `DesktopCapturer` | CEF + Patch (verify) | M5 | — |
 

@@ -17,20 +17,28 @@ public sealed record SafeStorageDecryptResult(bool ShouldReEncrypt, string Resul
 /// <summary>Encrypts and decrypts strings with the OS's per-user secret store; Electron's <c>safeStorage</c>.</summary>
 /// <remarks>Windows uses Chromium's os_crypt format, as Electron does: "v10", a 12-byte nonce, then AES-256-GCM under
 /// a random key that DPAPI wraps in <c>Local State</c> (<c>os_crypt.encrypted_key</c>), so ciphertext moves between
-/// Oriel and Electron apps that share the key. Other platforms report encryption as unavailable.</remarks>
+/// Oriel and Electron apps that share the key. macOS uses "v10" AES-128-CBC under a key derived from the Keychain item
+/// "<c>{app name} Safe Storage</c>"; Linux uses "v11" under a key from the secret service, or "v10" under Chromium's
+/// fixed key (see <see cref="LinuxOsCryptBackend"/> and <see cref="KeychainOsCryptBackend"/>).</remarks>
 public static class SafeStorage
 {
     private const string NotReady = "safeStorage cannot be used before app is ready";
 
     internal static ISafeStorageBackend Backend { get; set; } = OperatingSystem.IsWindows()
         ? new OsCryptBackend(new CefLocalState())
+        : OperatingSystem.IsMacOS() ? KeychainOsCryptBackend.CreateDefault()
+        : OperatingSystem.IsLinux() ? LinuxOsCryptBackend.CreateDefault()
         : new UnsupportedSafeStorageBackend();
 
     internal static Func<bool> IsAppReady { get; set; } = () => OrielApp.CurrentOrNull is { IsReady: true };
 
-    /// <summary>Whether encryption is available: on Windows, once the app is ready and the key is loaded.
+    private static volatile bool s_usePlainText;
+
+    /// <summary>Whether encryption is available: once the app is ready, when the key is loaded (Windows, macOS) or the
+    /// secret service gave one (Linux), or on Linux's "basic_text" store after <see cref="SetUsePlainTextEncryption"/>.
     /// <c>safeStorage.isEncryptionAvailable()</c>.</summary>
-    public static bool IsEncryptionAvailable() => IsAppReady() && Backend.IsEncryptionAvailable;
+    public static bool IsEncryptionAvailable()
+        => IsAppReady() && (Backend.IsEncryptionAvailable || (s_usePlainText && Backend.SelectedStorageBackend == "basic_text"));
 
     /// <summary>Encrypts <paramref name="plainText"/> (as UTF-8); <c>safeStorage.encryptString()</c>.</summary>
     /// <exception cref="InvalidOperationException">Before ready, when encryption is unavailable, or when it fails, with
@@ -60,20 +68,21 @@ public static class SafeStorage
         return Encoding.UTF8.GetString(plain);
     }
 
-    /// <summary>Whether the asynchronous encryptor is available: false before ready, else true once it has initialised.
-    /// <c>safeStorage.isAsyncEncryptionAvailable()</c>.</summary>
+    /// <summary>Whether the asynchronous encryptor is available: false before ready, else true once it has initialised
+    /// (whatever keys it found). <c>safeStorage.isAsyncEncryptionAvailable()</c>.</summary>
     public static Task<bool> IsAsyncEncryptionAvailableAsync()
     {
         if (!IsAppReady()) return Task.FromResult(false);
+        if (s_usePlainText && Backend.SelectedStorageBackend == "basic_text") return Task.FromResult(true);
         return Task.Run(() =>
         {
-            _ = Backend.IsEncryptionAvailable;
+            Backend.LoadAsyncKeys();
             return true;
         });
     }
 
-    /// <summary>Encrypts <paramref name="plainText"/> as os_crypt_async's encryptor does: the same "v10" format, and an
-    /// empty result for "". <c>safeStorage.encryptStringAsync()</c>.</summary>
+    /// <summary>Encrypts <paramref name="plainText"/> as os_crypt_async's encryptor does, with its encrypting key provider's
+    /// tag in front, and an empty result for "". <c>safeStorage.encryptStringAsync()</c>.</summary>
     /// <exception cref="InvalidOperationException">Before ready, or when encryption fails, with Electron's messages.</exception>
     public static Task<byte[]> EncryptStringAsync(string plainText)
     {
@@ -81,16 +90,17 @@ public static class SafeStorage
         if (!IsAppReady()) return Task.FromException<byte[]>(new InvalidOperationException(NotReady));
         return Task.Run(() =>
         {
+            Backend.LoadAsyncKeys();
             if (plainText.Length == 0) return [];
-            return Backend.Encrypt(Encoding.UTF8.GetBytes(plainText))
+            return Backend.AsyncEncrypt(Encoding.UTF8.GetBytes(plainText))
                 ?? throw new InvalidOperationException("Error while encrypting the text provided to safeStorage.encryptStringAsync.");
         });
     }
 
-    /// <summary>Decrypts "v10" data as os_crypt_async's encryptor does; an empty buffer gives "". Unlike
-    /// <see cref="DecryptString"/> there is no DPAPI fallback. <c>safeStorage.decryptStringAsync()</c>.</summary>
-    /// <exception cref="InvalidOperationException">Before ready, or when the data cannot be decrypted, with Electron's
-    /// messages.</exception>
+    /// <summary>Decrypts data as os_crypt_async's encryptor does, by the key provider whose tag it starts with; an empty
+    /// buffer gives "". Unlike <see cref="DecryptString"/> there is no DPAPI fallback. <c>safeStorage.decryptStringAsync()</c>.</summary>
+    /// <exception cref="InvalidOperationException">Before ready, when the data's key is temporarily unavailable, or when the
+    /// data cannot be decrypted, with Electron's messages.</exception>
     public static Task<SafeStorageDecryptResult> DecryptStringAsync(byte[] encrypted)
     {
         ArgumentNullException.ThrowIfNull(encrypted);
@@ -98,23 +108,26 @@ public static class SafeStorage
         if (encrypted.Length == 0) return Task.FromResult(new SafeStorageDecryptResult(false, ""));
         return Task.Run(() =>
         {
-            var plain = Backend.Decrypt(encrypted);
-            // One key provider on Windows, so nothing decrypted here was under a key other than the encrypting one.
-            return plain is null
-                ? throw new InvalidOperationException("Error while decrypting the ciphertext provided to safeStorage.decryptStringAsync.")
-                : new SafeStorageDecryptResult(false, Encoding.UTF8.GetString(plain));
+            var outcome = Backend.AsyncDecrypt(encrypted);
+            if (outcome.Plain is { } plain) return new SafeStorageDecryptResult(outcome.ShouldReEncrypt, Encoding.UTF8.GetString(plain));
+            throw new InvalidOperationException(outcome.TemporarilyUnavailable
+                ? "safeStorage.decryptStringAsync is temporarily unavailable. Please try again."
+                : "Error while decrypting the ciphertext provided to safeStorage.decryptStringAsync.");
         });
     }
 
-    /// <summary>Linux only: allows an in-memory password when no secret store is found;
-    /// <c>safeStorage.setUsePlainTextEncryption()</c>. No-op on Windows and macOS, as in Electron.</summary>
-    public static void SetUsePlainTextEncryption(bool usePlainText) { }
+    /// <summary>Linux only: when the selected store is "basic_text", makes the synchronous API available with Chromium's
+    /// fixed "v10" key; <c>safeStorage.setUsePlainTextEncryption()</c>. No effect on Windows and macOS, as in Electron.</summary>
+    public static void SetUsePlainTextEncryption(bool usePlainText) => s_usePlainText = usePlainText;
 
-    /// <summary>The secret store in use; <c>safeStorage.getSelectedStorageBackend()</c>, which Electron has on Linux only.
-    /// "unknown" until Linux support exists.</summary>
+    /// <summary>The secret store chosen at startup: "basic_text", "gnome_libsecret", "kwallet", "kwallet5" or "kwallet6", or
+    /// "unknown" before ready. <c>safeStorage.getSelectedStorageBackend()</c>, which Electron has on Linux only.</summary>
     [SupportedOSPlatform("linux")]
-    public static string GetSelectedStorageBackend() => "unknown";
+    public static string GetSelectedStorageBackend() => IsAppReady() ? Backend.SelectedStorageBackend : "unknown";
 }
+
+/// <summary>What <see cref="ISafeStorageBackend.AsyncDecrypt"/> found: os_crypt_async's result and its two flags.</summary>
+internal readonly record struct AsyncDecryptOutcome(byte[]? Plain, bool ShouldReEncrypt = false, bool TemporarilyUnavailable = false);
 
 /// <summary>A platform's secret store behind <see cref="SafeStorage"/>.</summary>
 internal interface ISafeStorageBackend
@@ -127,6 +140,19 @@ internal interface ISafeStorageBackend
 
     /// <summary>Decrypts "v10" bytes from <see cref="Encrypt"/>; null when they cannot be.</summary>
     byte[]? Decrypt(byte[] encrypted);
+
+    /// <summary>Linux's selected store, as Electron names it; "unknown" elsewhere.</summary>
+    string SelectedStorageBackend => "unknown";
+
+    /// <summary>Asks the asynchronous encryptor's key providers for their keys, once.</summary>
+    void LoadAsyncKeys() => _ = IsEncryptionAvailable;
+
+    /// <summary>Encrypts with the asynchronous encryptor's key; null if it has none.</summary>
+    byte[]? AsyncEncrypt(byte[] plain) => Encrypt(plain);
+
+    /// <summary>Decrypts with the asynchronous encryptor's keys. One key provider on Windows, so nothing decrypted there
+    /// was under a key other than the encrypting one.</summary>
+    AsyncDecryptOutcome AsyncDecrypt(byte[] encrypted) => new(Decrypt(encrypted));
 }
 
 /// <summary>The two <c>Local State</c> preferences os_crypt keeps its key in.</summary>

@@ -12,6 +12,7 @@
     <Project Path="samples/Oriel.SessionTest/Oriel.SessionTest.csproj" />
     <Project Path="samples/Oriel.UtilityTest/Oriel.UtilityTest.csproj" />
     <Project Path="samples/Oriel.UtilityTest.Child/Oriel.UtilityTest.Child.csproj" />
+    <Project Path="samples/Oriel.SafeStorageTest/Oriel.SafeStorageTest.csproj" />
     <Project Path="samples/Oriel.Sample/Oriel.Sample.csproj" />
     <Project Path="samples/Oriel.WindowTest/Oriel.WindowTest.csproj" />
   </Folder>
