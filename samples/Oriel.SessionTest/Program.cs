@@ -1108,6 +1108,16 @@ async Task RunAsync()
     }
     if (OperatingSystem.IsLinux())
     {
+        // DIR_ASSETS is DIR_MODULE of the module holding Chromium's base: the libcef.so the process mapped.
+        var mappedLibcef = File.ReadLines("/proc/self/maps").Select(l => l.Split(' ', StringSplitOptions.RemoveEmptyEntries))
+            .Where(p => p.Length >= 6 && p[5].EndsWith("/libcef.so", StringComparison.Ordinal)).Select(p => p[5]).FirstOrDefault();
+        var linuxAssets = app.GetPath("assets");
+        Check("GetPath(assets) is the directory of the libcef.so loaded, with CEF's data beside it, on Linux",
+            mappedLibcef is not null && linuxAssets == Path.GetDirectoryName(mappedLibcef) && File.Exists(Path.Combine(linuxAssets, "icudtl.dat")),
+            $"{linuxAssets} vs libcef {mappedLibcef}");
+    }
+    if (OperatingSystem.IsLinux())
+    {
         var userDirs =Path.Combine(app.GetPath("appData"), "user-dirs.dirs");
         File.WriteAllText(userDirs, "XDG_DOWNLOAD_DIR=\"$HOME/Fetched\"\n");
         var downloadsDir = app.GetPath("downloads");
