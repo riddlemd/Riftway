@@ -267,8 +267,9 @@ public sealed unsafe partial class WebContents
         if (!args.Cancel && _pendingUnloadUrl is { } url)
         {
             _pendingUnloadUrl = null;
-            DidFailLoad?.Invoke(this, new LoadFailedEventArgs(AbortedError, "ERR_ABORTED", url, true));
-            CompleteLoad(new LoadFailedException(AbortedError, "ERR_ABORTED", url));
+            var failing = _loadDone;
+            try { DidFailLoad?.Invoke(this, new LoadFailedEventArgs(AbortedError, "ERR_ABORTED", url, true)); }
+            finally { CompleteLoad(failing, new LoadFailedException(AbortedError, "ERR_ABORTED", url)); }
         }
         return args.Cancel;
     }
