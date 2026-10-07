@@ -5,11 +5,11 @@ electron/electron). When Electron adds or changes a module, this table changes w
 
 ## Progress
 
-Recounted 2026-10-06 against `src/Oriel`. Update these figures when a row or checklist item changes.
+Recounted 2026-10-07 against `src/Oriel`. Update these figures when a row or checklist item changes.
 
 | Measure | Done | Partial | Not started | Total |
 |---|---|---|---|---|
-| Module rows below | 3 | 26 | 38 | 67 |
+| Module rows below | 3 | 27 | 37 | 67 |
 | M2 rows | 2 | 15 | 4 | 21 |
 
 The 67 rows include `BrowserView` (deprecated, never implemented; counted as not started).
@@ -122,7 +122,7 @@ Detailed item-by-item status, including `navigationHistory` and `WebFrameMain`: 
 | `nativeTheme` | `NativeTheme` | OS + CEF | M5 | — |
 | `powerMonitor` | `PowerMonitor` | OS | M5 | — |
 | `powerSaveBlocker` | `PowerSaveBlocker` | OS | M5 | — |
-| `safeStorage` | `SafeStorage` | OS | M5 | — |
+| `safeStorage` | `SafeStorage` | OS | M5 | partial: all methods (`isEncryptionAvailable`, `encryptString`, `decryptString`, `isAsyncEncryptionAvailable`, `encryptStringAsync`, `decryptStringAsync`, `setUsePlainTextEncryption`, `getSelectedStorageBackend`) in Chromium os_crypt's formats: Windows `v10` AES-256-GCM under CEF's `Local State` key; macOS `v10` AES-128-CBC under the "`{name} Safe Storage`" Keychain item; Linux `v11` from the Secret Service (libsecret) or `v10` `basic_text`; no KWallet or Secret portal (DRIFT D1-D5) |
 | `systemPreferences` | `SystemPreferences` | OS | M5 | — |
 | `desktopCapturer` | `DesktopCapturer` | CEF + Patch (verify) | M5 | — |
 
