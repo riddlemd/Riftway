@@ -35,7 +35,7 @@ Cross-platform work. Platform-specific items: [linux-todo.md](linux-todo.md), [w
       `Debugger`; the remaining Electron command-line switches and `ELECTRON_*` variables, checked one by one
 - [x] `app.commandLine` (`OrielApp.CommandLine`; DRIFT A19)
 - [x] `window.open` handling: `SetWindowOpenHandler`, `DidCreateWindow` (branch `window-open`)
-- [ ] Menus: Alt+letter mnemonics and the Alt toggle never fire (DRIFT W19): handle Alt in a `cef_keyboard_handler_t`
+- [x] Menus: Alt+letter mnemonics and the Alt toggle (was DRIFT W19): handled in a `cef_keyboard_handler_t`; WindowTest covers both
 - [x] macOS: `Width`/`Height` gave a window a title bar taller than asked (was DRIFT W18)
 - [x] `OrielApp.Quit()` from any thread (was DRIFT A4)
 - [ ] `Protocol`: `AllowServiceWorkers` and `CodeCache` privileges throw `NotSupportedException`
