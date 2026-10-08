@@ -12,7 +12,10 @@ public static class GlobalShortcut
         : OperatingSystem.IsLinux() ? new LinuxGlobalShortcutBackend() : new UnsupportedGlobalShortcutBackend();
 
     /// <summary>Calls <paramref name="callback"/> whenever <paramref name="accelerator"/> is pressed, in any app. False if the
-    /// shortcut is taken, by another app or already by this one. Electron's <c>globalShortcut.register()</c>.</summary>
+    /// shortcut is taken, by another app or already by this one, or while shortcuts are suspended. Electron's
+    /// <c>globalShortcut.register()</c>.</summary>
+    /// <remarks>An <c>AltGr</c> shortcut is registered without AltGr and never runs its callback, as in Chromium
+    /// (DRIFT J5).</remarks>
     /// <exception cref="ArgumentException">Not a valid accelerator.</exception>
     public static bool Register(string accelerator, Action callback)
     {
@@ -20,15 +23,18 @@ public static class GlobalShortcut
         return s_backend.Register(GlobalShortcuts.Key(accelerator), callback);
     }
 
-    /// <summary>Registers each accelerator with the same callback; those that are taken are skipped. Electron's
-    /// <c>globalShortcut.registerAll()</c>.</summary>
-    public static void RegisterAll(IEnumerable<string> accelerators, Action callback)
+    /// <summary>Registers each accelerator with the same callback. If one cannot be registered, those this call registered
+    /// are unregistered again and the result is false. Electron's <c>globalShortcut.registerAll()</c>.</summary>
+    /// <exception cref="ArgumentException">One of them is not a valid accelerator; nothing is registered then.</exception>
+    public static bool RegisterAll(IEnumerable<string> accelerators, Action callback)
     {
         ArgumentNullException.ThrowIfNull(accelerators);
-        foreach (var accelerator in accelerators) Register(accelerator, callback);
+        ArgumentNullException.ThrowIfNull(callback);
+        return GlobalShortcuts.RegisterAll(s_backend, [.. accelerators.Select(GlobalShortcuts.Key)], callback);
     }
 
-    /// <summary>Whether this app registered <paramref name="accelerator"/>. Electron's <c>globalShortcut.isRegistered()</c>.</summary>
+    /// <summary>Whether this app registered <paramref name="accelerator"/>, suspended or not. Electron's
+    /// <c>globalShortcut.isRegistered()</c>.</summary>
     public static bool IsRegistered(string accelerator) => s_backend.IsRegistered(GlobalShortcuts.Key(accelerator));
 
     /// <summary>Releases <paramref name="accelerator"/>. Electron's <c>globalShortcut.unregister()</c>.</summary>
@@ -36,10 +42,19 @@ public static class GlobalShortcut
 
     /// <summary>Releases every shortcut this app registered. Electron's <c>globalShortcut.unregisterAll()</c>.</summary>
     public static void UnregisterAll() => s_backend.UnregisterAll();
+
+    /// <summary>Suspends or resumes every global shortcut: while suspended the OS registrations are released (so the keys
+    /// reach other apps) and <see cref="Register"/> fails; resuming registers them again. Electron's
+    /// <c>globalShortcut.setSuspended()</c>.</summary>
+    public static void SetSuspended(bool suspended) => s_backend.SetSuspended(suspended);
+
+    /// <summary>Whether global shortcuts are suspended. Electron's <c>globalShortcut.isSuspended()</c>.</summary>
+    public static bool IsSuspended() => s_backend.IsSuspended();
 }
 
-/// <summary>A global shortcut as Windows registers it: <c>MOD_</c> flags and a virtual-key code.</summary>
-internal readonly record struct HotKey(uint Modifiers, uint VirtualKey);
+/// <summary>A parsed global shortcut: Win32 <c>MOD_</c> flags, a virtual-key code, and AltGr, which is part of the
+/// shortcut's identity (as <c>EF_ALTGR_DOWN</c> is in <c>ui::Accelerator</c>) but never reaches the OS.</summary>
+internal readonly record struct HotKey(uint Modifiers, uint VirtualKey, bool AltGr = false);
 
 internal static class GlobalShortcuts
 {
@@ -49,11 +64,11 @@ internal static class GlobalShortcuts
     {
         ArgumentNullException.ThrowIfNull(accelerator);
         var parsed = Accelerator.Parse(accelerator, OperatingSystem.IsMacOS());
-        return new HotKey(Modifiers(parsed.Modifiers), (uint)parsed.KeyCode);
+        return new HotKey(Modifiers(parsed.Modifiers), (uint)parsed.KeyCode, parsed.Modifiers.HasFlag(AcceleratorModifiers.AltGr));
     }
 
     /// <summary>Win32's <c>MOD_ALT</c>, <c>MOD_CONTROL</c>, <c>MOD_SHIFT</c>, <c>MOD_WIN</c>; Command is the Windows key (Chromium drops it
-    /// and registers the bare key; see DRIFT J2).</summary>
+    /// and registers the bare key; see DRIFT J2). AltGr has no flag: Chromium's listeners drop it.</summary>
     internal static uint Modifiers(AcceleratorModifiers m)
         => (m.HasFlag(AcceleratorModifiers.Alt) ? 0x1u : 0) | (m.HasFlag(AcceleratorModifiers.Control) ? 0x2u : 0)
             | (m.HasFlag(AcceleratorModifiers.Shift) ? 0x4u : 0) | (m.HasFlag(AcceleratorModifiers.Command) ? 0x8u : 0);
@@ -62,6 +77,23 @@ internal static class GlobalShortcuts
     /// Mod4, which Chromium leaves out (DRIFT J3).</summary>
     internal static ushort X11Modifiers(uint mod)
         => X11Keys.Modifiers(alt: (mod & 0x1) != 0, control: (mod & 0x2) != 0, shift: (mod & 0x4) != 0, super: (mod & 0x8) != 0);
+
+    /// <summary>Electron's <c>GlobalShortcut::RegisterAll</c>: registers in order and, at the first failure, unregisters
+    /// only those this call registered.</summary>
+    internal static bool RegisterAll(IGlobalShortcutBackend backend, IReadOnlyList<HotKey> keys, Action callback)
+    {
+        var registered = new List<HotKey>();
+        foreach (var key in keys)
+        {
+            if (!backend.Register(key, callback))
+            {
+                foreach (var done in registered) backend.Unregister(done);
+                return false;
+            }
+            registered.Add(key);
+        }
+        return true;
+    }
 }
 
 /// <summary>One OS's global shortcuts.</summary>
@@ -71,46 +103,108 @@ internal interface IGlobalShortcutBackend
     bool IsRegistered(HotKey key);
     void Unregister(HotKey key);
     void UnregisterAll();
+    void SetSuspended(bool suspended);
+    bool IsSuspended();
+}
+
+/// <summary>Chromium's <c>GlobalAcceleratorListener</c> with Electron's callback map: one registration per shortcut,
+/// suspension that releases and retakes the OS registrations, and dispatch by the shortcut the OS reports.</summary>
+/// <remarks>State is touched on the UI thread only (<see cref="OnUi{T}"/>).</remarks>
+internal abstract class HotKeyListener : IGlobalShortcutBackend
+{
+    private readonly Dictionary<HotKey, Action> _callbacks = [];
+    private bool _suspended;
+
+    /// <summary>The OS registration (<c>StartListeningForAccelerator</c>); false when the OS refuses it.</summary>
+    protected abstract bool StartListening(HotKey key);
+
+    /// <summary>Releases the OS registration (<c>StopListeningForAccelerator</c>).</summary>
+    protected abstract void StopListening(HotKey key);
+
+    protected virtual T OnUi<T>(Func<T> func) => CefThread.InvokeOnUi(func);
+
+    public bool Register(HotKey key, Action callback) => OnUi(() =>
+    {
+        if (_suspended || _callbacks.ContainsKey(key) || !StartListening(key)) return false;
+        _callbacks[key] = callback;
+        return true;
+    });
+
+    public bool IsRegistered(HotKey key) => OnUi(() => _callbacks.ContainsKey(key));
+
+    public void Unregister(HotKey key) => OnUi(() =>
+    {
+        if (!_callbacks.ContainsKey(key)) return false;
+        // A suspended shortcut holds no OS registration to release.
+        if (!_suspended) StopListening(key);
+        _callbacks.Remove(key);
+        return true;
+    });
+
+    public void UnregisterAll() => OnUi(() =>
+    {
+        foreach (var key in _callbacks.Keys.ToList()) Unregister(key);
+        return true;
+    });
+
+    /// <summary><c>SetShortcutHandlingSuspended</c>: releases every registration, or takes each again; a key another app
+    /// took meanwhile stays registered here without firing, as Chromium ignores the result.</summary>
+    public void SetSuspended(bool suspended) => OnUi(() =>
+    {
+        if (_suspended == suspended) return true;
+        _suspended = suspended;
+        foreach (var key in _callbacks.Keys.ToList())
+        {
+            if (suspended) StopListening(key);
+            else _ = StartListening(key);
+        }
+        return true;
+    });
+
+    public bool IsSuspended() => OnUi(() => _suspended);
+
+    /// <summary><c>NotifyKeyPressed</c>, on the UI thread: the OS reports the shortcut without AltGr, so an AltGr shortcut
+    /// is never found (Electron then fails a <c>CHECK</c>; DRIFT J5).</summary>
+    protected void Pressed(HotKey reported)
+    {
+        if (_callbacks.TryGetValue(reported with { AltGr = false }, out var callback)) callback();
+    }
 }
 
 [System.Runtime.Versioning.SupportedOSPlatform("windows")]
-internal sealed class WindowsGlobalShortcutBackend : IGlobalShortcutBackend
+internal sealed class WindowsGlobalShortcutBackend : HotKeyListener
 {
-    private readonly Dictionary<HotKey, (int Id, Action Callback)> _registered = [];
+    // UI thread only.
+    private readonly Dictionary<HotKey, int> _ids = [];
     private int _nextId;
 
     public WindowsGlobalShortcutBackend() => SystemHost.Shortcuts = this;
 
-    public bool Register(HotKey key, Action callback) => CefThread.InvokeOnUi(() =>
+    // Chromium's GlobalAcceleratorListenerWin: RegisterHotKey with Shift, Control and Alt; AltGr never reaches it.
+    protected override bool StartListening(HotKey key)
     {
         SystemHost.Start();
         // Application hotkey ids are 0x0000–0xBFFF.
         var id = ++_nextId & 0xBFFF;
         if (!WindowsSystem.RegisterHotKey(id, key.Modifiers, key.VirtualKey)) return false;
-        _registered[key] = (id, callback);
+        _ids[key] = id;
         return true;
-    });
+    }
 
-    public bool IsRegistered(HotKey key) => CefThread.InvokeOnUi(() => _registered.ContainsKey(key));
-
-    public void Unregister(HotKey key) => CefThread.InvokeOnUi(() =>
+    protected override void StopListening(HotKey key)
     {
-        if (_registered.Remove(key, out var entry)) WindowsSystem.UnregisterHotKey(entry.Id);
-        return true;
-    });
-
-    public void UnregisterAll() => CefThread.InvokeOnUi(() =>
-    {
-        foreach (var (id, _) in _registered.Values) WindowsSystem.UnregisterHotKey(id);
-        _registered.Clear();
-        return true;
-    });
+        if (_ids.Remove(key, out var id)) WindowsSystem.UnregisterHotKey(id);
+    }
 
     /// <summary>A hotkey fired, on the UI thread.</summary>
     internal void Fired(int id)
     {
-        foreach (var (_, entry) in _registered)
-            if (entry.Id == id) entry.Callback();
+        foreach (var (key, keyId) in _ids)
+        {
+            if (keyId != id) continue;
+            Pressed(key);
+            return;
+        }
     }
 }
 
@@ -118,38 +212,27 @@ internal sealed class WindowsGlobalShortcutBackend : IGlobalShortcutBackend
 /// for each lock-modifier variant, failing when another client holds any of them. Like Chromium, a held key's
 /// auto-repeated presses each run the callback.</summary>
 [System.Runtime.Versioning.SupportedOSPlatform("linux")]
-internal sealed class LinuxGlobalShortcutBackend : IGlobalShortcutBackend
+internal sealed class LinuxGlobalShortcutBackend : HotKeyListener
 {
-    // UI thread only.
-    private readonly Dictionary<HotKey, (byte Keycode, ushort Modifiers, Action Callback)> _registered = [];
+    // UI thread only. AltGr shortcuts grab the same key as their plain twin.
+    private readonly Dictionary<HotKey, (byte Keycode, ushort Modifiers)> _grabs = [];
 
     public LinuxGlobalShortcutBackend() => X11System.KeyPressed += OnKeyPressed;
 
-    public bool Register(HotKey key, Action callback) => CefThread.InvokeOnUi(() =>
+    protected override bool StartListening(HotKey key)
     {
-        if (_registered.ContainsKey(key)) return false;
         var modifiers = GlobalShortcuts.X11Modifiers(key.Modifiers);
         if (X11System.GrabKey(X11Keys.KeysymOf((int)key.VirtualKey), modifiers) is not { } keycode) return false;
-        _registered[key] = (keycode, modifiers, callback);
+        _grabs[key] = (keycode, modifiers);
         return true;
-    });
+    }
 
-    public bool IsRegistered(HotKey key) => CefThread.InvokeOnUi(() => _registered.ContainsKey(key));
-
-    public void Unregister(HotKey key) => CefThread.InvokeOnUi(() =>
+    protected override void StopListening(HotKey key)
     {
-        if (_registered.Remove(key, out var entry)) X11System.UngrabKey(entry.Keycode, entry.Modifiers);
-        return true;
-    });
+        if (_grabs.Remove(key, out var grab)) X11System.UngrabKey(grab.Keycode, grab.Modifiers);
+    }
 
-    public void UnregisterAll() => CefThread.InvokeOnUi(() =>
-    {
-        foreach (var (keycode, modifiers, _) in _registered.Values) X11System.UngrabKey(keycode, modifiers);
-        _registered.Clear();
-        return true;
-    });
-
-    // X event thread. A press that arrives after Unregister finds nothing, as Chromium's map lookup does.
+    // X event thread. A press that arrives after Unregister or SetSuspended finds no grab, as Chromium's lookup does.
     private void OnKeyPressed(byte keycode, ushort state)
     {
         var modifiers = X11Keys.Relevant(state);
@@ -157,10 +240,10 @@ internal sealed class LinuxGlobalShortcutBackend : IGlobalShortcutBackend
         {
             CefThread.PostUi(() =>
             {
-                foreach (var entry in _registered.Values)
+                foreach (var (key, grab) in _grabs)
                 {
-                    if (entry.Keycode != keycode || entry.Modifiers != modifiers) continue;
-                    entry.Callback();
+                    if (grab.Keycode != keycode || grab.Modifiers != modifiers) continue;
+                    Pressed(key);
                     return;
                 }
             });
@@ -178,6 +261,8 @@ internal sealed class UnsupportedGlobalShortcutBackend : IGlobalShortcutBackend
     public bool IsRegistered(HotKey key) => throw NotYet();
     public void Unregister(HotKey key) => throw NotYet();
     public void UnregisterAll() => throw NotYet();
+    public void SetSuspended(bool suspended) => throw NotYet();
+    public bool IsSuspended() => throw NotYet();
 }
 
 /// <summary>The Windows host window behind <see cref="GlobalShortcut"/> and <see cref="PowerMonitor"/>, started once on the

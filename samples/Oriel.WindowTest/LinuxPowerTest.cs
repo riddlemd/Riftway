@@ -80,13 +80,16 @@ static class LinuxPowerTest
         check("a failed Register leaves no grab of its own behind", x.GrabAll(f9, Mods));
         x.UngrabAll(f9, Mods);
 
-        GlobalShortcut.RegisterAll(["Ctrl+Alt+Shift+F10", "Ctrl+Alt+Shift+F11"], () => { });
-        check("RegisterAll grabs each", GlobalShortcut.IsRegistered("Ctrl+Alt+Shift+F10") && GlobalShortcut.IsRegistered("Ctrl+Alt+Shift+F11")
+        check("RegisterAll grabs each and is true", GlobalShortcut.RegisterAll(["Ctrl+Alt+Shift+F10", "Ctrl+Alt+Shift+F11"], () => { })
+            && GlobalShortcut.IsRegistered("Ctrl+Alt+Shift+F10") && GlobalShortcut.IsRegistered("Ctrl+Alt+Shift+F11")
             && !x.Grab(x.Keycode(F10), Mods) && !x.Grab(x.Keycode(F11), Mods));
         GlobalShortcut.UnregisterAll();
         check("UnregisterAll releases them all", !GlobalShortcut.IsRegistered("Ctrl+Alt+Shift+F10") && x.GrabAll(x.Keycode(F10), Mods) && x.GrabAll(x.Keycode(F11), Mods));
         x.UngrabAll(x.Keycode(F10), Mods);
         x.UngrabAll(x.Keycode(F11), Mods);
+        await RegisterAllRollbackAsync(check, x);
+        await SuspendAsync(check, step, x);
+        await AltGrAsync(check, x);
 
         fired = 0;
         check("Super is grabbed as Mod4, not dropped (DRIFT J3)", GlobalShortcut.Register("Super+F9", () => fired++) && !x.Grab(f9, Mod4) && x.Grab(f9, 0));
@@ -95,6 +98,82 @@ static class LinuxPowerTest
         check("Super+F9 fires it", Eventually(() => fired == 1, step), fired);
         GlobalShortcut.Unregister("Super+F9");
         check("an invalid accelerator throws", Throws<ArgumentException>(() => GlobalShortcut.Register("Ctrl+Nope", () => { })));
+    }
+
+    // Electron's RegisterAll: at the first refusal, those registered by this call are unregistered again, and only those.
+    private static Task RegisterAllRollbackAsync(MessageBoxTest.CheckFn check, TestXcb x)
+    {
+        const ushort Mods = Control | Mod1 | Shift;
+        byte f9 = x.Keycode(F9), f10 = x.Keycode(F10), f11 = x.Keycode(F11), f12 = x.Keycode(0xFFC9);
+        check("(setup) another client holds Ctrl+Alt+Shift+F11", x.Grab(f11, Mods));
+        var result = GlobalShortcut.RegisterAll(["Ctrl+Alt+Shift+F10", "Ctrl+Alt+Shift+F11", "Ctrl+Alt+Shift+F12"], () => { });
+        check("RegisterAll is false when one key is taken, and lets go of the ones it took: F10 is free again, F12 was never tried",
+            !result && !GlobalShortcut.IsRegistered("Ctrl+Alt+Shift+F10") && !GlobalShortcut.IsRegistered("Ctrl+Alt+Shift+F12") && x.GrabAll(f10, Mods) && x.GrabAll(f12, Mods));
+        x.UngrabAll(f10, Mods);
+        x.UngrabAll(f12, Mods);
+        x.Ungrab(f11, Mods);
+        GlobalShortcut.Register("Ctrl+Alt+Shift+F9", () => { });
+        result = GlobalShortcut.RegisterAll(["Ctrl+Alt+Shift+F10", "Ctrl+Alt+Shift+F9"], () => { });
+        check("a key this app already holds fails RegisterAll too; the rollback leaves that earlier registration alone",
+            !result && !GlobalShortcut.IsRegistered("Ctrl+Alt+Shift+F10") && GlobalShortcut.IsRegistered("Ctrl+Alt+Shift+F9") && !x.Grab(f9, Mods) && x.GrabAll(f10, Mods));
+        x.UngrabAll(f10, Mods);
+        GlobalShortcut.UnregisterAll();
+        return Task.CompletedTask;
+    }
+
+    // Chromium's SetShortcutHandlingSuspended on X11: every grab is released while suspended and taken again on resume.
+    private static async Task SuspendAsync(MessageBoxTest.CheckFn check, TimeSpan step, TestXcb x)
+    {
+        const ushort Mods = Control | Mod1 | Shift;
+        byte f9 = x.Keycode(F9);
+        var fired = 0;
+        GlobalShortcut.Register("Ctrl+Alt+Shift+F9", () => fired++);
+        GlobalShortcut.SetSuspended(true);
+        check("SetSuspended(true): suspended, still registered, and every grab is released (another client can take them)",
+            GlobalShortcut.IsSuspended() && GlobalShortcut.IsRegistered("Ctrl+Alt+Shift+F9") && x.GrabAll(f9, Mods));
+        x.UngrabAll(f9, Mods);
+        Xdotool("key", "ctrl+alt+shift+F9");
+        await Task.Delay(400);
+        check("a suspended shortcut does not fire", fired == 0, fired);
+        check("Register is false while suspended", !GlobalShortcut.Register("Ctrl+Alt+Shift+F10", () => { }) && !GlobalShortcut.IsRegistered("Ctrl+Alt+Shift+F10"));
+        GlobalShortcut.SetSuspended(false);
+        check("SetSuspended(false) grabs it again", !GlobalShortcut.IsSuspended() && !x.Grab(f9, Mods) && !x.Grab(f9, Mods | Mod2));
+        Xdotool("key", "ctrl+alt+shift+F9");
+        check("... and it fires again", Eventually(() => fired == 1, step), fired);
+        GlobalShortcut.SetSuspended(true);
+        x.Grab(f9, Mods);
+        GlobalShortcut.SetSuspended(false);
+        x.Ungrab(f9, Mods);
+        Xdotool("key", "ctrl+alt+shift+F9");
+        await Task.Delay(400);
+        check("resuming while another client holds the key keeps it registered but ungrabbed, as Chromium ignores the failure",
+            GlobalShortcut.IsRegistered("Ctrl+Alt+Shift+F9") && fired == 1, fired);
+        GlobalShortcut.SetSuspended(true);
+        GlobalShortcut.Unregister("Ctrl+Alt+Shift+F9");
+        GlobalShortcut.SetSuspended(false);
+        check("Unregister while suspended removes it; resuming grabs nothing for it", !GlobalShortcut.IsRegistered("Ctrl+Alt+Shift+F9") && x.GrabAll(f9, Mods));
+        x.UngrabAll(f9, Mods);
+    }
+
+    // AltGr is its own modifier, but Chromium's X11 listener grabs only Shift, Control and Alt (DRIFT J5).
+    private static async Task AltGrAsync(MessageBoxTest.CheckFn check, TestXcb x)
+    {
+        byte f9 = x.Keycode(F9);
+        var fired = new List<string>();
+        check("AltGr+F9 registers as a shortcut of its own", GlobalShortcut.Register("AltGr+F9", () => fired.Add("altgr"))
+            && GlobalShortcut.IsRegistered("AltGr+F9") && !GlobalShortcut.IsRegistered("F9") && !GlobalShortcut.IsRegistered("Alt+F9"));
+        check("... grabbing the bare F9 (and its lock variants), not Alt+F9", !x.Grab(f9, 0) && !x.Grab(f9, Mod2) && x.Grab(f9, Mod1));
+        x.Ungrab(f9, Mod1);
+        Xdotool("key", "F9");
+        await Task.Delay(400);
+        check("pressing F9 runs no AltGr callback (Electron fails a CHECK there)", fired.Count == 0, string.Join(",", fired));
+        check("F9 itself can still be registered: the same client may grab the same key again", GlobalShortcut.Register("F9", () => fired.Add("plain")));
+        Xdotool("key", "F9");
+        await Task.Delay(400);
+        check("... and pressing F9 runs only its callback", fired.SequenceEqual(["plain"]), string.Join(",", fired));
+        GlobalShortcut.UnregisterAll();
+        check("UnregisterAll lets go of the shared grab", x.GrabAll(f9, 0));
+        x.UngrabAll(f9, 0);
     }
 
     private static async Task IdleAndLockAsync(MessageBoxTest.CheckFn check, TimeSpan step, TestXcb x, FakeDBusService? saver)

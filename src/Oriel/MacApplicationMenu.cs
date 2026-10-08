@@ -107,7 +107,9 @@ internal static class MacApplicationMenu
         MacMenu.Release(nsSubmenu);
     }
 
-    private static ulong MaskOf(AcceleratorModifiers modifiers)
+    private static ulong MaskOf(AcceleratorModifiers modifiers) => MaskOfMenu(modifiers.ForMenus());
+
+    private static ulong MaskOfMenu(AcceleratorModifiers modifiers)
         => (modifiers.HasFlag(AcceleratorModifiers.Command) ? MacMenu.CommandKeyMask : 0)
             | (modifiers.HasFlag(AcceleratorModifiers.Shift) ? MacMenu.ShiftKeyMask : 0)
             | (modifiers.HasFlag(AcceleratorModifiers.Alt) ? MacMenu.OptionKeyMask : 0)

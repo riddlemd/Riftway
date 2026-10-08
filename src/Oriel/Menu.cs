@@ -334,7 +334,7 @@ public sealed record KeyboardEvent
     internal static KeyboardEvent ForAccelerator(string? accelerator)
     {
         if (accelerator is null) return new() { TriggeredByAccelerator = true };
-        var modifiers = Oriel.Accelerator.Parse(accelerator, OperatingSystem.IsMacOS()).Modifiers;
+        var modifiers = Oriel.Accelerator.Parse(accelerator, OperatingSystem.IsMacOS()).Modifiers.ForMenus();
         return new()
         {
             ShiftKey = modifiers.HasFlag(AcceleratorModifiers.Shift),

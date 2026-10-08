@@ -2997,11 +2997,30 @@ async Task PowerAndShortcutsAsync()
     WindowsShell.Chord(0x11, 0x12, 0x10, (byte)F9);
     await Task.Delay(300);
     Check("a released shortcut no longer runs the callback", fired == 1, fired);
-    GlobalShortcut.RegisterAll(["Ctrl+Alt+Shift+F10", "Ctrl+Alt+Shift+F11"], () => { });
-    Check("RegisterAll takes each", GlobalShortcut.IsRegistered("Ctrl+Alt+Shift+F10") && GlobalShortcut.IsRegistered("Ctrl+Alt+Shift+F11") && !WindowsShell.HotKeyFree(Mods, 0x79));
+    Check("RegisterAll takes each and is true", GlobalShortcut.RegisterAll(["Ctrl+Alt+Shift+F10", "Ctrl+Alt+Shift+F11"], () => { }) && GlobalShortcut.IsRegistered("Ctrl+Alt+Shift+F10") && GlobalShortcut.IsRegistered("Ctrl+Alt+Shift+F11") && !WindowsShell.HotKeyFree(Mods, 0x79));
     GlobalShortcut.UnregisterAll();
     Check("UnregisterAll lets them all go", !GlobalShortcut.IsRegistered("Ctrl+Alt+Shift+F10") && WindowsShell.HotKeyFree(Mods, 0x79) && WindowsShell.HotKeyFree(Mods, 0x7A));
     Check("an invalid accelerator throws", Throws<ArgumentException>(() => GlobalShortcut.Register("Ctrl+Nope", () => { })));
+    // Electron's RegisterAll rollback: only the keys this call registered are let go.
+    GlobalShortcut.Register("Ctrl+Alt+Shift+F11", () => { });
+    Check("RegisterAll is false on a key this app holds, unregisters what it took, and leaves the earlier one",
+        !GlobalShortcut.RegisterAll(["Ctrl+Alt+Shift+F10", "Ctrl+Alt+Shift+F11"], () => { }) && WindowsShell.HotKeyFree(Mods, 0x79) && !WindowsShell.HotKeyFree(Mods, 0x7A)
+        && GlobalShortcut.IsRegistered("Ctrl+Alt+Shift+F11"));
+    // Chromium's SetShortcutHandlingSuspended: UnregisterHotKey for each while suspended, RegisterHotKey again on resume.
+    GlobalShortcut.SetSuspended(true);
+    Check("SetSuspended(true) releases the hotkeys but keeps them registered; Register fails meanwhile", GlobalShortcut.IsSuspended() && WindowsShell.HotKeyFree(Mods, 0x7A)
+        && GlobalShortcut.IsRegistered("Ctrl+Alt+Shift+F11") && !GlobalShortcut.Register("Ctrl+Alt+Shift+F10", () => { }));
+    GlobalShortcut.SetSuspended(false);
+    Check("SetSuspended(false) registers them again", !GlobalShortcut.IsSuspended() && !WindowsShell.HotKeyFree(Mods, 0x7A));
+    GlobalShortcut.UnregisterAll();
+    // AltGr never reaches RegisterHotKey (DRIFT J5): the bare key is taken and its press runs nothing.
+    fired = 0;
+    Check("AltGr+F9 registers the bare F9 (Chromium's modifiers), apart from F9 itself", GlobalShortcut.Register("AltGr+F9", () => fired++) && !WindowsShell.HotKeyFree(0, F9)
+        && WindowsShell.HotKeyFree(0x1, F9) && !GlobalShortcut.IsRegistered("F9") && !GlobalShortcut.Register("F9", () => { }));
+    WindowsShell.Chord((byte)F9);
+    await Task.Delay(300);
+    Check("pressing F9 runs no AltGr callback", fired == 0, fired);
+    GlobalShortcut.UnregisterAll();
 
     // Idle time and power source, read independently.
     WindowsShell.Nudge();
