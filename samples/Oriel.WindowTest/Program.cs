@@ -396,6 +396,16 @@ async Task<object?> Js(BrowserWindow w, string code)
     return task.Result?.ToJsonString();
 }
 
+// The running X11 window manager's _NET_WM_NAME, as wmctrl reads it (Openbox, Mutter, KWin, Xfwm4); "" if none.
+static string LinuxWindowManager()
+{
+    if (!File.Exists("/usr/bin/wmctrl")) return "";
+    var p = System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo("/usr/bin/wmctrl", "-m") { RedirectStandardOutput = true })!;
+    var output = p.StandardOutput.ReadToEnd();
+    p.WaitForExit();
+    return output.Split('\n').FirstOrDefault(l => l.StartsWith("Name: ", StringComparison.Ordinal))?["Name: ".Length..].Trim() ?? "";
+}
+
 async Task WebPreferencesAsync(BrowserWindow win)
 {
     // ExecuteJavaScriptAsync: values, promises, undefined, exceptions.
@@ -541,9 +551,15 @@ async Task ParentAndModalAsync(BrowserWindow win)
     await Task.Delay(500);
     win.Focus();
     await Task.Delay(800);
-    // Linux window managers may ignore window-modal hints (openbox does); a known gap there.
     if (!OperatingSystem.IsLinux())
         Check("a modal window keeps focus from its parent", !win.IsFocused && modal.IsFocused, $"parent={win.IsFocused} modal={modal.IsFocused}");
+    else
+    {
+        // Electron's focus() is the parent's own widget()->Activate() on Linux (native_window_views.cc Focus). No window
+        // manager redirects it: X11Window::Map rewrites _NET_WM_STATE, so the modal hint never reaches one.
+        Check("Linux: focusing a modal's parent activates the parent, as Electron", Eventually(() => win.IsFocused && !modal.IsFocused, step),
+            $"wm={LinuxWindowManager()} parent={win.IsFocused} modal={modal.IsFocused}");
+    }
     child.Focus();
     Check("a sibling of the modal can still take focus", Eventually(() => child.IsFocused, step), $"child={child.IsFocused}");
     Check("GetChildWindows lists both", win.GetChildWindows().Count == 2, win.GetChildWindows().Count);
@@ -777,7 +793,8 @@ async Task DialogsAsync(BrowserWindow win)
                 p.WaitForExit();
                 return p.ExitCode == 0 ? output.Trim() : "";
             }
-            var id = X($"search --sync --name \"{title}\"").Split('\n')[0];
+            // Mutter's frames are windows of mutter-x11-frames carrying the client's title; only ours have our pid.
+            var id = X($"search --sync --all --pid {Environment.ProcessId} --name \"{title}\"").Split('\n')[0];
             if (id.Length == 0) return false;
             if (!accept)
             {
@@ -1179,7 +1196,10 @@ async Task MacWindowApisAsync()
                 xdotool.WaitForExit();
                 return output;
             }
-            var before = Desktop();
+            // Chromium leaves _NET_WM_DESKTOP to the window manager (x11_window.cc), which sets it once it manages the
+            // window; KWin does so after the window is shown, and xdotool reads a missing one as -1.
+            var before = "";
+            Eventually(() => (before = Desktop()) is not ("" or "-1" or "4294967295"), step);
             w.SetVisibleOnAllWorkspaces(true);
             var all = Eventually(() => Desktop() is "-1" or "4294967295", step) && w.IsVisibleOnAllWorkspaces();
             var allDesktop = Desktop();
@@ -2041,7 +2061,8 @@ async Task InputEventAsync()
             p.WaitForExit();
             return p.ExitCode == 0 ? output.Trim() : "";
         }
-        var id = X("search --sync --name oriel-input-event").Split('\n')[0];
+        // Our pid, not just the title: mutter's frame windows carry it too.
+        var id = X($"search --sync --all --pid {Environment.ProcessId} --name oriel-input-event").Split('\n')[0];
         X($"windowactivate --sync {id}");
         await Js(w, "document.getElementById('k').focus(); 1");
         await Task.Delay(300);
