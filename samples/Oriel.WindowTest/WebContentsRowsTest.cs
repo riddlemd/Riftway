@@ -11,6 +11,7 @@ static class WebContentsRowsTest
         await ProcessAsync(check);
         await DevToolsTargetAsync(check, debugPort);
         await HeapSnapshotAsync(check);
+        await CopyImageAsync(check, step);
     }
 
     // The ids Chromium's own DevTools HTTP endpoint lists, by URL.
@@ -175,5 +176,132 @@ static class WebContentsRowsTest
         check("a closed page has no process: GetProcessId -1, GetOSProcessId 0", b.GetProcessId() == -1 && b.GetOSProcessId() == 0,
             $"{b.GetProcessId()} {b.GetOSProcessId()}");
         first.Destroy();
+    }
+    // Windows PowerShell in another process reads the clipboard independently of Oriel's code.
+    static string Ps(string script)
+    {
+        var outFile = Path.Combine(Path.GetTempPath(), "oriel-rows-clipboard-" + Path.GetRandomFileName());
+        var wrapped = "Add-Type -AssemblyName System.Windows.Forms, System.Drawing; $o = & { " + script + " }; [IO.File]::WriteAllText('" + outFile + "', [string]$o, [Text.Encoding]::UTF8)";
+        var psi = new System.Diagnostics.ProcessStartInfo("powershell.exe") { UseShellExecute = false, CreateNoWindow = true };
+        foreach (var arg in new[] { "-NoProfile", "-STA", "-Command", wrapped }) psi.ArgumentList.Add(arg);
+        System.Diagnostics.Process.Start(psi)!.WaitForExit();
+        var text = File.Exists(outFile) ? File.ReadAllText(outFile).TrimStart('﻿') : "";
+        File.Delete(outFile);
+        return text;
+    }
+
+    // Off the UI thread: the clipboard owner answers render requests there.
+    static Task<string> PsAsync(string script) => Task.Run(() => Ps(script));
+
+    static async Task<bool> Eventually(Func<Task<bool>> condition, TimeSpan timeout)
+    {
+        var deadline = DateTime.UtcNow + timeout;
+        while (DateTime.UtcNow < deadline)
+        {
+            if (await condition()) return true;
+            await Task.Delay(100);
+        }
+        return await condition();
+    }
+
+    static async Task CopyImageAsync(CheckFn check, TimeSpan step)
+    {
+        if (!OperatingSystem.IsWindows()) return;
+        string saved;
+        try { saved = await Clipboard.ReadTextAsync(); } catch (Exception) { saved = ""; }
+        // A 4x3 red PNG shown at 80x60, and a 10x10 green canvas: what is copied is the image at its own size.
+        var pixels = new byte[4 * 3 * 4];
+        for (var i = 0; i < pixels.Length; i += 4) (pixels[i], pixels[i + 1], pixels[i + 2], pixels[i + 3]) = (0, 0, 255, 255);
+        var png = Convert.ToBase64String(NativeImage.CreateFromBitmap(pixels, new NativeImageBitmapOptions { Width = 4, Height = 3 }).ToPng());
+        var win = new BrowserWindow(new BrowserWindowOptions { Width = 400, Height = 300 });
+        var wc = win.WebContents;
+        await wc.LoadUrl("data:text/html,<style>body{margin:0}</style>"
+            + $"<img id=i src='data:image/png;base64,{png}' alt='A %26 \"B\"' style='position:absolute;left:0;top:0;width:80px;height:60px'>"
+            + "<canvas id=c width=10 height=10 style='position:absolute;left:100px;top:0;width:50px;height:50px'></canvas>"
+            + "<p style='position:absolute;left:0;top:150px'>text</p>"
+            + "<script>const g = c.getContext('2d'); g.fillStyle = '%2300ff00'; g.fillRect(0, 0, 10, 10);</script>");
+        static Task<string> ClipImage() => PsAsync("$i = [Windows.Forms.Clipboard]::GetImage(); if ($i) { $p = $i.GetPixel(1, 1); '' + $i.Width + 'x' + $i.Height + ' ' + $p.R + ',' + $p.G + ',' + $p.B } else { 'none' }");
+        static Task<string> ClipHtml() => PsAsync("[Windows.Forms.Clipboard]::GetText('Html')");
+        static Task<string> Formats() => PsAsync("[Windows.Forms.Clipboard]::GetDataObject().GetFormats() -join ','");
+
+        await Clipboard.WriteTextAsync("before");
+        wc.CopyImageAt(20, 20);
+        var image = "";
+        var copied = await Eventually(async () => (image = await ClipImage()) == "4x3 255,0,0", step);
+        var html = await ClipHtml();
+        var formats = await Formats();
+        check("CopyImageAt copies the image at the point at its own size, with <img> markup and the src as a bookmark, as Blink's Copy Image",
+            copied && html.Contains($"<img src=\"data:image/png;base64,{png}\" alt=\"A &amp; &quot;B&quot;\"/>", StringComparison.Ordinal)
+            && formats.Contains("UniformResourceLocatorW", StringComparison.Ordinal), $"{image} formats={formats} html={(html.Length > 160 ? html[..160] : html)}");
+
+        await Clipboard.WriteTextAsync("before");
+        wc.CopyImageAt(120, 20);
+        var canvas = await Eventually(async () => (image = await ClipImage()) == "10x10 0,255,0", step);
+        formats = await Formats();
+        check("CopyImageAt on a canvas copies its pixels, without markup or bookmark", canvas && !formats.Contains("HTML Format", StringComparison.Ordinal)
+            && !formats.Contains("UniformResourceLocatorW", StringComparison.Ordinal), $"{image} formats={formats}");
+
+        wc.SetZoomFactor(2);
+        await Task.Delay(500);
+        await Clipboard.WriteTextAsync("before");
+        wc.CopyImageAt(140, 100);
+        check("CopyImageAt's point is in DIPs of the view, whatever the zoom", await Eventually(async () => (image = await ClipImage()) == "4x3 255,0,0", step), image);
+        wc.SetZoomFactor(1);
+        await Task.Delay(500);
+
+        await Clipboard.WriteTextAsync("before");
+        wc.CopyImageAt(10, 160);
+        await Task.Delay(1500);
+        check("CopyImageAt where there is no image leaves the clipboard alone", await PsAsync("Get-Clipboard -Raw") == "before" && await ClipImage() == "none", await Formats());
+
+        // An iframe's own document: Blink's hit test goes down into frames in the same process.
+        var framed = Path.Combine(Path.GetTempPath(), $"oriel-copy-image-{Environment.ProcessId}.html");
+        File.WriteAllText(framed, "<!doctype html><style>body{margin:0}</style><iframe style='position:absolute;left:50px;top:50px;width:200px;height:150px;border:5px solid;padding:7px' "
+            + "srcdoc=\"<style>body{margin:0}</style><canvas id=c width=6 height=5 style='width:60px;height:50px'></canvas><script>const g = c.getContext('2d'); g.fillStyle = 'blue'; g.fillRect(0, 0, 6, 5);</script>\"></iframe>");
+        await wc.LoadFile(framed).WaitAsync(TimeSpan.FromSeconds(10));
+        await Task.Delay(500);
+        await Clipboard.WriteTextAsync("before");
+        // Near the canvas's far corner: off it unless the frame's border and padding are allowed for.
+        wc.CopyImageAt(50 + 5 + 7 + 58, 50 + 5 + 7 + 48);
+        check("CopyImageAt finds the image inside a same-process iframe", await Eventually(async () => (image = await ClipImage()) == "6x5 0,0,255", step), image);
+
+        // A cross-origin image taints a canvas, so its pixels come from the bytes the page loaded.
+        var blue = new byte[5 * 4 * 4];
+        for (var i = 0; i < blue.Length; i += 4) (blue[i], blue[i + 1], blue[i + 2], blue[i + 3]) = (255, 0, 0, 255);
+        var bluePng = NativeImage.CreateFromBitmap(blue, new NativeImageBitmapOptions { Width = 5, Height = 4 }).ToPng();
+        var listener = new System.Net.Sockets.TcpListener(System.Net.IPAddress.Loopback, 0);
+        listener.Start();
+        var port = ((System.Net.IPEndPoint)listener.LocalEndpoint).Port;
+        _ = Task.Run(async () =>
+        {
+            while (true)
+            {
+                System.Net.Sockets.TcpClient client;
+                try { client = await listener.AcceptTcpClientAsync(); } catch (Exception) { return; }
+                using var _ = client;
+                try
+                {
+                    var stream = client.GetStream();
+                    var reader = new StreamReader(stream);
+                    while (!string.IsNullOrEmpty(await reader.ReadLineAsync())) { }
+                    await stream.WriteAsync(System.Text.Encoding.ASCII.GetBytes($"HTTP/1.1 200 OK\r\nContent-Type: image/png\r\nContent-Length: {bluePng.Length}\r\nConnection: close\r\n\r\n"));
+                    await stream.WriteAsync(bluePng);
+                }
+                catch (Exception) { }
+            }
+        });
+        File.WriteAllText(framed, $"<!doctype html><style>body{{margin:0}}</style><img src='http://127.0.0.1:{port}/blue.png' style='width:100px;height:80px'>");
+        await wc.LoadFile(framed).WaitAsync(TimeSpan.FromSeconds(10));
+        await Task.Delay(500);
+        await Clipboard.WriteTextAsync("before");
+        wc.CopyImageAt(30, 30);
+        var tainted = await Eventually(async () => (image = await ClipImage()) == "5x4 0,0,255", step);
+        html = await ClipHtml();
+        check("CopyImageAt copies a cross-origin image the page cannot read from the bytes it loaded",
+            tainted && html.Contains($"<img src=\"http://127.0.0.1:{port}/blue.png\"/>", StringComparison.Ordinal), $"{image} {html}");
+        listener.Stop();
+        win.Destroy();
+        File.Delete(framed);
+        try { await Clipboard.WriteTextAsync(saved); } catch (Exception) { }
     }
 }

@@ -12,13 +12,13 @@ Percentages are over the non-n/a items; the second counts a partial item as half
 |---|---|---|---|---|---|---|---|
 | Static methods | 5 | 3 | 2 | 0 | 0 | 60.0% | 80.0% |
 | Instance events | 59 | 31 | 18 | 8 | 2 | 54.4% | 70.2% |
-| Instance methods | 118 | 43 | 24 | 43 | 8 | 39.1% | 50.0% |
+| Instance methods | 118 | 43 | 25 | 42 | 8 | 39.1% | 50.5% |
 | Instance properties | 18 | 10 | 1 | 6 | 1 | 58.8% | 61.8% |
 | navigationHistory | 14 | 12 | 0 | 2 | 0 | 85.7% | 85.7% |
 | WebFrameMain events and statics | 3 | 1 | 1 | 1 | 0 | 33.3% | 50.0% |
 | WebFrameMain methods | 9 | 1 | 4 | 4 | 0 | 11.1% | 33.3% |
 | WebFrameMain properties | 15 | 10 | 3 | 2 | 0 | 66.7% | 76.7% |
-| **Total** | 241 | 111 | 53 | 66 | 11 | 48.3% | 59.8% |
+| **Total** | 241 | 111 | 54 | 65 | 11 | 48.3% | 60.0% |
 
 ## Checklist
 
@@ -152,7 +152,7 @@ Percentages are over the non-n/a items; the second counts a partial item as half
 | `getZoomMode()` | — | missing |  |
 | `setVisualZoomLevelLimits()` | `SetVisualZoomLevelLimits` | partial | Pinch on or off; off on Windows/Linux (C37) |
 | `centerSelection()` | `CenterSelection` | partial | Script; does nothing off macOS, as Electron (C20). |
-| `copyImageAt()` | — | missing |  |
+| `copyImageAt()` | `CopyImageAt` | partial | The page's own hit test over DevTools: a canvas the page cannot read and a cross-origin image in an iframe are not copied (C48). |
 | `copyVideoFrameAt()` | — | missing |  |
 | `saveVideoFrameAs()` | — | missing |  |
 | `unselect()` | `Unselect` | partial | Script in the focused frame (C20). |

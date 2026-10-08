@@ -135,6 +135,9 @@ public static class Clipboard
 
     internal static Task<object> ReadTypeAsync(string mime) => Task.Run(() => ClipboardReader.ReadType(s_backend, mime, () => OrielApp.CurrentOrNull is { IsReady: true }));
 
+    // webContents.copyImageAt writes as Blink does, outside the ClipboardItem path.
+    internal static void Write(ClipboardWriter writer) => Commit(writer);
+
     private static void Commit(ClipboardWriter writer) => s_backend.Write(writer);
 
     private static ImageBitmap? Decode(byte[] bytes) => ImageCodec.Decode(bytes);
