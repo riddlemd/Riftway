@@ -27,8 +27,7 @@ General items: [todo.md](todo.md).
 - [ ] Screen capture: Chromium's X11 desktop capturer dies with SIGILL under the Docker Xvfb (arm64) when getDisplayMedia starts; SessionTest skips the capture checks there (ORIEL_XVFB). Verify on a real X server; if it crashes there too, find the CHECK with CEF's symbols
 - [x] `Shell` (branch `linux-shell`): Electron's `platform_util_linux.cc`, checked by `samples/Oriel.ShellTest` against fake
       `xdg-open`/`xdg-email`/`gio` scripts, a fake portal `OpenDirectory` and a fake `FileManager1`, and the X bell
-  - [ ] A real `gio trash` landing in `~/.local/share/Trash`: the image has no `gio`; add `libglib2.0-bin` to
-        `eng/docker/linux-dev.Dockerfile` and ShellTest checks it instead of skipping
+  - [x] A real `gio trash` landing in `~/.local/share/Trash`: the image has `libglib2.0-bin` (rebuild `oriel-linux-dev`)
   - [ ] Against a real desktop: GNOME's portal and Nautilus, KDE's `kioclient5`/`kioclient`, Dolphin's `FileManager1`
 - [ ] nativeTheme against a real `xdg-desktop-portal` (GNOME, KDE): Docker has none, so the checks use a fake portal
       (`samples/Shared/FakePortal.cs`) that WindowTest starts before CEF

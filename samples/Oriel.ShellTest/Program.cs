@@ -165,13 +165,19 @@ async Task RunAsync()
     _ = Next("gio", TimeSpan.Zero);
     Check("TrashItemAsync rejects when gio fails: Failed to move item to trash", error is IOException { Message: "Failed to move item to trash" }, error?.Message);
     SetExit("gio", null);
+    // PATH without the system's folders, so a real gio is out of reach too.
     File.Move(Path.Combine(fakes, "gio"), Path.Combine(root, "gio.off"));
+    Native.SetEnv("PATH", fakes);
     try
     {
         error = await Throws(() => Shell.TrashItemAsync(victim));
         Check("TrashItemAsync rejects without a gio to exec", error is IOException { Message: "Failed to move item to trash" }, error?.Message);
     }
-    finally { File.Move(Path.Combine(root, "gio.off"), Path.Combine(fakes, "gio")); }
+    finally
+    {
+        Native.SetEnv("PATH", fakes + ":" + originalPath);
+        File.Move(Path.Combine(root, "gio.off"), Path.Combine(fakes, "gio"));
+    }
 
     if (originalPath.Split(':').FirstOrDefault(d => File.Exists(Path.Combine(d, "gio"))) is null)
         Console.WriteLine("SKIP  a real `gio trash`: gio is not installed (libglib2.0-bin)");
