@@ -13,6 +13,7 @@ static class WebContentsRowsTest
         await HeapSnapshotAsync(check);
         await CopyImageAsync(check, step);
         await OpenerAsync(check, step);
+        await SavePageAsync(check);
     }
 
     // The ids Chromium's own DevTools HTTP endpoint lists, by URL.
@@ -366,6 +367,93 @@ static class WebContentsRowsTest
         check("on the UI thread, Opener is null once the opener has gone", goneOnUi == "null", goneOnUi);
         check("Opener is null once the opener has gone", fromFrame is not null && OpenerOf(fromFrame) is null, OpenerOf(fromFrame)?.Url);
         foreach (var popup in created) if (!popup.IsDestroyed) popup.Destroy();
+        try { Directory.Delete(dir, recursive: true); } catch (IOException) { }
+    }
+
+    static async Task SavePageAsync(CheckFn check)
+    {
+        var dir = Directory.CreateTempSubdirectory("oriel-save-").FullName;
+        var site = Directory.CreateDirectory(Path.Combine(dir, "site")).FullName;
+        var pixels = new byte[3 * 2 * 4];
+        for (var i = 0; i < pixels.Length; i += 4) (pixels[i], pixels[i + 1], pixels[i + 2], pixels[i + 3]) = (0, 255, 0, 255);
+        var png = NativeImage.CreateFromBitmap(pixels, new NativeImageBitmapOptions { Width = 3, Height = 2 }).ToPng();
+        File.WriteAllBytes(Path.Combine(site, "pic.png"), png);
+        File.WriteAllText(Path.Combine(site, "look.css"), "p { color: rgb(1, 2, 3); }");
+        var source = "<!doctype html><html><head><title>saved</title><link rel=stylesheet href=look.css></head><body><p id=t>Saved text</p><img src=pic.png>"
+            + "<script>document.getElementById('t').dataset.ran = 'yes';</script></body></html>";
+        var page = Path.Combine(site, "page.html");
+        File.WriteAllText(page, source);
+        var win = new BrowserWindow(new BrowserWindowOptions { Show = false });
+        var wc = win.WebContents;
+        await wc.LoadFile(page);
+        async Task<string?> Save(string path, SavePageType type)
+        {
+            try { await wc.SavePageAsync(path, type).WaitAsync(TimeSpan.FromSeconds(20)); return null; }
+            catch (Exception e) { return e.GetBaseException().Message; }
+        }
+
+        var only = Path.Combine(dir, "only.html");
+        var onlyError = await Save(only, SavePageType.HtmlOnly);
+        check("SavePageAsync HtmlOnly writes the page's HTML as it was loaded", onlyError is null && File.Exists(only) && File.ReadAllText(only) == source
+            && !Directory.Exists(Path.Combine(dir, "only_files")), onlyError ?? (File.Exists(only) ? File.ReadAllText(only)[..Math.Min(80, File.ReadAllText(only).Length)] : "missing"));
+
+        var mhtml = Path.Combine(dir, "page.mhtml");
+        var mhtmlError = await Save(mhtml, SavePageType.Mhtml);
+        var mhtmlText = File.Exists(mhtml) ? File.ReadAllText(mhtml) : "";
+        check("SavePageAsync Mhtml writes one MHTML file with the page and its image in it", mhtmlError is null && mhtmlText.StartsWith("From: <Saved by Blink>", StringComparison.Ordinal)
+            && mhtmlText.Contains("Content-Location: " + new Uri(page).AbsoluteUri, StringComparison.Ordinal)
+            && mhtmlText.Contains("Content-Location: " + new Uri(Path.Combine(site, "pic.png")).AbsoluteUri, StringComparison.Ordinal),
+            mhtmlError ?? mhtmlText[..Math.Min(120, mhtmlText.Length)]);
+
+        var complete = Path.Combine(dir, "whole.html");
+        var completeError = await Save(complete, SavePageType.HtmlComplete);
+        var completeText = File.Exists(complete) ? File.ReadAllText(complete) : "";
+        var files = Path.Combine(dir, "whole_files");
+        check("SavePageAsync HtmlComplete writes the page with its links into whole_files, which holds the resources as loaded",
+            completeError is null && completeText.StartsWith("<!DOCTYPE html>\n<!-- saved from url=(", StringComparison.Ordinal)
+            && completeText.Contains("src=\"./whole_files/pic.png\"", StringComparison.Ordinal) && completeText.Contains("href=\"./whole_files/look.css\"", StringComparison.Ordinal)
+            && completeText.Contains("data-ran=\"yes\"", StringComparison.Ordinal)
+            && File.Exists(Path.Combine(files, "pic.png")) && File.ReadAllBytes(Path.Combine(files, "pic.png")).SequenceEqual(png)
+            && File.Exists(Path.Combine(files, "look.css")) && File.ReadAllText(Path.Combine(files, "look.css")) == "p { color: rgb(1, 2, 3); }",
+            completeError ?? completeText[..Math.Min(200, completeText.Length)]);
+
+        // Over http the page is downloaded again, as SavePackage does; no-store keeps a cached copy out of it.
+        var served = 0;
+        var listener = new System.Net.Sockets.TcpListener(System.Net.IPAddress.Loopback, 0);
+        listener.Start();
+        var port = ((System.Net.IPEndPoint)listener.LocalEndpoint).Port;
+        _ = Task.Run(async () =>
+        {
+            while (true)
+            {
+                System.Net.Sockets.TcpClient client;
+                try { client = await listener.AcceptTcpClientAsync(); } catch (Exception) { return; }
+                using var _ = client;
+                try
+                {
+                    var stream = client.GetStream();
+                    var reader = new StreamReader(stream);
+                    var first = await reader.ReadLineAsync() ?? "";
+                    while (!string.IsNullOrEmpty(await reader.ReadLineAsync())) { }
+                    var body = first.Contains("/page", StringComparison.Ordinal)
+                        ? System.Text.Encoding.UTF8.GetBytes($"<!doctype html><title>net</title><p>served {Interlocked.Increment(ref served)}</p>") : [];
+                    await stream.WriteAsync(System.Text.Encoding.ASCII.GetBytes($"HTTP/1.1 {(body.Length > 0 ? "200 OK" : "404 Not Found")}\r\nContent-Type: text/html\r\nCache-Control: no-store\r\nContent-Length: {body.Length}\r\nConnection: close\r\n\r\n"));
+                    await stream.WriteAsync(body);
+                }
+                catch (Exception) { }
+            }
+        });
+        await wc.LoadUrl($"http://127.0.0.1:{port}/page");
+        var net = Path.Combine(dir, "net.html");
+        var netError = await Save(net, SavePageType.HtmlOnly);
+        var netText = File.Exists(net) ? File.ReadAllText(net) : "missing";
+        check("SavePageAsync HtmlOnly over http downloads the page again, as SavePackage does", netError is null && served == 2
+            && netText == "<!doctype html><title>net</title><p>served 2</p>", $"{netError} served={served} {netText}");
+        listener.Stop();
+
+        check("SavePageAsync rejects a relative path with Electron's message", await Save("relative.html", SavePageType.HtmlOnly) == "Path must be absolute");
+        check("SavePageAsync rejects a path it cannot write", await Save(Path.Combine(dir, "missing", "x.mhtml"), SavePageType.Mhtml) == "Failed to save the page");
+        win.Destroy();
         try { Directory.Delete(dir, recursive: true); } catch (IOException) { }
     }
 }
