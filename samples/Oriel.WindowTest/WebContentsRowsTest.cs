@@ -15,6 +15,7 @@ static class WebContentsRowsTest
         await OpenerAsync(check, step);
         await SavePageAsync(check);
         await PrintToPdfAsync(check);
+        await WebRtcAsync(check);
     }
 
     // The ids Chromium's own DevTools HTTP endpoint lists, by URL.
@@ -561,5 +562,81 @@ static class WebContentsRowsTest
             goneError == "InvalidOperationException: Render frame was disposed before WebFrameMain could be accessed", goneError);
         win.Destroy();
         File.Delete(page);
+    }
+    // The ICE candidates a fresh peer connection gathers, as "protocol port" pairs.
+    const string GatherCandidates = """
+        (async () => {
+          const pc = new RTCPeerConnection();
+          pc.createDataChannel('x');
+          const found = [];
+          pc.onicecandidate = e => { if (e.candidate && e.candidate.candidate) found.push(e.candidate.protocol + ' ' + e.candidate.port); };
+          await pc.setLocalDescription(await pc.createOffer());
+          await new Promise(done => {
+            pc.onicegatheringstatechange = () => { if (pc.iceGatheringState === 'complete') done(); };
+            setTimeout(done, 8000);
+          });
+          pc.close();
+          return found;
+        })()
+        """;
+
+    static async Task WebRtcAsync(CheckFn check)
+    {
+        var win = new BrowserWindow(new BrowserWindowOptions { Show = false });
+        var wc = win.WebContents;
+        await wc.LoadUrl("data:text/html,<p>webrtc</p>");
+        async Task<List<(string Protocol, int Port)>> Gather()
+        {
+            var list = await wc.ExecuteJavaScriptAsync(GatherCandidates).WaitAsync(TimeSpan.FromSeconds(20));
+            return [.. list!.AsArray().Select(n => ((string)n!).Split(' ')).Select(p => (p[0], int.Parse(p[1], System.Globalization.CultureInfo.InvariantCulture)))];
+        }
+        static string Show(List<(string Protocol, int Port)> found) => string.Join(",", found.Select(c => $"{c.Protocol}:{c.Port}"));
+
+        var before = await Gather();
+        check("GetWebRtcIpHandlingPolicy is default, and WebRTC gathers UDP candidates", wc.GetWebRtcIpHandlingPolicy() == "default" && before.Any(c => c.Protocol == "udp"), Show(before));
+        wc.SetWebRtcIpHandlingPolicy("disable_non_proxied_udp");
+        var blocked = await Gather();
+        check("SetWebRtcIpHandlingPolicy(disable_non_proxied_udp) stops UDP candidates on the open page",
+            wc.GetWebRtcIpHandlingPolicy() == "disable_non_proxied_udp" && !blocked.Any(c => c.Protocol == "udp"), Show(blocked));
+        wc.SetWebRtcIpHandlingPolicy("nonsense");
+        var reset = await Gather();
+        check("SetWebRtcIpHandlingPolicy of an unknown policy is default, as Electron's", wc.GetWebRtcIpHandlingPolicy() == "default" && reset.Any(c => c.Protocol == "udp"), Show(reset));
+
+        check("GetWebRtcUdpPortRange is 0, 0 by default", wc.GetWebRtcUdpPortRange() == new WebRtcUdpPortRange(0, 0));
+        // A range wide enough for one port per interface.
+        var range = new WebRtcUdpPortRange(47100, 47140);
+        wc.SetWebRtcUdpPortRange(range);
+        var ranged = await Gather();
+        check("SetWebRtcUdpPortRange keeps WebRTC's UDP candidates in the range",
+            wc.GetWebRtcUdpPortRange() == range && ranged.Any(c => c.Protocol == "udp") && ranged.Where(c => c.Protocol == "udp").All(c => c.Port is >= 47100 and <= 47140), Show(ranged));
+        wc.SetWebRtcUdpPortRange(default);
+        var any = await Gather();
+        check("SetWebRtcUdpPortRange(0, 0) lifts it", wc.GetWebRtcUdpPortRange() == default && any.Any(c => c.Protocol == "udp" && c.Port is < 47100 or > 47140), Show(any));
+
+        string? Refused(WebRtcUdpPortRange bad)
+        {
+            try { wc.SetWebRtcUdpPortRange(bad); return null; }
+            catch (ArgumentException e) { return e.Message; }
+        }
+        check("SetWebRtcUdpPortRange refuses bad ranges with Electron's messages",
+            Refused(new(-1, 5)) == "'min' and 'max' are both required"
+            && Refused(new(0, 5)) == "'min' and 'max' must be in the (0, 65535] range or [0, 0]"
+            && Refused(new(5, 70000)) == "'min' and 'max' must be in the (0, 65535] range or [0, 0]"
+            && Refused(new(10, 5)) == "'max' must be greater than or equal to 'min'"
+            && wc.GetWebRtcUdpPortRange() == default && Refused(new(65535, 65535)) is null && Refused(new(5, 5)) is null && wc.GetWebRtcUdpPortRange() == new WebRtcUdpPortRange(5, 5),
+            $"{Refused(new(-1, 5))} | {Refused(new(0, 5))} | {Refused(new(5, 70000))} | {Refused(new(10, 5))}");
+        wc.SetWebRtcUdpPortRange(default);
+
+        // Drift C52: Chromium keeps these per profile, so the session's other pages follow.
+        var other = new BrowserWindow(new BrowserWindowOptions { Show = false });
+        await other.WebContents.LoadUrl("data:text/html,<p>other</p>");
+        wc.SetWebRtcIpHandlingPolicy("disable_non_proxied_udp");
+        var otherList = await other.WebContents.ExecuteJavaScriptAsync(GatherCandidates).WaitAsync(TimeSpan.FromSeconds(20));
+        var otherFound = otherList!.AsArray().Select(n => (string)n!).ToList();
+        check("SetWebRtcIpHandlingPolicy reaches the session's other pages, whose own getter stays default (drift C52)",
+            other.WebContents.GetWebRtcIpHandlingPolicy() == "default" && !otherFound.Any(c => c.StartsWith("udp", StringComparison.Ordinal)), string.Join(",", otherFound));
+        wc.SetWebRtcIpHandlingPolicy("default");
+        other.Destroy();
+        win.Destroy();
     }
 }
