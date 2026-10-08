@@ -18,12 +18,12 @@ Counted from the Checklist at the end: `BaseWindow` and `BrowserWindow` are one 
 | Area | Items | Done | Partial | Missing | n/a | % done | % done + partial/2 |
 |---|---|---|---|---|---|---|---|
 | BaseWindow + BrowserWindow options | 54 | 32 | 12 | 10 | 0 | 59.3% | 70.4% |
-| webPreferences | 46 | 11 | 4 | 24 | 7 | 28.2% | 33.3% |
-| Instance methods | 143 | 86 | 26 | 25 | 6 | 62.8% | 72.3% |
-| Instance properties | 24 | 12 | 4 | 8 | 0 | 50.0% | 58.3% |
+| webPreferences | 46 | 12 | 4 | 23 | 7 | 30.8% | 35.9% |
+| Instance methods | 143 | 87 | 26 | 24 | 6 | 63.5% | 73.0% |
+| Instance properties | 24 | 13 | 4 | 7 | 0 | 54.2% | 62.5% |
 | Events | 35 | 18 | 10 | 7 | 0 | 51.4% | 65.7% |
 | Static methods | 6 | 5 | 0 | 0 | 1 | 100.0% | 100.0% |
-| **Total** | 308 | 164 | 56 | 74 | 14 | 55.8% | 65.3% |
+| **Total** | 308 | 167 | 56 | 71 | 14 | 56.8% | 66.3% |
 
 ## Done since the audit
 
@@ -78,7 +78,7 @@ Counted from the Checklist at the end: `BaseWindow` and `BrowserWindow` are one 
   DevTools `Runtime.evaluate` in the main world; rejects with `JavaScriptException`).
 - `parent`, `modal`, `getParentWindow`, `getChildWindows`, `isModal` (`D.get_parent_window`, `D.is_window_modal_dialog`);
   children close with their parent. The constructor now runs from any thread. A modal window keeps focus from its
-  parent on macOS; on Linux (openbox) it does not, because the window manager ignores the modal hint. Oriel now
+  parent on macOS; on Linux it does not, as in Electron: the modal hint reaches no window manager. Oriel now
   disables the parent's input itself there, as Electron does (`SetEnabled`, drift W5).
 - webContents `sendInputEvent` for keyboard events (`keyDown`, `keyUp`, `char`; Electron key names and
   modifiers), through DevTools `Input.dispatchKeyEvent`, so the browser's own shortcuts see them; and for mouse
@@ -146,7 +146,7 @@ Counted from the Checklist at the end: `BaseWindow` and `BrowserWindow` are one 
 
 1. Remaining webPreferences:
    - Need other modules: `spellcheck` (no per-page switch, E22), `offscreen` (offscreen
-     rendering), `transparent`. `session`/`partition` landed with the `Session` module (DRIFT E1-E11).
+     rendering). `session`/`partition` landed with the `Session` module (DRIFT E1-E11).
    - Process-wide in CEF (Chromium switches, not per window): `webSecurity`, `allowRunningInsecureContent`,
      `experimentalFeatures`, `enableBlinkFeatures`/`disableBlinkFeatures`, `autoplayPolicy`, `sandbox`. Decide between
      an app-level option and a per-window gap.
@@ -296,7 +296,7 @@ Parameters in brackets are optional in Electron. `webContents` members are in [w
 | `enableWebSQL` | — | n/a | Not applicable (listed in "Not applicable"). |
 | `v8CacheOptions` | — | n/a | Node/V8 option. |
 | `enablePreferredSizeMode` | `EnablePreferredSizeMode` | partial | Turns on `PreferredSizeChanged`, measured in the page (C42). |
-| `transparent` | — | missing |  |
+| `transparent` | `Transparent` | done | Only an explicit true acts, as Electron for a window's or view's page; the window's `backgroundColor` wins (V14). Screen-pixel checks on Windows. |
 | `enableDeprecatedPaste` | — | n/a | Deprecated. |
 | `focusOnNavigation` | — | missing |  |
 
@@ -304,8 +304,8 @@ Parameters in brackets are optional in Electron. `webContents` members are in [w
 
 | Electron | Oriel | Status | Note |
 |---|---|---|---|
-| `setContentView(view)` | — | missing | No View module. |
-| `getContentView()` | — | missing | No View module. |
+| `setContentView(view)` | — | missing | DRIFT V9 (with `BaseWindow`) |
+| `getContentView()` | `ContentView` | done | A property, as Electron's `contentView` |
 | `destroy()` | `Destroy` | done |  |
 | `close()` | `Close` | done |  |
 | `focus()` | `Focus` | done |  |
@@ -454,7 +454,7 @@ Parameters in brackets are optional in Electron. `webContents` members are in [w
 |---|---|---|---|
 | `webContents` | `WebContents` | done |  |
 | `id` | `Id` | done |  |
-| `contentView` | — | missing | No View module. |
+| `contentView` | `ContentView` | done | First child is the window's page (Chrome style); views added over it are Alloy style (DRIFT V2) |
 | `tabbingIdentifier` | — | missing |  |
 | `autoHideMenuBar` | `AutoHideMenuBar` | done |  |
 | `simpleFullScreen` | `SetSimpleFullScreen / IsSimpleFullScreen` | done |  |

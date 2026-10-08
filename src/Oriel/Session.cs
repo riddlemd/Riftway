@@ -56,11 +56,9 @@ public sealed unsafe partial class Session
         {
             RequireReady();
             Session session;
-            lock (s_gate)
-            {
-                session = s_default ??= new Session(CefNative.cef_request_context_get_global_context(), OrielApp.DataDirectory, null);
-                if (s_defaultPagelessContext == 0) ShareDefaultForPageless(session._context);
-            }
+            lock (s_gate) session = s_default ??= new Session(CefNative.cef_request_context_get_global_context(), OrielApp.DataDirectory, null);
+            // Outside s_gate: this waits for the UI thread, which may itself be waiting for s_gate.
+            if (Interlocked.CompareExchange(ref s_sharingDefault, 1, 0) == 0) ShareDefaultForPageless(session._context);
             return Announce(session);
         }
     }
@@ -229,6 +227,12 @@ public sealed unsafe partial class Session
     /// <summary>Watches and changes this session's requests. Electron's <c>ses.webRequest</c>.</summary>
     public WebRequest WebRequest { get; } = new();
 
+    /// <summary>Every session made from a partition or path; the default session is CEF's global context.</summary>
+    internal static IReadOnlyList<Session> Created()
+    {
+        lock (s_gate) return [.. s_byPath.Values.Concat(s_byPartition.Values).Distinct()];
+    }
+
     /// <summary>The native context with a reference for the caller.</summary>
     internal cef_request_context_t* AddRefNative()
     {
@@ -244,6 +248,8 @@ public sealed unsafe partial class Session
         // Electron has no popup blocker: window.open works without a user gesture, and WebContents.SetWindowOpenHandler decides.
         context->set_content_setting(context, null, null, cef_content_setting_types_t.CEF_CONTENT_SETTING_TYPE_POPUPS,
             cef_content_setting_values_t.CEF_CONTENT_SETTING_VALUE_ALLOW);
+
+        NativeTheme.ApplyTo(context);
 
         // Chrome-style profiles save each origin's zoom across launches; Electron keeps zoom for the session only.
         var value = CefNative.cef_value_create();
@@ -315,6 +321,7 @@ public sealed unsafe partial class Session
     // sharing it (CefBrowserContext::UpdateWorkerRequestContextHandler), so this context exists only to carry one.
     private static readonly RequestContextHandler s_defaultPageless = WebRequest.PagelessHandler(() => Volatile.Read(ref s_default)?.WebRequest);
     private static nint s_defaultPagelessContext;
+    private static int s_sharingDefault;
 
     private static void ShareDefaultForPageless(cef_request_context_t* global) => s_defaultPagelessContext = CefThread.InvokeOnUi(() =>
     {

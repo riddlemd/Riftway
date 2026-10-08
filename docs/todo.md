@@ -33,15 +33,21 @@ Cross-platform work. Platform-specific items: [linux-todo.md](linux-todo.md), [w
 - [x] File `Dialog` and `Screen`; gaps in [DRIFT.md](DRIFT.md)
 - [x] `NavigationHistory` (`WebContents.NavigationHistory`)
 - [x] `WebFrameMain` (`WebContents.MainFrame`, IPC `SenderFrame`)
-- [x] Core `Session` (`Session`, `Cookies`, partitions; gaps DRIFT E1-E11) and `NativeImage` (gaps DRIFT B1-B5)
-- [ ] Remaining M2 modules: `BaseWindow`, `View`, `WebContentsView`,
-      `Debugger`; the remaining Electron command-line switches and `ELECTRON_*` variables, checked one by one
+- [x] Core `Session` (`Session`, `Cookies`, partitions; gaps DRIFT E1-E11) and `NativeImage` (gaps DRIFT B1, B3-B5)
+- [x] `Debugger` (`WebContents.Debugger`; shares Oriel's protocol session, DRIFT C43)
+- [ ] `View` and `WebContentsView` ([design](design/web-contents-view.md)): phase 1 done (`ContentView`, child views,
+      bounds, visibility, `bounds-changed`, popups and `close()` from view pages); next `BaseWindow` (DRIFT V1, V2, V4, V7, V9, V12, V13)
+- [x] Windows: closing a view's page tears it down in a hidden, never-shown window; check it takes no focus there (WindowTest: no `EVENT_SYSTEM_FOREGROUND`, the window keeps the foreground)
+- [ ] macOS: check whether a hidden window or a `LoadUrl` takes focus (it did on Windows; fixed on branch `window-polish`)
+- [ ] Remaining M2 modules: `BaseWindow`; the remaining Electron command-line switches and `ELECTRON_*` variables,
+      checked one by one
 - [x] `app.commandLine` (`OrielApp.CommandLine`; DRIFT A19)
 - [x] `window.open` handling: `SetWindowOpenHandler`, `DidCreateWindow` (branch `window-open`)
 - [x] Menus: Alt+letter mnemonics and the Alt toggle (was DRIFT W19): handled in a `cef_keyboard_handler_t`; WindowTest covers both
 - [x] macOS: `Width`/`Height` gave a window a title bar taller than asked (was DRIFT W18)
 - [x] `OrielApp.Quit()` from any thread (was DRIFT A4)
 - [ ] `Protocol`: `AllowServiceWorkers` and `CodeCache` privileges throw `NotSupportedException`
+
 
 ## Tests
 

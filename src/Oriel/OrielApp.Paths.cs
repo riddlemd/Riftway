@@ -7,7 +7,7 @@ public sealed unsafe partial class OrielApp
     private readonly Dictionary<string, string> _paths = new(StringComparer.Ordinal);
 
     /// <summary>A directory or file by Electron's name: <c>home</c>, <c>appData</c>, <c>userData</c>,
-    /// <c>sessionData</c>, <c>temp</c>, <c>exe</c>, <c>module</c>, <c>desktop</c>, <c>documents</c>, <c>downloads</c>,
+    /// <c>sessionData</c>, <c>temp</c>, <c>exe</c>, <c>module</c>, <c>assets</c>, <c>desktop</c>, <c>documents</c>, <c>downloads</c>,
     /// <c>music</c>, <c>pictures</c>, <c>videos</c>, <c>recent</c> (Windows), <c>logs</c>, <c>crashDumps</c>. Electron's
     /// <c>app.getPath()</c>.</summary>
     /// <exception cref="ArgumentException">An unknown name, or one this OS does not have.</exception>
@@ -49,6 +49,7 @@ public sealed unsafe partial class OrielApp
             "temp" => Path.TrimEndingDirectorySeparator(Path.GetTempPath()),
             "exe" => Environment.ProcessPath,
             "module" => CefLayout.MainProcessLibrary(),
+            "assets" => AssetsDirectory(CefLayout.MainProcessLibrary(), Environment.ProcessPath, OperatingSystem.IsMacOS()),
             "desktop" => UserDirectory("DESKTOP", "Desktop", Environment.SpecialFolder.DesktopDirectory),
             "documents" => UserDirectory("DOCUMENTS", "Documents", Environment.SpecialFolder.MyDocuments),
             "downloads" => OperatingSystem.IsWindows() ? WindowsFileDialog.DownloadsFolder() : UserDirectory("DOWNLOAD", "Downloads", null),
@@ -60,6 +61,24 @@ public sealed unsafe partial class OrielApp
             "crashDumps" => Path.Combine(UserData(), "Crashpad"),
             _ => null,
         };
+    }
+
+    // base::DIR_ASSETS as libcef, which holds Chromium's base, answers it: DIR_MODULE, except that a bundled macOS
+    // app gets the framework's Resources (CEF overrides FrameworkBundlePath to its framework).
+    internal static string AssetsDirectory(string library, string? exePath, bool mac)
+    {
+        var module = Path.GetDirectoryName(library)!;
+        if (!mac || !IsInAppBundle(exePath)) return module;
+        return Path.Combine(module, "Resources");
+    }
+
+    // base::apple::AmIBundled: the exe sits at <X>.app/Contents/MacOS/<exe>.
+    private static bool IsInAppBundle(string? exePath)
+    {
+        var macOS = Path.GetDirectoryName(exePath);
+        var contents = Path.GetDirectoryName(macOS);
+        return Path.GetFileName(macOS) == "MacOS" && Path.GetFileName(contents) == "Contents"
+            && Path.GetFileName(Path.GetDirectoryName(contents))?.EndsWith(".app", StringComparison.Ordinal) == true;
     }
 
     // ~/Library/Application Support, %APPDATA%, or $XDG_CONFIG_HOME with ~/.config.

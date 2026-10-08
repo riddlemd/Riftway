@@ -63,6 +63,7 @@ public sealed unsafe partial class WebContents
         _appPreloadPath = appPreloadPath;
         _devTools.EventReceived += OnDevToolsEvent;
         RegisterMethods();
+        Debugger = new Debugger(_devTools, () => _ready);
 
         Display = new DisplayHandler
         {
@@ -87,6 +88,8 @@ public sealed unsafe partial class WebContents
             {
                 if (_navigated) DidFrameFinishLoad?.Invoke(this, isMain);
                 if (!isMain) return;
+                // The load got past the old page, so no beforeunload kept it; Electron records only such a pending load.
+                _pendingUnloadUrl = null;
                 if (_navigated && !_bootstrapForgotten)
                 {
                     _bootstrapForgotten = true;
@@ -102,12 +105,20 @@ public sealed unsafe partial class WebContents
                     (code, text) = (BlockedByClientError, "ERR_BLOCKED_BY_CLIENT");
                 if (!_navigated) return;
                 var failure = new LoadFailedEventArgs(code, text, url, isMain);
-                DidFailProvisionalLoad?.Invoke(this, failure);
-                // Electron's did-fail-load leaves out cancelled loads.
-                if (code != AbortedError) DidFailLoad?.Invoke(this, failure);
-                // After the events, as Electron's loadURL rejects from its own did-fail-load listener, added after the app's.
-                // An aborted load was superseded by a newer one, whose task stays pending; LoadUrl already failed the old one.
-                if (isMain && code != AbortedError) CompleteLoad(new LoadFailedException(code, text, url));
+                // Taken before the events: a handler that loads again gets a task of its own, which this failure must not settle.
+                var failing = _loadDone;
+                try
+                {
+                    DidFailProvisionalLoad?.Invoke(this, failure);
+                    // Electron's did-fail-load leaves out cancelled loads.
+                    if (code != AbortedError) DidFailLoad?.Invoke(this, failure);
+                }
+                finally
+                {
+                    // After the events, as Electron's loadURL rejects from its own did-fail-load listener, added after the app's.
+                    // An aborted load was superseded by a newer one, whose task stays pending; LoadUrl already failed the old one.
+                    if (isMain && code != AbortedError) CompleteLoad(failing, new LoadFailedException(code, text, url));
+                }
             },
         };
         var webRequest = session.WebRequest;
@@ -228,6 +239,8 @@ public sealed unsafe partial class WebContents
 
     /// <summary>The page's downloads, reported to its session.</summary>
     internal DownloadHandler Downloads { get; }
+    /// <summary>The page's Chrome DevTools Protocol session. Electron's <c>webContents.debugger</c>.</summary>
+    public Debugger Debugger { get; }
 
     /// <summary>The settings this page was created with; a page it opens inherits them.</summary>
     internal WebPreferences Preferences => _preferences;
@@ -582,9 +595,13 @@ public sealed unsafe partial class WebContents
     public void Reload() => CefThread.RunOnUi(() =>
     {
         if (_browser is null || !_navigated) return;
+        if (EntryLoadForReload() is { } entry)
+        {
+            ReloadWith(entry);
+            return;
+        }
         _reloadRequested = true;
-        if (EntryLoadForReload() is { } entry) ReloadWith(entry);
-        else _browser->reload(_browser);
+        _browser->reload(_browser);
     });
 
     // The options of the LoadUrl that made the page's entry, which Chromium's NavigationEntry keeps for its reloads.
@@ -602,6 +619,8 @@ public sealed unsafe partial class WebContents
     private void ReloadWith(PendingLoad entry)
     {
         if (entry.PostData is not null) return;
+        // Only a reload that starts is Oriel's: the page's own next reload must still raise will-navigate.
+        _reloadRequested = true;
         Navigate(GetUrl(), entry);
     }
 
@@ -609,12 +628,12 @@ public sealed unsafe partial class WebContents
     public void ReloadIgnoringCache() => CefThread.RunOnUi(() =>
     {
         if (_browser is null || !_navigated) return;
-        _reloadRequested = true;
         if (EntryLoadForReload() is { } entry)
         {
             ReloadWith(entry);
             return;
         }
+        _reloadRequested = true;
         _browser->reload_ignore_cache(_browser);
     });
 
@@ -751,10 +770,13 @@ public sealed unsafe partial class WebContents
         => Uri.TryCreate(current, UriKind.Absolute, out var from) && Uri.TryCreate(target, UriKind.Absolute, out var to)
             && to.Fragment.Length > 0 && from.GetLeftPart(UriPartial.Query) == to.GetLeftPart(UriPartial.Query);
 
-    private void CompleteLoad(LoadFailedException? failure)
+    private void CompleteLoad(LoadFailedException? failure) => CompleteLoad(_loadDone, failure);
+
+    // Settles one LoadUrl task, and forgets it only while it is still the latest.
+    private void CompleteLoad(TaskCompletionSource? done, LoadFailedException? failure)
     {
-        if (_loadDone is not { } done) return;
-        _loadDone = null;
+        if (done is null) return;
+        if (_loadDone == done) _loadDone = null;
         if (failure is null) done.TrySetResult();
         else done.TrySetException(failure);
     }
@@ -991,6 +1013,7 @@ public sealed unsafe partial class WebContents
             _mainFrameId = frame.GetProperty("id").GetString();
             AddFrameTree(result.GetProperty("frameTree"));
             _ready = true;
+            Debugger.OnTargetCreated();
             // A page-opened window starts on its real page, which can commit before the scripts above are registered
             // and would then run without Oriel's runtime or the preload. Reloading keeps window.opener.
             if (_openedByPage && frame.GetProperty("url").GetString() is { Length: > 0 } url && url != "about:blank")
@@ -1006,12 +1029,45 @@ public sealed unsafe partial class WebContents
     /// <summary>Cancelled when the page's browser is destroyed.</summary>
     internal CancellationToken DestroyedToken => _destroyed.Token;
 
+    /// <summary>Windows this page opened that close with it.</summary>
+    internal List<BrowserWindow> Popups { get; } = [];
+
+    /// <summary>Pages this page opened into views (by a createWindow callback) that close with it.</summary>
+    internal List<WebContents> PopupPages { get; } = [];
+
+    /// <summary>Set while a createWindow callback may adopt this popup page.</summary>
+    internal PopupGuest? Guest { get; set; }
+
+    /// <summary>Whether the page is an Alloy-style browser: a view's page, or a popup of one (CEF gives a popup its
+    /// opener's style).</summary>
+    internal bool IsAlloyStyle { get; init; }
+
+    /// <summary>UI thread: closes <paramref name="page"/> with this page, as Electron's guest-window-manager destroys it.</summary>
+    internal void ClosePopupPageWithThis(WebContents page)
+    {
+        PopupPages.Add(page);
+        page.Destroyed += (_, _) => PopupPages.Remove(page);
+    }
+
+    /// <summary>A popup page CEF never created a browser for: gone, without events.</summary>
+    internal void DiscardUnborn()
+    {
+        _destroyed.Cancel();
+        UnregisterLifecycle();
+    }
+
     internal void OnBrowserDestroyed()
     {
         _destroyed.Cancel();
         SyncIpc.Forget(this, null);
         UnregisterLifecycle();
+        // As Electron: windows the page opened close with it unless they asked to outlive it.
+        foreach (var popup in Popups.ToArray()) popup.Destroy();
+        Popups.Clear();
+        foreach (var page in PopupPages.ToArray()) page.Close();
+        PopupPages.Clear();
         _devTools.Detach();
+        Debugger.OnTargetDestroyed();
         NativeObject.Release(_browser);
         _browser = null;
         _ready = false;
@@ -1152,6 +1208,9 @@ public sealed unsafe partial class WebContents
                 break;
             case "theme":
                 OnThemeColor(args[0].ValueKind == JsonValueKind.Null ? null : args[0].GetString());
+                break;
+            case "vis":
+                _visibilityState = args[0].GetString() == "visible" ? "visible" : "hidden";
                 break;
             case "media":
                 Raise(args[0].GetBoolean() ? MediaStartedPlaying : MediaPaused, EventArgs.Empty, args[0].GetBoolean() ? "media-started-playing" : "media-paused");

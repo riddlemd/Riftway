@@ -39,7 +39,7 @@ internal sealed unsafe class TitleBarOverlayView
     internal void Attach(cef_window_t* window, uint color, uint symbol, int height)
     {
         // Electron's container paints the colour too, under the buttons that paint it again.
-        _panelDelegate = new PanelDelegate(() => { if (_panel is not null) _panel->@base.set_background_color(&_panel->@base, _color); });
+        _panelDelegate = new PanelDelegate { ThemeChanged = () => { if (_panel is not null) _panel->@base.set_background_color(&_panel->@base, _color); } };
         NativeObject.AddRef(_panelDelegate.Native);
         _panel = CefNative.cef_panel_create(_panelDelegate.Native);
         var horizontal = new cef_box_layout_settings_t { size = (nuint)sizeof(cef_box_layout_settings_t), horizontal = 1 };

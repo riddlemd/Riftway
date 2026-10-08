@@ -9,15 +9,15 @@ These figures are counted from the rows: after changing a row or checklist item,
 
 | Measure | Done | Partial | Not started | Total |
 |---|---|---|---|---|
-| Module rows below | 3 | 38 | 26 | 67 |
-| M2 rows | 2 | 15 | 4 | 21 |
+| Module rows below | 4 | 41 | 22 | 67 |
+| M2 rows | 3 | 17 | 1 | 21 |
 
 The 67 rows include `BrowserView` (deprecated, never implemented; counted as not started).
 
 | Checklist | Applicable items | Done | Partial | Missing | % done | % done + partial/2 |
 |---|---|---|---|---|---|---|
-| [BrowserWindow](parity/browser-window.md) (with `BaseWindow`) | 294 | 164 | 56 | 74 | 55.8% | 65.3% |
-| [webContents](parity/web-contents.md) (with `navigationHistory`, `WebFrameMain`) | 230 | 105 | 51 | 74 | 45.7% | 56.7% |
+| [BrowserWindow](parity/browser-window.md) (with `BaseWindow`) | 294 | 167 | 56 | 71 | 56.8% | 66.3% |
+| [webContents](parity/web-contents.md) (with `navigationHistory`, `WebFrameMain`) | 230 | 106 | 55 | 69 | 46.1% | 58.0% |
 
 **Source** — where the implementation comes from:
 
@@ -55,14 +55,14 @@ Detailed item-by-item status: [parity/browser-window.md](parity/browser-window.m
 | Electron | Oriel | Source | Wave | Status |
 |---|---|---|---|---|
 | `BaseWindow` | `BaseWindow` | CEF (Views) | M2 | — |
-| `BrowserWindow` | `BrowserWindow` | CEF (Views) | M2 | partial: 164 of 294 applicable items done (55.8%), see parity/browser-window.md |
-| `View` | `View` | CEF (Views panel) | M2 | — |
-| `WebContentsView` | `WebContentsView` | CEF (Views browser view) | M2 | — |
+| `BrowserWindow` | `BrowserWindow` | CEF (Views) | M2 | partial: 167 of 294 applicable items done (56.8%), see parity/browser-window.md |
+| `View` | `View` | CEF (Views panel) | M2 | partial: `addChildView` (index, move to top, reparent), `removeChildView`, `children`, `setBounds`/`getBounds`, `setVisible`/`getVisible`, `setBackgroundColor`, `bounds-changed`; no `setBorderRadius` (DRIFT V1) |
+| `WebContentsView` | `WebContentsView` | CEF (Views browser view) | M2 | partial: `new WebContentsView({ webPreferences })`, `webContents`, child views over the page, in `BrowserWindow.ContentView`; pages outlive their window and the view stays when its page closes, as Electron; popups and `webContents.close()` from view pages; `webContents` option for a `createWindow` popup (V4); Alloy style (DRIFT V2, V4, V7, V9, V12, V13) |
 | `ImageView` | `ImageView` | CEF + .NET | M5 | — |
 | `win.setSimpleFullScreen` (macOS) | `BrowserWindow.SetSimpleFullScreen` | OS | M2 | done (native full screen blacks out other displays on macOS) |
 | `BrowserView` (deprecated) | not implemented; use `WebContentsView` | — | — | — |
 | `<webview>` tag | `<webview>` | Patch | M7 | — |
-| `window.open` handling | `WebContents.SetWindowOpenHandler` | CEF | M2 | partial: handler (allow/deny, override options, outlivesOpener), `did-create-window`, popups as full `BrowserWindow`s with the opener's preferences and preload, no popup blocker (see DRIFT.md) |
+| `window.open` handling | `WebContents.SetWindowOpenHandler` | CEF | M2 | partial: handler (allow/deny, override options, outlivesOpener, `createWindow` into the app's window or view), `did-create-window`, popups as full `BrowserWindow`s with the opener's preferences and preload, no popup blocker (see DRIFT.md) |
 | `screen` | `Screen` | CEF | M2 | partial: displays with all of Electron's fields (macOS and Windows), nearest/matching, cursor point, DIP conversion, display events (from OS notifications on macOS and window messages on Windows, polled on Linux; see DRIFT.md) |
 | `-electron-corner-smoothing` CSS | same CSS property | Patch | M7 | — |
 
@@ -72,10 +72,10 @@ Detailed item-by-item status, including `navigationHistory` and `WebFrameMain`: 
 
 | Electron | Oriel | Source | Wave | Status |
 |---|---|---|---|---|
-| `webContents` | `WebContents` | CEF | M2 | partial: 105 of 230 applicable items done (45.7%) across `webContents`, `navigationHistory` and `WebFrameMain`, see parity/web-contents.md; `loadURL`/`loadFile`/`reload`, `send`, IPC, window-open handler, context menu, input events, zoom, user agent, DevTools |
-| `webFrameMain` | `WebFrameMain` | CEF | M2 | partial: frame tree, url/origin/name, `executeJavaScript`, `reload`, `send`, IPC `senderFrame`; in-process frames only (see DRIFT.md) |
+| `webContents` | `WebContents` | CEF | M2 | partial: 106 of 230 applicable items done (46.1%) across `webContents`, `navigationHistory` and `WebFrameMain`, see parity/web-contents.md; `loadURL`/`loadFile`/`reload`, `send`, IPC, window-open handler, context menu, input events, zoom, user agent, DevTools |
+| `webFrameMain` | `WebFrameMain` | CEF | M2 | partial: frame tree, url/origin/name, `frameToken`, `processId`, `osProcessId`, `visibilityState`, `fromFrameToken`, `executeJavaScript`, `reload`, `send`, IPC `senderFrame`; script and messages in in-process frames only; no `frameTreeNodeId`, `routingId`, `fromId`, `collectJavaScriptCallStack` (see DRIFT.md F1, F2, F5-F7) |
 | `NavigationHistory` | `NavigationHistory` | CEF | M2 | partial: back/forward, index/offset moves, entries, clear; no `removeEntryAtIndex` or `restore` (see DRIFT.md) |
-| `Debugger` (`webContents.debugger`) | `Debugger` (DevTools protocol) | CEF | M2 | — |
+| `Debugger` (`webContents.debugger`) | `Debugger` (DevTools protocol) | CEF | M2 | done: `attach` (protocol version check), `isAttached`, `detach`, `sendCommand` (with `sessionId`), `message` and `detach` events; shares Oriel's protocol session (DRIFT C43) |
 | `webFrame` (renderer) | `oriel.webFrame` in the preload | CEF (DevTools protocol) | M6 | partial: zoom (factor and level), `insertCSS`/`removeInsertedCSS`, `insertText`, `executeJavaScript`, `executeJavaScriptInIsolatedWorld`, `frameToken`, for the frame that calls (I8) |
 | `webUtils` (renderer) | `oriel.webUtils` | CEF | M6 | — |
 | `sharedTexture` | `SharedTexture` | Patch | M7 | — |
@@ -94,7 +94,7 @@ Detailed item-by-item status, including `navigationHistory` and `WebFrameMain`: 
 | Electron | Oriel | Source | Wave | Status |
 |---|---|---|---|---|
 | `session` | `Session` | CEF | M2 core, M6 rest | partial: core done (`setUserAgent`/`getUserAgent`, `defaultSession`, `fromPartition`, `fromPath`, `persist:` partitions, `WebPreferences.Session`/`Partition`, `WebContents.Session`, per-session `protocol`, `flushStorageData`, `webRequest`, `setPermissionRequestHandler`, `setPermissionCheckHandler` (`navigator.permissions.query` only, E28), `setDisplayMediaRequestHandler` (whole desktop, E30), `setDownloadPath`, `clearCache`, `clearAuthCache`, `closeAllConnections`, `setProxy`, `resolveHost` (no options, E38), `clearStorageData`, `clearData` (E35), `getCacheSize` (sessions on disk, E34), `downloadURL` with `headers` (hidden page, E37), `will-download`); no device permission handlers (E31), `clearHostResolverCache`, `resolveProxy`, `clearCodeCaches` (E8), `createInterruptedDownload` (E16) (see DRIFT.md E1-E38) |
-| `protocol` | `Protocol` | CEF | M2 | partial: `handle`, `unhandle`, `isProtocolHandled`, `registerSchemesAsPrivileged`; global, not per session; no `intercept*` or legacy `register*Protocol` (see DRIFT.md) |
+| `protocol` | `Protocol` | CEF | M2 | partial: `handle`, `unhandle`, `isProtocolHandled`, `registerSchemesAsPrivileged`; per session through `Session.Protocol`; no `intercept*` or legacy `register*Protocol` (see DRIFT.md) |
 | `Cookies` | `Cookies` | CEF | M6 | partial: `get`, `set` (Electron's rejection messages), `remove`, `flushStore`, `changed` (read from the store, see DRIFT E4, E5) |
 | `WebRequest` | `WebRequest` | CEF | M6 | partial: all eight events with `urls`/`excludeUrls`/`types` filters, cancel and `redirectURL`, request header changes, `uploadData` (bytes and file paths), `frame`, `webContentsId`, custom-scheme requests, service and shared worker requests without a page; `onHeadersReceived` cannot change or cancel the response, no `fromCache`/`ip`/`initiatorOrigin`, a `net` module's requests unseen (see DRIFT.md E17-E19, E27) |
 | `DownloadItem` | `DownloadItem` | CEF | M6 | — |
@@ -118,8 +118,8 @@ Detailed item-by-item status, including `navigationHistory` and `WebFrameMain`: 
 | `Dock` (`app.dock`, macOS) | `OrielApp.Dock` | OS | M5 | done: `setBadge`, `getBadge`, `bounce`, `cancelBounce`, `downloadFinished`, `hide`, `show` (as `ShowAsync`), `isVisible`, `setMenu`, `getMenu`, `setIcon` |
 | `clipboard` / `ClipboardItem` | `Clipboard` / `ClipboardItem` | OS | M5 | partial: Windows and macOS, Electron 44's W3C-style API (`read`/`write` with `ClipboardItem`, `readText`, `writeText`, `has`, `clear`; text, HTML, RTF, images, bookmark, files, raw `osclipboard` and `web` custom formats, Chromium's type list; on macOS the bookmark title and `electron application/findtext`); Linux throws; no `selection` (DRIFT K1-K11, branches `shell-clipboard`, `mac-clipboard`) |
 | `shell` | `Shell` | OS | M5 | partial: Windows, as Electron 44 does it (openExternal with `logUsage`, openPath, showItemInFolder, trashItem, beep, shortcut links); macOS and Linux throw (DRIFT H1, H3, H4, branch `shell-clipboard`) |
-| `nativeImage` | `NativeImage` | CEF + .NET | M5 | partial: PNG/JPEG through CEF, raw bitmaps, data URLs, `@Nx` files, crop, resize, representations; window icon, overlay and thumbar buttons take it; gaps in DRIFT B1-B5 (no `createThumbnailFromPath`, one resize filter, template images unused, no ICO) |
-| `nativeTheme` | `NativeTheme` | OS + CEF | M5 | — |
+| `nativeImage` | `NativeImage` | CEF + .NET | M5 | partial: PNG/JPEG through CEF, raw bitmaps, data URLs, `@Nx` files, crop, resize, representations; window icon, overlay and thumbar buttons take it; gaps in DRIFT B1, B3-B5 (no `createThumbnailFromPath`, template images unused); resize uses Skia's Hamming-1/Lanczos-3 filters and `.ico` reads on Windows |
+| `nativeTheme` | `NativeTheme` | OS + CEF | M5 | partial: `themeSource` (pages, Chromium's UI, macOS appearance), `shouldUseDarkColors`, `shouldUseHighContrastColors`, `shouldUseInvertedColorScheme`, `inForcedColorsMode`, `prefersReducedTransparency`, `updated` (at once on macOS and Linux, polled on Windows; DRIFT Y1-Y3) |
 | `powerMonitor` | `PowerMonitor` | OS | M5 | partial: Windows (suspend, resume, on-ac, on-battery, lock and unlock, speed-limit-change, idle time and state, battery); macOS and Linux throw (branch `power-shortcuts`) |
 | `powerSaveBlocker` | `PowerSaveBlocker` | OS | M5 | partial: Windows (one process-wide power request at the highest active type, as Chromium and Electron); macOS and Linux throw (branch `power-shortcuts`) |
 | `safeStorage` | `SafeStorage` | OS | M5 | partial: all methods (`isEncryptionAvailable`, `encryptString`, `decryptString`, `isAsyncEncryptionAvailable`, `encryptStringAsync`, `decryptStringAsync`, `setUsePlainTextEncryption`, `getSelectedStorageBackend`) in Chromium os_crypt's formats: Windows `v10` AES-256-GCM under CEF's `Local State` key; macOS `v10` AES-128-CBC under the "`{name} Safe Storage`" Keychain item; Linux `v11` from the Secret Service (libsecret) or `v10` `basic_text`; no KWallet or Secret portal (DRIFT D1-D5) |

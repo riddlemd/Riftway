@@ -110,13 +110,24 @@ internal sealed unsafe partial class SessionHelperPage
     internal static Task<SessionHelperPage> CreateAsync(Session session)
     {
         var created = new TaskCompletionSource<SessionHelperPage>(TaskCreationOptions.RunContinuationsAsynchronously);
-        session.Initialized.ContinueWith(_ => CefThread.RunOnUi(() =>
+        session.Initialized.ContinueWith(_ =>
         {
-            try { created.SetResult(new SessionHelperPage(session)); }
-            catch (Exception e) { created.SetException(e); }
-        }), TaskScheduler.Default);
+            // Posting fails once CEF is shutting down; the callers must not wait forever.
+            try
+            {
+                CefThread.RunOnUi(() =>
+                {
+                    try { created.SetResult(new SessionHelperPage(session)); }
+                    catch (Exception e) { created.SetException(e); }
+                });
+            }
+            catch (Exception e) { created.TrySetException(e); }
+        }, TaskScheduler.Default);
         return created.Task;
     }
+
+    /// <summary>Whether the page still has its browser.</summary>
+    internal bool IsAlive => _browser is not null;
 
     // UI thread.
     private void Send(string method, Action<Utf8JsonWriter>? writeParams, TaskCompletionSource<JsonElement> result)

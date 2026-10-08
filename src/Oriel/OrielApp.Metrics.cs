@@ -41,6 +41,8 @@ public sealed partial class OrielApp
         lock (_metricsGate)
         {
             foreach (var stale in _samplers.Keys.Except(processes.Select(p => p.Pid)).ToList()) _samplers.Remove(stale);
+            // A pid the OS gives a new process must not inherit the old one's peak.
+            foreach (var stale in _peakResident.Keys.Except(processes.Select(p => p.Pid)).ToList()) _peakResident.Remove(stale);
             foreach (var (pid, type, service) in processes)
             {
                 if (ReadProcess(pid) is not { } info) continue;
@@ -98,6 +100,28 @@ public sealed partial class OrielApp
             // Chromium rewrites a child's title into one space-separated string, so split on spaces as well as NULs.
             if (ChildKind(TryRead($"/proc/{pid}/cmdline").Split(['\0', ' '], StringSplitOptions.RemoveEmptyEntries)) is { } kind) yield return (pid, kind.Type, kind.Service);
     }
+
+    // Chromium gives each renderer its render process id as --renderer-client-id; 0 when none is running with it.
+    internal static int RendererPid(int processId)
+    {
+        var self = Environment.ProcessId;
+        IEnumerable<(int Pid, IReadOnlyList<string> Arguments)> children =
+            OperatingSystem.IsLinux() ? LinuxDescendants(self).Select(pid => (pid, (IReadOnlyList<string>)TryRead($"/proc/{pid}/cmdline").Split(['\0', ' '], StringSplitOptions.RemoveEmptyEntries)))
+            : OperatingSystem.IsMacOS() ? MacArguments(self)
+            : OperatingSystem.IsWindows() ? WindowsArguments(self)
+            : [];
+        foreach (var (pid, arguments) in children)
+            if (FrameIdentity.RendererClientId(arguments) == processId) return pid;
+        return 0;
+    }
+
+    [System.Runtime.Versioning.SupportedOSPlatform("macos")]
+    private static IEnumerable<(int, IReadOnlyList<string>)> MacArguments(int root)
+        => Descendants(ProcessInfo.MacProcessTree().ToDictionary(p => p.Pid, p => p.ParentPid), root).Select(pid => (pid, (IReadOnlyList<string>)ProcessInfo.MacProcessArguments(pid)));
+
+    [System.Runtime.Versioning.SupportedOSPlatform("windows")]
+    private static IEnumerable<(int, IReadOnlyList<string>)> WindowsArguments(int root)
+        => Descendants(ProcessInfo.WindowsParents(), root).Select(pid => (pid, (IReadOnlyList<string>)(ProcessInfo.WindowsCommandLine(pid)?.Split(' ', StringSplitOptions.RemoveEmptyEntries) ?? [])));
 
     internal static IEnumerable<int> LinuxDescendants(int root)
     {

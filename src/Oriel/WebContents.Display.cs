@@ -80,6 +80,13 @@ public sealed unsafe partial class WebContents
     private bool _ignoreMenuShortcuts;
     private bool _closingWithoutUnload;
 
+    // UI thread: a forced close, which Chrome style still asks beforeunload of (drift C32).
+    internal void CloseWithoutUnload(cef_browser_host_t* host)
+    {
+        _closingWithoutUnload = true;
+        host->close_browser(host, 1);
+    }
+
     /// <summary>Handlers and listeners for this page's messages, asked before <see cref="IpcMain"/>'s. Electron's
     /// <c>webContents.ipc</c>.</summary>
     public IpcMainScope Ipc { get; } = new();
@@ -267,8 +274,9 @@ public sealed unsafe partial class WebContents
         if (!args.Cancel && _pendingUnloadUrl is { } url)
         {
             _pendingUnloadUrl = null;
-            DidFailLoad?.Invoke(this, new LoadFailedEventArgs(AbortedError, "ERR_ABORTED", url, true));
-            CompleteLoad(new LoadFailedException(AbortedError, "ERR_ABORTED", url));
+            var failing = _loadDone;
+            try { DidFailLoad?.Invoke(this, new LoadFailedEventArgs(AbortedError, "ERR_ABORTED", url, true)); }
+            finally { CompleteLoad(failing, new LoadFailedException(AbortedError, "ERR_ABORTED", url)); }
         }
         return args.Cancel;
     }

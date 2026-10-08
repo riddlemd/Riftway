@@ -28,6 +28,39 @@ public sealed class AppPathTests
     }
 
     [Fact]
+    public void AssetsDirectory_IsLibcefsDirectoryOnWindowsAndLinux()
+    {
+        var app = Path.Combine(Path.GetTempPath(), "MyApp");
+        Assert.Equal(app, OrielApp.AssetsDirectory(Path.Combine(app, "libcef.dll"), Path.Combine(app, "MyApp.exe"), mac: false));
+        Assert.Equal(app, OrielApp.AssetsDirectory(Path.Combine(app, "libcef.so"), Path.Combine(app, "MyApp"), mac: false));
+        // A bundle-shaped exe path means nothing off macOS.
+        var macOS = Path.Combine(app, "X.app", "Contents", "MacOS");
+        Assert.Equal(app, OrielApp.AssetsDirectory(Path.Combine(app, "libcef.so"), Path.Combine(macOS, "X"), mac: false));
+    }
+
+    [Fact]
+    public void AssetsDirectory_IsTheFrameworksResourcesInAMacBundle()
+    {
+        var contents = Path.Combine(Path.GetTempPath(), "My App.app", "Contents");
+        var framework = Path.Combine(contents, "Frameworks", "Chromium Embedded Framework.framework");
+        var library = Path.Combine(framework, "Chromium Embedded Framework");
+        Assert.Equal(Path.Combine(framework, "Resources"),
+            OrielApp.AssetsDirectory(library, Path.Combine(contents, "MacOS", "My App"), mac: true));
+        // Unbundled (AmIBundled false), Chromium falls back to DIR_MODULE.
+        Assert.Equal(framework, OrielApp.AssetsDirectory(library, Path.Combine(Path.GetTempPath(), "bin", "My App"), mac: true));
+        Assert.Equal(framework, OrielApp.AssetsDirectory(library, Path.Combine(Path.GetTempPath(), "My App.app", "Other", "MacOS", "x"), mac: true));
+        Assert.Equal(framework, OrielApp.AssetsDirectory(library, Path.Combine(Path.GetTempPath(), "NotApp", "Contents", "MacOS", "x"), mac: true));
+        Assert.Equal(framework, OrielApp.AssetsDirectory(library, null, mac: true));
+    }
+
+    [Fact]
+    public void DefaultPath_AssetsIsTheModulesDirectoryHere()
+    {
+        if (OperatingSystem.IsMacOS()) return;
+        Assert.Equal(Path.GetDirectoryName(OrielApp.DefaultPath("module", "App")), OrielApp.DefaultPath("assets", "App"));
+    }
+
+    [Fact]
     public void XdgUserDirectory_ReadsUserDirsLikeXdgUserDir()
     {
         var config = Directory.CreateTempSubdirectory("oriel-xdg-").FullName;

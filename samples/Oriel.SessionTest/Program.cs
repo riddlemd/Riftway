@@ -46,6 +46,54 @@ const string Site = "https://oriel.test/";
 const string CustomScheme = "x-webrequest";
 const string Page = "<!doctype html><title>session</title><p>session test</p>";
 
+// Linux without an XDG portal on the bus (none is installed here): Chromium's fallback is GTK's theme.
+#pragma warning disable CA1416 // Called only on Linux.
+async Task NoPortalThemeAsync()
+{
+    var w = new BrowserWindow(new BrowserWindowOptions { Show = false });
+    await w.WebContents.LoadUrl("about:blank");
+    async Task<bool?> Page(string query) => (await w.WebContents.ExecuteJavaScriptAsync($"matchMedia('{query}').matches"))?.GetValue<bool>();
+    void Gtk(string name, object value) => Oriel.Cef.CefThread.InvokeOnUi(() =>
+    {
+        Oriel.Cef.Platform.LinuxGtkTheme.SetSetting(name, value);
+        return true;
+    });
+    var updates = 0;
+    EventHandler counter = (_, _) => Interlocked.Increment(ref updates);
+    NativeTheme.Updated += counter;
+    long? Latency(Action change)
+    {
+        var before = Volatile.Read(ref updates);
+        var clock = System.Diagnostics.Stopwatch.StartNew();
+        change();
+        var deadline = DateTime.UtcNow.AddSeconds(2);
+        while (Volatile.Read(ref updates) == before && DateTime.UtcNow < deadline) Thread.Sleep(10);
+        return Volatile.Read(ref updates) > before ? clock.ElapsedMilliseconds : null;
+    }
+
+    var settled = Oriel.Cef.Platform.LinuxPortalSettings.WaitSettled(TimeSpan.FromSeconds(5));
+    Check("NativeTheme: without a portal Linux reads none", settled && !Oriel.Cef.Platform.LinuxPortalSettings.Appearance.Present,
+        Oriel.Cef.Platform.LinuxPortalSettings.Appearance);
+    Check("NativeTheme: without a portal GTK's Adwaita is light and not high contrast, for Oriel and the page",
+        !NativeTheme.ShouldUseDarkColors && !NativeTheme.ShouldUseHighContrastColors && await Page("(prefers-color-scheme: dark)") == false
+        && await Page("(prefers-contrast: more)") == false);
+    // The image's settings.ini names Yaru, which is not installed, and GTK's stand-in for it has no dark variant.
+    Gtk("gtk-theme-name", "Adwaita");
+    var variant = Latency(() => Gtk("gtk-application-prefer-dark-theme", true));
+    Check("NativeTheme: without a portal GTK's prefer-dark variant is dark, raised at once", variant is < 300 && NativeTheme.ShouldUseDarkColors,
+        $"{variant} ms; page dark={await Page("(prefers-color-scheme: dark)")} (CEF keeps GTK's first colours, DRIFT Y2)");
+    var light = Latency(() => Gtk("gtk-application-prefer-dark-theme", false));
+    Check("NativeTheme: and back to light, raised at once", light is < 300 && !NativeTheme.ShouldUseDarkColors, $"{light} ms");
+    var contrast = Latency(() => Gtk("gtk-theme-name", "HighContrast"));
+    Check("NativeTheme: without a portal a GTK theme named high contrast is high contrast, raised at once, for Oriel and the page",
+        contrast is < 300 && NativeTheme.ShouldUseHighContrastColors && !NativeTheme.ShouldUseDarkColors && await Page("(prefers-contrast: more)") == true,
+        $"{contrast} ms");
+    Gtk("gtk-theme-name", "Adwaita");
+    NativeTheme.Updated -= counter;
+    w.Destroy();
+}
+#pragma warning restore CA1416
+
 async Task RunAsync()
 {
     // Identity and storage.
@@ -480,6 +528,17 @@ async Task RunAsync()
     Check("a navigation a listener cancels fails LoadUrl and DidFailLoad with ERR_BLOCKED_BY_CLIENT, as Electron's",
         blockedLoad is LoadFailedException { ErrorCode: -20 } && failedLoads.SequenceEqual([-20]) && !settledBeforeEvent,
         $"{blockedLoad?.Message} [{string.Join(",", failedLoads)}] settled before the event: {settledBeforeEvent}");
+    // A did-fail-load handler that loads elsewhere gets its own task: the failure settles only the load that failed, which
+    // the new navigation aborted first, as Electron's loadURL rejects on did-start-navigation before its own did-fail-load.
+    Task? fallbackTask = null;
+    EventHandler<LoadFailedEventArgs> retry = (_, e) => { if (e.ErrorCode == -20 && fallbackTask is null) fallbackTask = requestWin.LoadUrl(Site + "fallback"); };
+    requestWin.WebContents.DidFailLoad += retry;
+    var retriedLoad = await Throws(() => requestWin.LoadUrl(Site + "blocked").WaitAsync(TimeSpan.FromSeconds(10)));
+    var fallbackLoad = fallbackTask is null ? new InvalidOperationException("no retry") : await Throws(() => fallbackTask.WaitAsync(TimeSpan.FromSeconds(10)));
+    requestWin.WebContents.DidFailLoad -= retry;
+    Check("a LoadUrl a did-fail-load handler starts loads, while the failed one fails as aborted, as Electron's",
+        retriedLoad is LoadFailedException { ErrorCode: -3 } && fallbackLoad is null && requestWin.WebContents.GetUrl() == Site + "fallback",
+        $"{retriedLoad?.Message} | {fallbackLoad?.Message ?? "loaded"} | {requestWin.WebContents.GetUrl()}");
     var unfiltered = await Fetch("/unfiltered");
     Check("onBeforeRequest follows its filter", unfiltered == Page && Saw("before", "unfiltered") is null && await WaitFor(() => Saw("completed", "unfiltered")) is not null);
 
@@ -1114,9 +1173,30 @@ async Task RunAsync()
         $"{app.GetPath("userData")} vs {defaultSession.GetStoragePath()}");
     Check("GetPath(home), (temp) and (exe) are the OS's", app.GetPath("home") == Environment.GetFolderPath(Environment.SpecialFolder.UserProfile)
         && app.GetPath("temp") == Path.TrimEndingDirectorySeparator(Path.GetTempPath()) && app.GetPath("exe") == Environment.ProcessPath, app.GetPath("temp"));
+    if (OperatingSystem.IsWindows())
+    {
+        // DIR_ASSETS is DIR_MODULE of the libcef actually loaded, which every Windows layout puts beside the exe.
+        var loadedLibcef = System.Diagnostics.Process.GetCurrentProcess().Modules.Cast<System.Diagnostics.ProcessModule>()
+            .FirstOrDefault(m => string.Equals(m.ModuleName, "libcef.dll", StringComparison.OrdinalIgnoreCase))?.FileName;
+        var assets = app.GetPath("assets");
+        Check("GetPath(assets) is the exe's directory, where libcef and its resources are, on Windows",
+            string.Equals(assets, Path.GetDirectoryName(Environment.ProcessPath), StringComparison.OrdinalIgnoreCase)
+            && string.Equals(assets, Path.GetDirectoryName(loadedLibcef), StringComparison.OrdinalIgnoreCase)
+            && File.Exists(Path.Combine(assets, "resources.pak")), $"{assets} vs exe {Environment.ProcessPath}, libcef {loadedLibcef}");
+    }
     if (OperatingSystem.IsLinux())
     {
-        var userDirs = Path.Combine(app.GetPath("appData"), "user-dirs.dirs");
+        // DIR_ASSETS is DIR_MODULE of the module holding Chromium's base: the libcef.so the process mapped.
+        var mappedLibcef = File.ReadLines("/proc/self/maps").Select(l => l.Split(' ', StringSplitOptions.RemoveEmptyEntries))
+            .Where(p => p.Length >= 6 && p[5].EndsWith("/libcef.so", StringComparison.Ordinal)).Select(p => p[5]).FirstOrDefault();
+        var linuxAssets = app.GetPath("assets");
+        Check("GetPath(assets) is the directory of the libcef.so loaded, with CEF's data beside it, on Linux",
+            mappedLibcef is not null && linuxAssets == Path.GetDirectoryName(mappedLibcef) && File.Exists(Path.Combine(linuxAssets, "icudtl.dat")),
+            $"{linuxAssets} vs libcef {mappedLibcef}");
+    }
+    if (OperatingSystem.IsLinux())
+    {
+        var userDirs =Path.Combine(app.GetPath("appData"), "user-dirs.dirs");
         File.WriteAllText(userDirs, "XDG_DOWNLOAD_DIR=\"$HOME/Fetched\"\n");
         var downloadsDir = app.GetPath("downloads");
         File.Delete(userDirs);
@@ -2347,7 +2427,12 @@ Protocol.RegisterSchemesAsPrivileged(new PrivilegedScheme(CustomScheme, new Sche
 
 app.Ready += (_, _) => _ = Task.Run(async () =>
 {
-    try { await (mediaChild ? PermissionChecks(mediaOnly: true) : RunAsync()); }
+    try
+    {
+        await (mediaChild ? PermissionChecks(mediaOnly: true) : RunAsync());
+        // Last: a window opened before the session checks above stalls them.
+        if (!mediaChild && OperatingSystem.IsLinux()) await NoPortalThemeAsync();
+    }
     catch (Exception e) { Check("run completed", false, e); }
     failures = results.Count(r => r.StartsWith("FAIL"));
     app.Quit();

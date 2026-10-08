@@ -40,8 +40,8 @@ internal sealed unsafe class WindowMenuBar
     /// <summary>Hides the bar until Alt is pressed.</summary>
     internal bool AutoHide { get; set; }
 
-    /// <summary>Lays the window out as the bar above <paramref name="browserView"/>, which takes the rest.</summary>
-    internal void Attach(cef_window_t* window, cef_browser_view_t* browserView)
+    /// <summary>Lays the window out as the bar above <paramref name="content"/>, which takes the rest.</summary>
+    internal void Attach(cef_window_t* window, cef_view_t* content)
     {
         // The window delegate releases its argument after on_window_created, which frees this wrapper.
         NativeObject.AddRef(window);
@@ -55,10 +55,10 @@ internal sealed unsafe class WindowMenuBar
         NativeObject.AddRef(_panel);
         window->@base.add_child_view(&window->@base, (cef_view_t*)_panel);
 
-        NativeObject.AddRef(browserView);
-        window->@base.add_child_view(&window->@base, (cef_view_t*)browserView);
-        NativeObject.AddRef(browserView);
-        layout->set_flex_for_view(layout, (cef_view_t*)browserView, 1);
+        NativeObject.AddRef(content);
+        window->@base.add_child_view(&window->@base, content);
+        NativeObject.AddRef(content);
+        layout->set_flex_for_view(layout, content, 1);
         NativeObject.Release(layout);
         UpdateVisibility();
     }

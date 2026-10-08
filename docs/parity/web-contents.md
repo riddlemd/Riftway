@@ -1,6 +1,6 @@
 # webContents parity
 
-Against Electron **v44.5.1** (`docs/api/web-contents.md`, `navigation-history.md`, `web-frame-main.md`). Audited 2026-10-04; update this file as items land.
+Against Electron **v44.5.1** (`docs/api/web-contents.md`, `navigation-history.md`, `web-frame-main.md`). Audited 2026-10-04, recounted 2026-10-07; update this file as items land.
 
 Status: **done**, **partial** (exists with a documented gap; DRIFT.md id in the note), **missing**, or **n/a** (Node/`<webview>` features and deprecated APIs). Window-side items are in [browser-window.md](browser-window.md).
 
@@ -13,12 +13,12 @@ Percentages are over the non-n/a items; the second counts a partial item as half
 | Static methods | 5 | 2 | 2 | 1 | 0 | 40.0% | 60.0% |
 | Instance events | 59 | 31 | 18 | 8 | 2 | 54.4% | 70.2% |
 | Instance methods | 118 | 39 | 26 | 45 | 8 | 35.5% | 47.3% |
-| Instance properties | 18 | 9 | 1 | 7 | 1 | 52.9% | 55.9% |
+| Instance properties | 18 | 10 | 1 | 6 | 1 | 58.8% | 61.8% |
 | navigationHistory | 14 | 12 | 0 | 2 | 0 | 85.7% | 85.7% |
-| WebFrameMain events and statics | 3 | 1 | 0 | 2 | 0 | 33.3% | 33.3% |
+| WebFrameMain events and statics | 3 | 1 | 1 | 1 | 0 | 33.3% | 50.0% |
 | WebFrameMain methods | 9 | 1 | 4 | 4 | 0 | 11.1% | 33.3% |
-| WebFrameMain properties | 15 | 10 | 0 | 5 | 0 | 66.7% | 66.7% |
-| **Total** | 241 | 105 | 51 | 74 | 11 | 45.7% | 56.7% |
+| WebFrameMain properties | 15 | 10 | 3 | 2 | 0 | 66.7% | 76.7% |
+| **Total** | 241 | 106 | 55 | 69 | 11 | 46.1% | 58.0% |
 
 ## Checklist
 
@@ -109,7 +109,7 @@ Percentages are over the non-n/a items; the second counts a partial item as half
 | `setUserAgent(userAgent)` | `SetUserAgent` | done |  |
 | `getUserAgent()` | `GetUserAgent` | done | The app's fallback until overridden |
 | `executeJavaScript(code, userGesture)` | `ExecuteJavaScriptAsync` | partial | JSON result only, `JsonNode?` (C6, S3). |
-| `setWindowOpenHandler(handler)` | `SetWindowOpenHandler` | partial | `features` rebuilt, no `referrer`/`postBody`, no `createWindow` (O1, O2, O3). |
+| `setWindowOpenHandler(handler)` | `SetWindowOpenHandler` | partial | `features` rebuilt, no `referrer`/`postBody`; `createWindow` must adopt the page before it returns (O1, O2, O3). |
 | `setZoomFactor(factor)` | `SetZoomFactor` | done |  |
 | `getZoomFactor()` | `GetZoomFactor` | done |  |
 | `setZoomLevel(level)` | `SetZoomLevel` | done |  |
@@ -237,7 +237,7 @@ Percentages are over the non-n/a items; the second counts a partial item as half
 | `id` | `Id` | done |  |
 | `session` | `Session` | done | See DRIFT E1-E11 for the session gaps. |
 | `devToolsWebContents` | — | missing |  |
-| `debugger` | — | missing |  |
+| `debugger` | `Debugger` | done | Shares Oriel's protocol session (DRIFT C43) |
 | `backgroundThrottling` | — | missing |  |
 | `opener` | — | missing |  |
 | `zoomMode` | — | missing |  |
@@ -265,8 +265,8 @@ Percentages are over the non-n/a items; the second counts a partial item as half
 
 | Electron | Oriel | Status | Note |
 |---|---|---|---|
-| `fromId(processId, routingId)` | — | missing | F2. |
-| `fromFrameToken(processId, frameToken)` | — | missing | F2. |
+| `fromId(processId, routingId)` | — | missing | No routing id (F2). |
+| `fromFrameToken(processId, frameToken)` | `WebFrameMain.FromFrameToken` | partial | Current frames of window pages, by CEF's frame identifier (F6). |
 | `dom-ready (event)` | `DomReady` | done |  |
 
 ### `WebFrameMain` instance methods
@@ -278,7 +278,7 @@ Percentages are over the non-n/a items; the second counts a partial item as half
 | `isDestroyed()` | `IsDestroyed` | done |  |
 | `send(channel, ...args)` | `Send` | partial | Dropped for cross-process frames and before the preload runs (F1). |
 | `postMessage(channel, message, transfer)` | `WebFrameMain.PostMessage` | partial | JSON messages (I1). |
-| `collectJavaScriptCallStack()` | — | missing | F2. |
+| `collectJavaScriptCallStack()` | — | missing | F5. |
 | `copyVideoFrameAt(x, y)` | — | missing |  |
 | `saveVideoFrameAs(x, y)` | — | missing |  |
 | `printToPDF(options)` | — | missing |  |
@@ -294,11 +294,11 @@ Percentages are over the non-n/a items; the second counts a partial item as half
 | `frames` | `Frames` | done |  |
 | `framesInSubtree` | `FramesInSubtree` | done |  |
 | `name` | `Name` | done |  |
-| `frameToken` | `FrameToken` | done | Chromium's DevTools frame token (F2). |
+| `frameToken` | `FrameToken` | partial | Chromium's `LocalFrameToken`, from CEF's frame identifier; the frame is matched to CEF's (F6). |
 | `detached` | `Detached` | done |  |
 | `ipc` | `Ipc` | done | Kept per frame object across its navigations, where Electron's follows the frame tree node. |
-| `frameTreeNodeId` | — | missing | F2 for the ids. |
-| `osProcessId` | — | missing | F2 for the ids. |
-| `processId` | — | missing | F2 for the ids. |
-| `routingId` | — | missing | F2 for the ids. |
-| `visibilityState` | — | missing | F2 for the ids. |
+| `frameTreeNodeId` | — | missing | F2. |
+| `osProcessId` | `OsProcessId` | done | The child process launched with `--renderer-client-id` set to `processId`. |
+| `processId` | `ProcessId` | partial | From CEF's frame identifier; the frame is matched to CEF's (F6). |
+| `routingId` | — | missing | F2. |
+| `visibilityState` | `VisibilityState` | partial | Reported by the document (F7). |

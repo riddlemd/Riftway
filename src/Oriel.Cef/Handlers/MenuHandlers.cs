@@ -92,29 +92,6 @@ public sealed unsafe class ButtonDelegate
     }
 }
 
-/// <summary><c>cef_panel_delegate_t</c>: told when the theme resets the panel's colours.</summary>
-public sealed unsafe class PanelDelegate
-{
-    public PanelDelegate(Action themeChanged)
-    {
-        ThemeChanged = themeChanged;
-        Native = NativeObject.Create<cef_panel_delegate_t>(this);
-        Native->@base.on_theme_changed = &OnThemeChanged;
-    }
-
-    public cef_panel_delegate_t* Native { get; }
-
-    public Action ThemeChanged { get; }
-
-    [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])]
-    private static void OnThemeChanged(cef_view_delegate_t* self, cef_view_t* view)
-    {
-        var owner = NativeObject.Owner<PanelDelegate>(self);
-        Guard.Run(owner.ThemeChanged);
-        NativeObject.Release(view);
-    }
-}
-
 /// <summary><c>cef_menu_button_delegate_t</c>: a Views button that opens a menu.</summary>
 public sealed unsafe class MenuButtonDelegate
 {

@@ -246,6 +246,8 @@ public sealed unsafe partial class OrielApp
         // Under bootstrap every child runs as this same exe; naming another would make CEF drop the sandbox.
         if (!bootstrap) CefString.Set(&settings.browser_subprocess_path, CefLayout.SubprocessPath());
 
+        // Before Chromium starts its own portal reads, so both see the portal from the same moment.
+        if (OperatingSystem.IsLinux()) LinuxPortalSettings.Start();
         NativeObject.AddRef(app.Native);
         var initialized = CefNative.cef_initialize((cef_main_args_t*)&args, &settings, app.Native, sandboxInfo) != 0;
         CefString.Clear(&settings.user_agent);
@@ -311,7 +313,8 @@ public sealed unsafe partial class OrielApp
         _quitting = false;
         if (will.Cancel) return;
         SessionHelperPage.CloseAll();
-        CefNative.cef_quit_message_loop();
+        // CEF must not shut down with a page still open: views outside every window still have theirs.
+        WebContentsView.CloseAll(CefNative.cef_quit_message_loop);
     }
 
     /// <summary>A window refused to close; a quit in progress stops, as in Electron.</summary>
@@ -371,6 +374,7 @@ public sealed unsafe partial class OrielApp
         var global = CefNative.cef_request_context_get_global_context();
         Session.ApplyElectronDefaults(global);
         NativeObject.Release(global);
+        NativeTheme.OnReady();
         // Before Ready, so the first window's page can already load from a custom scheme.
         Protocol.OnContextInitialized();
         IsReady = true;

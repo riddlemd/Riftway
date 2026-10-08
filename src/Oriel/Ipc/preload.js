@@ -19,6 +19,10 @@
 
   // The frame that last took focus is webContents.focusedFrame. Captured: an element's focus does not bubble.
   globalThis.addEventListener('focus', () => post(JSON.stringify({ t: 'focus', ch: '', args: [] })), true);
+  // webFrameMain.visibilityState: Chromium keeps it in the browser process; here the document reports each change.
+  const reportVisibility = () => post(JSON.stringify({ t: 'vis', ch: '', args: [document.visibilityState] }));
+  reportVisibility();
+  document.addEventListener('visibilitychange', reportVisibility, true);
   // Chromium's MediaStartedPlaying and MediaStoppedPlaying, per player; captured, as media events do not bubble.
   globalThis.addEventListener('playing', () => post(JSON.stringify({ t: 'media', ch: '', args: [true] })), true);
   // Chromium turns a Ctrl+wheel the page leaves unhandled into ContentsZoomChange, one per whole wheel tick, except on

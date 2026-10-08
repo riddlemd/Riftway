@@ -27,68 +27,97 @@ internal static class ImagePixels
         return new ImageBitmap(w, h, bgra);
     }
 
-    /// <summary>Scales to the given size: box-averages an axis that shrinks, interpolates bilinearly when it grows, on premultiplied values.</summary>
-    internal static ImageBitmap Resize(ImageBitmap src, int width, int height)
+    /// <summary>Scales to the given size the way Chromium's <c>skia::ImageOperations::Resize</c> does: a separable convolution
+    /// on premultiplied 8-bit values with 14-bit fixed-point weights, horizontal pass first. <c>Good</c> and <c>Better</c> use
+    /// Hamming-1, <c>Best</c> Lanczos-3.</summary>
+    internal static ImageBitmap Resize(ImageBitmap src, int width, int height, ResizeQuality quality = ResizeQuality.Best)
     {
         if (width <= 0 || height <= 0 || src.Width <= 0 || src.Height <= 0) return Empty;
         if (width == src.Width && height == src.Height) return src with { Bgra = (byte[])src.Bgra.Clone() };
 
-        var horizontal = ResizeAxis(ToFloats(src.Bgra), src.Height, src.Width, width, 4, src.Width * 4, 4, width * 4);
-        var vertical = ResizeAxis(horizontal, width, src.Height, height, width * 4, 4, width * 4, 4);
+        var lanczos = quality == ResizeQuality.Best;
+        var xFilters = ComputeFilters(src.Width, width, lanczos);
+        var yFilters = ComputeFilters(src.Height, height, lanczos);
+
+        var rows = new byte[src.Height * width * 4];
+        for (var y = 0; y < src.Height; y++)
+        for (var x = 0; x < width; x++)
+        {
+            var (start, weights) = xFilters[x];
+            for (var c = 0; c < 4; c++)
+            {
+                var sum = 0;
+                for (var k = 0; k < weights.Length; k++) sum += weights[k] * src.Bgra[(y * src.Width + start + k) * 4 + c];
+                rows[(y * width + x) * 4 + c] = ClampTo8(sum >> FixedShift);
+            }
+        }
+
         var bgra = new byte[width * height * 4];
-        for (var i = 0; i < bgra.Length; i++) bgra[i] = (byte)Math.Clamp((int)(vertical[i] + 0.5f), 0, 255);
+        for (var y = 0; y < height; y++)
+        for (var x = 0; x < width; x++)
+        {
+            var (start, weights) = yFilters[y];
+            var o = (y * width + x) * 4;
+            for (var c = 0; c < 4; c++)
+            {
+                var sum = 0;
+                for (var k = 0; k < weights.Length; k++) sum += weights[k] * rows[((start + k) * width + x) * 4 + c];
+                bgra[o + c] = ClampTo8(sum >> FixedShift);
+            }
+            // Premultiplied colour can never exceed alpha; the filters' overshoot is cut back to it.
+            for (var c = 0; c < 3; c++) if (bgra[o + c] > bgra[o + 3]) bgra[o + c] = bgra[o + 3];
+        }
         return new ImageBitmap(width, height, bgra);
     }
 
-    private static float[] ToFloats(byte[] bytes)
+    private const int FixedShift = 14;
+
+    private static byte ClampTo8(int v) => (byte)Math.Clamp(v, 0, 255);
+
+    private static float EvalFilter(bool lanczos, float x)
     {
-        var f = new float[bytes.Length];
-        for (var i = 0; i < f.Length; i++) f[i] = bytes[i];
-        return f;
+        var size = lanczos ? 3 : 1;
+        if (x <= -size || x >= size) return 0f;
+        if (x > -float.Epsilon && x < float.Epsilon) return 1f;
+        var xpi = x * MathF.PI;
+        var sinc = MathF.Sin(xpi) / xpi;
+        return lanczos
+            ? sinc * MathF.Sin(xpi / size) / (xpi / size)
+            : sinc * (0.54f + 0.46f * MathF.Cos(xpi / size));
     }
 
-    // Resamples one axis of a 4-channel float image. Strides are in floats: between samples along the axis and between
-    // lines across it, for the input and the output. The vertical pass treats columns as lines.
-    private static float[] ResizeAxis(float[] input, int lines, int srcN, int dstN, int inSample, int inLine, int outSample, int outLine)
+    // Port of skia's ResizeFilter::ComputeFilters: weights are normalized, then truncated to fixed point with the rounding
+    // remainder added to the middle tap so a flat area keeps its level.
+    private static (int Start, short[] Weights)[] ComputeFilters(int srcSize, int destSize, bool lanczos)
     {
-        var output = new float[(lines - 1) * outLine + (dstN - 1) * outSample + 4];
-        var scale = (double)srcN / dstN;
-        for (var d = 0; d < dstN; d++)
+        var scale = (float)destSize / srcSize;
+        var clamped = Math.Min(1f, scale);
+        var support = (lanczos ? 3f : 1f) / clamped;
+        var invScale = 1f / scale;
+        var filters = new (int, short[])[destSize];
+        for (var d = 0; d < destSize; d++)
         {
-            var taps = Taps(d, srcN, dstN, scale);
-            for (var line = 0; line < lines; line++)
-            for (var c = 0; c < 4; c++)
+            var srcPixel = (d + 0.5f) * invScale;
+            var begin = Math.Max(0, (int)MathF.Floor(srcPixel - support));
+            var end = Math.Min(srcSize - 1, (int)MathF.Ceiling(srcPixel + support));
+            var values = new float[end + 1 - begin];
+            var total = 0f;
+            for (var i = 0; i < values.Length; i++)
             {
-                double sum = 0;
-                foreach (var (index, weight) in taps)
-                    sum += input[line * inLine + index * inSample + c] * weight;
-                output[line * outLine + d * outSample + c] = (float)sum;
+                values[i] = EvalFilter(lanczos, (begin + i + 0.5f - srcPixel) * clamped);
+                total += values[i];
             }
-        }
-        return output;
-    }
-
-    private static List<(int Index, double Weight)> Taps(int d, int srcN, int dstN, double scale)
-    {
-        var taps = new List<(int, double)>();
-        if (dstN < srcN)
-        {
-            double start = d * scale, end = start + scale;
-            for (var s = (int)start; s < srcN && s < end; s++)
+            var fixedWeights = new short[values.Length];
+            var fixedSum = 0;
+            for (var i = 0; i < values.Length; i++)
             {
-                var overlap = Math.Min(end, s + 1) - Math.Max(start, s);
-                if (overlap > 0) taps.Add((s, overlap / scale));
+                fixedWeights[i] = (short)(int)(values[i] / total * (1 << FixedShift));
+                fixedSum += fixedWeights[i];
             }
+            fixedWeights[fixedWeights.Length / 2] += (short)((1 << FixedShift) - fixedSum);
+            filters[d] = (begin, fixedWeights);
         }
-        else
-        {
-            var pos = Math.Clamp((d + 0.5) * scale - 0.5, 0, srcN - 1);
-            var lo = (int)pos;
-            var frac = pos - lo;
-            taps.Add((lo, 1 - frac));
-            if (frac > 0) taps.Add((lo + 1, frac));
-        }
-        return taps;
+        return filters;
     }
 
     /// <summary>The same pixels with straight alpha, as Win32 icon DIBs take them; fully transparent pixels become zero.</summary>

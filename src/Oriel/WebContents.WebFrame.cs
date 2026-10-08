@@ -55,9 +55,13 @@ public sealed unsafe partial class WebContents
         }
     }
 
-    // UI thread: a frame's preload world started; it learns its frame token and the page's zoom.
+    // UI thread: a frame's preload world started; it learns its frame token and the page's zoom. Reading the token here
+    // also keeps it for the frame once it goes, as Electron's outlives the frame.
     private void TellFrameItself(int context, string frameId)
-        => Deliver(context, new JsonObject { ["t"] = "frame", ["token"] = frameId, ["zoomLevel"] = _zoomLevelForFrames, ["pinch"] = _pinchForFrames }.ToJsonString());
+    {
+        var token = _frames.TryGetValue(frameId, out var frame) ? FrameIdentity.Parse(CefIdentifierOf(frame))?.FrameToken ?? "" : "";
+        Deliver(context, new JsonObject { ["t"] = "frame", ["token"] = token, ["zoomLevel"] = _zoomLevelForFrames, ["pinch"] = _pinchForFrames }.ToJsonString());
+    }
 
     // Whether the page's preloads let a pinch through; kept across navigations, as Electron's web preference is.
     private bool _pinchForFrames;
