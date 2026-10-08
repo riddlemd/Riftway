@@ -666,6 +666,30 @@ async Task LinuxDisabledInputAsync(BrowserWindow focusAfter)
     Check("Linux: SetEnabled(true) enables it again", Eventually(() => parent.IsEnabled, step));
     Check("Linux: after SetEnabled(true) clicks and keys reach the page",
         await Reaches("mousedown", Click()) && await Reaches("keydown", $"{offWindows} key e"), await Counts());
+
+    // A view's page takes keys through its own handler; a disabled window must keep them from it as well.
+    var view = new WebContentsView();
+    parent.ContentView.AddChildView(view);
+    view.SetBounds(new Rectangle(0, 0, 300, 200));
+    await view.WebContents.LoadUrl(counting);
+    async Task<string> ViewKeys() => (await view.WebContents.ExecuteJavaScriptAsync("c.keydown"))?.ToJsonString() ?? "null";
+    async Task<bool> ReachesView(string act)
+    {
+        var before = await ViewKeys();
+        Xdo(act);
+        await Task.Delay(400);
+        return await ViewKeys() != before;
+    }
+    view.WebContents.Focus();
+    await Task.Delay(300);
+    Check("Linux: a key reaches a focused view's page in an enabled window", await ReachesView($"{offWindows} key f"), await ViewKeys());
+    parent.SetEnabled(false);
+    Eventually(() => !parent.IsEnabled, step);
+    Check("Linux: a disabled window keeps keys from its focused view's page", !await ReachesView($"{offWindows} key g"), await ViewKeys());
+    parent.SetEnabled(true);
+    Eventually(() => parent.IsEnabled, step);
+    parent.ContentView.RemoveChildView(view);
+    view.WebContents.Close();
     using (var closed = new ManualResetEventSlim())
     {
         parent.Closed += (_, _) => closed.Set();

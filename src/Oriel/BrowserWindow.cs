@@ -799,6 +799,14 @@ public sealed unsafe partial class BrowserWindow
     // Keys go to the X focus window, past the input cover, so the keyboard handlers drop them while disabled.
     private bool BlocksInput => OperatingSystem.IsLinux() && !_enabled.Enabled;
 
+    // UI thread. A view's page has a keyboard handler of its own, so it asks the window its view tree hangs from.
+    internal static bool BlocksInputAround(View view)
+    {
+        var root = view;
+        while (root.Parent is { } parent) root = parent;
+        return GetAllWindows().FirstOrDefault(w => w.ContentView == root) is { BlocksInput: true };
+    }
+
     private void ApplyLinuxEnabled()
     {
         if (!OperatingSystem.IsLinux() || _window is null) return;
