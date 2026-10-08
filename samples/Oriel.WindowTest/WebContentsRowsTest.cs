@@ -12,6 +12,7 @@ static class WebContentsRowsTest
         await DevToolsTargetAsync(check, debugPort);
         await HeapSnapshotAsync(check);
         await CopyImageAsync(check, step);
+        await OpenerAsync(check, step);
     }
 
     // The ids Chromium's own DevTools HTTP endpoint lists, by URL.
@@ -303,5 +304,68 @@ static class WebContentsRowsTest
         win.Destroy();
         File.Delete(framed);
         try { await Clipboard.WriteTextAsync(saved); } catch (Exception) { }
+    }
+
+    static async Task OpenerAsync(CheckFn check, TimeSpan step)
+    {
+        var dir = Directory.CreateTempSubdirectory("oriel-opener-").FullName;
+        File.WriteAllText(Path.Combine(dir, "opener.html"), "<!doctype html><title>opener</title><a id=blank href=popup.html target=_blank>blank</a><iframe id=f src=inner.html></iframe>");
+        File.WriteAllText(Path.Combine(dir, "inner.html"), "<!doctype html><title>inner</title><p>inner</p>");
+        File.WriteAllText(Path.Combine(dir, "popup.html"), "<!doctype html><title>popup</title><p>popup</p>");
+        var win = new BrowserWindow(new BrowserWindowOptions { Show = false });
+        var wc = win.WebContents;
+        var created = new System.Collections.Concurrent.ConcurrentQueue<BrowserWindow>();
+        // Handlers run on the UI thread, where Opener answers from the read made as the page was created.
+        var onUi = new System.Collections.Concurrent.ConcurrentDictionary<BrowserWindow, WebFrameMain?>();
+        wc.DidCreateWindow += (_, e) =>
+        {
+            var popup = e.Window;
+            popup.WebContents.DidFinishLoad += (_, _) => onUi.TryAdd(popup, popup.WebContents.Opener);
+            created.Enqueue(popup);
+        };
+        wc.SetWindowOpenHandler(_ => WindowOpenHandlerResponse.Allow(outlivesOpener: true));
+        await wc.LoadFile(Path.Combine(dir, "opener.html"));
+        await Task.Delay(300);
+        async Task<BrowserWindow?> Open(string code, WebFrameMain? frame = null)
+        {
+            var before = created.Count;
+            await (frame ?? wc.MainFrame!).ExecuteJavaScriptAsync(code, true);
+            for (var i = 0; i < 100 && created.Count == before; i++) await Task.Delay(50);
+            var popup = created.ToArray().ElementAtOrDefault(before);
+            if (popup is not null) for (var i = 0; i < 100 && popup.WebContents.GetTitle() != "popup"; i++) await Task.Delay(50);
+            return popup;
+        }
+        WebFrameMain? OpenerOf(BrowserWindow? popup) => popup is null ? null : Task.Run(() => popup.WebContents.Opener).Result;
+
+        check("a window nothing opened has no Opener", OpenerOf(win) is null);
+        var fromMain = await Open("window.open('popup.html', 'one'); 1");
+        check("Opener of a window.open popup is the frame that opened it: the opener's main frame",
+            fromMain is not null && OpenerOf(fromMain) == wc.MainFrame && fromMain.WebContents.Opener == wc.MainFrame, OpenerOf(fromMain)?.Url);
+        var inner = wc.MainFrame!.Frames.FirstOrDefault();
+        var fromFrame = inner is null ? null : await Open("window.open('popup.html', 'two'); 1", inner);
+        check("Opener of a popup an iframe opened is that iframe", fromFrame is not null && inner is not null && OpenerOf(fromFrame) == inner, OpenerOf(fromFrame)?.Url);
+        var noOpener = await Open("window.open('popup.html', 'three', 'noopener'); 1");
+        check("a popup opened with noopener has no Opener", noOpener is not null && OpenerOf(noOpener) is null, OpenerOf(noOpener)?.Url);
+        WebFrameMain? Ui(BrowserWindow? popup) => popup is not null && onUi.TryGetValue(popup, out var frame) ? frame : null;
+        check("on the UI thread, Opener is the opener read as the popup was created", fromMain is not null && onUi.ContainsKey(fromMain) && Ui(fromMain) == wc.MainFrame
+            && Ui(fromFrame) == inner && noOpener is not null && onUi.ContainsKey(noOpener) && Ui(noOpener) is null, $"{Ui(fromMain)?.Url} {Ui(fromFrame)?.Url} {onUi.Count}");
+        var blank = await Open("document.getElementById('blank').click(); 1");
+        check("a target=_blank link opens without an opener, so no Opener", blank is not null && OpenerOf(blank) is null, OpenerOf(blank)?.Url);
+        await fromMain!.WebContents.ExecuteJavaScriptAsync("window.opener = null; 1");
+        check("a popup that drops window.opener has no Opener", OpenerOf(fromMain) is null, OpenerOf(fromMain)?.Url);
+        win.Destroy();
+        await Task.Delay(1000);
+        // Read on the UI thread before any read off it refreshes the value.
+        var afterGone = new TaskCompletionSource<WebFrameMain?>(TaskCreationOptions.RunContinuationsAsynchronously);
+        if (fromFrame is not null)
+        {
+            fromFrame.WebContents.PageTitleUpdated += (_, _) => afterGone.TrySetResult(fromFrame.WebContents.Opener);
+            await fromFrame.WebContents.ExecuteJavaScriptAsync("document.title = 'gone'; 1");
+        }
+        var goneOnUi = await afterGone.Task.WaitAsync(step).ContinueWith(t => t.IsCompletedSuccessfully ? (t.Result is null ? "null" : t.Result.Url) : "no title event");
+        check("on the UI thread, Opener is null once the opener has gone", goneOnUi == "null", goneOnUi);
+        check("Opener is null once the opener has gone", fromFrame is not null && OpenerOf(fromFrame) is null, OpenerOf(fromFrame)?.Url);
+        foreach (var popup in created) if (!popup.IsDestroyed) popup.Destroy();
+        try { Directory.Delete(dir, recursive: true); } catch (IOException) { }
     }
 }

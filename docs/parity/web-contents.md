@@ -13,12 +13,12 @@ Percentages are over the non-n/a items; the second counts a partial item as half
 | Static methods | 5 | 3 | 2 | 0 | 0 | 60.0% | 80.0% |
 | Instance events | 59 | 31 | 18 | 8 | 2 | 54.4% | 70.2% |
 | Instance methods | 118 | 43 | 25 | 42 | 8 | 39.1% | 50.5% |
-| Instance properties | 18 | 10 | 1 | 6 | 1 | 58.8% | 61.8% |
+| Instance properties | 18 | 10 | 2 | 5 | 1 | 58.8% | 64.7% |
 | navigationHistory | 14 | 12 | 0 | 2 | 0 | 85.7% | 85.7% |
 | WebFrameMain events and statics | 3 | 1 | 1 | 1 | 0 | 33.3% | 50.0% |
 | WebFrameMain methods | 9 | 1 | 4 | 4 | 0 | 11.1% | 33.3% |
 | WebFrameMain properties | 15 | 10 | 3 | 2 | 0 | 66.7% | 76.7% |
-| **Total** | 241 | 111 | 54 | 65 | 11 | 48.3% | 60.0% |
+| **Total** | 241 | 111 | 55 | 64 | 11 | 48.3% | 60.2% |
 
 ## Checklist
 
@@ -239,7 +239,7 @@ Percentages are over the non-n/a items; the second counts a partial item as half
 | `devToolsWebContents` | — | missing |  |
 | `debugger` | `Debugger` | done | Shares Oriel's protocol session (DRIFT C43) |
 | `backgroundThrottling` | — | missing |  |
-| `opener` | — | missing |  |
+| `opener` | `Opener` | partial | Read over DevTools; on the UI thread, the value last read (C49). |
 | `zoomMode` | — | missing |  |
 
 ### `navigationHistory` (`NavigationHistory`)

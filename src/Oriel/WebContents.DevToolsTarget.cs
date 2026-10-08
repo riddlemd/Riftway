@@ -34,6 +34,7 @@ public sealed unsafe partial class WebContents
     private void ReadDevToolsTargetId() => _devTools.Send("Target.getTargetInfo", onResult: (result, error) =>
     {
         if (error is null && result.TryGetProperty("targetInfo", out var info)) _devToolsTargetId = info.GetProperty("targetId").GetString();
+        if (error is null) ReadOpener(result);
         _devToolsTargetIdRead.TrySetResult();
     });
 }
