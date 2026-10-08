@@ -7,6 +7,10 @@ General items: [todo.md](todo.md).
   - [x] Workaround: `Oriel.Subprocess.Native` overrides `getauxval` and clears HWCAP2 SME when SVE is absent
         (branch `sme-override`; ProtocolTest green plain and sandboxed without any preload)
   - [ ] Check whether Chromium/libyuv already has a bug or fix; file one if not, then drop the override
+    - Likely tracked as issuetracker.google.com/issues/558654023 (M5 Pro under OrbStack; sign-in only, read from a search
+      summary, fix status unknown). Cause, per pingdotgg/t3code#11731: SME code built for `-march=armv9-a+i8mm+sme`
+      (libyuv BUILD.gn) runs a non-streaming SVE `cntd` before `smstart`, which M4+ lacks. Chromium 154 detection is not
+      the bug: `cpu_id.cc` enables SME without SVE on purpose. No libyuv fix found; recheck when CEF moves past 154
   - [x] `Oriel.Subprocess.Native` builds and links on linux-x64 (clang 18, GNU ld; `--export-dynamic-symbol` is accepted).
         The override is `__aarch64__`-only, so x64 exports no `getauxval` by design.
 - [ ] Linux sandbox on Ubuntu 24.04+: AppArmor profile, or documented `--no-sandbox` (M4)
