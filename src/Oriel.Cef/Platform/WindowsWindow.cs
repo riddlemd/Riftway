@@ -52,6 +52,11 @@ public static unsafe class WindowsWindow
 
     private const ushort VtLpwstr = 31;
     private const uint SystemBackdropType = 38; // DWMWA_SYSTEMBACKDROP_TYPE
+    private const int GwlExStyle = -20;
+    private const nint WsExTopmost = 0x00000008;
+    private const nint HwndTopmost = -1;
+    private const nint HwndNoTopmost = -2;
+    private const uint SwpZOrderOnly = 0x0001 | 0x0002 | 0x0010; // NOSIZE, NOMOVE, NOACTIVATE
 
     /// <summary>Writes <paramref name="values"/> to the window's property store and commits them.
     /// False if the store could not be opened or refused a value.</summary>
@@ -105,6 +110,20 @@ public static unsafe class WindowsWindow
         return DwmGetWindowAttribute(hwnd, SystemBackdropType, &value, sizeof(int)) >= 0 ? (WindowsBackdrop)value : null;
     }
 
+    /// <summary>Whether the window has <c>WS_EX_TOPMOST</c>.</summary>
+    public static bool IsTopmost(nint hwnd) => (GetWindowLongPtrW(hwnd, GwlExStyle) & WsExTopmost) != 0;
+
+    /// <summary>Makes the window topmost where a plain <c>HWND_TOPMOST</c> did not take. True if it is topmost now.</summary>
+    public static bool EnsureTopmost(nint hwnd)
+    {
+        if (IsTopmost(hwnd)) return true;
+        // Windows ignores HWND_TOPMOST, while reporting success, for a background thread's active window that lies under
+        // the foreground window (CEF activates a window starting a load); HWND_NOTOPMOST is allowed and lifts it first.
+        _ = SetWindowPos(hwnd, HwndNoTopmost, 0, 0, 0, 0, SwpZOrderOnly);
+        _ = SetWindowPos(hwnd, HwndTopmost, 0, 0, 0, 0, SwpZOrderOnly);
+        return IsTopmost(hwnd);
+    }
+
     /// <summary>The window's DPI scale: 1 at 96 DPI.</summary>
     public static double ScaleFactor(nint hwnd) => GetDpiForWindow(hwnd) is var dpi and > 0 ? dpi / 96.0 : 1.0;
 
@@ -141,4 +160,6 @@ public static unsafe class WindowsWindow
     [DllImport("dwmapi.dll")] private static extern int DwmSetWindowAttribute(nint hwnd, uint attribute, void* value, uint size);
     [DllImport("dwmapi.dll")] private static extern int DwmGetWindowAttribute(nint hwnd, uint attribute, void* value, uint size);
     [DllImport("user32.dll")] private static extern uint GetDpiForWindow(nint hwnd);
+    [DllImport("user32.dll")] private static extern nint GetWindowLongPtrW(nint hwnd, int index);
+    [DllImport("user32.dll")] private static extern int SetWindowPos(nint hwnd, nint after, int x, int y, int cx, int cy, uint flags);
 }

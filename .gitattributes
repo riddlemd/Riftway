@@ -2,6 +2,9 @@
 # Set default behavior to automatically normalize line endings.
 ###############################################################################
 * text=auto
+# Run inside Linux containers mounted from Windows checkouts, where CRLF breaks the shebang.
+*.sh text eol=lf
+*.py text eol=lf
 
 ###############################################################################
 # Set default behavior for command prompt diff.

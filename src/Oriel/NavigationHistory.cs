@@ -34,18 +34,10 @@ public sealed unsafe class NavigationHistory
     public void GoForward() => _page.WithBrowser(b => b->go_forward(b));
 
     /// <summary>Goes to the page at <paramref name="index"/>. Electron's <c>goToIndex()</c>.</summary>
-    public void GoToIndex(int index) => _page.WithBrowser(_ =>
-    {
-        var (entries, active) = Snapshot();
-        if (index >= 0 && index < entries.Count && index != active) _page.RunInMainFrame($"history.go({index - active})");
-    });
+    public void GoToIndex(int index) => _page.GoToHistoryEntry((_, _) => index);
 
     /// <summary>Goes <paramref name="offset"/> pages back (negative) or forward. Electron's <c>goToOffset()</c>.</summary>
-    public void GoToOffset(int offset) => _page.WithBrowser(_ =>
-    {
-        // CEF can only step one page at a time, so the page's own history moves.
-        if (offset != 0) _page.RunInMainFrame($"history.go({offset})");
-    });
+    public void GoToOffset(int offset) => _page.GoToHistoryEntry((current, _) => current + offset);
 
     /// <summary>Forgets every page but the one showing. Electron's <c>clear()</c>.</summary>
     public void Clear() => _page.ResetHistory();

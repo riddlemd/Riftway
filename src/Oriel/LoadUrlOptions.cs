@@ -71,17 +71,37 @@ public sealed record UploadRawData(byte[] Bytes) : PostDataEntry;
 
 /// <summary>A file sent as part of the body. Electron's <c>UploadFile</c>.</summary>
 /// <param name="FilePath">The file to upload.</param>
-/// <remarks>CEF uploads whole files: a non-zero <see cref="Offset"/> or <see cref="Length"/> is not supported.</remarks>
 public sealed record UploadFile(string FilePath) : PostDataEntry
 {
-    /// <summary>Not supported unless 0. Electron's <c>offset</c>.</summary>
+    /// <summary>Where the part starts, in bytes. Electron's <c>offset</c>.</summary>
     public long Offset { get; init; }
 
-    /// <summary>Not supported unless 0 (the whole file). Electron's <c>length</c>.</summary>
+    /// <summary>How many bytes to send; 0 sends the rest of the file. Electron's <c>length</c>.</summary>
     public long Length { get; init; }
 
-    /// <summary>Accepted and ignored: CEF does not check it. Electron's <c>modificationTime</c>.</summary>
+    /// <summary>The file's last-write time, in seconds since the UNIX epoch, that it must still have, or the load fails
+    /// with <c>ERR_UPLOAD_FILE_CHANGED</c>; 0 checks nothing. Electron's <c>modificationTime</c>.</summary>
     public double ModificationTime { get; init; }
+
+    /// <summary>Whether the file was written since <see cref="ModificationTime"/>.</summary>
+    internal bool HasChanged()
+    {
+        if (ModificationTime == 0) return false;
+        var written = new DateTimeOffset(File.GetLastWriteTimeUtc(FilePath)).ToUnixTimeMilliseconds() / 1000.0;
+        return Math.Abs(written - ModificationTime) > 0.001;
+    }
+
+    /// <summary>The part to send when it is not the whole file; CEF attaches only whole files.</summary>
+    internal byte[]? ReadSlice()
+    {
+        if (Offset == 0 && Length == 0) return null;
+        using var stream = File.OpenRead(FilePath);
+        stream.Position = Math.Min(Offset, stream.Length);
+        var count = Length == 0 ? stream.Length - stream.Position : Math.Min(Length, stream.Length - stream.Position);
+        var bytes = new byte[count];
+        stream.ReadExactly(bytes);
+        return bytes;
+    }
 }
 
 /// <summary>What one <see cref="WebContents.LoadUrl"/> call changes on its navigation request.</summary>
@@ -101,8 +121,8 @@ internal sealed record PendingLoad(
             throw new NotSupportedException("baseURLForDataURL is not supported: CEF cannot load a data: URL under another base URL.");
         foreach (var entry in options.PostData ?? [])
         {
-            if (entry is UploadFile { Offset: not 0 } or UploadFile { Length: not 0 })
-                throw new NotSupportedException("UploadFile offset and length are not supported: CEF uploads whole files.");
+            if (entry is UploadFile { Offset: < 0 } or UploadFile { Length: < 0 })
+                throw new ArgumentOutOfRangeException(nameof(options), "UploadFile offset and length cannot be negative.");
             if (entry is null) throw new ArgumentException("PostData contains a null entry.", nameof(options));
         }
 
@@ -190,6 +210,9 @@ internal sealed record PendingLoad(
             {
                 case UploadRawData raw:
                     fixed (byte* bytes = raw.Bytes) element->set_to_bytes(element, (nuint)raw.Bytes.Length, bytes);
+                    break;
+                case UploadFile file when file.ReadSlice() is { } slice:
+                    fixed (byte* bytes = slice) element->set_to_bytes(element, (nuint)slice.Length, bytes);
                     break;
                 case UploadFile file:
                     cef_string_utf16_t path = default;

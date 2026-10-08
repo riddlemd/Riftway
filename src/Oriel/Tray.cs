@@ -401,7 +401,7 @@ internal sealed unsafe class TrayMenu
         var handle = (nint)window;
         var popupDelegate = new MenuModelDelegate
         {
-            CommandExecuted = id => menu.FindByCommandId(id)?.Activate(BrowserWindow.GetFocusedWindow()),
+            CommandExecuted = (id, flags) => menu.FindByCommandId(id)?.Activate(BrowserWindow.GetFocusedWindow(), KeyboardEvent.FromCefFlags(flags)),
             // Posted: CEF is still inside the window's menu code when it reports the close.
             Closed = () => CefThread.PostUi(() => { if ((nint)_window == handle) Close(); }),
         };

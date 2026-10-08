@@ -177,6 +177,56 @@ static unsafe class WindowsShell
         public fixed uint Colors[256];
     }
 
+    /// <summary>The screen pixel at the centre of the window's client area, as composited by DWM.</summary>
+    internal static (byte R, byte G, byte B) ClientCentrePixel(nint hwnd)
+    {
+        // POINT packed in a long: x in the low half, y in the high.
+        long origin = 0;
+        var client = new int[4];
+        fixed (int* r = client) _ = GetClientRect(hwnd, r);
+        _ = ClientToScreen(hwnd, &origin);
+        var dc = GetDC(0);
+        var c = GetPixel(dc, (int)origin + client[2] / 2, (int)(origin >> 32) + client[3] / 2);
+        _ = ReleaseDC(0, dc);
+        return ((byte)c, (byte)(c >> 8), (byte)(c >> 16));
+    }
+
+    /// <summary>What the window answers <c>WM_NCHITTEST</c> two pixels inside its left edge, half way down
+    /// (<c>HTLEFT</c> is 10, <c>HTCLIENT</c> 1).</summary>
+    internal static nint LeftEdgeHitTest(nint hwnd)
+    {
+        var rect = new int[4];
+        fixed (int* r = rect) _ = GetWindowRect(hwnd, r);
+        var x = rect[0] + 2;
+        var y = (rect[1] + rect[3]) / 2;
+        nint result;
+        _ = SendMessageTimeoutW(hwnd, 0x84 /* WM_NCHITTEST */, 0, (nint)((y << 16) | (x & 0xFFFF)), 2 /* SMTO_ABORTIFHUNG */, 1000, &result);
+        return result;
+    }
+
+    /// <summary>The window's <c>GWL_STYLE</c>.</summary>
+    internal static uint Style(nint hwnd) => (uint)GetWindowLongPtrW(hwnd, -16);
+
+    /// <summary>Sets the window's <c>GWL_STYLE</c> as another party (Chromium) would.</summary>
+    internal static void SetStyle(nint hwnd, uint style) => SetWindowLongPtrW(hwnd, -16, (nint)style);
+
+    /// <summary>Puts the window in or out of the topmost band as another program would; true if <c>WS_EX_TOPMOST</c> agrees.</summary>
+    internal static bool SetTopmost(nint hwnd, bool topmost)
+    {
+        const uint zOrderOnly = 0x0001 | 0x0002 | 0x0010; // SWP_NOSIZE | SWP_NOMOVE | SWP_NOACTIVATE
+        // HWND_TOPMOST alone can be ignored for a window under the foreground one; HWND_NOTOPMOST first lifts it.
+        _ = SetWindowPos(hwnd, -2 /* HWND_NOTOPMOST */, 0, 0, 0, 0, zOrderOnly);
+        if (topmost) _ = SetWindowPos(hwnd, -1 /* HWND_TOPMOST */, 0, 0, 0, 0, zOrderOnly);
+        return ((GetWindowLongPtrW(hwnd, -20) & 0x8 /* WS_EX_TOPMOST */) != 0) == topmost;
+    }
+
+    [DllImport("user32.dll")] private static extern int SetWindowPos(nint hwnd, nint after, int x, int y, int cx, int cy, uint flags);
+    [DllImport("user32.dll")] private static extern int GetClientRect(nint hwnd, int* rect);
+    [DllImport("user32.dll")] private static extern int GetWindowRect(nint hwnd, int* rect);
+    [DllImport("user32.dll")] private static extern int ClientToScreen(nint hwnd, long* point);
+    [DllImport("gdi32.dll")] private static extern uint GetPixel(nint dc, int x, int y);
+    [DllImport("user32.dll")] private static extern nint GetWindowLongPtrW(nint hwnd, int index);
+    [DllImport("user32.dll")] private static extern nint SetWindowLongPtrW(nint hwnd, int index, nint value);
     [DllImport("user32.dll")] private static extern nint SendMessageTimeoutW(nint hwnd, uint message, nint wParam, nint lParam, uint flags, uint timeout, nint* result);
     [DllImport("user32.dll")] private static extern int GetIconInfo(nint icon, IconInfo* info);
     [DllImport("user32.dll")] private static extern nint GetDC(nint hwnd);
@@ -298,15 +348,91 @@ static unsafe class WindowsShell
     [DllImport("user32.dll")] private static extern int PostMessageW(nint hwnd, uint message, nint wParam, nint lParam);
     [DllImport("user32.dll")] private static extern int IsWindowVisible(nint hwnd);
     [DllImport("user32.dll", CharSet = CharSet.Unicode)] private static extern nint FindWindowExW(nint parent, nint after, string? cls, string? name);
-    [DllImport("user32.dll")] private static extern uint GetWindowThreadProcessId(nint hwnd, uint* pid);
     [DllImport("user32.dll")] private static extern nint GetWindow(nint hwnd, uint cmd);
     [DllImport("user32.dll")] private static extern int GetWindowLongW(nint hwnd, int index);
-    [DllImport("user32.dll")] private static extern int GetClassNameW(nint hwnd, char* name, int length);
     [DllImport("user32.dll")] private static extern int SetCursorPos(int x, int y);
     [DllImport("user32.dll")] private static extern int GetCursorPos(int* point);
     [DllImport("user32.dll")] private static extern int GetMenuItemCount(nint menu);
     [DllImport("user32.dll")] private static extern int GetMenuStringW(nint menu, uint item, char* text, int max, uint flags);
     [DllImport("user32.dll")] private static extern uint GetMenuState(nint menu, uint item, uint flags);
+
+    /// <summary>Open Explorer windows as (folder path, selected item names, window object), from Shell.Application.</summary>
+    internal static List<(string Folder, List<string> Selected, dynamic Window)> ExplorerWindows()
+    {
+        var found = new List<(string, List<string>, dynamic)>();
+        dynamic shell = Activator.CreateInstance(OperatingSystem.IsWindows() ? Type.GetTypeFromProgID("Shell.Application")! : throw new PlatformNotSupportedException())!;
+        foreach (var window in shell.Windows())
+        {
+            try
+            {
+                string? url = window.LocationURL;
+                if (url is null || !url.StartsWith("file:", StringComparison.OrdinalIgnoreCase)) continue;
+                var folder = new Uri(url).LocalPath;
+                var selected = new List<string>();
+                foreach (var item in window.Document.SelectedItems()) selected.Add((string)item.Name);
+                found.Add((folder, selected, window));
+            }
+            // Windows that are closing, or not Explorer, answer with errors.
+            catch (Exception) { }
+        }
+        return found;
+    }
+
+    /// <summary>Closes every Explorer window showing <paramref name="folder"/>.</summary>
+    internal static void CloseExplorerAt(string folder)
+    {
+        bool At(string path) => string.Equals(Path.TrimEndingDirectorySeparator(path), Path.TrimEndingDirectorySeparator(folder), StringComparison.OrdinalIgnoreCase);
+        foreach (var (path, _, window) in ExplorerWindows())
+            if (At(path)) window.Quit();
+        // Quit returns before the window is gone, and the shell hands the next open of that folder to the dying window.
+        var deadline = DateTime.UtcNow.AddSeconds(5);
+        while (DateTime.UtcNow < deadline && ExplorerWindows().Any(w => At(w.Folder))) Thread.Sleep(100);
+        Thread.Sleep(500);
+    }
+
+    /// <summary>The Recycle Bin's file for an item that was <paramref name="originalPath"/>, or null.</summary>
+    internal static string? RecycledCopyOf(string originalPath)
+    {
+        dynamic shell = Activator.CreateInstance(OperatingSystem.IsWindows() ? Type.GetTypeFromProgID("Shell.Application")! : throw new PlatformNotSupportedException())!;
+        var bin = shell.Namespace(10 /* ssfBITBUCKET */);
+        foreach (var item in bin.Items())
+        {
+            // Detail 1 is the folder the item was deleted from.
+            string name = item.Name, from = bin.GetDetailsOf(item, 1);
+            if (string.Equals(Path.Combine(from, name), originalPath, StringComparison.OrdinalIgnoreCase)
+                || string.Equals(Path.Combine(from, name), Path.ChangeExtension(originalPath, null), StringComparison.OrdinalIgnoreCase))
+                return (string)item.Path;
+        }
+        return null;
+    }
+
+    /// <summary>The clipboard owner window's process id and class name, read straight from Win32; (0, "") with no owner.</summary>
+    internal static (int ProcessId, string ClassName) ClipboardOwner()
+    {
+        var owner = GetClipboardOwner();
+        if (owner == 0) return (0, "");
+        uint pid = 0;
+        if (GetWindowThreadProcessId(owner, &pid) == 0) return (0, "");
+        var name = stackalloc char[256];
+        var length = GetClassNameW(owner, name, 256);
+        return ((int)pid, new string(name, 0, Math.Max(length, 0)));
+    }
+
+    /// <summary>A .lnk file's fields as WScript.Shell reads them, independently of Oriel's IShellLink code.</summary>
+    internal static (string Target, string Arguments, string WorkingDirectory, string Description, string IconLocation) ShortcutFields(string path)
+    {
+        dynamic shell = Activator.CreateInstance(OperatingSystem.IsWindows() ? Type.GetTypeFromProgID("WScript.Shell")! : throw new PlatformNotSupportedException())!;
+        var link = shell.CreateShortcut(path);
+        return ((string)link.TargetPath, (string)link.Arguments, (string)link.WorkingDirectory, (string)link.Description, (string)link.IconLocation);
+    }
+
+    /// <summary>Deletes a recycled item for good: its <c>$R</c> file and the <c>$I</c> record beside it.</summary>
+    internal static void Purge(string recycledPath)
+    {
+        File.Delete(recycledPath);
+        var info = Path.Combine(Path.GetDirectoryName(recycledPath)!, "$I" + Path.GetFileName(recycledPath)[2..]);
+        File.Delete(info);
+    }
 
     private static void* Slot(void* com, int index) => (*(void***)com)[index];
 
@@ -343,6 +469,133 @@ static unsafe class WindowsShell
         public uint Private;
     }
 
+    /// <summary>Whether a contrast theme is on, from <c>SPI_GETHIGHCONTRAST</c>; and the registry's copy of the flags.</summary>
+    [System.Runtime.Versioning.SupportedOSPlatform("windows")]
+    internal static (bool Api, bool Registry) HighContrastOn()
+    {
+        // HIGHCONTRASTW: cbSize, dwFlags, lpszDefaultScheme.
+        var info = stackalloc byte[16];
+        *(uint*)info = 16;
+        var api = SystemParametersInfoW(0x0042, 16, info, 0) != 0 && (((uint*)info)[1] & 1) != 0;
+        var flags = Microsoft.Win32.Registry.GetValue(@"HKEY_CURRENT_USER\Control Panel\Accessibility\HighContrast", "Flags", "0") as string;
+        return (api, uint.TryParse(flags, out var f) && (f & 1) != 0);
+    }
+
+    /// <summary>The icon <c>LoadImage(IMAGE_ICON, size, size, LR_LOADFROMFILE)</c> makes of <paramref name="path"/>, as
+    /// straight BGRA with the AND mask applied to icons without alpha; null if it cannot be loaded.</summary>
+    internal static (int Width, int Height, byte[] Bgra)? LoadIcon(string path, int size)
+    {
+        var icon = LoadImageW(0, path, 1 /* IMAGE_ICON */, size, size, 0x10 /* LR_LOADFROMFILE */);
+        if (icon == 0) return null;
+        IconInfo info;
+        try
+        {
+            if (GetIconInfo(icon, &info) == 0 || info.Color == 0) return null;
+        }
+        finally { _ = DestroyIcon(icon); }
+        try
+        {
+            BitmapHeader bitmap;
+            if (GetObjectW(info.Color, sizeof(BitmapHeader), &bitmap) == 0) return null;
+            var (w, h) = (bitmap.Width, bitmap.Height);
+            var colour = Bits(info.Color, w, h);
+            var mask = Bits(info.Mask, w, h);
+            if (colour is null || mask is null) return null;
+            var anyAlpha = false;
+            for (var i = 3; i < colour.Length; i += 4) anyAlpha |= colour[i] != 0;
+            if (!anyAlpha)
+                for (var i = 0; i < colour.Length; i += 4) colour[i + 3] = mask[i] == 0 ? (byte)255 : (byte)0;
+            return (w, h, colour);
+        }
+        finally
+        {
+            _ = DeleteObject(info.Color);
+            if (info.Mask != 0) _ = DeleteObject(info.Mask);
+        }
+
+        static byte[]? Bits(nint bmp, int w, int h)
+        {
+            var header = new BitmapInfoHeader { Size = 40, Width = w, Height = -h, Planes = 1, BitCount = 32 };
+            var pixels = new byte[w * h * 4];
+            var dc = GetDC(0);
+            try
+            {
+                fixed (byte* data = pixels)
+                    return GetDIBits(dc, bmp, 0, (uint)h, data, &header, 0) == 0 ? null : pixels;
+            }
+            finally { _ = ReleaseDC(0, dc); }
+        }
+    }
+
+    /// <summary>The composited screen pixel at (<paramref name="x"/>, <paramref name="y"/>) DIPs into the window's client area.</summary>
+    internal static (byte R, byte G, byte B) ClientPixel(nint hwnd, int x, int y)
+    {
+        long origin = 0;
+        _ = ClientToScreen(hwnd, &origin);
+        var scale = GetDpiForWindow(hwnd) / 96.0;
+        var dc = GetDC(0);
+        var c = GetPixel(dc, (int)origin + (int)(x * scale), (int)(origin >> 32) + (int)(y * scale));
+        _ = ReleaseDC(0, dc);
+        return ((byte)c, (byte)(c >> 8), (byte)(c >> 16));
+    }
+
+    internal static nint Foreground() => GetForegroundWindow();
+
+    /// <summary>Records every window that becomes the foreground window (<c>EVENT_SYSTEM_FOREGROUND</c>) until disposed,
+    /// however briefly: a window handing activation straight back is still seen.</summary>
+    internal sealed class ForegroundWatch : IDisposable
+    {
+        private static readonly ConcurrentQueue<(nint Hwnd, int ProcessId)> s_seen = new();
+        private readonly Thread _thread;
+        private uint _threadId;
+
+        internal ForegroundWatch()
+        {
+            s_seen.Clear();
+            using var ready = new ManualResetEventSlim();
+            _thread = new Thread(() =>
+            {
+                _threadId = GetCurrentThreadId();
+                var hook = SetWinEventHook(3 /* EVENT_SYSTEM_FOREGROUND */, 3, 0, &OnEvent, 0, 0, 0 /* WINEVENT_OUTOFCONTEXT */);
+                ready.Set();
+                Msg msg;
+                while (GetMessageW(&msg, 0, 0, 0) > 0) DispatchMessageW(&msg);
+                _ = UnhookWinEvent(hook);
+            }) { IsBackground = true, Name = "foreground watch" };
+            _thread.Start();
+            ready.Wait();
+        }
+
+        internal IReadOnlyList<(nint Hwnd, int ProcessId)> Seen => [.. s_seen];
+
+        public void Dispose()
+        {
+            _ = PostThreadMessageW(_threadId, 0x0012 /* WM_QUIT */, 0, 0);
+            _thread.Join(2000);
+        }
+
+        [UnmanagedCallersOnly]
+        // The owner is read now: a window that is already gone by the time the test looks has no process.
+        private static void OnEvent(nint hook, uint e, nint hwnd, int obj, int child, uint thread, uint time) => s_seen.Enqueue((hwnd, ProcessOf(hwnd)));
+    }
+
+    /// <summary>The process that owns <paramref name="hwnd"/>.</summary>
+    internal static int ProcessOf(nint hwnd)
+    {
+        uint pid;
+        _ = GetWindowThreadProcessId(hwnd, &pid);
+        return (int)pid;
+    }
+
+    [DllImport("user32.dll")] private static extern int SystemParametersInfoW(uint action, uint param, void* data, uint winIni);
+    [DllImport("user32.dll", CharSet = CharSet.Unicode)] private static extern nint LoadImageW(nint instance, string name, uint type, int cx, int cy, uint flags);
+    [DllImport("user32.dll")] private static extern int DestroyIcon(nint icon);
+    [DllImport("user32.dll")] private static extern uint GetDpiForWindow(nint hwnd);
+    [DllImport("user32.dll")] private static extern nint GetForegroundWindow();
+    [DllImport("user32.dll")] private static extern nint SetWinEventHook(uint min, uint max, nint module, delegate* unmanaged<nint, uint, nint, int, int, uint, uint, void> proc, uint pid, uint thread, uint flags);
+    [DllImport("user32.dll")] private static extern int UnhookWinEvent(nint hook);
+    [DllImport("user32.dll")] private static extern int PostThreadMessageW(uint thread, uint message, nint wParam, nint lParam);
+    [DllImport("kernel32.dll")] private static extern uint GetCurrentThreadId();
     [DllImport("user32.dll")] private static extern ushort RegisterClassW(WndClass* cls);
     [DllImport("user32.dll")] private static extern nint CreateWindowExW(uint exStyle, char* cls, char* name, uint style, int x, int y, int w, int h, nint parent, nint menu, nint instance, nint param);
     [DllImport("user32.dll")] private static extern uint RegisterWindowMessageW(char* name);
@@ -352,5 +605,8 @@ static unsafe class WindowsShell
     [DllImport("user32.dll")] private static extern nint DefWindowProcW(nint hwnd, uint message, nint wParam, nint lParam);
     [DllImport("user32.dll", CharSet = CharSet.Unicode)] private static extern nint FindWindowW(string? cls, string? name);
     [DllImport("kernel32.dll")] private static extern nint GetModuleHandleW(char* name);
+    [DllImport("user32.dll")] private static extern nint GetClipboardOwner();
+    [DllImport("user32.dll")] private static extern uint GetWindowThreadProcessId(nint hwnd, uint* pid);
+    [DllImport("user32.dll")] private static extern int GetClassNameW(nint hwnd, char* name, int capacity);
     [DllImport("ole32.dll")] private static extern int CoCreateInstance(Guid* clsid, void* outer, uint context, Guid* iid, void** result);
 }

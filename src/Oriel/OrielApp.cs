@@ -8,7 +8,7 @@ using Oriel.Cef.Platform;
 namespace Oriel;
 
 /// <summary>The application: Electron's <c>app</c>. One per process.</summary>
-public sealed unsafe class OrielApp
+public sealed unsafe partial class OrielApp
 {
     private static OrielApp? s_current;
 
@@ -22,6 +22,53 @@ public sealed unsafe class OrielApp
 
     /// <summary>CEF's root cache path: the default session's data, and the parent of every persistent session's.</summary>
     internal static string? DataDirectory { get; private set; }
+
+    /// <summary>The user agent of pages that set none, as Electron's: Chromium's, with <c>Name/version</c> before the Chrome
+    /// token and <c>Oriel/version</c> after it. Set before <see cref="Run"/> for every page, or later for pages created
+    /// after. Electron's <c>app.userAgentFallback</c>.</summary>
+    public string UserAgentFallback
+    {
+        get => _userAgentFallback ??= BuildUserAgent(Name, AppVersion(), ChromeVersion(), OrielVersion());
+        set => _userAgentFallback = value ?? throw new ArgumentNullException(nameof(value));
+    }
+
+    private string? _userAgentFallback;
+
+    /// <summary>The user agent CEF was started with: every page's unless overridden.</summary>
+    internal static string? ProcessUserAgent { get; private set; }
+
+    /// <summary>Electron's format (GetApplicationUserAgent), on Chromium's reduced, per-OS platform string.</summary>
+    internal static string BuildUserAgent(string name, string version, string chromeVersion, string orielVersion)
+    {
+        var platform = OperatingSystem.IsMacOS() ? "Macintosh; Intel Mac OS X 10_15_7"
+            : OperatingSystem.IsWindows() ? "Windows NT 10.0; Win64; x64"
+            : "X11; Linux x86_64";
+        return $"Mozilla/5.0 ({platform}) AppleWebKit/537.36 (KHTML, like Gecko) {name.Replace(" ", "")}/{version} " +
+            $"Chrome/{chromeVersion} Oriel/{orielVersion} Safari/537.36";
+    }
+
+    /// <summary>The app's version: its project's <c>Version</c>, as Electron reads package.json's. Electron's <c>app.getVersion()</c>.</summary>
+    public string Version => AppVersion();
+
+    private static string AppVersion() => VersionOf(Assembly.GetEntryAssembly());
+
+    // The informational version keeps a prerelease tag; the build adds "+commit" metadata that package.json would not have.
+    internal static string VersionOf(Assembly? assembly)
+    {
+        var informational = assembly?.GetCustomAttribute<AssemblyInformationalVersionAttribute>()?.InformationalVersion;
+        if (!string.IsNullOrEmpty(informational)) return informational.Split('+')[0];
+        return ThreePart(assembly?.GetName().Version);
+    }
+
+    internal static string OrielVersion() => ThreePart(typeof(OrielApp).Assembly.GetName().Version);
+
+    private static string ThreePart(Version? version) => version is null ? "0.0.0" : $"{version.Major}.{version.Minor}.{Math.Max(version.Build, 0)}";
+
+    internal static string ChromeVersion()
+    {
+        CefRuntime.Load(CefLayout.MainProcessLibrary());
+        return string.Join('.', Enumerable.Range(4, 4).Select(CefNative.cef_version_info));
+    }
 
     /// <summary>The application's name; also names its data directory.</summary>
     public string Name { get; }
@@ -45,9 +92,31 @@ public sealed unsafe class OrielApp
     /// <summary>Every window has closed for a quit; cancel to keep running. Electron's <c>will-quit</c>.</summary>
     public event EventHandler<CancelEventArgs>? WillQuit;
 
+    /// <summary>The application is quitting, by <see cref="Quit"/> or <see cref="Exit"/>; raised on the main thread once the
+    /// message loop has ended. Electron's <c>quit</c> event (named for the method it would collide with).</summary>
+    public event EventHandler<ExitedEventArgs>? Exited;
+
     /// <summary>The last window closed. With no handler the application quits. Not raised while quitting.
     /// Electron's <c>window-all-closed</c>.</summary>
     public event EventHandler? WindowAllClosed;
+
+    /// <summary>A page's navigation hit an invalid certificate, after the page's own
+    /// <see cref="WebContents.CertificateError"/>. Electron's <c>app</c> <c>certificate-error</c>.</summary>
+    public event EventHandler<CertificateErrorEventArgs>? CertificateError;
+
+    /// <summary>A server or proxy asks a page for credentials, after the page's own <see cref="WebContents.Login"/>.
+    /// Electron's <c>app</c> <c>login</c>.</summary>
+    public event EventHandler<LoginEventArgs>? Login;
+
+    internal void RaiseCertificateError(object? sender, CertificateErrorEventArgs args) => CertificateError?.Invoke(this, args);
+
+    /// <summary>A server asks a page for a client certificate, after the page's own
+    /// <see cref="WebContents.SelectClientCertificate"/>. Electron's <c>app</c> <c>select-client-certificate</c>.</summary>
+    public event EventHandler<SelectClientCertificateEventArgs>? SelectClientCertificate;
+
+    internal void RaiseSelectClientCertificate(object? sender, SelectClientCertificateEventArgs args) => SelectClientCertificate?.Invoke(this, args);
+
+    internal void RaiseLogin(object? sender, LoginEventArgs args) => Login?.Invoke(this, args);
 
     /// <summary>Creates the process's application.</summary>
     /// <param name="name">Defaults to the entry assembly's name.</param>
@@ -55,7 +124,10 @@ public sealed unsafe class OrielApp
     public static OrielApp Create(string? name = null)
     {
         if (s_current is not null) throw new InvalidOperationException("An OrielApp already exists in this process.");
-        return s_current = new OrielApp(name ?? Assembly.GetEntryAssembly()?.GetName().Name ?? "Oriel");
+        s_current = new OrielApp(name ?? Assembly.GetEntryAssembly()?.GetName().Name ?? "Oriel");
+        // Electron's init.ts does this at start-up, from package.json's desktopName or the app's name.
+        s_current.SetDesktopName(DefaultDesktopName(s_current.Name));
+        return s_current;
     }
 
     /// <summary>Turns on Chromium's sandbox for every child process. Electron's <c>app.enableSandbox()</c>.</summary>
@@ -100,21 +172,27 @@ public sealed unsafe class OrielApp
         var exitCode = CefNative.cef_execute_process((cef_main_args_t*)&args, app.Native, null);
         if (exitCode >= 0) return exitCode;
 
-        // Without Create, Linux answers "" when ~/.config does not exist yet, and CEF rejects the relative path.
-        var dataDirectory = DataDirectory = Path.Combine(
-            Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData, Environment.SpecialFolderOption.Create), Name);
+        // userData or sessionData set before Run moves the profile, as Electron's before ready.
+        var dataDirectory = DataDirectory = GetPath("sessionData");
+        // Electron's default log file is in DIR_LOGS, which release Chromium puts in userData.
+        _loggingSwitches = CommandLine.ElectronLoggingSwitches(Environment.GetEnvironmentVariable, GetPath("userData"));
         var settings = new cef_settings_t
         {
             size = (nuint)sizeof(cef_settings_t),
             no_sandbox = IsSandboxed ? 0 : 1,
             log_severity = cef_log_severity_t.LOGSEVERITY_WARNING,
         };
+        ProcessUserAgent = UserAgentFallback;
+        CefString.Set(&settings.user_agent, ProcessUserAgent);
         CefString.Set(&settings.root_cache_path, dataDirectory);
         CefString.Set(&settings.cache_path, dataDirectory);
         CefString.Set(&settings.browser_subprocess_path, CefLayout.SubprocessPath());
 
+        // Before Chromium starts its own portal reads, so both see the portal from the same moment.
+        if (OperatingSystem.IsLinux()) LinuxPortalSettings.Start();
         NativeObject.AddRef(app.Native);
         var initialized = CefNative.cef_initialize((cef_main_args_t*)&args, &settings, app.Native, null) != 0;
+        CefString.Clear(&settings.user_agent);
         CefString.Clear(&settings.root_cache_path);
         CefString.Clear(&settings.cache_path);
         CefString.Clear(&settings.browser_subprocess_path);
@@ -127,6 +205,7 @@ public sealed unsafe class OrielApp
         }
 
         CefNative.cef_run_message_loop();
+        Exited?.Invoke(this, new ExitedEventArgs(_exitCode));
         CefNative.cef_shutdown();
         return _exitCode;
     }
@@ -170,7 +249,10 @@ public sealed unsafe class OrielApp
         var will = new CancelEventArgs();
         WillQuit?.Invoke(this, will);
         _quitting = false;
-        if (!will.Cancel) CefNative.cef_quit_message_loop();
+        if (will.Cancel) return;
+        SessionHelperPage.CloseAll();
+        // CEF must not shut down with a page still open: views outside every window still have theirs.
+        WebContentsView.CloseAll(CefNative.cef_quit_message_loop);
     }
 
     /// <summary>A window refused to close; a quit in progress stops, as in Electron.</summary>
@@ -189,6 +271,15 @@ public sealed unsafe class OrielApp
         // signature; ad-hoc dev builds change it every build and macOS prompts for a password.
         // TODO(M4): use the real Keychain for signed builds, as Electron's safeStorage does.
         if (OperatingSystem.IsMacOS() && processType.Length == 0) AppendSwitch(commandLine, "use-mock-keychain");
+        // Chrome style otherwise hands page auth challenges to Chrome's own login prompt and never calls
+        // get_auth_credentials, so the login event would not fire.
+        if (processType.Length == 0) AppendSwitch(commandLine, "disable-chrome-login-prompt");
+        if (processType.Length == 0 && s_current is { } app)
+        {
+            // After Oriel's own switches, so the app can remove them as an Electron app can Electron's.
+            app.CommandLine.ApplyTo(commandLine);
+            CommandLine.Append(commandLine, app._loggingSwitches);
+        }
     }
 
     private static void AppendSwitch(cef_command_line_t* commandLine, string name)
@@ -221,18 +312,21 @@ public sealed unsafe class OrielApp
         var global = CefNative.cef_request_context_get_global_context();
         Session.ApplyElectronDefaults(global);
         NativeObject.Release(global);
+        NativeTheme.OnReady();
         // Before Ready, so the first window's page can already load from a custom scheme.
         Protocol.OnContextInitialized();
         IsReady = true;
         Ready?.Invoke(this, EventArgs.Empty);
-        // After Ready, so an app that sets its own menu there never shows the default.
-        if (OperatingSystem.IsMacOS())
-        {
-            Menu.SetDefaultApplicationMenuIfUnset();
-            MacApplicationMenu.Install();
-        }
+        // After Ready, so an app that sets its own menu there never shows the default (Electron sets it just before
+        // ready and lets the app replace it, which ends the same way).
+        Menu.SetDefaultApplicationMenuIfUnset();
+        if (OperatingSystem.IsMacOS()) MacApplicationMenu.Install();
     }
 }
+
+/// <summary>How the application is quitting; Electron's <c>quit</c> event arguments.</summary>
+/// <param name="ExitCode">What <see cref="OrielApp.Run"/> returns.</param>
+public sealed record ExitedEventArgs(int ExitCode);
 
 /// <summary>A relaunch handed to the running instance; Electron's <c>second-instance</c> arguments.</summary>
 /// <param name="CommandLine">The new launch's full command line.</param>

@@ -9,6 +9,13 @@ namespace Oriel;
 /// <summary>A rectangle in screen device-independent pixels; Electron's <c>Rectangle</c>.</summary>
 public readonly record struct Rectangle(int X, int Y, int Width, int Height);
 
+/// <summary>Arguments for <see cref="BrowserWindow.AlwaysOnTopChanged"/>.</summary>
+public sealed class AlwaysOnTopChangedEventArgs(bool isAlwaysOnTop) : EventArgs
+{
+    /// <summary>Whether the window now stays above others.</summary>
+    public bool IsAlwaysOnTop { get; } = isAlwaysOnTop;
+}
+
 /// <summary>Options for a new <see cref="BrowserWindow"/>; Electron's <c>BrowserWindowConstructorOptions</c>.</summary>
 public sealed record BrowserWindowOptions
 {
@@ -64,9 +71,18 @@ public sealed record BrowserWindowOptions
     /// <summary>Centres the window even when <see cref="X"/> and <see cref="Y"/> are set.</summary>
     public bool Center { get; init; }
 
-    /// <summary>The colour shown before the page paints, as <c>#RRGGBB</c> or <c>#AARRGGBB</c>.
-    /// Electron's <c>backgroundColor</c>.</summary>
+    /// <summary>The colour behind the page, as <c>#RRGGBB</c> or <c>#AARRGGBB</c>; the alpha shows the desktop through
+    /// on a <see cref="Transparent"/> window. Electron's <c>backgroundColor</c>.</summary>
     public string? BackgroundColor { get; init; }
+
+    /// <summary>Makes the window see-through wherever the page and <see cref="BackgroundColor"/> are (Windows; ignored
+    /// on macOS and Linux). As in Electron, such a window has no title bar or sizing border, cannot be resized by the
+    /// user or maximized from the system menu, and <see cref="BrowserWindow.Maximize"/> fills the work area instead.
+    /// Electron's <c>transparent</c>.</summary>
+    public bool Transparent { get; init; }
+
+    /// <summary>Linux: asks GTK window managers for the dark variant of the window's frame. Electron's <c>darkTheme</c>.</summary>
+    public bool DarkTheme { get; init; }
 
     /// <summary>A PNG or JPEG for the window and taskbar icon (Windows, Linux). Electron's <c>icon</c> as a path.</summary>
     public string? Icon { get; init; }
@@ -79,8 +95,10 @@ public sealed record BrowserWindowOptions
     /// Electron's <c>skipTaskbar</c>.</summary>
     public bool SkipTaskbar { get; init; }
 
-    /// <summary>What Windows 11 22H2 and later draws behind the window; null leaves the system default. Windows only:
-    /// ignored on macOS and Linux. Electron's <c>backgroundMaterial</c>.</summary>
+    /// <summary>What Windows 11 22H2 and later draws behind the window; null leaves the system default. Unless
+    /// <see cref="BackgroundColor"/> is set, any value but <see cref="Oriel.BackgroundMaterial.None"/> makes the page
+    /// background transparent so the material shows. Windows only: ignored on macOS and Linux. Electron's
+    /// <c>backgroundMaterial</c>.</summary>
     public BackgroundMaterial? BackgroundMaterial { get; init; }
 
     /// <summary>Whether the window stays above other windows.</summary>
@@ -94,6 +112,9 @@ public sealed record BrowserWindowOptions
     /// <see cref="BrowserWindow.SetFullScreen"/>, the title bar's green button and Window ▸ Enter Full Screen.
     /// Ignored elsewhere. Electron's <c>simpleFullscreen</c>.</summary>
     public bool SimpleFullScreen { get; init; }
+
+    /// <summary>Leaves the window out of Mission Control (macOS). Electron's <c>hiddenInMissionControl</c>.</summary>
+    public bool HiddenInMissionControl { get; init; }
 
     /// <summary>The window this one belongs to: it stays above its parent, has no taskbar button of its own,
     /// and closes with it. Electron's <c>parent</c>.</summary>
@@ -109,6 +130,11 @@ public sealed record BrowserWindowOptions
 
     /// <summary>Settings for the page. Electron's <c>webPreferences</c>.</summary>
     public WebPreferences WebPreferences { get; init; } = new();
+
+    /// <summary>The page the window shows instead of a new one, whose preferences then apply instead of
+    /// <see cref="WebPreferences"/>: only the popup page a <see cref="WindowOpenHandlerResponse.CreateWindow"/> callback
+    /// receives, adopted while it runs (drift V4). Electron's <c>webContents</c>.</summary>
+    public WebContents? WebContents { get; init; }
 }
 
 /// <summary>Settings for a window's page; Electron's <c>WebPreferences</c>.</summary>
@@ -155,6 +181,10 @@ public sealed record WebPreferences
     /// <remarks>Not supported (setting it throws): CEF applies the profile's value to every window.</remarks>
     public string? DefaultEncoding { get; init; }
 
+    /// <summary>Raises <see cref="WebContents.PreferredSizeChanged"/> when the page's preferred size changes. Electron's
+    /// <c>enablePreferredSizeMode</c>.</summary>
+    public bool EnablePreferredSizeMode { get; init; }
+
     /// <summary>Suppresses the page's <c>alert</c>, <c>confirm</c> and <c>prompt</c>: they return at once
     /// (<c>confirm</c> false, <c>prompt</c> null). Electron's <c>disableDialogs</c>.</summary>
     public bool DisableDialogs { get; init; }
@@ -167,6 +197,24 @@ public sealed record WebPreferences
     /// is kept on disk, any other name in memory. Null or empty uses <see cref="Oriel.Session.DefaultSession"/>.
     /// Electron's <c>partition</c>.</summary>
     public string? Partition { get; init; }
+
+    /// <summary>Whether the page's default background is transparent instead of white, so what lies behind the page
+    /// shows where the page paints nothing. A window's <see cref="BrowserWindowOptions.BackgroundColor"/>, and a transparent
+    /// or material window, decide its page's background over this. Electron's <c>transparent</c>, which for a window's
+    /// or a <see cref="WebContentsView"/>'s page acts only when true (its documented default of true is a
+    /// <c>&lt;webview&gt;</c>'s).</summary>
+    public bool Transparent { get; init; }
+
+    internal void Validate(string paramName)
+    {
+        // Chrome-style browsers take these from the profile's preferences, over the browser settings.
+        if (MinimumFontSize is not null) throw new NotSupportedException("MinimumFontSize is not supported: CEF applies the profile's value to every window.");
+        if (DefaultEncoding is not null) throw new NotSupportedException("DefaultEncoding is not supported: CEF applies the profile's value to every window.");
+        if (ZoomFactor <= 0) throw new ArgumentOutOfRangeException(paramName, "ZoomFactor must be greater than 0.");
+    }
+
+    internal Session ResolveSession() => Session ?? Oriel.Session.FromPartition(Partition ?? "");
+
 }
 
 /// <summary>Fonts for CSS's generic font families; null keeps Chromium's choice. Electron's <c>defaultFontFamily</c>.</summary>
@@ -201,7 +249,7 @@ public sealed record DefaultFontFamily
 /// Electron's event names collide with its method names in C# (<c>focus()</c> / <c>'focus'</c>), so
 /// events use .NET's past tense: <see cref="Focused"/>, <see cref="Moved"/>, <see cref="Maximized"/>, ...
 /// </remarks>
-public sealed unsafe class BrowserWindow
+public sealed unsafe partial class BrowserWindow
 {
     // Native delegates call back into these objects, so open windows must stay reachable.
     private static readonly List<BrowserWindow> s_open = [];
@@ -238,50 +286,75 @@ public sealed unsafe class BrowserWindow
     private bool _closeFromCode;
     private bool _readyToShowRaised;
     private string? _backgroundColor;
+    // Transparent windows are Windows-only so far (DRIFT W24).
+    private readonly bool _transparent;
+
+    // macOS keeps resizing and maximizing for a transparent window, as Electron's NativeWindowMac does.
+    private readonly bool _macTransparent;
+    private bool _resizable;
+    // A transparent window's bounds before Maximize filled the work area.
+    private Rectangle? _restoreBounds;
     // macOS: the NSWindow whose full-screen toggle routes to simple full screen, or 0.
     private nint _routedNSWindow;
     // Touched only on the UI thread.
     private readonly List<BrowserWindow> _children = [];
-    // Popups this window's page opened, closed with it unless they outlive it; UI thread only.
-    private readonly List<BrowserWindow> _popups = [];
-    // Popups allowed by on_before_popup whose view CEF has not created yet, by the client CEF will use.
-    private static readonly Dictionary<nint, (BrowserWindow Window, int PopupId, WindowOpenDetails Details)> s_pendingPopups = [];
-    private BrowserWindow? _opener;
-    private bool _outlivesOpener;
+    // Popups allowed by on_before_popup whose view CEF has not created yet, by the client CEF will use; UI thread only.
+    private static readonly Dictionary<nint, PendingPopup> s_pendingPopups = [];
+    private WebContents? _opener;
+
+    // Where a popup's view goes: a window's page or a view's (from a createWindow callback).
+    private sealed record PendingPopup(BrowserWindow? Window, WebContentsView? View, WebContents Page, int PopupId,
+        WindowOpenDetails Details, bool RaiseDidCreateWindow, bool ClosesWithOpener)
+    {
+        public nint Delegate => Window is { } window ? (nint)window._viewDelegate.Native : View!.ViewDelegateNative;
+    }
 
     /// <summary>Creates the window, shown unless <see cref="BrowserWindowOptions.Show"/> is false.</summary>
     /// <exception cref="InvalidOperationException">The application is not ready yet, or the parent is closed.</exception>
     /// <exception cref="ArgumentException"><see cref="BrowserWindowOptions.Modal"/> without a parent.</exception>
-    /// <exception cref="NotSupportedException">An option CEF cannot honour, such as <see cref="DefaultFontFamily.Math"/>.</exception>
+    /// <exception cref="NotSupportedException">An option CEF cannot honour, such as <see cref="WebPreferences.MinimumFontSize"/>,
+    /// or a <see cref="BrowserWindowOptions.WebContents"/> that is not a createWindow callback's popup page.</exception>
     public BrowserWindow(BrowserWindowOptions? options = null) : this(options, opener: null)
     {
     }
 
     // A popup's window waits for CEF to create its browser view (AdoptPopupView) instead of creating one.
-    private BrowserWindow(BrowserWindowOptions? options, BrowserWindow? opener)
+    private BrowserWindow(BrowserWindowOptions? options, WebContents? opener)
     {
         if (!OrielApp.Current.IsReady) throw new InvalidOperationException("Create windows after OrielApp.Ready.");
 
         _options = options ?? new BrowserWindowOptions();
         if (_options.Modal && _options.Parent is null) throw new ArgumentException("A modal window needs a Parent.", nameof(options));
-        if (_options.WebPreferences.DefaultFontFamily?.Math is not null) throw new NotSupportedException("CEF has no setting for the math font family.");
-        // Chrome-style browsers take these from the profile's preferences, over the browser settings.
-        if (_options.WebPreferences.MinimumFontSize is not null) throw new NotSupportedException("MinimumFontSize is not supported: CEF applies the profile's value to every window.");
-        if (_options.WebPreferences.DefaultEncoding is not null) throw new NotSupportedException("DefaultEncoding is not supported: CEF applies the profile's value to every window.");
-        if (_options.WebPreferences.ZoomFactor <= 0) throw new ArgumentOutOfRangeException(nameof(options), "ZoomFactor must be greater than 0.");
+        _options.WebPreferences.Validate(nameof(options));
 
         Id = Interlocked.Increment(ref s_nextId);
         _closable = _options.Closable;
         _skipTaskbar = _options.SkipTaskbar;
         _icon = _options.IconImage ?? (_options.Icon is { } iconPath ? NativeImage.CreateFromBuffer(File.ReadAllBytes(iconPath)) : null);
-        _backgroundColor = _options.BackgroundColor;
-        var session = _options.WebPreferences.Session ?? Session.FromPartition(_options.WebPreferences.Partition ?? "");
+        _transparent = _options.Transparent && OperatingSystem.IsWindows();
+        _macTransparent = _options.Transparent && OperatingSystem.IsMacOS();
+        _resizable = _options.Resizable;
+        _backgroundColor = WindowTransparency.InitialBackgroundColor(_options.BackgroundColor, _transparent || _macTransparent,
+            OperatingSystem.IsWindows() ? _options.BackgroundMaterial : null);
+        var adopted = _options.WebContents;
+        var session = adopted?.Session ?? _options.WebPreferences.ResolveSession();
+        if (adopted is not null) opener = PopupGuest.Adopt(adopted, this).Opener;
         // CEF gives a popup its opener's request context, whatever the options say.
-        if (opener is not null && session != opener.WebContents.Session)
+        if (opener is not null && session != opener.Session)
             throw new InvalidOperationException("A window a page opens must use its opener's session.");
-        WebContents = new WebContents(_options.WebPreferences.Preload is { } preload ? File.ReadAllText(preload) : null, _options.WebPreferences, session);
+        WebContents = adopted ?? new WebContents(_options.WebPreferences.Preload, _options.WebPreferences, session) { IsAlloyStyle = opener?.IsAlloyStyle ?? false };
+        ContentView = new View();
+        _pageView = new WebContentsView(WebContents);
+        CefThread.InvokeOnUi(() =>
+        {
+            ContentView.InsertChild(_pageView, 0);
+            return true;
+        });
         WebContents.PageTitleUpdated += (_, e) => PageTitleUpdated?.Invoke(this, e);
+        WebContents.EnterHtmlFullScreen += (_, _) => EnterHtmlFullScreen?.Invoke(this, EventArgs.Empty);
+        WebContents.LeaveHtmlFullScreen += (_, _) => LeaveHtmlFullScreen?.Invoke(this, EventArgs.Empty);
         WebContents.TitleApplied = SetTitle;
+        WebContents.PageMouseDown = () => _menuBar?.OnPageMouseDown();
         WebContents.DidFinishLoad += (_, _) =>
         {
             if (_readyToShowRaised) return;
@@ -289,8 +362,14 @@ public sealed unsafe class BrowserWindow
             ReadyToShow?.Invoke(this, EventArgs.Empty);
         };
         _client = new ClientHandler(WebContents.Display, WebContents.Load, WebContents.JsDialog, WebContents.Request, WebContents.Command,
-            WebContents.ContextMenuRequests, new KeyboardHandler(keyEvent => _menuBar?.OnKeyEvent(keyEvent) ?? false),
-            new LifeSpanHandler { BeforePopup = OnBeforePopup, PopupAborted = OnPopupAborted });
+            WebContents.ContextMenuRequests, new KeyboardHandler(keyEvent => WebContents.OnPreKeyEvent(keyEvent) || (!WebContents.IgnoresMenuShortcuts && (_menuBar?.OnKeyEvent(keyEvent) ?? false))),
+            new LifeSpanHandler { BeforePopup = (request, features, settings) => OpenPopup(WebContents, request, features, settings), PopupAborted = OnPopupAborted })
+        {
+            Permission = WebContents.Permissions,
+            Download = WebContents.Downloads,
+            Find = WebContents.Finds,
+            Focus = WebContents.FocusEvents,
+        };
         if (!OperatingSystem.IsMacOS())
         {
             _menuBar = new WindowMenuBar(this) { AutoHide = _options.AutoHideMenuBar };
@@ -304,8 +383,9 @@ public sealed unsafe class BrowserWindow
         {
             BrowserCreated = OnBrowserCreated,
             BrowserDestroyed = OnBrowserDestroyed,
-            PopupDelegate = client => s_pendingPopups.TryGetValue(client, out var pending) ? (nint)pending.Window._viewDelegate.Native : 0,
-            PopupViewCreated = OnPopupViewCreated,
+            PopupDelegate = PopupDelegateFor,
+            PopupViewCreated = (view, popupDelegate) => AdoptPopupView(WebContents, view, popupDelegate),
+            ThemeChanged = () => Command(ApplyBackgroundColor),
         };
         _windowDelegate = new WindowDelegate
         {
@@ -315,27 +395,35 @@ public sealed unsafe class BrowserWindow
             ActivationChanged = OnActivationChanged,
             BoundsChanged = OnBoundsChanged,
             FullscreenTransition = OnFullscreenTransition,
-            Resizable = _options.Resizable,
+            // Otherwise Chromium offers resize edges and a maximize box, which Electron's transparent windows lack.
+            Resizable = _options.Resizable && !_transparent,
             Minimizable = _options.Minimizable,
-            Maximizable = _options.Maximizable,
+            Maximizable = _options.Maximizable && !_transparent,
+            ThemeChanged = () => Command(ApplyBackgroundColor),
             Frameless = !_options.Frame,
             MinimumSize = new cef_size_t { width = _options.MinWidth, height = _options.MinHeight },
             MaximumSize = new cef_size_t { width = _options.MaxWidth, height = _options.MaxHeight },
             Parent = _options.Parent is { } parent ? () => (nint)parent._window : null,
             Modal = _options.Modal,
-            Accelerator = commandId => _menuBar?.OnAccelerator(commandId) ?? false,
+            Accelerator = commandId => !WebContents.IgnoresMenuShortcuts && (_menuBar?.OnAccelerator(commandId) ?? false),
             KeyEvent = keyEvent => _menuBar?.OnKeyEvent(keyEvent) ?? false,
         };
 
+        OrielApp.CurrentOrNull?.RaiseBrowserWindowCreated(this);
         if (opener is not null)
         {
             _opener = opener;
             return;
         }
+        // CEF refuses a browser view while its profile is still loading (cef_browser_view_create returns null), which a
+        // new on-disk session's is for a moment.
+        var profile = WebContents.Session;
+        profile.WaitUntilInitialized();
         CefThread.InvokeOnUi(() =>
         {
             if (_options.Parent is { _window: null }) throw new InvalidOperationException("The parent window is closed.");
-            CreateNative();
+            if (profile.Initialized.IsCompleted) CreateNative();
+            else profile.Initialized.ContinueWith(_ => CefThread.RunOnUi(CreateNative), TaskScheduler.Default);
             return true;
         });
     }
@@ -358,6 +446,7 @@ public sealed unsafe class BrowserWindow
         // Null is the global context, which the default session wraps.
         var context = WebContents.Session.IsDefault ? null : WebContents.Session.AddRefNative();
         _browserView = CefNative.cef_browser_view_create(_client.Native, &url, &settings, null, context, _viewDelegate.Native);
+        _pageView.SetNative(_browserView);
         CefString.Clear(&url);
         ClearWebPreferenceStrings(&settings);
         OpenWindow();
@@ -373,18 +462,21 @@ public sealed unsafe class BrowserWindow
     }
 
     // UI thread, inside CEF's on_before_popup: asks the page's handler, then prepares the window CEF's popup will live in.
-    private cef_client_t* OnBeforePopup(PopupRequest request, cef_popup_features_t* features, cef_browser_settings_t* settings)
+    internal static cef_client_t* OpenPopup(WebContents opener, PopupRequest request, cef_popup_features_t* features, cef_browser_settings_t* settings)
     {
         var details = new WindowOpenDetails(request.Url, request.FrameName, FeaturesOf(features), DispositionOf(request.Disposition))
         {
             UserGesture = request.UserGesture,
         };
-        var response = WebContents.DecideWindowOpen(details);
+        var response = opener.DecideWindowOpen(details);
         if (!response.IsAllowed) return null;
 
-        var options = response.OverrideBrowserWindowOptions ?? PopupOptionsFrom(features, WebContents.Preferences);
+        var parsed = PopupOptionsFrom(features, opener.Preferences);
+        var options = response.OverrideBrowserWindowOptions ?? response.ConfigureBrowserWindowOptions?.Invoke(parsed) ?? parsed;
+        if (response.CreateWindow is { } createWindow)
+            return OpenCreatedPopup(opener, request, details, options, createWindow, response.OutlivesOpener, settings);
         BrowserWindow popup;
-        try { popup = new BrowserWindow(options, opener: this) { _outlivesOpener = response.OutlivesOpener }; }
+        try { popup = new BrowserWindow(options, opener); }
         catch (Exception e) when (e is ArgumentException or NotSupportedException or InvalidOperationException)
         {
             Console.Error.WriteLine($"[Oriel] Blocked a window the page opened: {e.Message}");
@@ -392,42 +484,101 @@ public sealed unsafe class BrowserWindow
         }
         settings->background_color = popup._backgroundColor is null ? settings->background_color : ParseColor(popup._backgroundColor);
         ApplyWebPreferences(settings, popup._options.WebPreferences);
-        s_pendingPopups[(nint)popup._client.Native] = (popup, request.PopupId, details);
+        s_pendingPopups[(nint)popup._client.Native] = new PendingPopup(popup, null, popup.WebContents, request.PopupId, details,
+            RaiseDidCreateWindow: true, ClosesWithOpener: !response.OutlivesOpener);
         return popup._client.Native;
     }
 
-    private static void OnPopupAborted(int popupId)
+    // Electron's createWindow path: the popup's page exists before the app's window or view does, which adopts it. Under
+    // CEF the browser comes after on_before_popup, so the page waits here, and CEF is given the adopter's client.
+    private static cef_client_t* OpenCreatedPopup(WebContents opener, PopupRequest request, WindowOpenDetails details, BrowserWindowOptions options,
+        Func<BrowserWindowOptions, WebContents?> createWindow, bool outlivesOpener, cef_browser_settings_t* settings)
     {
-        foreach (var (client, pending) in s_pendingPopups.ToArray())
-            if (pending.PopupId == popupId) s_pendingPopups.Remove(client);
+        var preferences = options.WebPreferences;
+        try
+        {
+            preferences.Validate(nameof(options));
+            // CEF gives a popup its opener's request context, whatever the options say.
+            if (preferences.ResolveSession() != opener.Session) throw new InvalidOperationException("A window a page opens must use its opener's session.");
+        }
+        catch (Exception e) when (e is ArgumentException or NotSupportedException or InvalidOperationException)
+        {
+            Console.Error.WriteLine($"[Oriel] Blocked a window the page opened: {e.Message}");
+            return null;
+        }
+        var page = new WebContents(preferences.Preload, preferences, opener.Session) { IsAlloyStyle = opener.IsAlloyStyle };
+        var guest = page.Guest = new PopupGuest(opener);
+        WebContents? returned = null;
+        try { returned = createWindow(options with { WebContents = page }); }
+        catch (Exception e) { Console.Error.WriteLine($"[Oriel] Unhandled exception in createWindow: {e}"); }
+        finally { page.Guest = null; }
+
+        var (adopted, returnedThePage) = (guest.Host is not null, ReferenceEquals(returned, page));
+        if (PopupGuest.ErrorFor(adopted, returnedThePage) is { } error) Console.Error.WriteLine($"[Oriel] {error}");
+        var outcome = PopupGuest.Decide(adopted, returnedThePage, outlivesOpener);
+        if (outcome == CreateWindowOutcome.Block)
+        {
+            page.DiscardUnborn();
+            return null;
+        }
+        var (window, view) = (guest.Host as BrowserWindow, guest.Host as WebContentsView);
+        if (window?._backgroundColor is { } color) settings->background_color = ParseColor(color);
+        ApplyWebPreferences(settings, preferences);
+        var client = window is not null ? window._client.Native : view!.ClientNative;
+        s_pendingPopups[(nint)client] = new PendingPopup(window, view, page, request.PopupId, details,
+            RaiseDidCreateWindow: false, ClosesWithOpener: outcome == CreateWindowOutcome.Wired);
+        return client;
     }
 
-    // The popup's view arrives with the delegate PopupDelegate chose, which identifies the waiting window.
-    private bool OnPopupViewCreated(nint popupView, nint popupDelegate)
+    internal static void OnPopupAborted(int popupId)
     {
         foreach (var (client, pending) in s_pendingPopups.ToArray())
         {
-            if ((nint)pending.Window._viewDelegate.Native != popupDelegate) continue;
+            if (pending.PopupId != popupId) continue;
             s_pendingPopups.Remove(client);
-            var popup = pending.Window;
-            NativeObject.AddRef((void*)popupView);
-            popup._browserView = (cef_browser_view_t*)popupView;
-            popup.WebContents.MarkOpenedByPage();
-            if (!popup._outlivesOpener) _popups.Add(popup);
-            popup.OpenWindow();
-            WebContents.RaiseDidCreateWindow(new DidCreateWindowEventArgs(popup, pending.Details));
+            pending.Page.DiscardUnborn();
+        }
+    }
+
+    // The delegate for a popup's view: the waiting window's or view's, found by the client OpenPopup chose.
+    internal static nint PopupDelegateFor(nint client)
+        => s_pendingPopups.TryGetValue(client, out var pending) ? pending.Delegate : 0;
+
+    // The popup's view arrives with the delegate PopupDelegateFor chose, which identifies the waiting window or view.
+    internal static bool AdoptPopupView(WebContents opener, nint popupView, nint popupDelegate)
+    {
+        foreach (var (client, pending) in s_pendingPopups.ToArray())
+        {
+            if (pending.Delegate != popupDelegate) continue;
+            s_pendingPopups.Remove(client);
+            pending.Page.MarkOpenedByPage();
+            if (pending.Window is { } popup)
+            {
+                NativeObject.AddRef((void*)popupView);
+                popup._browserView = (cef_browser_view_t*)popupView;
+                popup._pageView.SetNative(popup._browserView);
+                if (pending.ClosesWithOpener) opener.Popups.Add(popup);
+                popup.OpenWindow();
+                if (pending.RaiseDidCreateWindow) opener.RaiseDidCreateWindow(new DidCreateWindowEventArgs(popup, pending.Details));
+            }
+            else
+            {
+                pending.View!.AdoptPopupPage((cef_browser_view_t*)popupView);
+                if (pending.ClosesWithOpener) opener.ClosePopupPageWithThis(pending.Page);
+            }
             return true;
         }
         return false;
     }
 
-    /// <summary>The options of a window a page opens with no override: the opener's web preferences, and the size
-    /// and position the page asked for, which like a browser's are the page area's.</summary>
+    /// <summary>The options of a window a page opens with no override: the opener's web preferences, and the size and
+    /// position the page asked for (the outer size, as Electron).</summary>
     internal static BrowserWindowOptions PopupOptionsFrom(cef_popup_features_t* features, WebPreferences openerPreferences)
     {
         var options = new BrowserWindowOptions { WebPreferences = openerPreferences };
-        if (features->widthSet != 0) options = options with { Width = features->width, UseContentSize = true };
-        if (features->heightSet != 0) options = options with { Height = features->height, UseContentSize = true };
+        // As Electron (parse-features-string.ts): width and height are the window's outer size, not the page's.
+        if (features->widthSet != 0) options = options with { Width = features->width };
+        if (features->heightSet != 0) options = options with { Height = features->height };
         if (features->xSet != 0 && features->ySet != 0) options = options with { X = features->x, Y = features->y };
         return options;
     }
@@ -453,7 +604,7 @@ public sealed unsafe class BrowserWindow
         _ => WindowOpenDisposition.Other,
     };
 
-    private static void ApplyWebPreferences(cef_browser_settings_t* settings, WebPreferences preferences)
+    internal static void ApplyWebPreferences(cef_browser_settings_t* settings, WebPreferences preferences)
     {
         static cef_state_t State(bool enabled) => enabled ? cef_state_t.STATE_DEFAULT : cef_state_t.STATE_DISABLED;
         settings->javascript = State(preferences.Javascript);
@@ -472,7 +623,7 @@ public sealed unsafe class BrowserWindow
     }
 
     // CEF copies the settings, so the strings are freed once the browser view exists.
-    private static void ClearWebPreferenceStrings(cef_browser_settings_t* settings)
+    internal static void ClearWebPreferenceStrings(cef_browser_settings_t* settings)
     {
         CefString.Clear(&settings->standard_font_family);
         CefString.Clear(&settings->serif_font_family);
@@ -484,6 +635,12 @@ public sealed unsafe class BrowserWindow
 
     /// <summary>The window's page. Electron's <c>win.webContents</c>.</summary>
     public WebContents WebContents { get; }
+
+    /// <summary>The view filling the window's content area. Its first child shows <see cref="WebContents"/> and fills
+    /// it; add <see cref="WebContentsView"/>s and other views over it. Electron's <c>win.contentView</c>.</summary>
+    public View ContentView { get; }
+
+    private readonly WebContentsView _pageView;
 
     /// <summary>A number unique among this process's windows. Electron's <c>win.id</c>.</summary>
     public int Id { get; }
@@ -552,7 +709,7 @@ public sealed unsafe class BrowserWindow
         var content = ContentBoundsOn(w);
         var at = x is { } ax && y is { } ay ? new Point(content.X + ax, content.Y + ay) : Screen.GetCursorScreenPoint();
         var screen = new cef_point_t { x = at.X, y = at.Y };
-        var popupDelegate = new MenuModelDelegate { CommandExecuted = id => menu.FindByCommandId(id)?.Activate(this), Closed = closed };
+        var popupDelegate = new MenuModelDelegate { CommandExecuted = (id, flags) => menu.FindByCommandId(id)?.Activate(this, KeyboardEvent.FromCefFlags(flags)), Closed = closed };
         NativeObject.AddRef(popupDelegate.Native);
         var model = CefNative.cef_menu_model_create(popupDelegate.Native);
         MenuModels.Fill(model, menu);
@@ -579,6 +736,12 @@ public sealed unsafe class BrowserWindow
 
     /// <summary>The page set its title; cancel to keep the window's title. Electron's <c>page-title-updated</c>.</summary>
     public event EventHandler<PageTitleUpdatedEventArgs>? PageTitleUpdated;
+
+    /// <summary>The page entered HTML full screen. Electron's <c>enter-html-full-screen</c>.</summary>
+    public event EventHandler? EnterHtmlFullScreen;
+
+    /// <summary>The page left HTML full screen. Electron's <c>leave-html-full-screen</c>.</summary>
+    public event EventHandler? LeaveHtmlFullScreen;
 
     /// <summary>The page finished its first load, so the window can be shown without a blank flash.
     /// Electron's <c>ready-to-show</c>.</summary>
@@ -627,12 +790,23 @@ public sealed unsafe class BrowserWindow
     /// <summary>The window finished leaving full screen. Electron's <c>leave-full-screen</c>.</summary>
     public event EventHandler? LeftFullScreen;
 
+    /// <summary><see cref="SetAlwaysOnTop"/> turned always-on-top on or off; not raised when the state is unchanged,
+    /// nor when another program changes the window's z-order, as Electron. Electron's <c>always-on-top-changed</c>.</summary>
+    public event EventHandler<AlwaysOnTopChangedEventArgs>? AlwaysOnTopChanged;
+
     /// <summary>Whether the window has closed. Electron's <c>win.isDestroyed()</c>.</summary>
     public bool IsDestroyed => Query(_ => false, true);
 
     /// <summary>Navigates the window's page. Electron's <c>win.loadURL()</c>.</summary>
     /// <inheritdoc cref="Oriel.WebContents.LoadUrl" path="/param|/exception"/>
     public Task LoadUrl(string url, LoadUrlOptions? options = null) => WebContents.LoadUrl(url, options);
+
+    /// <summary>Loads a local file in the window's page. Electron's <c>win.loadFile()</c>.</summary>
+    public Task LoadFile(string path, IReadOnlyDictionary<string, string>? query = null, string? hash = null, string? search = null)
+        => WebContents.LoadFile(path, query, hash, search);
+
+    /// <summary>Reloads the window's page. Electron's <c>win.reload()</c>.</summary>
+    public void Reload() => WebContents.Reload();
 
     /// <summary>Shows and focuses the window. Electron's <c>win.show()</c>.</summary>
     public void Show() => Command(w =>
@@ -657,9 +831,10 @@ public sealed unsafe class BrowserWindow
     /// <summary>Brings the window to the front and gives it focus. Electron's <c>win.focus()</c>.</summary>
     public void Focus() => CefThread.RunOnUi(() =>
     {
-        // Windows disables a modal's parent, but SetForegroundWindow still activates a disabled window.
+        // Windows disables a modal's parent, but SetForegroundWindow still activates a disabled window. Linux's Electron
+        // activates the parent itself and leaves the modal to the window manager.
         var target = this;
-        while (target._children.FirstOrDefault(c => c._options.Modal && c._window is not null && c._window->@base.@base.is_visible(&c._window->@base.@base) != 0) is { } modal)
+        while (!OperatingSystem.IsLinux() && target._children.FirstOrDefault(c => c._options.Modal && c._window is not null && c._window->@base.@base.is_visible(&c._window->@base.@base) != 0) is { } modal)
             target = modal;
         if (target._window is not null) target._window->activate(target._window);
     });
@@ -671,22 +846,55 @@ public sealed unsafe class BrowserWindow
     public bool IsFocused => Query(w => w->is_active(w) != 0, false);
 
     /// <summary>Maximizes the window. Electron's <c>win.maximize()</c>.</summary>
-    public void Maximize() => Command(w => w->maximize(w));
+    /// <remarks>A <see cref="BrowserWindowOptions.Transparent"/> window fills its display's work area instead, as in
+    /// Electron.</remarks>
+    public void Maximize() => Command(w =>
+    {
+        if (!_transparent)
+        {
+            w->maximize(w);
+            return;
+        }
+        if (IsMaximizedOn(w)) return;
+        _restoreBounds = ToRectangle(w->@base.@base.get_bounds_in_screen(&w->@base.@base));
+        ApplyOuterBounds(w, WorkAreaOf(w), animate: false);
+    });
 
     /// <summary>Leaves the maximized state. Electron's <c>win.unmaximize()</c>.</summary>
     public void Unmaximize() => Command(w =>
     {
-        if (w->is_maximized(w) != 0) w->restore(w);
+        if (IsMaximizedOn(w)) RestoreOn(w);
     });
 
     /// <summary>Whether the window is maximized. Electron's <c>win.isMaximized()</c>.</summary>
-    public bool IsMaximized => Query(w => w->is_maximized(w) != 0, false);
+    public bool IsMaximized => Query(IsMaximizedOn, false);
+
+    private bool IsMaximizedOn(cef_window_t* w)
+        => w->is_maximized(w) != 0 || (_transparent && WindowTransparency.FillsWorkArea(
+            ToRectangle(w->@base.@base.get_bounds_in_screen(&w->@base.@base)), WorkAreaOf(w), w->is_minimized(w) != 0));
+
+    // A transparent window leaves its emulated maximize by going back to the bounds it had.
+    private void RestoreOn(cef_window_t* w)
+    {
+        if (_transparent && _restoreBounds is { } bounds && w->is_maximized(w) == 0 && IsMaximizedOn(w)) ApplyOuterBounds(w, bounds, animate: false);
+        else w->restore(w);
+    }
+
+    private static Rectangle WorkAreaOf(cef_window_t* w)
+    {
+        var bounds = w->@base.@base.get_bounds_in_screen(&w->@base.@base);
+        var display = CefNative.cef_display_get_matching_bounds(&bounds, 0);
+        if (display is null) return default;
+        var area = ToRectangle(display->get_work_area(display));
+        NativeObject.Release(display);
+        return area;
+    }
 
     /// <summary>Minimizes the window. Electron's <c>win.minimize()</c>.</summary>
     public void Minimize() => Command(w => w->minimize(w));
 
     /// <summary>Restores the window from minimized. Electron's <c>win.restore()</c>.</summary>
-    public void Restore() => Command(w => w->restore(w));
+    public void Restore() => Command(RestoreOn);
 
     /// <summary>Whether the window is minimized. Electron's <c>win.isMinimized()</c>.</summary>
     public bool IsMinimized => Query(w => w->is_minimized(w) != 0, false);
@@ -702,8 +910,9 @@ public sealed unsafe class BrowserWindow
         else Command(w => w->set_fullscreen(w, flag ? 1 : 0));
     }
 
-    /// <summary>Whether the window is full screen. Electron's <c>win.isFullScreen()</c>.</summary>
-    public bool IsFullScreen => UsesSimpleFullScreen ? IsSimpleFullScreen : IsNativeFullScreen;
+    /// <summary>Whether the window is in native full screen; false in simple full screen, as Electron (which reads the
+    /// window's full-screen style). Electron's <c>win.isFullScreen()</c>.</summary>
+    public bool IsFullScreen => IsNativeFullScreen;
 
     private bool IsNativeFullScreen => Query(w => w->is_fullscreen(w) != 0, false);
 
@@ -744,7 +953,41 @@ public sealed unsafe class BrowserWindow
     public nint GetNativeWindowHandle() => Query(w => (nint)w->get_window_handle(w), 0);
 
     /// <summary>Keeps the window above others, or stops. Electron's <c>win.setAlwaysOnTop()</c>.</summary>
-    public void SetAlwaysOnTop(bool flag) => Command(w => w->set_always_on_top(w, flag ? 1 : 0));
+    /// <remarks>On macOS, <paramref name="level"/> (<c>normal</c>, <c>floating</c>, <c>torn-off-menu</c>, <c>modal-panel</c>,
+    /// <c>main-menu</c>, <c>status</c>, <c>pop-up-menu</c>, <c>screen-saver</c>) plus <paramref name="relativeLevel"/> sets the
+    /// window's level, as Electron; elsewhere they are ignored (DRIFT W29).</remarks>
+    /// <exception cref="ArgumentException">An unknown level.</exception>
+    public void SetAlwaysOnTop(bool flag, string level = "floating", int relativeLevel = 0)
+    {
+        var macLevel = MacWindowLevel(level) ?? throw new ArgumentException($"Unknown level '{level}'.", nameof(level));
+        Command(w =>
+        {
+            var onTop = StaysOnTop(flag, macLevel + relativeLevel, OperatingSystem.IsMacOS());
+            // The widget's z-order level, which Electron compares against too; z-order changes made elsewhere raise nothing.
+            var wasOnTop = w->is_always_on_top(w) != 0;
+            w->set_always_on_top(w, onTop ? 1 : 0);
+            if (onTop && OperatingSystem.IsWindows()) WindowsWindow.EnsureTopmost((nint)w->get_window_handle(w));
+            if (OperatingSystem.IsMacOS()) MacWindow.SetLevel((nint)w->get_window_handle(w), onTop ? macLevel + relativeLevel : 0);
+            if (wasOnTop != onTop) AlwaysOnTopChanged?.Invoke(this, new AlwaysOnTopChangedEventArgs(onTop));
+        });
+    }
+
+    /// <summary>Whether <see cref="SetAlwaysOnTop"/> leaves the window on top: on macOS only if the resulting level is
+    /// not the normal one, so <c>normal</c> with no <c>relativeLevel</c> is off; elsewhere <paramref name="flag"/> alone, as Electron.</summary>
+    internal static bool StaysOnTop(bool flag, long macLevel, bool mac) => flag && (!mac || macLevel != 0);
+
+    /// <summary>Electron's level names as AppKit window levels (NSWindowLevel).</summary>
+    internal static long? MacWindowLevel(string level) => level switch
+    {
+        "normal" => 0,
+        "floating" or "torn-off-menu" => 3,
+        "modal-panel" => 8,
+        "main-menu" => 24,
+        "status" => 25,
+        "pop-up-menu" => 101,
+        "screen-saver" => 1000,
+        _ => null,
+    };
 
     /// <summary>Whether the window stays above others. Electron's <c>win.isAlwaysOnTop()</c>.</summary>
     public bool IsAlwaysOnTop => Query(w => w->is_always_on_top(w) != 0, false);
@@ -766,27 +1009,47 @@ public sealed unsafe class BrowserWindow
     public string GetTitle() => Query(w => CefString.ReadUserFree(w->get_title(w)), string.Empty);
 
     /// <summary>Moves and resizes the window, in screen DIPs. Electron's <c>win.setBounds()</c>.</summary>
-    public void SetBounds(Rectangle bounds) => Command(w =>
+    /// <remarks>On macOS, <paramref name="animate"/> uses AppKit's animation; elsewhere it is ignored, as in Electron.</remarks>
+    public void SetBounds(Rectangle bounds, bool animate = false) => Command(w => ApplyOuterBounds(w, bounds, animate));
+
+    private static void ApplyOuterBounds(cef_window_t* w, Rectangle bounds, bool animate)
     {
+        if (animate && OperatingSystem.IsMacOS())
+        {
+            MacWindow.AnimateFrame((nint)w->get_window_handle(w), bounds.X, bounds.Y, bounds.Width, bounds.Height);
+            return;
+        }
         var rect = new cef_rect_t { x = bounds.X, y = bounds.Y, width = bounds.Width, height = bounds.Height };
         w->@base.@base.set_bounds(&w->@base.@base, &rect);
-    });
+    }
+
+    private static Rectangle OuterBoundsOn(cef_window_t* w) => ToRectangle(w->@base.@base.get_bounds_in_screen(&w->@base.@base));
 
     /// <summary>The window's bounds in screen DIPs. Electron's <c>win.getBounds()</c>.</summary>
     public Rectangle GetBounds() => Query(w => ToRectangle(w->@base.@base.get_bounds_in_screen(&w->@base.@base)), default);
 
     /// <summary>Resizes the window, keeping its position. Electron's <c>win.setSize()</c>.</summary>
-    public void SetSize(int width, int height) => Command(w =>
+    /// <remarks>On macOS, <paramref name="animate"/> uses AppKit's animation; elsewhere it is ignored, as in Electron.</remarks>
+    public void SetSize(int width, int height, bool animate = false) => Command(w =>
     {
-        var size = new cef_size_t { width = width, height = height };
-        w->@base.@base.set_size(&w->@base.@base, &size);
+        if (animate) ApplyOuterBounds(w, OuterBoundsOn(w) with { Width = width, Height = height }, animate);
+        else
+        {
+            var size = new cef_size_t { width = width, height = height };
+            w->@base.@base.set_size(&w->@base.@base, &size);
+        }
     });
 
     /// <summary>Moves the window, keeping its size. Electron's <c>win.setPosition()</c>.</summary>
-    public void SetPosition(int x, int y) => Command(w =>
+    /// <remarks>On macOS, <paramref name="animate"/> uses AppKit's animation; elsewhere it is ignored, as in Electron.</remarks>
+    public void SetPosition(int x, int y, bool animate = false) => Command(w =>
     {
-        var point = new cef_point_t { x = x, y = y };
-        w->@base.@base.set_position(&w->@base.@base, &point);
+        if (animate) ApplyOuterBounds(w, OuterBoundsOn(w) with { X = x, Y = y }, animate);
+        else
+        {
+            var point = new cef_point_t { x = x, y = y };
+            w->@base.@base.set_position(&w->@base.@base, &point);
+        }
     });
 
     /// <summary>Centres the window on its display. Electron's <c>win.center()</c>.</summary>
@@ -801,6 +1064,8 @@ public sealed unsafe class BrowserWindow
     public void Close() => Command(w =>
     {
         _closeFromCode = true;
+        // A window with a sheet attached does not close, even once the sheet ends; Electron ends them first.
+        if (OperatingSystem.IsMacOS()) MacWindow.EndAttachedSheets((nint)w->get_window_handle(w));
         w->close(w);
     });
 
@@ -812,17 +1077,21 @@ public sealed unsafe class BrowserWindow
         if (browser is not null)
         {
             var host = browser->get_host(browser);
-            host->close_browser(host, 1);
+            WebContents.CloseWithoutUnload(host);
             NativeObject.Release(host);
         }
         w->close(w);
     });
 
     /// <summary>Lets the user resize the window, or stops. Electron's <c>win.setResizable()</c>.</summary>
-    public void SetResizable(bool flag) => Command(_ => _windowDelegate.Resizable = flag);
+    public void SetResizable(bool flag) => Command(_ =>
+    {
+        _resizable = flag;
+        _windowDelegate.Resizable = flag && !_transparent;
+    });
 
     /// <summary>Whether the user can resize the window. Electron's <c>win.isResizable()</c>.</summary>
-    public bool IsResizable => Query(_ => _windowDelegate.Resizable, false);
+    public bool IsResizable => Query(_ => WindowTransparency.ReportsResizable(_options.Frame, _transparent, _resizable), false);
 
     /// <summary>Lets the window be minimized, or stops. Electron's <c>win.setMinimizable()</c>.</summary>
     public void SetMinimizable(bool flag) => Command(_ => _windowDelegate.Minimizable = flag);
@@ -831,7 +1100,7 @@ public sealed unsafe class BrowserWindow
     public bool IsMinimizable => Query(_ => _windowDelegate.Minimizable, false);
 
     /// <summary>Lets the window be maximized, or stops. Electron's <c>win.setMaximizable()</c>.</summary>
-    public void SetMaximizable(bool flag) => Command(_ => _windowDelegate.Maximizable = flag);
+    public void SetMaximizable(bool flag) => Command(_ => _windowDelegate.Maximizable = flag && !_transparent);
 
     /// <summary>Whether the window can be maximized. Electron's <c>win.isMaximizable()</c>.</summary>
     public bool IsMaximizable => Query(_ => _windowDelegate.Maximizable, false);
@@ -866,29 +1135,71 @@ public sealed unsafe class BrowserWindow
     public Rectangle GetContentBounds() => Query(ContentBoundsOn, default);
 
     /// <summary>Places the window so its page area has <paramref name="bounds"/>. Electron's <c>win.setContentBounds()</c>.</summary>
-    public void SetContentBounds(Rectangle bounds) => Command(w => SetContentBoundsOn(w, bounds));
+    /// <remarks>On macOS, <paramref name="animate"/> uses AppKit's animation; elsewhere it is ignored, as in Electron.</remarks>
+    public void SetContentBounds(Rectangle bounds, bool animate = false) => Command(w => SetContentBoundsOn(w, bounds, animate));
 
     /// <summary>The page area's size. Electron's <c>win.getContentSize()</c>.</summary>
     public (int Width, int Height) GetContentSize() => GetContentBounds() is var b ? (b.Width, b.Height) : default;
 
     /// <summary>Resizes the window so its page area is <paramref name="width"/>×<paramref name="height"/>.
     /// Electron's <c>win.setContentSize()</c>.</summary>
-    public void SetContentSize(int width, int height) => Command(w =>
+    /// <remarks>On macOS, <paramref name="animate"/> uses AppKit's animation; elsewhere it is ignored, as in Electron.</remarks>
+    public void SetContentSize(int width, int height, bool animate = false) => Command(w =>
     {
         var content = ContentBoundsOn(w);
-        SetContentBoundsOn(w, content with { Width = width, Height = height });
+        SetContentBoundsOn(w, content with { Width = width, Height = height }, animate);
     });
 
     /// <summary>Sets the colour behind the page. Electron's <c>win.setBackgroundColor()</c>.</summary>
     /// <exception cref="FormatException">The colour is not <c>#RRGGBB</c> or <c>#AARRGGBB</c>.</exception>
     public void SetBackgroundColor(string color)
     {
-        var argb = ParseColor(color);
-        Command(w =>
+        ParseColor(color);
+        Command(w => SetBackgroundColorOn(w, color));
+    }
+
+    private void SetBackgroundColorOn(cef_window_t* w, string color)
+    {
+        _backgroundColor = color;
+        ApplyBackgroundColor(w);
+        ApplyPageBackground();
+    }
+
+    // CEF clears a view's background whenever its theme applies (CefViewView::OnThemeChanged), which includes the view
+    // joining its window, so on_theme_changed calls this again.
+    private void ApplyBackgroundColor(cef_window_t* w)
+    {
+        var transparentPage = _options.WebPreferences.Transparent;
+        if (WindowTransparency.WindowFill(_backgroundColor, transparentPage) is not { } fill
+            || WindowTransparency.PageBackgroundColor(_backgroundColor, transparentPage) is not { } page) return;
+        w->@base.@base.set_background_color(&w->@base.@base, ParseColor(fill));
+        var under = WindowTransparency.BrowserViewColor(ParseColor(page));
+        if (_browserView is not null) _browserView->@base.set_background_color(&_browserView->@base, under);
+        // The content view sits between the window and the page; a themed panel colour there would hide a transparent window.
+        ContentView.SetBackgroundArgb(under);
+    }
+
+    private void ApplyPageBackground()
+    {
+        if (WindowTransparency.PageBackgroundColor(_backgroundColor, _options.WebPreferences.Transparent) is { } page)
+            SendPageBackground(WebContents, ParseColor(page));
+    }
+
+    // CEF takes only opaque colours for a windowed browser (GetColor in libcef/browser/context.cc) and cannot change the
+    // page's after creation; DevTools' default background override can, and lasts across navigations.
+    internal static void SendPageBackground(WebContents page, uint argb)
+    {
+        if (page.Browser is null) return;
+        var (r, g, b, a) = WindowTransparency.PageColor(argb);
+        page.DevTools.Send("Emulation.setDefaultBackgroundColorOverride", w =>
         {
-            _backgroundColor = color;
-            w->@base.@base.set_background_color(&w->@base.@base, argb);
-            if (_browserView is not null) _browserView->@base.set_background_color(&_browserView->@base, argb);
+            w.WritePropertyName("color");
+            w.WriteStartObject();
+            w.WriteNumber("r", r);
+            w.WriteNumber("g", g);
+            w.WriteNumber("b", b);
+            w.WriteNumber("a", a);
+            w.WriteEndObject();
         });
     }
 
@@ -922,7 +1233,8 @@ public sealed unsafe class BrowserWindow
     /// <summary>Shows progress on the taskbar button, from 0 to 1; below 0 removes it and above 1 shows it as
     /// indeterminate. Electron's <c>win.setProgressBar()</c>.</summary>
     /// <remarks>macOS: on the Dock icon, which all windows share; error and paused show as the plain bar.
-    /// Linux: not shown yet (desktop-specific).</remarks>
+    /// Linux: a Unity launcher entry signal for the whole app, as Electron's: the raw value, shown only inside (0, 1),
+    /// whatever the mode; only some desktops show it.</remarks>
     public void SetProgressBar(double progress, ProgressBarOptions? options = null)
     {
         var (state, percent) = ProgressBar.Map(progress, options?.Mode ?? ProgressBarMode.Normal);
@@ -933,6 +1245,7 @@ public sealed unsafe class BrowserWindow
             // One Dock tile for the whole application; error and paused show as the plain bar.
             if (OperatingSystem.IsMacOS())
                 MacDock.SetProgress(state == TaskbarProgressState.None ? null : percent / 100.0, state == TaskbarProgressState.Indeterminate);
+            if (OperatingSystem.IsLinux()) _ = LinuxLauncherEntry.SetProgress(progress);
         });
     }
 
@@ -1024,14 +1337,25 @@ public sealed unsafe class BrowserWindow
 
     /// <summary>Sets what Windows 11 22H2 and later draws behind the window. Windows only: does nothing on macOS and
     /// Linux. Electron's <c>win.setBackgroundMaterial()</c>.</summary>
-    /// <remarks>DWM holds the material, but CEF paints the whole window opaque, title bar included, so it does not
-    /// show yet, even under a transparent page and <see cref="BrowserWindowOptions.BackgroundColor"/>.</remarks>
-    public void SetBackgroundMaterial(BackgroundMaterial material) => Command(w => ApplyBackgroundMaterial(w, material));
-
-    private static void ApplyBackgroundMaterial(cef_window_t* w, BackgroundMaterial material)
+    /// <remarks>As in Electron, a material makes the background colour transparent so it shows behind the page, and
+    /// <see cref="BackgroundMaterial.None"/> makes it white; <see cref="BackgroundMaterial.Auto"/> leaves it.</remarks>
+    public void SetBackgroundMaterial(BackgroundMaterial material) => Command(w =>
     {
-        if (OperatingSystem.IsWindows() && !WindowsWindow.SetBackdrop(Hwnd(w), BackgroundMaterials.ToBackdrop(material)))
+        if (!OperatingSystem.IsWindows()) return;
+        ApplyBackgroundMaterial(w, material);
+        if (WindowTransparency.MaterialBackgroundColor(material) is { } color) SetBackgroundColorOn(w, color);
+    });
+
+    [System.Runtime.Versioning.SupportedOSPlatform("windows")]
+    private void ApplyBackgroundMaterial(cef_window_t* w, BackgroundMaterial material)
+    {
+        var hwnd = Hwnd(w);
+        if (!WindowsWindow.SetBackdrop(hwnd, BackgroundMaterials.ToBackdrop(material)))
+        {
             Console.Error.WriteLine("[Oriel] DWM did not take the background material (it needs Windows 11 22H2).");
+            return;
+        }
+        WindowsTranslucency.ActivateBackdrop(hwnd, _options.Frame);
     }
 
     [System.Runtime.Versioning.SupportedOSPlatform("windows")]
@@ -1092,7 +1416,7 @@ public sealed unsafe class BrowserWindow
         return client with { Y = client.Y + bar, Height = client.Height - bar };
     }
 
-    private void SetContentBoundsOn(cef_window_t* w, Rectangle content)
+    private void SetContentBoundsOn(cef_window_t* w, Rectangle content, bool animate = false)
     {
         // The frame is whatever the window has beyond its page area; keep it the same around the new content.
         var outer = ToRectangle(w->@base.@base.get_bounds_in_screen(&w->@base.@base));
@@ -1104,7 +1428,7 @@ public sealed unsafe class BrowserWindow
             width = content.Width + (outer.Width - inner.Width),
             height = content.Height + (outer.Height - inner.Height),
         };
-        w->@base.@base.set_bounds(&w->@base.@base, &rect);
+        ApplyOuterBounds(w, ToRectangle(rect), animate);
     }
 
     /// <summary>Parses <c>#RRGGBB</c> or <c>#AARRGGBB</c> into CEF's ARGB.</summary>
@@ -1136,19 +1460,19 @@ public sealed unsafe class BrowserWindow
 
     private delegate T WindowQuery<out T>(cef_window_t* window);
 
-    private static Rectangle ToRectangle(cef_rect_t rect) => new(rect.x, rect.y, rect.width, rect.height);
+    internal static Rectangle ToRectangle(cef_rect_t rect) => new(rect.x, rect.y, rect.width, rect.height);
 
     private void OnWindowCreated(cef_window_t* window)
     {
         if (_menuBar is not null)
         {
-            _menuBar.Attach(window, _browserView);
+            _menuBar.Attach(window, ContentView.NativeView);
             _menuBar.SetMenu(_hasOwnMenu ? _ownMenu : Menu.GetApplicationMenu());
         }
         else
         {
-            NativeObject.AddRef(_browserView);
-            window->@base.add_child_view(&window->@base, (cef_view_t*)_browserView);
+            NativeObject.AddRef(ContentView.NativeView);
+            window->@base.add_child_view(&window->@base, ContentView.NativeView);
         }
 
         var size = new cef_size_t { width = _options.Width, height = _options.Height };
@@ -1185,14 +1509,19 @@ public sealed unsafe class BrowserWindow
             var content = ContentBoundsOn(window);
             SetContentBoundsOn(window, content with { Width = _options.Width, Height = _options.Height });
         }
-        if (_backgroundColor is not null)
+        ApplyBackgroundColor(window);
+        if (_macTransparent && OperatingSystem.IsMacOS())
+            // Electron hides the traffic lights of a transparent window with the normal title bar style, the only one here.
+            MacWindow.MakeTransparent((nint)window->get_window_handle(window), hideButtons: true);
+        if (OperatingSystem.IsWindows())
         {
-            var argb = ParseColor(_backgroundColor);
-            window->@base.@base.set_background_color(&window->@base.@base, argb);
-            _browserView->@base.set_background_color(&_browserView->@base, argb);
+            if (_transparent) MakeSeeThrough(window);
+            if (_options.BackgroundMaterial is { } material) ApplyBackgroundMaterial(window, material);
         }
-        if (_options.BackgroundMaterial is { } material) ApplyBackgroundMaterial(window, material);
         if (_icon is not null) SetIconOn(window, _icon);
+        // Electron sets the variant only when asked, and only at creation.
+        if (_options.DarkTheme && OperatingSystem.IsLinux() && !X11Window.SetGtkThemeVariant(Hwnd(window), dark: true))
+            Console.Error.WriteLine("[Oriel] No X display for DarkTheme.");
 
         if (UsesSimpleFullScreen && OperatingSystem.IsMacOS())
             _routedNSWindow = MacWindow.RouteFullScreenToggle((nint)window->get_window_handle(window), () => SetSimpleFullScreen(!IsSimpleFullScreen));
@@ -1202,6 +1531,8 @@ public sealed unsafe class BrowserWindow
             window->show(window);
             ApplySkipTaskbar(window);
         }
+        if (_options.HiddenInMissionControl && OperatingSystem.IsMacOS())
+            MacWindow.SetCollectionBehavior((nint)window->get_window_handle(window), MacWindow.Transient, true);
         if (_options.FullScreen)
         {
             if (UsesSimpleFullScreen && OperatingSystem.IsMacOS()) MacWindow.SetSimpleFullScreen((nint)window->get_window_handle(window), true);
@@ -1212,7 +1543,20 @@ public sealed unsafe class BrowserWindow
         CefThread.PostUiDelayed(PollState, s_statePoll);
     }
 
-    private void OnBrowserCreated(cef_browser_t* browser) => WebContents.OnBrowserCreated(browser);
+    private void OnBrowserCreated(cef_browser_t* browser)
+    {
+        WebContents.OnBrowserCreated(browser);
+        ApplyPageBackground();
+    }
+
+    [System.Runtime.Versioning.SupportedOSPlatform("windows")]
+    private void MakeSeeThrough(cef_window_t* w)
+    {
+        var hwnd = Hwnd(w);
+        if (!WindowsTranslucency.MakeSeeThrough(hwnd)) Console.Error.WriteLine("[Oriel] The window could not be made transparent.");
+        // Chromium gives its windows Mica (DesktopWindowTreeHostWin::Init), which would fill what should be see-through.
+        if (_options.BackgroundMaterial is null) WindowsWindow.SetBackdrop(hwnd, WindowsBackdrop.None);
+    }
 
     private bool OnClosing(cef_window_t* window)
     {
@@ -1243,10 +1587,21 @@ public sealed unsafe class BrowserWindow
         return canClose;
     }
 
+    // As Electron, views added to the window outlive it: tearing the window down would destroy their pages, and a page
+    // whose view has merely been removed lives on.
+    private void DetachViews()
+    {
+        foreach (var view in ContentView.Children)
+            if (view != _pageView) ContentView.RemoveChild(view);
+    }
+
     private void OnActivationChanged(bool active)
     {
         if (!active) _menuBar?.OnWindowBlurred();
+        // The page's view loses focus with its window, as a Chromium view does when its window resigns.
+        if (!active) WebContents.OnViewBlurred();
         (active ? Focused : Blurred)?.Invoke(this, EventArgs.Empty);
+        OrielApp.CurrentOrNull?.RaiseBrowserWindowFocus(this, active);
     }
 
     // CEF reports no minimize/restore of its own, and on macOS minimizing changes no bounds, so the
@@ -1273,7 +1628,7 @@ public sealed unsafe class BrowserWindow
     private void RaiseStateChanges()
     {
         if (_window is null) return;
-        var maximized = _window->is_maximized(_window) != 0;
+        var maximized = IsMaximizedOn(_window);
         var minimized = _window->is_minimized(_window) != 0;
         if (maximized != _wasMaximized) (maximized ? Maximized : Unmaximized)?.Invoke(this, EventArgs.Empty);
         if (minimized != _wasMinimized) (minimized ? Minimized : Restored)?.Invoke(this, EventArgs.Empty);
@@ -1287,7 +1642,12 @@ public sealed unsafe class BrowserWindow
         (_window->is_fullscreen(_window) != 0 ? EnteredFullScreen : LeftFullScreen)?.Invoke(this, EventArgs.Empty);
     }
 
-    private void OnBrowserDestroyed(cef_browser_t* browser) => WebContents.OnBrowserDestroyed();
+    // The window's page goes first; the window's teardown follows at once, without asking can_close again.
+    private void OnBrowserDestroyed(cef_browser_t* browser)
+    {
+        DetachViews();
+        WebContents.OnBrowserDestroyed();
+    }
 
     private void OnWindowDestroyed(cef_window_t* window)
     {
@@ -1306,9 +1666,7 @@ public sealed unsafe class BrowserWindow
         // macOS closes child windows with their parent; Linux does not. Destroy, as Windows does with owned
         // windows: a child that vetoed would outlive its parent.
         foreach (var child in _children.ToArray()) child.Destroy();
-        // As Electron: windows the page opened close with it unless they asked to outlive it.
-        foreach (var popup in _popups.ToArray()) popup.Destroy();
-        _opener?._popups.Remove(this);
+        _opener?.Popups.Remove(this);
         Closed?.Invoke(this, EventArgs.Empty);
         if (s_open.Count == 0) OrielApp.Current.OnAllWindowsClosed();
     }

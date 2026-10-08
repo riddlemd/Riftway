@@ -17,9 +17,10 @@ Cross-platform work. Platform-specific items: [linux-todo.md](linux-todo.md), [w
   - [x] Taskbar on Windows: `setProgressBar`, `flashFrame`, `setSkipTaskbar`/`skipTaskbar`, `setOverlayIcon`
   - [x] Taskbar on macOS (Dock progress and bounce) and Linux (urgency hint, skip taskbar)
   - [x] `setThumbarButtons`, `setIcon`/`setOverlayIcon` with `NativeImage`
-  - [ ] Linux taskbar progress (desktop-specific)
+  - [x] Linux taskbar progress and badge count (Unity launcher entry on the session bus), `app.setDesktopName`
   - [x] Windows: `setAppDetails`, `setThumbnailClip`, `setThumbnailToolTip`, `backgroundMaterial`/`setBackgroundMaterial`
-  - [ ] Make `backgroundMaterial` visible: CEF paints over it (DRIFT W24)
+  - [x] Make `backgroundMaterial` visible; `transparent` on Windows
+  - [ ] `transparent` on macOS and Linux (DRIFT W24)
   - [ ] `showInactive`
   - [x] `loadURL` options (userAgent, extraHeaders, httpReferrer, postData); `baseURLForDataURL` throws
   - [ ] Window state persistence (`getNormalBounds`, `persisted-state-restored`)
@@ -29,14 +30,21 @@ Cross-platform work. Platform-specific items: [linux-todo.md](linux-todo.md), [w
 - [x] File `Dialog` and `Screen`; gaps in [DRIFT.md](DRIFT.md)
 - [x] `NavigationHistory` (`WebContents.NavigationHistory`)
 - [x] `WebFrameMain` (`WebContents.MainFrame`, IPC `SenderFrame`)
-- [x] Core `Session` (`Session`, `Cookies`, partitions; gaps DRIFT E1-E11) and `NativeImage` (gaps DRIFT B1-B5)
-- [ ] Remaining M2 modules: `BaseWindow`, `View`, `WebContentsView`,
-      `Debugger`, command line
+- [x] Core `Session` (`Session`, `Cookies`, partitions; gaps DRIFT E1-E11) and `NativeImage` (gaps DRIFT B1, B3-B5)
+- [x] `Debugger` (`WebContents.Debugger`; shares Oriel's protocol session, DRIFT C43)
+- [ ] `View` and `WebContentsView` ([design](design/web-contents-view.md)): phase 1 done (`ContentView`, child views,
+      bounds, visibility, `bounds-changed`, popups and `close()` from view pages); next `BaseWindow` (DRIFT V1, V2, V4, V7, V9, V12, V13)
+- [x] Windows: closing a view's page tears it down in a hidden, never-shown window; check it takes no focus there (WindowTest: no `EVENT_SYSTEM_FOREGROUND`, the window keeps the foreground)
+- [ ] macOS: check whether a hidden window or a `LoadUrl` takes focus (it did on Windows; fixed on branch `window-polish`)
+- [ ] Remaining M2 modules: `BaseWindow`; the remaining Electron command-line switches and `ELECTRON_*` variables,
+      checked one by one
+- [x] `app.commandLine` (`OrielApp.CommandLine`; DRIFT A19)
 - [x] `window.open` handling: `SetWindowOpenHandler`, `DidCreateWindow` (branch `window-open`)
-- [ ] Menus: Alt+letter mnemonics and the Alt toggle never fire (DRIFT W19): handle Alt in a `cef_keyboard_handler_t`
+- [x] Menus: Alt+letter mnemonics and the Alt toggle (was DRIFT W19): handled in a `cef_keyboard_handler_t`; WindowTest covers both
 - [x] macOS: `Width`/`Height` gave a window a title bar taller than asked (was DRIFT W18)
 - [x] `OrielApp.Quit()` from any thread (was DRIFT A4)
 - [ ] `Protocol`: `AllowServiceWorkers` and `CodeCache` privileges throw `NotSupportedException`
+
 
 ## Tests
 
@@ -58,5 +66,6 @@ Cross-platform work. Platform-specific items: [linux-todo.md](linux-todo.md), [w
 ## Later milestones
 
 - [x] `Tray` on Windows (branch `tray`); macOS and Linux to come (DRIFT T1)
+- [x] `Shell` and `Clipboard` on Windows (branch `shell-clipboard`); macOS and Linux backends to come (DRIFT H1, K1)
 - [ ] M3 Blazor Hybrid · M4 ship it · M5 desktop integration · M6 session/network/processes · M7 own CEF builds
       (see [PLAN.md](PLAN.md#milestones))

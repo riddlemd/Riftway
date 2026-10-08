@@ -9,15 +9,19 @@ using Oriel.Cef.Interop;
 namespace Oriel;
 
 /// <summary>The page inside a window: Electron's <c>webContents</c>.</summary>
-public sealed unsafe class WebContents
+public sealed unsafe partial class WebContents
 {
     private const string IsolatedWorld = "oriel";
     private const string Binding = "__orielIpc";
 
-    private static readonly string s_preloadRuntime = ReadResource("Oriel.Ipc.preload.js");
-    private static readonly string s_mainWorldStub = ReadResource("Oriel.Ipc.main-world.js");
+    // Both worlds carry the same contextBridge end.
+    private static readonly string s_bridge = ReadResource("Oriel.Ipc.bridge.js");
+    private static readonly string s_preloadRuntime = ReadResource("Oriel.Ipc.preload.js").Replace("/*@bridge*/", s_bridge, StringComparison.Ordinal);
+    private static readonly string s_mainWorldStub = ReadResource("Oriel.Ipc.main-world.js").Replace("/*@bridge*/", s_bridge, StringComparison.Ordinal);
 
-    private readonly string _isolatedScript;
+    private readonly string? _appPreloadPath;
+    // DevTools' id for the registered isolated-world script, so a session preload change can replace it.
+    private string? _isolatedScriptId;
     private readonly DevToolsChannel _devTools = new();
     private readonly List<string> _pendingDeliveries = [];
     private readonly CancellationTokenSource _destroyed = new();
@@ -37,30 +41,55 @@ public sealed unsafe class WebContents
     private string _title = string.Empty;
     private readonly WebPreferences _preferences;
 
-    internal WebContents(string? appPreload, WebPreferences preferences, Session session)
+    internal WebContents(string? appPreloadPath, WebPreferences preferences, Session session)
     {
+        Permissions = new PermissionHandler { Prompt = DecidePromptAsync, PromptSettled = OnPromptSettled, MediaAccess = DecideMediaAsync };
+        Downloads = new DownloadHandler
+        {
+            Before = (snapshot, before) => session.OnBeforeDownload(this, snapshot, before),
+            Updated = session.OnDownloadUpdated,
+        };
+        _defaultUserAgent = session.UserAgentOrNull ?? OrielApp.CurrentOrNull?.UserAgentFallback;
+        _acceptLanguages = session.AcceptLanguages;
+        session.Track(this);
+        RegisterLifecycle();
         _preferences = preferences;
         Session = session;
-        JsDialog = new JsDialogHandler { SuppressAll = preferences.DisableDialogs };
+        JsDialog = new JsDialogHandler { SuppressAll = preferences.DisableDialogs, BeforeUnload = OnBeforeUnload };
         // Chrome's own shortcut (F12) and the context menu's Inspect open DevTools without OpenDevTools.
         if (!preferences.DevTools)
             Command = new CommandHandler(["IDC_DEV_TOOLS", "IDC_DEV_TOOLS_CONSOLE", "IDC_DEV_TOOLS_DEVICES", "IDC_DEV_TOOLS_INSPECT",
                 "IDC_DEV_TOOLS_TOGGLE", "IDC_CONTENT_CONTEXT_INSPECTELEMENT", "IDC_CONTENT_CONTEXT_INSPECTBACKGROUNDPAGE"]);
-        // The app's preload gets its own scope, after Oriel's runtime has defined `oriel`.
-        _isolatedScript = appPreload is null
-            ? s_preloadRuntime
-            : $"{s_preloadRuntime}\n;(() => {{\n{appPreload}\n}})();\n";
+        _appPreloadPath = appPreloadPath;
         _devTools.EventReceived += OnDevToolsEvent;
+        RegisterMethods();
+        Debugger = new Debugger(_devTools, () => _ready);
 
-        Display = new DisplayHandler { TitleChanged = OnTitleChanged };
+        Display = new DisplayHandler
+        {
+            TitleChanged = OnTitleChanged,
+            FaviconUrlsChanged = OnFaviconUrlsChanged,
+            FullscreenModeChanged = OnFullscreenModeChanged,
+            ConsoleMessage = OnConsoleMessage,
+            StatusMessage = OnStatusMessage,
+            CursorChanged = OnCursorChanged,
+            ContentsBoundsChanged = OnContentsBoundsChanged,
+        };
         ContextMenuRequests = new ContextMenuHandler(OnContextMenu);
         Load = new LoadHandler
         {
             LoadStarted = isMain => { if (isMain) ApplyDefaultZoom(); },
-            LoadingStateChanged = loading => Raise(loading ? DidStartLoading : DidStopLoading),
+            LoadingStateChanged = loading =>
+            {
+                Raise(loading ? DidStartLoading : DidStopLoading);
+                if (!loading && _navigated) OnStoppedLoadingForPreferredSize();
+            },
             LoadEnded = (isMain, _) =>
             {
+                if (_navigated) DidFrameFinishLoad?.Invoke(this, isMain);
                 if (!isMain) return;
+                // The load got past the old page, so no beforeunload kept it; Electron records only such a pending load.
+                _pendingUnloadUrl = null;
                 if (_navigated && !_bootstrapForgotten)
                 {
                     _bootstrapForgotten = true;
@@ -71,15 +100,52 @@ public sealed unsafe class WebContents
             },
             LoadFailed = (isMain, code, text, url) =>
             {
-                // An aborted load was superseded by a newer one, whose task stays pending; LoadUrl already failed the old one.
-                if (isMain && _navigated && code != AbortedError) CompleteLoad(new LoadFailedException(code, text, url));
-                if (_navigated) DidFailLoad?.Invoke(this, new LoadFailedEventArgs(code, text, url, isMain));
+                // CEF aborts a navigation a webRequest listener cancelled; Electron reports it blocked.
+                if (isMain && code == AbortedError && Interlocked.Exchange(ref _blockedNavigation, null) == url)
+                    (code, text) = (BlockedByClientError, "ERR_BLOCKED_BY_CLIENT");
+                if (!_navigated) return;
+                var failure = new LoadFailedEventArgs(code, text, url, isMain);
+                // Taken before the events: a handler that loads again gets a task of its own, which this failure must not settle.
+                var failing = _loadDone;
+                try
+                {
+                    DidFailProvisionalLoad?.Invoke(this, failure);
+                    // Electron's did-fail-load leaves out cancelled loads.
+                    if (code != AbortedError) DidFailLoad?.Invoke(this, failure);
+                }
+                finally
+                {
+                    // After the events, as Electron's loadURL rejects from its own did-fail-load listener, added after the app's.
+                    // An aborted load was superseded by a newer one, whose task stays pending; LoadUrl already failed the old one.
+                    if (isMain && code != AbortedError) CompleteLoad(failing, new LoadFailedException(code, text, url));
+                }
             },
         };
-        Request = new RequestHandler(new ResourceRequestHandler { BeforeResourceLoad = OnBeforeResourceLoad })
+        var webRequest = session.WebRequest;
+        Request = new RequestHandler(new ResourceRequestHandler
+        {
+            BeforeResourceLoad = OnBeforeResourceLoad,
+            Decide = request => WatchBlocked(request, webRequest.Decide(this, request)),
+            Sent = request => webRequest.Sent(this, request),
+            Redirected = (request, response, url) => webRequest.Redirected(this, request, response, url),
+            ResponseStarted = (request, response) =>
+            {
+                RecordNavigationResponse(request, response);
+                webRequest.ResponseStarted(this, request, response);
+            },
+            Completed = (request, response, status) => webRequest.Completed(this, request, response, status),
+        })
         {
             Wants = WantsRequest,
+            CertificateError = OnCertificateError,
+            SelectClientCertificate = OnSelectClientCertificate,
+            BeforeBrowse = OnBeforeBrowse,
+            Login = OnLogin,
+            RenderProcessTerminated = OnRenderProcessTerminated,
+            RenderProcessUnresponsive = OnRenderProcessUnresponsive,
+            RenderProcessResponsive = OnRenderProcessResponsive,
         };
+        OrielApp.CurrentOrNull?.RaiseWebContentsCreated(this);
     }
 
     /// <summary>The page's title changed; cancel to keep the window's title. Electron's <c>page-title-updated</c>.</summary>
@@ -127,6 +193,9 @@ public sealed unsafe class WebContents
             CefString.Clear(&word);
         }
         CefNative.cef_string_list_free(suggestions);
+        var misspelled = CefString.ReadUserFree(p->get_misspelled_word(p));
+        // macOS checks with the system spell checker, whose guesses Chromium fetches only when it builds its own menu.
+        if (OperatingSystem.IsMacOS() && words.Count == 0 && misspelled.Length > 0) words = [.. Oriel.Cef.Platform.MacSpelling.Guesses(misspelled)];
 
         var args = new ContextMenuParams
         {
@@ -144,7 +213,7 @@ public sealed unsafe class WebContents
             TitleText = CefString.ReadUserFree(p->get_title_text(p)),
             IsEditable = p->is_editable(p) != 0,
             SpellcheckEnabled = p->is_spell_check_enabled(p) != 0,
-            MisspelledWord = CefString.ReadUserFree(p->get_misspelled_word(p)),
+            MisspelledWord = misspelled,
             DictionarySuggestions = words,
             EditFlags = new ContextMenuEditFlags(
                 Has(cef_context_menu_edit_state_flags_t.CM_EDITFLAG_CAN_UNDO), Has(cef_context_menu_edit_state_flags_t.CM_EDITFLAG_CAN_REDO),
@@ -158,6 +227,17 @@ public sealed unsafe class WebContents
 
     /// <summary>The session the page's cookies, cache and storage belong to. Electron's <c>webContents.session</c>.</summary>
     public Session Session { get; }
+
+    /// <summary>A mouse button went down in the page; UI thread.</summary>
+    internal Action? PageMouseDown { get; set; }
+
+    /// <summary>The page's permission prompts and media requests, decided by its session.</summary>
+    internal PermissionHandler Permissions { get; }
+
+    /// <summary>The page's downloads, reported to its session.</summary>
+    internal DownloadHandler Downloads { get; }
+    /// <summary>The page's Chrome DevTools Protocol session. Electron's <c>webContents.debugger</c>.</summary>
+    public Debugger Debugger { get; }
 
     /// <summary>The settings this page was created with; a page it opens inherits them.</summary>
     internal WebPreferences Preferences => _preferences;
@@ -205,7 +285,16 @@ public sealed unsafe class WebContents
         if (isChar && inputEvent.KeyCode.Length != 1) throw new ArgumentException("A Char event takes exactly one character.", nameof(inputEvent));
         var key = isChar ? default : KeyMap.Resolve(inputEvent.KeyCode, inputEvent.Modifiers.HasFlag(InputModifiers.Shift));
         var modifiers = KeyMap.DevToolsModifiers(inputEvent.Modifiers);
-        CefThread.RunOnUi(() => _devTools.Send("Input.dispatchKeyEvent", w =>
+        CefThread.RunOnUi(() =>
+        {
+            if (isChar) ReportSentChar(inputEvent);
+            SendKeyEvent(inputEvent, isChar, key, modifiers);
+        });
+    }
+
+    private void SendKeyEvent(KeyboardInputEvent inputEvent, bool isChar, KeyMap.Key key, int modifiers)
+    {
+        _devTools.Send("Input.dispatchKeyEvent", w =>
         {
             // rawKeyDown: a press that types nothing; text arrives only through char events.
             w.WriteString("type", inputEvent.Type switch { KeyboardInputEventType.KeyDown => "rawKeyDown", KeyboardInputEventType.KeyUp => "keyUp", _ => "char" });
@@ -221,7 +310,7 @@ public sealed unsafe class WebContents
             w.WriteString("code", key.Code);
             w.WriteNumber("windowsVirtualKeyCode", key.VirtualKeyCode);
             w.WriteNumber("nativeVirtualKeyCode", key.VirtualKeyCode);
-        }));
+        });
     }
 
     /// <summary>Sends a mouse event to the page as if from the user: a right button press opens a context menu.
@@ -230,12 +319,41 @@ public sealed unsafe class WebContents
     {
         ArgumentNullException.ThrowIfNull(inputEvent);
         var modifiers = KeyMap.DevToolsModifiers(inputEvent.Modifiers);
+        switch (inputEvent.Type)
+        {
+            // DevTools has no enter or leave; CEF's own mouse move carries the leave flag.
+            case MouseInputEventType.MouseEnter or MouseInputEventType.MouseLeave:
+                WithHost(host =>
+                {
+                    var mouse = new cef_mouse_event_t { x = inputEvent.X, y = inputEvent.Y, modifiers = KeyMap.CefModifiers(inputEvent.Modifiers) };
+                    host->send_mouse_move_event(host, &mouse, inputEvent.Type == MouseInputEventType.MouseLeave ? 1 : 0);
+                });
+                return;
+            // A right click is what raises the page's contextmenu, as Electron's contextMenu event does.
+            case MouseInputEventType.ContextMenu:
+                SendInputEvent(inputEvent with { Type = MouseInputEventType.MouseDown, Button = MouseButton.Right });
+                SendInputEvent(inputEvent with { Type = MouseInputEventType.MouseUp, Button = MouseButton.Right });
+                return;
+        }
         CefThread.RunOnUi(() => _devTools.Send("Input.dispatchMouseEvent", w =>
         {
-            w.WriteString("type", inputEvent.Type switch { MouseInputEventType.MouseDown => "mousePressed", MouseInputEventType.MouseUp => "mouseReleased", _ => "mouseMoved" });
+            w.WriteString("type", inputEvent.Type switch
+            {
+                MouseInputEventType.MouseDown => "mousePressed",
+                MouseInputEventType.MouseUp => "mouseReleased",
+                MouseInputEventType.MouseWheel => "mouseWheel",
+                _ => "mouseMoved",
+            });
             w.WriteNumber("x", inputEvent.X);
             w.WriteNumber("y", inputEvent.Y);
             w.WriteNumber("modifiers", modifiers);
+            if (inputEvent.Type == MouseInputEventType.MouseWheel)
+            {
+                // Chromium's wheel deltas are positive upwards and leftwards; DevTools', like the DOM's, downwards.
+                w.WriteNumber("deltaX", -inputEvent.DeltaX);
+                w.WriteNumber("deltaY", -inputEvent.DeltaY);
+                return;
+            }
             if (inputEvent.Type == MouseInputEventType.MouseMove) return;
             w.WriteString("button", inputEvent.Button switch { MouseButton.Middle => "middle", MouseButton.Right => "right", _ => "left" });
             w.WriteNumber("clickCount", inputEvent.ClickCount);
@@ -268,7 +386,27 @@ public sealed unsafe class WebContents
 
     /// <summary>Zooms the page by level: 0 is 100%, each step is 20% larger or smaller; remembered per origin.
     /// Electron's <c>webContents.setZoomLevel()</c>.</summary>
-    public void SetZoomLevel(double level) => WithHost(host => host->set_zoom_level(host, level));
+    public void SetZoomLevel(double level) => WithHost(host =>
+    {
+        // Chromium keeps zoom per host; one the app set, to 0 included, keeps it.
+        if (Uri.TryCreate(GetUrl(), UriKind.Absolute, out var url)) lock (_zoomedHosts) _zoomedHosts.Add(url.Host);
+        host->set_zoom_level(host, level);
+        TellFramesZoom(level);
+    });
+
+    private readonly HashSet<string> _zoomedHosts = new(StringComparer.OrdinalIgnoreCase);
+
+    /// <summary>Sets the pinch-to-zoom range; Electron starts every page at 1 and 1, which turns pinching off.
+    /// Electron's <c>webContents.setVisualZoomLevelLimits()</c>.</summary>
+    /// <remarks>Oriel turns pinching on or off; the page's scale range itself stays Chromium's (drift C37).</remarks>
+    public Task SetVisualZoomLevelLimits(double minimumLevel, double maximumLevel)
+    {
+        CefThread.RunOnUi(() => TellFramesPinch(AllowsPinch(minimumLevel, maximumLevel)));
+        return Task.CompletedTask;
+    }
+
+    // Electron's default_minimum/maximum_page_scale_factor of 1 leaves no room to pinch; any wider range allows it.
+    internal static bool AllowsPinch(double minimumLevel, double maximumLevel) => minimumLevel < 1 || maximumLevel > 1;
 
     /// <summary>The page's zoom level. Electron's <c>webContents.getZoomLevel()</c>.</summary>
     public double GetZoomLevel() => QueryHost(host => host->get_zoom_level(host), 0);
@@ -284,6 +422,7 @@ public sealed unsafe class WebContents
         if (!_navigated || _preferences.ZoomFactor == 1.0) return;
         WithHost(host =>
         {
+            if (Uri.TryCreate(GetUrl(), UriKind.Absolute, out var url)) lock (_zoomedHosts) if (_zoomedHosts.Contains(url.Host)) return;
             if (host->get_zoom_level(host) == 0) host->set_zoom_level(host, ZoomLevelOf(_preferences.ZoomFactor));
         });
     }
@@ -369,16 +508,22 @@ public sealed unsafe class WebContents
         if (_browser is not null) action(_browser);
     });
 
-    /// <summary>Runs script in the main frame's own world; UI thread, browser present.</summary>
-    internal void RunInMainFrame(string code)
+    /// <summary>Moves the history to the entry <paramref name="target"/> picks from the current index and the entry count;
+    /// directly, through DevTools, as Electron's controller does, so it needs none of the page's script.</summary>
+    internal void GoToHistoryEntry(Func<int, int, int> target) => CefThread.RunOnUi(() =>
     {
-        var frame = _browser->get_main_frame(_browser);
-        cef_string_utf16_t script = default, url = default;
-        CefString.Set(&script, code);
-        frame->execute_java_script(frame, &script, &url, 0);
-        CefString.Clear(&script);
-        NativeObject.Release(frame);
-    }
+        if (_browser is null) return;
+        _devTools.Send("Page.getNavigationHistory", onResult: (result, error) =>
+        {
+            if (error is not null) return;
+            var current = result.GetProperty("currentIndex").GetInt32();
+            var entries = result.GetProperty("entries");
+            var index = target(current, entries.GetArrayLength());
+            if (index < 0 || index >= entries.GetArrayLength() || index == current) return;
+            var id = entries[index].GetProperty("id").GetInt32();
+            _devTools.Send("Page.navigateToHistoryEntry", w => w.WriteNumber("entryId", id));
+        });
+    });
 
     /// <summary>Keeps only the page showing in the back/forward list.</summary>
     internal void ResetHistory() => CefThread.RunOnUi(() =>
@@ -407,16 +552,86 @@ public sealed unsafe class WebContents
         return url;
     });
 
+    /// <summary>Downloads <paramref name="url"/> without navigating; the session's <see cref="Session.WillDownload"/> is
+    /// raised for it. Electron's <c>webContents.downloadURL()</c>.</summary>
+    public void DownloadUrl(string url)
+    {
+        ArgumentNullException.ThrowIfNull(url);
+        WithHost(host =>
+        {
+            cef_string_utf16_t native = default;
+            CefString.Set(&native, url);
+            host->start_download(host, &native);
+            CefString.Clear(&native);
+        });
+    }
+
+    /// <summary>Replaces the misspelled word at the caret with <paramref name="text"/>. Electron's
+    /// <c>webContents.replaceMisspelling()</c>.</summary>
+    public void ReplaceMisspelling(string text)
+    {
+        ArgumentNullException.ThrowIfNull(text);
+        WithHost(host =>
+        {
+            cef_string_utf16_t native = default;
+            CefString.Set(&native, text);
+            host->replace_misspelling(host, &native);
+            CefString.Clear(&native);
+        });
+    }
+
+    internal void AddWordToDictionary(string word) => WithHost(host =>
+    {
+        cef_string_utf16_t native = default;
+        CefString.Set(&native, word);
+        host->add_word_to_dictionary(host, &native);
+        CefString.Clear(&native);
+    });
+
     /// <summary>Reloads the page. Electron's <c>webContents.reload()</c>.</summary>
     public void Reload() => CefThread.RunOnUi(() =>
     {
-        if (_browser is not null && _navigated) _browser->reload(_browser);
+        if (_browser is null || !_navigated) return;
+        if (EntryLoadForReload() is { } entry)
+        {
+            ReloadWith(entry);
+            return;
+        }
+        _reloadRequested = true;
+        _browser->reload(_browser);
     });
+
+    // The options of the LoadUrl that made the page's entry, which Chromium's NavigationEntry keeps for its reloads.
+    private PendingLoad? _entryLoad;
+
+    // UI thread: the options the page's entry keeps for a reload, or null for none.
+    private PendingLoad? EntryLoadForReload()
+    {
+        lock (_pendingLoadGate) return _entryLoad is { } entry && entry.Matches(GetUrl()) ? entry : null;
+    }
+
+    // CEF's reload skips the request handler that applies the options, so the page is loaded again at its own URL,
+    // which Chromium turns into a reload of the current entry. A POST is left alone: Electron reloads with
+    // check_for_repost and has no repost dialog to ask.
+    private void ReloadWith(PendingLoad entry)
+    {
+        if (entry.PostData is not null) return;
+        // Only a reload that starts is Oriel's: the page's own next reload must still raise will-navigate.
+        _reloadRequested = true;
+        Navigate(GetUrl(), entry);
+    }
 
     /// <summary>Reloads the page, bypassing the cache. Electron's <c>webContents.reloadIgnoringCache()</c>.</summary>
     public void ReloadIgnoringCache() => CefThread.RunOnUi(() =>
     {
-        if (_browser is not null && _navigated) _browser->reload_ignore_cache(_browser);
+        if (_browser is null || !_navigated) return;
+        if (EntryLoadForReload() is { } entry)
+        {
+            ReloadWith(entry);
+            return;
+        }
+        _reloadRequested = true;
+        _browser->reload_ignore_cache(_browser);
     });
 
     /// <summary>Undoes the last edit in the focused frame. Electron's <c>webContents.undo()</c>.</summary>
@@ -458,11 +673,13 @@ public sealed unsafe class WebContents
     /// <param name="path">Absolute, or relative to the current directory.</param>
     /// <param name="query">Query parameters, encoded into the URL.</param>
     /// <param name="hash">Fragment, without the leading <c>#</c>.</param>
-    public Task LoadFile(string path, IReadOnlyDictionary<string, string>? query = null, string? hash = null)
+    /// <param name="search">A raw query string, used as is; it replaces <paramref name="query"/>, as in Electron.</param>
+    public Task LoadFile(string path, IReadOnlyDictionary<string, string>? query = null, string? hash = null, string? search = null)
     {
         ArgumentNullException.ThrowIfNull(path);
         var builder = new UriBuilder(new Uri(Path.GetFullPath(path)));
-        if (query is { Count: > 0 })
+        if (search is not null) builder.Query = search.TrimStart('?');
+        else if (query is { Count: > 0 })
             builder.Query = string.Join('&', query.Select(kv => $"{Uri.EscapeDataString(kv.Key)}={Uri.EscapeDataString(kv.Value)}"));
         if (!string.IsNullOrEmpty(hash)) builder.Fragment = hash;
         return LoadUrl(builder.Uri.AbsoluteUri);
@@ -490,18 +707,26 @@ public sealed unsafe class WebContents
     /// Electron's <c>webContents.loadURL()</c>.</summary>
     /// <param name="url">The URL, with its scheme.</param>
     /// <param name="options">Referrer, user agent, extra headers and body for this navigation.</param>
-    /// <exception cref="NotSupportedException"><see cref="LoadUrlOptions.BaseUrlForDataUrl"/>, or an
-    /// <see cref="UploadFile"/> with an offset or length.</exception>
+    /// <exception cref="NotSupportedException"><see cref="LoadUrlOptions.BaseUrlForDataUrl"/>.</exception>
+    /// <exception cref="ArgumentOutOfRangeException">An <see cref="UploadFile"/> with a negative offset or length.</exception>
     public Task LoadUrl(string url, LoadUrlOptions? options = null)
     {
         ArgumentNullException.ThrowIfNull(url);
         var load = PendingLoad.Create(url, options);
         var userAgent = options?.UserAgent;
         var done = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        // Chromium fails the upload when a file changed since its modificationTime.
+        if (options?.PostData?.OfType<UploadFile>().Any(f => f.HasChanged()) == true)
+        {
+            CefThread.RunOnUi(() => DidFailLoad?.Invoke(this, new LoadFailedEventArgs(UploadFileChangedError, "ERR_UPLOAD_FILE_CHANGED", url, true)));
+            done.SetException(new LoadFailedException(UploadFileChangedError, "ERR_UPLOAD_FILE_CHANGED", url));
+            return done.Task;
+        }
         CefThread.RunOnUi(() =>
         {
             CompleteLoad(new LoadFailedException(AbortedError, "ERR_ABORTED", url));
             _loadDone = done;
+            _pendingUnloadUrl = url;
             if (userAgent is not null) ApplyUserAgent(userAgent);
             Navigate(url, load);
         });
@@ -510,6 +735,28 @@ public sealed unsafe class WebContents
 
     // net::ERR_ABORTED: a navigation stopped, typically because a newer one replaced it.
     private const int AbortedError = -3;
+
+    // net::ERR_BLOCKED_BY_CLIENT.
+    private const int BlockedByClientError = -20;
+
+    // The main-frame URL a webRequest listener last cancelled; set off the UI thread.
+    private string? _blockedNavigation;
+
+    private Task<RequestDecision>? WatchBlocked(RequestInfo request, Task<RequestDecision>? decision)
+    {
+        if (decision is null || request.ResourceType != cef_resource_type_t.RT_MAIN_FRAME) return decision;
+        return decision.ContinueWith(t =>
+        {
+            if (t.Result.Cancel) Volatile.Write(ref _blockedNavigation, request.Url);
+            return t.Result;
+        }, TaskContinuationOptions.ExecuteSynchronously);
+    }
+
+    // net::ERR_UPLOAD_FILE_CHANGED.
+    private const int UploadFileChangedError = -14;
+
+    // The latest LoadUrl's URL, until a refused beforeunload reports it as Electron's pending_unload_url_; UI thread.
+    private string? _pendingUnloadUrl;
 
     // The task of the latest LoadUrl, until its page finishes or fails; UI thread only.
     private TaskCompletionSource? _loadDone;
@@ -520,10 +767,13 @@ public sealed unsafe class WebContents
         => Uri.TryCreate(current, UriKind.Absolute, out var from) && Uri.TryCreate(target, UriKind.Absolute, out var to)
             && to.Fragment.Length > 0 && from.GetLeftPart(UriPartial.Query) == to.GetLeftPart(UriPartial.Query);
 
-    private void CompleteLoad(LoadFailedException? failure)
+    private void CompleteLoad(LoadFailedException? failure) => CompleteLoad(_loadDone, failure);
+
+    // Settles one LoadUrl task, and forgets it only while it is still the latest.
+    private void CompleteLoad(TaskCompletionSource? done, LoadFailedException? failure)
     {
-        if (_loadDone is not { } done) return;
-        _loadDone = null;
+        if (done is null) return;
+        if (_loadDone == done) _loadDone = null;
         if (failure is null) done.TrySetResult();
         else done.TrySetException(failure);
     }
@@ -536,16 +786,95 @@ public sealed unsafe class WebContents
         CefThread.RunOnUi(() => ApplyUserAgent(userAgent));
     }
 
-    /// <summary>The page's user agent: the override, else Chromium's default (empty until DevTools reports it,
-    /// just after the window is created). Electron's <c>webContents.getUserAgent()</c>.</summary>
+    /// <summary>The page's user agent: the override, else the app's fallback when the page was created.
+    /// Electron's <c>webContents.getUserAgent()</c>.</summary>
     public string GetUserAgent() => CefThread.InvokeOnUi(() => _userAgent is { Length: > 0 } ua ? ua : _defaultUserAgent ?? string.Empty);
 
     private void ApplyUserAgent(string userAgent)
     {
         _userAgent = userAgent;
-        // Emulation's override stays for the DevTools session, across navigations and renderer swaps.
-        _devTools.Send("Emulation.setUserAgentOverride", w => w.WriteString("userAgent", userAgent));
+        SendUserAgent();
     }
+
+    private string? _acceptLanguages;
+
+    /// <summary>UI thread: the page's session changed its user agent; the page's own override still wins.</summary>
+    // Oriel's runtime defines `oriel` first; then the session's preloads and the app's run one by one, each compiled on
+    // its own so one that fails, even to parse, is reported and the rest still run, as Electron's renderer init does.
+    private string IsolatedScript()
+    {
+        var script = new System.Text.StringBuilder("(() => {\nlet reportPreloadError;\n")
+            .Append("const orielOptions = { preferredSizeMode: ").Append(_preferences.EnablePreferredSizeMode ? "true" : "false").Append(" };\n")
+            .Append(s_preloadRuntime);
+        var paths = Session.GetPreloadScripts().Select(p => p.FilePath).ToList();
+        if (_appPreloadPath is not null) paths.Add(_appPreloadPath);
+        foreach (var path in paths) script.Append(PreloadWrapper(path, ReadPreload(path)));
+        return script.Append("\n})();\n").ToString();
+    }
+
+    // The preload's source, or a throw of Node's error for a file it cannot load.
+    private static string ReadPreload(string path)
+    {
+        try { return File.ReadAllText(path) + "\n//# sourceURL=" + new Uri(Path.GetFullPath(path)).AbsoluteUri; }
+        catch (Exception e) when (e is IOException or UnauthorizedAccessException)
+        {
+            return $"throw Object.assign(new Error({JsonValue.Create($"Cannot find module '{path}'").ToJsonString()}), {{ code: 'MODULE_NOT_FOUND' }});";
+        }
+    }
+
+    internal static string PreloadWrapper(string path, string source)
+        => $"\n;(() => {{\n  const preloadPath = {JsonValue.Create(path).ToJsonString()};\n"
+            + $"  try {{ new Function({JsonValue.Create(source).ToJsonString()})(); }}\n"
+            + "  catch (error) {\n    console.error(`Unable to load preload script: ${preloadPath}`);\n    console.error(error);\n"
+            + "    reportPreloadError(preloadPath, error);\n  }\n})();\n";
+
+    private void AddIsolatedScript() => _devTools.Send("Page.addScriptToEvaluateOnNewDocument", w =>
+    {
+        w.WriteString("source", IsolatedScript());
+        w.WriteString("worldName", IsolatedWorld);
+    }, onResult: (result, _) => _isolatedScriptId = result.TryGetProperty("identifier", out var id) ? id.GetString() : null);
+
+    /// <summary>UI thread: the session's preloads changed; the page's next load runs the new set.</summary>
+    internal void OnSessionPreloadsChanged()
+    {
+        if (_browser is null) return;
+        if (_isolatedScriptId is { } previous) _devTools.Send("Page.removeScriptToEvaluateOnNewDocument", w => w.WriteString("identifier", previous));
+        AddIsolatedScript();
+    }
+
+    internal void OnSessionUserAgent(string userAgent, string? acceptLanguages)
+    {
+        _defaultUserAgent = userAgent;
+        _acceptLanguages = acceptLanguages;
+        SendUserAgent();
+    }
+
+    // The page's override, else its session's, else the app's fallback; CEF started with the fallback.
+    // The user agent last sent to DevTools for this page.
+    private string? _sentUserAgent;
+
+    private void SendUserAgent()
+    {
+        var userAgent = _userAgent is { Length: > 0 } own ? own : _defaultUserAgent is { Length: > 0 } fallback ? fallback : OrielApp.ProcessUserAgent;
+        // The renderer keeps an earlier override's string when the next one is Chromium's own default; clearing first
+        // resets it (ProtocolTest: setUserAgent("") restores the default).
+        if (userAgent == OrielApp.ProcessUserAgent && _sentUserAgent is { } sent && sent != userAgent)
+            _devTools.Send("Emulation.setUserAgentOverride", w => w.WriteString("userAgent", ""));
+        _sentUserAgent = userAgent;
+        // Emulation's override stays for the DevTools session, across navigations and renderer swaps. Every page gets one:
+        // CEF starts Chromium with --user-agent, which leaves only the low-entropy hints unless metadata is passed in.
+        _devTools.Send("Emulation.setUserAgentOverride", w =>
+        {
+            w.WriteString("userAgent", userAgent);
+            if (_acceptLanguages is { } languages) w.WriteString("acceptLanguage", languages);
+            w.WritePropertyName("userAgentMetadata");
+            s_userAgentMetadata.Value.WriteTo(w);
+        });
+    }
+
+    // Electron overrides the user agent with Chromium's default client hints (embedder_support::GetUserAgentMetadata);
+    // DevTools drops them unless they are passed in.
+    private static readonly Lazy<JsonObject> s_userAgentMetadata = new(() => UserAgentMetadata.ForThisMachine(OrielProcess.Versions.Chrome));
 
     private void Navigate(string url, PendingLoad? load)
     {
@@ -572,20 +901,26 @@ public sealed unsafe class WebContents
 
     // IO thread: only the main-frame navigation a LoadUrl with options started needs the hop.
     private bool WantsRequest(cef_frame_t* frame, cef_request_t* request, bool isNavigation)
-    {
-        if (!isNavigation || frame is null || frame->is_main(frame) == 0) return false;
-        lock (_pendingLoadGate) return _pendingLoad is not null;
-    }
+        // Navigations always come here, for loadURL options and the status did-navigate reports.
+        => isNavigation || Session.WebRequest.HasListeners;
 
     private void OnBeforeResourceLoad(cef_frame_t* frame, cef_request_t* request)
     {
+        // With webRequest listeners every request comes here; loadURL options are for the main frame's navigation only.
+        if (frame is null || frame->is_main(frame) == 0 || request->get_resource_type(request) != cef_resource_type_t.RT_MAIN_FRAME) return;
         var url = CefString.ReadUserFree(request->get_url(request));
         PendingLoad? load;
         lock (_pendingLoadGate)
         {
-            if (_pendingLoad is not { } pending || !pending.Matches(url)) return;
+            if (_pendingLoad is not { } pending || !pending.Matches(url))
+            {
+                // A navigation without options makes an entry without them.
+                _entryLoad = null;
+                return;
+            }
             load = pending;
             _pendingLoad = null;
+            _entryLoad = load;
         }
         load.ApplyTo(request);
     }
@@ -605,20 +940,22 @@ public sealed unsafe class WebContents
 
     internal cef_browser_t* Browser => _browser;
 
+    internal bool HasBrowser => _browser is not null;
+
+    internal DevToolsChannel DevTools => _devTools;
+
     internal void OnBrowserCreated(cef_browser_t* browser)
     {
         NativeObject.AddRef(browser);
         _browser = browser;
         _devTools.Attach(browser);
+        if (_preferences.DevTools) WatchDevTools();
 
         _devTools.Send("Page.enable");
         // Per-frame DOMContentLoaded for dom-ready.
         _devTools.Send("Page.setLifecycleEventsEnabled", w => w.WriteBoolean("enabled", true));
-        _devTools.Send("Browser.getVersion", onResult: (result, error) =>
-        {
-            if (error is null) _defaultUserAgent = result.GetProperty("userAgent").GetString();
-        });
-        if (_userAgent is { } userAgent) ApplyUserAgent(userAgent);
+        // A session's user agent, or a fallback changed after start-up, applies from the first page, as Electron's.
+        SendUserAgent();
         _devTools.Send("Runtime.enable");
         // Chrome-style browsers ignore the font sizes in the browser settings; this sets them for this page only.
         if (_preferences.DefaultFontSize is not null || _preferences.DefaultMonospaceFontSize is not null)
@@ -631,6 +968,14 @@ public sealed unsafe class WebContents
                 w.WriteEndObject();
             });
         }
+        // The browser settings have no math family; DevTools sets it for this page.
+        if (_preferences.DefaultFontFamily?.Math is { } math)
+            _devTools.Send("Page.setFontFamilies", w =>
+            {
+                w.WriteStartObject("fontFamilies");
+                w.WriteString("math", math);
+                w.WriteEndObject();
+            });
         // Scoped to the isolated world: the page's own scripts never see the binding.
         _devTools.Send("Runtime.addBinding", w =>
         {
@@ -639,17 +984,20 @@ public sealed unsafe class WebContents
         });
         // Main world first: its listeners must exist when the isolated preload exposes APIs.
         _devTools.Send("Page.addScriptToEvaluateOnNewDocument", w => w.WriteString("source", s_mainWorldStub));
-        _devTools.Send("Page.addScriptToEvaluateOnNewDocument", w =>
-        {
-            w.WriteString("source", _isolatedScript);
-            w.WriteString("worldName", IsolatedWorld);
-        });
+        AddPermissionCheckScript();
+        AddIsolatedScript();
+        FinishSetup();
+    }
+
+    private void FinishSetup()
+    {
         _devTools.Send("Page.getFrameTree", onResult: (result, _) =>
         {
             var frame = result.GetProperty("frameTree").GetProperty("frame");
             _mainFrameId = frame.GetProperty("id").GetString();
             AddFrameTree(result.GetProperty("frameTree"));
             _ready = true;
+            Debugger.OnTargetCreated();
             // A page-opened window starts on its real page, which can commit before the scripts above are registered
             // and would then run without Oriel's runtime or the preload. Reloading keeps window.opener.
             if (_openedByPage && frame.GetProperty("url").GetString() is { Length: > 0 } url && url != "about:blank")
@@ -665,10 +1013,45 @@ public sealed unsafe class WebContents
     /// <summary>Cancelled when the page's browser is destroyed.</summary>
     internal CancellationToken DestroyedToken => _destroyed.Token;
 
+    /// <summary>Windows this page opened that close with it.</summary>
+    internal List<BrowserWindow> Popups { get; } = [];
+
+    /// <summary>Pages this page opened into views (by a createWindow callback) that close with it.</summary>
+    internal List<WebContents> PopupPages { get; } = [];
+
+    /// <summary>Set while a createWindow callback may adopt this popup page.</summary>
+    internal PopupGuest? Guest { get; set; }
+
+    /// <summary>Whether the page is an Alloy-style browser: a view's page, or a popup of one (CEF gives a popup its
+    /// opener's style).</summary>
+    internal bool IsAlloyStyle { get; init; }
+
+    /// <summary>UI thread: closes <paramref name="page"/> with this page, as Electron's guest-window-manager destroys it.</summary>
+    internal void ClosePopupPageWithThis(WebContents page)
+    {
+        PopupPages.Add(page);
+        page.Destroyed += (_, _) => PopupPages.Remove(page);
+    }
+
+    /// <summary>A popup page CEF never created a browser for: gone, without events.</summary>
+    internal void DiscardUnborn()
+    {
+        _destroyed.Cancel();
+        UnregisterLifecycle();
+    }
+
     internal void OnBrowserDestroyed()
     {
         _destroyed.Cancel();
+        SyncIpc.Forget(this, null);
+        UnregisterLifecycle();
+        // As Electron: windows the page opened close with it unless they asked to outlive it.
+        foreach (var popup in Popups.ToArray()) popup.Destroy();
+        Popups.Clear();
+        foreach (var page in PopupPages.ToArray()) page.Close();
+        PopupPages.Clear();
         _devTools.Detach();
+        Debugger.OnTargetDestroyed();
         NativeObject.Release(_browser);
         _browser = null;
         _ready = false;
@@ -676,6 +1059,7 @@ public sealed unsafe class WebContents
         foreach (var frame in _frames.Values) frame.Detached = true;
         _frames.Clear();
         _contextFrames.Clear();
+        Raise(Destroyed, EventArgs.Empty, "destroyed");
     }
 
     private void OnDevToolsEvent(string method, JsonElement parameters)
@@ -689,7 +1073,11 @@ public sealed unsafe class WebContents
             case "Page.frameAttached":
                 var attached = parameters.GetProperty("frameId").GetString()!;
                 if (!_frames.ContainsKey(attached))
-                    _frames[attached] = new FrameState { Id = attached, ParentId = parameters.GetProperty("parentFrameId").GetString() };
+                {
+                    var created = new FrameState { Id = attached, ParentId = parameters.GetProperty("parentFrameId").GetString() };
+                    _frames[attached] = created;
+                    if (FrameCreated is not null) Raise(FrameCreated, WrapperOf(created), "frame-created");
+                }
                 break;
 
             case "Page.lifecycleEvent" when parameters.GetProperty("name").GetString() == "DOMContentLoaded":
@@ -699,7 +1087,13 @@ public sealed unsafe class WebContents
                 break;
 
             case "Page.frameNavigated":
+                DetachDescendants(parameters.GetProperty("frame").GetProperty("id").GetString()!);
                 UpdateFrame(parameters.GetProperty("frame"));
+                OnFrameCommitted(parameters.GetProperty("frame"));
+                break;
+
+            case "Page.navigatedWithinDocument":
+                OnNavigatedWithinDocument(parameters);
                 break;
 
             // A swap moves the frame to another process, where it still exists; only a removal ends it.
@@ -710,10 +1104,13 @@ public sealed unsafe class WebContents
             case "Runtime.executionContextCreated":
                 var context = parameters.GetProperty("context");
                 TrackContext(context);
+                if (context.GetProperty("name").GetString() == IsolatedWorld && context.GetProperty("auxData").TryGetProperty("frameId", out var isolatedFrame))
+                    TellFrameItself(context.GetProperty("id").GetInt32(), isolatedFrame.GetString()!);
                 if (context.GetProperty("name").GetString() == IsolatedWorld &&
                     context.GetProperty("auxData").GetProperty("frameId").GetString() == _mainFrameId)
                 {
                     _isolatedContext = context.GetProperty("id").GetInt32();
+                    OnMainIsolatedContext(_isolatedContext.Value);
                     foreach (var pending in _pendingDeliveries) Deliver(_isolatedContext.Value, pending);
                     _pendingDeliveries.Clear();
                 }
@@ -722,6 +1119,8 @@ public sealed unsafe class WebContents
             case "Runtime.executionContextDestroyed":
                 var gone = parameters.GetProperty("executionContextId").GetInt32();
                 if (gone == _isolatedContext) _isolatedContext = null;
+                PortLink.ContextGone(this, gone);
+                SyncIpc.Forget(this, gone);
                 if (_contextFrames.Remove(gone, out var owner) && _frames.TryGetValue(owner, out var ownerFrame))
                 {
                     if (ownerFrame.DefaultContext == gone) ownerFrame.DefaultContext = null;
@@ -730,6 +1129,8 @@ public sealed unsafe class WebContents
                 break;
 
             case "Runtime.executionContextsCleared":
+                foreach (var cleared in _contextFrames.Keys) PortLink.ContextGone(this, cleared);
+                SyncIpc.Forget(this, null);
                 _isolatedContext = null;
                 _contextFrames.Clear();
                 foreach (var frame in _frames.Values) frame.DefaultContext = frame.IsolatedContext = null;
@@ -750,9 +1151,62 @@ public sealed unsafe class WebContents
                 IpcMain.DispatchSend(this, FrameForContext(context), channel, args);
                 break;
 
+            case "post" when _contextFrames.TryGetValue(context, out var postFrameId) && _frames.TryGetValue(postFrameId, out var postFrame):
+                var made = PortIds(root).Select(id => PortLink.FromPage(this, postFrame, context, id)).ToList();
+                IpcMain.DispatchSend(this, WrapperOf(postFrame), channel, args, made);
+                break;
+
+            case "port-msg" when PortLink.ForRemote(root.GetProperty("id").GetString()!) is { } link:
+                var portId = root.GetProperty("id").GetString()!;
+                if (link.RemoteEnd(portId) is { } origin)
+                    link.FromPageEnd(portId, root.GetProperty("data"), [.. PortIds(root).Select(id => (id, context))], origin);
+                break;
+
+            case "wf":
+                OnWebFrameRequest(context, root);
+                break;
+
+            case "port-close" when PortLink.ForRemote(root.GetProperty("id").GetString()!) is { } closing:
+                closing.Close(root.GetProperty("id").GetString()!);
+                break;
+
             case "invoke":
                 var id = root.GetProperty("id").GetInt32();
                 _ = ReplyAsync(context, id, channel, args);
+                break;
+
+            case "mousedown":
+                PageMouseDown?.Invoke();
+                break;
+            case "input" when context == _isolatedContext:
+                OnPagePointerEvent(args);
+                break;
+            case "psize" when context == _isolatedContext:
+                OnPagePreferredSize(args);
+                break;
+            case "sync-hello":
+                SyncIpc.Register(args[0].GetString()!, this, context);
+                break;
+            case "zoom":
+                Raise(ZoomChanged, args[0].GetBoolean() ? ZoomDirection.In : ZoomDirection.Out, "zoom-changed");
+                break;
+            case "theme":
+                OnThemeColor(args[0].ValueKind == JsonValueKind.Null ? null : args[0].GetString());
+                break;
+            case "vis":
+                _visibilityState = args[0].GetString() == "visible" ? "visible" : "hidden";
+                break;
+            case "media":
+                Raise(args[0].GetBoolean() ? MediaStartedPlaying : MediaPaused, EventArgs.Empty, args[0].GetBoolean() ? "media-started-playing" : "media-paused");
+                break;
+
+            case "focus":
+                if (_contextFrames.TryGetValue(context, out var frameId)) _focusedFrameId = frameId;
+                break;
+            case "preload-error":
+                var failure = args[1];
+                RaisePreloadError(new PreloadErrorEventArgs(args[0].GetString()!, failure.GetProperty("name").GetString()!,
+                    failure.GetProperty("message").GetString()!, failure.GetProperty("stack").GetString()!));
                 break;
         }
     }
@@ -772,6 +1226,12 @@ public sealed unsafe class WebContents
     // execution contexts name; UI thread only.
     private readonly Dictionary<string, FrameState> _frames = [];
     private readonly Dictionary<int, string> _contextFrames = [];
+    private string? _focusedFrameId;
+
+    /// <summary>The frame that has focus in the page, or null. Electron's <c>webContents.focusedFrame</c>.</summary>
+    /// <remarks>A cross-site iframe in another process is not seen taking focus (drift F1).</remarks>
+    public WebFrameMain? FocusedFrame => CefThread.InvokeOnUi(()
+        => _focusedFrameId is { } id && _frames.TryGetValue(id, out var frame) ? WrapperOf(frame) : null);
 
     /// <summary>The main frame's document has been parsed: its DOM is ready, though images may still load.
     /// Electron's <c>dom-ready</c>.</summary>
@@ -798,6 +1258,17 @@ public sealed unsafe class WebContents
 
     private WebFrameMain? FrameForContext(int context)
         => _contextFrames.TryGetValue(context, out var id) && _frames.TryGetValue(id, out var frame) ? WrapperOf(frame) : null;
+
+    // A frame's new document starts without the old one's iframes; DevTools reports no detach for them.
+    private void DetachDescendants(string frameId)
+    {
+        foreach (var child in _frames.Values.Where(f => f.ParentId == frameId).ToList())
+        {
+            DetachDescendants(child.Id);
+            child.Detached = true;
+            _frames.Remove(child.Id);
+        }
+    }
 
     private void AddFrameTree(JsonElement node)
     {
@@ -828,6 +1299,65 @@ public sealed unsafe class WebContents
     }
 
     // Runs in the isolated world's context, so only Oriel's preload runtime can receive it.
+    private static IEnumerable<string> PortIds(JsonElement root)
+        => root.TryGetProperty("ports", out var ports) ? ports.EnumerateArray().Select(p => p.GetString()!) : [];
+
+    /// <summary>Sends <paramref name="message"/> to the main frame with ports moved into it. Electron's
+    /// <c>webContents.postMessage()</c>.</summary>
+    /// <exception cref="InvalidOperationException">A port was already moved.</exception>
+    public void PostMessage(string channel, JsonNode? message, IReadOnlyList<MessagePortMain>? transfer = null)
+    {
+        ArgumentNullException.ThrowIfNull(channel);
+        var ports = PortLink.CheckTransfer(transfer, null);
+        CefThread.RunOnUi(() =>
+        {
+            if (_mainFrameId is { } id && _frames.TryGetValue(id, out var frame)) PostToFrame(frame, channel, message, ports);
+            else foreach (var port in ports) port.Close();
+        });
+    }
+
+    // UI thread.
+    internal void PostToFrame(FrameState frame, string channel, JsonNode? message, IReadOnlyList<MessagePortMain> ports)
+    {
+        var ids = ports.Select(p => PortLink.MoveToPage(p, this, frame)).ToList();
+        var envelope = new JsonObject { ["t"] = "msg", ["ch"] = channel, ["args"] = new JsonArray(message?.DeepClone()), ["ports"] = new JsonArray([.. ids.Select(i => (JsonNode?)i)]) };
+        DeliverTo(frame, envelope.ToJsonString(), null);
+    }
+
+    // UI thread: a port message for the page's end; a document that has gone takes the port with it.
+    internal void DeliverPort(RemoteEnd end, JsonObject message)
+    {
+        if (end.Context is { } known && end.Frame.IsolatedContext != known)
+        {
+            PortLink.ForRemote(end.Id)?.Close(end);
+            return;
+        }
+        DeliverTo(end.Frame, message.ToJsonString(), end);
+    }
+
+    // The main frame's messages wait for its preload; another frame without one gets nothing.
+    private void DeliverTo(FrameState frame, string message, RemoteEnd? end)
+    {
+        if (frame.IsolatedContext is { } context)
+        {
+            if (end is not null) end.Context ??= context;
+            Deliver(context, message);
+        }
+        else if (frame.Id == _mainFrameId) _pendingDeliveries.Add(message);
+    }
+
+    /// <summary>Sends a DevTools command to the page and completes with its result; for tests.</summary>
+    internal Task<JsonElement> DevToolsCommandAsync(string method, Action<Utf8JsonWriter>? writeParams = null)
+    {
+        var done = new TaskCompletionSource<JsonElement>(TaskCreationOptions.RunContinuationsAsynchronously);
+        CefThread.RunOnUi(() => _devTools.Send(method, writeParams, (result, error) =>
+        {
+            if (error is null) done.TrySetResult(result.Clone());
+            else done.TrySetException(new InvalidOperationException(error));
+        }));
+        return done.Task;
+    }
+
     private void Deliver(int context, string message)
         => _devTools.Send("Runtime.evaluate", w =>
         {

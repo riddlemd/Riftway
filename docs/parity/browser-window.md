@@ -17,13 +17,13 @@ Counted from the Checklist at the end: `BaseWindow` and `BrowserWindow` are one 
 
 | Area | Items | Done | Partial | Missing | n/a | % done | % done + partial/2 |
 |---|---|---|---|---|---|---|---|
-| BaseWindow + BrowserWindow options | 54 | 26 | 2 | 26 | 0 | 48.1% | 50.0% |
-| webPreferences | 46 | 11 | 3 | 25 | 7 | 28.2% | 32.1% |
-| Instance methods | 143 | 60 | 11 | 66 | 6 | 43.8% | 47.8% |
-| Instance properties | 24 | 11 | 0 | 13 | 0 | 45.8% | 45.8% |
-| Events | 35 | 12 | 4 | 19 | 0 | 34.3% | 40.0% |
+| BaseWindow + BrowserWindow options | 54 | 29 | 2 | 23 | 0 | 53.7% | 55.6% |
+| webPreferences | 46 | 12 | 4 | 23 | 7 | 30.8% | 35.9% |
+| Instance methods | 143 | 73 | 8 | 56 | 6 | 53.3% | 56.2% |
+| Instance properties | 24 | 12 | 0 | 12 | 0 | 50.0% | 50.0% |
+| Events | 35 | 15 | 4 | 16 | 0 | 42.9% | 48.6% |
 | Static methods | 6 | 4 | 0 | 1 | 1 | 80.0% | 80.0% |
-| **Total** | 308 | 124 | 20 | 150 | 14 | 42.2% | 45.6% |
+| **Total** | 308 | 145 | 18 | 131 | 14 | 49.3% | 52.4% |
 
 ## Done since the audit
 
@@ -38,12 +38,16 @@ Counted from the Checklist at the end: `BaseWindow` and `BrowserWindow` are one 
 - Taskbar: `SetProgressBar` (`ProgressBarOptions.Mode`), `FlashFrame`, `SetSkipTaskbar` and the `SkipTaskbar` option,
   `SetOverlayIcon` (`NativeImage`; the path overload is gone, so `null` is unambiguous), `SetThumbarButtons` (Windows: Windows `ITaskbarList3` and `FlashWindowEx` (`WindowsTaskbar`); macOS the Dock tile
   (`MacDock`: a progress bar over the icon, `requestUserAttention:`); Linux X11 (`X11Window`: the urgency hint,
-  `_NET_WM_STATE_SKIP_TASKBAR`). Gaps: Linux progress, macOS error/paused colours (DRIFT W20, W23).
+  `_NET_WM_STATE_SKIP_TASKBAR`) and the Unity launcher entry D-Bus signal for progress (`LinuxLauncherEntry`, DRIFT A20).
+  Gaps: macOS error/paused colours (DRIFT W20, W23).
 - Windows only, as in Electron: `SetAppDetails` (`AppDetailsOptions`: the window property store's
   `PKEY_AppUserModel_*`), `SetThumbnailClip` and `SetThumbnailToolTip` (`ITaskbarList3`; clips run on an STA thread
   because the shell's proxy rejects the NULL clip that clears them), `BackgroundMaterial` option and
-  `SetBackgroundMaterial` (`DWMWA_SYSTEMBACKDROP_TYPE`, Windows 11 22H2+). The material is set but hidden behind CEF's
-  opaque painting (DRIFT W24); `titleBarOverlay` is missing (W25).
+  `SetBackgroundMaterial` (`DWMWA_SYSTEMBACKDROP_TYPE`, Windows 11 22H2+; a material clears the page background so
+  it shows, `none` makes it white, as Electron), and `Transparent`: the page's background through DevTools'
+  `Emulation.setDefaultBackgroundColorOverride` (CEF takes only opaque colours), the window's caption and sizing border
+  stripped and kept off, no backdrop, not resizable or maximizable by the user, `Maximize` filling the work area as
+  Electron emulates it. macOS and Linux transparency is missing (W24); `titleBarOverlay` is missing (W25).
 - `getNativeWindowHandle` (`W.get_window_handle`: the content `NSView`, `HWND` or X11 `Window`).
 - webContents: `LoadFile` (query, hash), `Reload`, `GetUrl`, `GetTitle`, `did-start-loading`, `did-stop-loading`,
   `did-finish-load`, `did-fail-load`.
@@ -103,15 +107,15 @@ Counted from the Checklist at the end: `BaseWindow` and `BrowserWindow` are one 
 ## Next, by importance
 
 1. Remaining webPreferences:
-   - Need other modules: `spellcheck` (Session, E10), `offscreen` (offscreen
-     rendering), `transparent`. `session`/`partition` landed with the `Session` module (DRIFT E1-E11).
+   - Need other modules: `spellcheck` (no per-page switch, E22), `offscreen` (offscreen
+     rendering). `session`/`partition` landed with the `Session` module (DRIFT E1-E11).
    - Process-wide in CEF (Chromium switches, not per window): `webSecurity`, `allowRunningInsecureContent`,
      `experimentalFeatures`, `enableBlinkFeatures`/`disableBlinkFeatures`, `autoplayPolicy`, `sandbox`. Decide between
      an app-level option and a per-window gap.
    - Profile-wide in Chrome style, so they throw `NotSupportedException`: `minimumFontSize`, `defaultEncoding`.
    - Not yet investigated: `backgroundThrottling`, `navigateOnDragDrop`, `safeDialogs`/`safeDialogsMessage`,
      `accessibleTitle`, `scrollBounce`, `imageAnimationPolicy`, `zoomMode`, `focusOnNavigation`,
-     `enablePreferredSizeMode`, `disableHtmlFullscreenWindowResize`, `additionalArguments`.
+     `disableHtmlFullscreenWindowResize`, `additionalArguments`.
    - `contextIsolation` is always on; `false` is not offered.
 2. `setParentWindow` — CEF Views sets the parent only at creation, so this needs OS code (`addChildWindow:`, an owner
    `HWND`, `XSetTransientForHint`).
@@ -172,7 +176,7 @@ Parameters in brackets are optional in Electron. `webContents` members are in [w
 | `fullscreenable` | — | missing |  |
 | `simpleFullscreen` | `SimpleFullScreen` | done | macOS only, as in Electron. |
 | `skipTaskbar` | `SkipTaskbar` | done |  |
-| `hiddenInMissionControl` | — | missing |  |
+| `hiddenInMissionControl` | `HiddenInMissionControl` | done | macOS. |
 | `kiosk` | — | missing |  |
 | `name` | — | missing |  |
 | `windowStatePersistence` | — | missing |  |
@@ -189,8 +193,8 @@ Parameters in brackets are optional in Electron. `webContents` members are in [w
 | `backgroundColor` | `BackgroundColor` | done |  |
 | `hasShadow` | — | missing |  |
 | `opacity` | — | missing |  |
-| `darkTheme` | — | missing |  |
-| `transparent` | — | missing |  |
+| `darkTheme` | `DarkTheme` | done | Linux: `_GTK_THEME_VARIANT=dark` at creation, as Electron; Chromium 154 already writes dark when its GTK UI is loaded. |
+| `transparent` | `Transparent` | partial | Windows and macOS; not Linux (W24). |
 | `type` | — | missing |  |
 | `visualEffectState` | — | missing |  |
 | `titleBarStyle` | — | missing |  |
@@ -200,7 +204,7 @@ Parameters in brackets are optional in Electron. `webContents` members are in [w
 | `roundedCorners` | — | missing |  |
 | `thickFrame` | — | missing |  |
 | `vibrancy` | — | missing |  |
-| `backgroundMaterial` | `BackgroundMaterial` | partial | Windows 11 22H2+ only; set but hidden behind CEF's opaque painting (W24). |
+| `backgroundMaterial` | `BackgroundMaterial` | done | Windows 11 22H2+ only. |
 | `zoomToPageWidth` | — | missing |  |
 | `tabbingIdentifier` | — | missing |  |
 | `webPreferences (BrowserWindow)` | `WebPreferences` | done | Per-option status in the next table. |
@@ -249,11 +253,11 @@ Parameters in brackets are optional in Electron. `webContents` members are in [w
 | `autoplayPolicy` | — | missing | Process-wide in CEF (W13). |
 | `disableHtmlFullscreenWindowResize` | — | missing |  |
 | `accessibleTitle` | — | missing |  |
-| `spellcheck` | — | missing | Needs the Session module. |
+| `spellcheck` | — | missing | No per-page switch in CEF (E22); the session's `SetSpellCheckerEnabled` covers every page. |
 | `enableWebSQL` | — | n/a | Not applicable (listed in "Not applicable"). |
 | `v8CacheOptions` | — | n/a | Node/V8 option. |
-| `enablePreferredSizeMode` | — | missing |  |
-| `transparent` | — | missing |  |
+| `enablePreferredSizeMode` | `EnablePreferredSizeMode` | partial | Turns on `PreferredSizeChanged`, measured in the page (C42). |
+| `transparent` | `Transparent` | done | Only an explicit true acts, as Electron for a window's or view's page; the window's `backgroundColor` wins (V14). Screen-pixel checks on Windows. |
 | `enableDeprecatedPaste` | — | n/a | Deprecated. |
 | `focusOnNavigation` | — | missing |  |
 
@@ -261,8 +265,8 @@ Parameters in brackets are optional in Electron. `webContents` members are in [w
 
 | Electron | Oriel | Status | Note |
 |---|---|---|---|
-| `setContentView(view)` | — | missing | No View module. |
-| `getContentView()` | — | missing | No View module. |
+| `setContentView(view)` | — | missing | DRIFT V9 (with `BaseWindow`) |
+| `getContentView()` | `ContentView` | done | A property, as Electron's `contentView` |
 | `destroy()` | `Destroy` | done |  |
 | `close()` | `Close` | done |  |
 | `focus()` | `Focus` | done |  |
@@ -281,7 +285,7 @@ Parameters in brackets are optional in Electron. `webContents` members are in [w
 | `restore()` | `Restore` | done |  |
 | `isMinimized()` | `IsMinimized` | done |  |
 | `setFullScreen(flag)` | `SetFullScreen` | done |  |
-| `isFullScreen()` | `IsFullScreen` | done |  |
+| `isFullScreen()` | `IsFullScreen` | done | False in simple full screen, as Electron |
 | `setSimpleFullScreen(flag)` | `SetSimpleFullScreen` | done |  |
 | `isSimpleFullScreen()` | `IsSimpleFullScreen` | done |  |
 | `isNormal()` | — | missing |  |
@@ -317,9 +321,9 @@ Parameters in brackets are optional in Electron. `webContents` members are in [w
 | `isFullScreenable()` | — | missing |  |
 | `setClosable(closable)` | `SetClosable` | done |  |
 | `isClosable()` | `IsClosable` | done |  |
-| `setHiddenInMissionControl(hidden)` | — | missing |  |
-| `isHiddenInMissionControl()` | — | missing |  |
-| `setAlwaysOnTop(flag, level, relativeLevel)` | `SetAlwaysOnTop` | partial | No `level` or `relativeLevel`. |
+| `setHiddenInMissionControl(hidden)` | `SetHiddenInMissionControl` | done |  |
+| `isHiddenInMissionControl()` | `IsHiddenInMissionControl` | done |  |
+| `setAlwaysOnTop(flag, level, relativeLevel)` | `SetAlwaysOnTop` | partial | `level` and `relativeLevel` on macOS only; no taskbar ordering on Windows (DRIFT W29). `level` `normal` with no `relativeLevel` leaves the window off top on macOS only, as Electron. |
 | `isAlwaysOnTop()` | `IsAlwaysOnTop` | done |  |
 | `moveAbove(mediaSourceId)` | — | missing |  |
 | `moveTop()` | — | missing |  |
@@ -340,19 +344,19 @@ Parameters in brackets are optional in Electron. `webContents` members are in [w
 | `isWindowMessageHooked(message)` | — | missing |  |
 | `unhookWindowMessage(message)` | — | missing |  |
 | `unhookAllWindowMessages()` | — | missing |  |
-| `setRepresentedFilename(filename)` | — | missing |  |
-| `getRepresentedFilename()` | — | missing |  |
-| `setDocumentEdited(edited)` | — | missing |  |
-| `isDocumentEdited()` | — | missing |  |
+| `setRepresentedFilename(filename)` | `SetRepresentedFilename` | done | macOS; nothing elsewhere, as in Electron. |
+| `getRepresentedFilename()` | `GetRepresentedFilename` | done |  |
+| `setDocumentEdited(edited)` | `SetDocumentEdited` | done | macOS. |
+| `isDocumentEdited()` | `IsDocumentEdited` | done |  |
 | `focusOnWebView()` | — | missing |  |
 | `blurWebView()` | — | missing |  |
 | `capturePage(rect, opts)` | — | missing | `NativeImage` exists; the capture is missing. |
 | `loadURL(url, options)` | `LoadUrl` | partial | Returns Task; `baseURLForDataURL` throws, `UploadFile` offset/length throw, no client hints, reload drops options (C1, C2, C3, C5). |
-| `loadFile(filePath, options)` | `WebContents.LoadFile` | partial | Only on WebContents, no BrowserWindow shortcut; `query` and `hash`, no `search`. |
-| `reload()` | `WebContents.Reload` | partial | Only on WebContents, no BrowserWindow shortcut. |
+| `loadFile(filePath, options)` | `LoadFile` | done | `query`, `search` (raw, replaces `query`), `hash` |
+| `reload()` | `Reload` | done |  |
 | `setMenu(menu)` | `SetMenu` | done | Drawn by CEF Views on Windows/Linux (W16). |
 | `removeMenu()` | `RemoveMenu` | done |  |
-| `setProgressBar(progress, options)` | `SetProgressBar` | partial | No Linux progress; macOS error/paused show as plain bar (W20). |
+| `setProgressBar(progress, options)` | `SetProgressBar` | partial | macOS error/paused show as plain bar (W20); Linux sends Electron's launcher entry signal (A20). |
 | `setOverlayIcon(overlay, description)` | `SetOverlayIcon` | done | Takes a `NativeImage`. |
 | `invalidateShadow()` | — | missing |  |
 | `setHasShadow(hasShadow)` | — | missing |  |
@@ -368,14 +372,14 @@ Parameters in brackets are optional in Electron. `webContents` members are in [w
 | `getAccentColor()` | — | missing |  |
 | `showDefinitionForSelection()` | — | missing |  |
 | `setIcon(icon)` | `SetIcon` | done | Path or `NativeImage`; Windows and Linux only, as in Electron. |
-| `setWindowButtonVisibility(visible)` | — | missing |  |
+| `setWindowButtonVisibility(visible)` | `SetWindowButtonVisibility` | done | macOS. |
 | `setAutoHideMenuBar(hide)` | `AutoHideMenuBar (set)` | done |  |
 | `isMenuBarAutoHide()` | `AutoHideMenuBar (get)` | done |  |
 | `setMenuBarVisibility(visible)` | `SetMenuBarVisibility` | done |  |
 | `isMenuBarVisible()` | `IsMenuBarVisible` | done |  |
 | `isSnapped()` | — | missing |  |
-| `setVisibleOnAllWorkspaces(visible, options)` | — | missing |  |
-| `isVisibleOnAllWorkspaces()` | — | missing |  |
+| `setVisibleOnAllWorkspaces(visible, options)` | `SetVisibleOnAllWorkspaces` | done | macOS and Linux; Windows has no workspaces, as in Electron. |
+| `isVisibleOnAllWorkspaces()` | `IsVisibleOnAllWorkspaces` | done |  |
 | `setIgnoreMouseEvents(ignore, options)` | — | missing |  |
 | `setContentProtection(enable)` | — | missing |  |
 | `isContentProtected()` | — | missing |  |
@@ -393,7 +397,7 @@ Parameters in brackets are optional in Electron. `webContents` members are in [w
 | `toggleTabBar()` | — | missing |  |
 | `addTabbedWindow(window)` | — | missing |  |
 | `setVibrancy(type, options)` | — | missing |  |
-| `setBackgroundMaterial(material)` | `SetBackgroundMaterial` | partial | Windows 11 22H2+ only; set but hidden (W24). |
+| `setBackgroundMaterial(material)` | `SetBackgroundMaterial` | done | Windows 11 22H2+ only. |
 | `setWindowButtonPosition(position)` | — | missing |  |
 | `getWindowButtonPosition()` | — | missing |  |
 | `setTouchBar(touchBar)` | — | missing |  |
@@ -411,7 +415,7 @@ Parameters in brackets are optional in Electron. `webContents` members are in [w
 |---|---|---|---|
 | `webContents` | `WebContents` | done |  |
 | `id` | `Id` | done |  |
-| `contentView` | — | missing | No View module. |
+| `contentView` | `ContentView` | done | First child is the window's page (Chrome style); views added over it are Alloy style (DRIFT V2) |
 | `tabbingIdentifier` | — | missing |  |
 | `autoHideMenuBar` | `AutoHideMenuBar` | done |  |
 | `simpleFullScreen` | `SetSimpleFullScreen / IsSimpleFullScreen` | done |  |
@@ -462,9 +466,9 @@ Parameters in brackets are optional in Electron. `webContents` members are in [w
 | `moved` | — | missing |  |
 | `enter-full-screen` | `EnteredFullScreen` | done |  |
 | `leave-full-screen` | `LeftFullScreen` | done |  |
-| `enter-html-full-screen` | — | missing |  |
-| `leave-html-full-screen` | — | missing |  |
-| `always-on-top-changed` | — | missing |  |
+| `enter-html-full-screen` | `EnterHtmlFullScreen` | done |  |
+| `leave-html-full-screen` | `LeaveHtmlFullScreen` | done |  |
+| `always-on-top-changed` | `AlwaysOnTopChanged` | done | `AlwaysOnTopChangedEventArgs.IsAlwaysOnTop`. Raised by `SetAlwaysOnTop` only when the state changes, not for z-order changes made by other programs, as Electron. |
 | `app-command` | — | missing |  |
 | `swipe` | — | missing |  |
 | `rotate-gesture` | — | missing |  |

@@ -8,6 +8,48 @@
   const results = [];
   const check = (name, pass, detail) => results.push({ name, pass: !!pass, detail: String(detail ?? '') });
 
+  // Electron's proxied function keeps its original alive only while the proxy is reachable. gc() is V8's, from the
+  // --js-flags=--expose-gc this app appends; a collection is isolate-wide, so it reaches the preload's world too.
+  const collected = new Set();
+  const watched = new FinalizationRegistry((tag) => collected.add(tag));
+  const sendAway = (tag, to) => {
+    const fn = (x) => tag + ':' + x;
+    watched.register(fn, tag);
+    to(fn);
+  };
+  const collectUntil = async (done) => {
+    for (let i = 0; i < 100 && !done(); i++) {
+      gc();
+      await new Promise((resolve) => setTimeout(resolve, 20));
+    }
+    return done();
+  };
+  const bridgeLifetime = async () => {
+    if (typeof gc !== 'function') { check('bridge lifetime: gc() is exposed', false, typeof gc); return; }
+    sendAway('page-dropped', api.hold);
+    api.drop();
+    sendAway('page-kept', api.keep);
+    api.make('preload-dropped');
+    const keptProxy = api.make('preload-kept');
+    const released = await collectUntil(() => collected.has('page-dropped') && api.collected('preload-dropped'));
+    check('bridge lifetime: a page function is released once the preload drops its proxy', collected.has('page-dropped'), [...collected]);
+    check('bridge lifetime: a preload function is released once the page drops its proxy', api.collected('preload-dropped'), released);
+    let keptAnswer;
+    try { keptAnswer = api.callKept(5); } catch (e) { keptAnswer = e.message; }
+    check('bridge lifetime: a proxy the preload still holds keeps working after gc', keptAnswer === 'page-kept:5' && !collected.has('page-kept'), keptAnswer);
+    let madeAnswer;
+    try { madeAnswer = keptProxy(); } catch (e) { madeAnswer = e.message; }
+    check('bridge lifetime: a proxy the page still holds keeps working after gc', madeAnswer === 'made:preload-kept' && !api.collected('preload-kept'), madeAnswer);
+
+    const f = () => 0;
+    check('bridge identity: one function twice in one crossing is one proxy', api.same(f, f), api.same(f, f));
+    check('bridge identity: a proxy sent back arrives as the original', api.echo(f) === f, api.echo(f) === f);
+    api.sameAsLast(f);
+    const again = api.sameAsLast(f);
+    api.forgetLast();
+    check('bridge identity: each crossing makes a new proxy', again === false, again);
+  };
+
   (async () => {
     check('api exposed before page scripts', exposedAtStart, typeof window.api);
     check('binding hidden from page', typeof window.__orielIpc === 'undefined', typeof window.__orielIpc);
@@ -33,6 +75,8 @@
       new Promise((resolve) => setTimeout(() => resolve('timeout'), 5000)),
     ]);
     check('send + webContents.send + callback', tick === 42, tick);
+
+    await bridgeLifetime();
 
     document.getElementById('out').textContent = JSON.stringify(results, null, 2);
     await api.report(results);
