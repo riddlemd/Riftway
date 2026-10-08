@@ -1605,6 +1605,8 @@ async Task WebContentsMethodsAsync()
     Check("a refused close after a finished load raises no did-fail-load for that load", !settled.WebContents.IsDestroyed() && settledFailures == 0,
         $"destroyed={settled.WebContents.IsDestroyed()} failures={settledFailures}");
     settled.Destroy();
+    Check("Destroy closes a window whose page refuses beforeunload, as Electron's destroy skips it",
+        Eventually(() => settled.IsDestroyed && settled.WebContents.IsDestroyed(), step), $"window={settled.IsDestroyed} page={settled.WebContents.IsDestroyed()}");
 
     // zoom-changed: Ctrl+wheel the page leaves alone is reported, one per tick, and does not zoom; never on macOS.
     File.WriteAllText(page, "<!doctype html><div id=box style='height:3000px'>zoom</div>");
