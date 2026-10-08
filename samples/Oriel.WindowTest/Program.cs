@@ -2965,12 +2965,18 @@ async Task WindowsApisAsync()
 
 async Task PowerAndShortcutsAsync()
 {
-    if (!OperatingSystem.IsWindows())
+    if (OperatingSystem.IsMacOS())
     {
-        Check("globalShortcut, powerMonitor and powerSaveBlocker throw off Windows", Throws<PlatformNotSupportedException>(() => GlobalShortcut.IsRegistered("Ctrl+A"))
+        Check("globalShortcut, powerMonitor and powerSaveBlocker throw on macOS", Throws<PlatformNotSupportedException>(() => GlobalShortcut.IsRegistered("Ctrl+A"))
             && Throws<PlatformNotSupportedException>(() => PowerMonitor.GetSystemIdleTime()) && Throws<PlatformNotSupportedException>(() => PowerSaveBlocker.Start(PowerSaveBlockerType.PreventAppSuspension)));
         return;
     }
+    if (OperatingSystem.IsLinux())
+    {
+        await LinuxPowerTest.RunAsync(Check, step, app.Name);
+        return;
+    }
+    if (!OperatingSystem.IsWindows()) return;
 
     // Global shortcuts: Windows refuses a combination another app holds, so this test can see Oriel holding it.
     const uint Mods = 0x1 | 0x2 | 0x4; // MOD_ALT | MOD_CONTROL | MOD_SHIFT
@@ -3001,10 +3007,12 @@ async Task PowerAndShortcutsAsync()
     WindowsShell.Nudge();
     await Task.Delay(2500);
     var quiet = PowerMonitor.GetSystemIdleTime();
+    var quietState = PowerMonitor.GetSystemIdleState(2);
     WindowsShell.Nudge();
     Check("GetSystemIdleTime counts seconds without input, and input resets it", quiet is 2 or 3 && PowerMonitor.GetSystemIdleTime() <= 1, $"{quiet} -> {PowerMonitor.GetSystemIdleTime()}");
-    Check("GetSystemIdleState: active under the threshold, idle at zero", PowerMonitor.GetSystemIdleState(60) == SystemIdleState.Active && PowerMonitor.GetSystemIdleState(0) == SystemIdleState.Idle,
-        $"{PowerMonitor.GetSystemIdleState(60)} {PowerMonitor.GetSystemIdleState(0)}");
+    Check("GetSystemIdleState: idle at the threshold, active under it; 0 throws, as Electron's TypeError", quietState == SystemIdleState.Idle
+        && PowerMonitor.GetSystemIdleState(60) == SystemIdleState.Active && Throws<ArgumentOutOfRangeException>(() => PowerMonitor.GetSystemIdleState(0)),
+        $"{quietState} {PowerMonitor.GetSystemIdleState(60)}");
     var psi = new System.Diagnostics.ProcessStartInfo("powershell.exe") { UseShellExecute = false, CreateNoWindow = true, RedirectStandardOutput = true };
     foreach (var arg in new[] { "-NoProfile", "-Command", "Add-Type -AssemblyName System.Windows.Forms; [Windows.Forms.SystemInformation]::PowerStatus.PowerLineStatus" }) psi.ArgumentList.Add(arg);
     var line = System.Diagnostics.Process.Start(psi)!.StandardOutput.ReadToEnd().Trim();

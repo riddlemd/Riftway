@@ -4,11 +4,12 @@ using Oriel.Cef.Platform;
 namespace Oriel;
 
 /// <summary>Keyboard shortcuts that work while the app is in the background. Electron's <c>globalShortcut</c>.</summary>
-/// <remarks>Windows only for now: macOS and Linux throw <see cref="PlatformNotSupportedException"/>. Use it once the app is
-/// ready; callbacks run on the UI thread.</remarks>
+/// <remarks>Windows and Linux (X11 key grabs) for now: macOS throws <see cref="PlatformNotSupportedException"/>. Use it once
+/// the app is ready; callbacks run on the UI thread.</remarks>
 public static class GlobalShortcut
 {
-    private static readonly IGlobalShortcutBackend s_backend = OperatingSystem.IsWindows() ? new WindowsGlobalShortcutBackend() : new UnsupportedGlobalShortcutBackend();
+    private static readonly IGlobalShortcutBackend s_backend = OperatingSystem.IsWindows() ? new WindowsGlobalShortcutBackend()
+        : OperatingSystem.IsLinux() ? new LinuxGlobalShortcutBackend() : new UnsupportedGlobalShortcutBackend();
 
     /// <summary>Calls <paramref name="callback"/> whenever <paramref name="accelerator"/> is pressed, in any app. False if the
     /// shortcut is taken, by another app or already by this one. Electron's <c>globalShortcut.register()</c>.</summary>
@@ -56,6 +57,11 @@ internal static class GlobalShortcuts
     internal static uint Modifiers(AcceleratorModifiers m)
         => (m.HasFlag(AcceleratorModifiers.Alt) ? 0x1u : 0) | (m.HasFlag(AcceleratorModifiers.Control) ? 0x2u : 0)
             | (m.HasFlag(AcceleratorModifiers.Shift) ? 0x4u : 0) | (m.HasFlag(AcceleratorModifiers.Command) ? 0x8u : 0);
+
+    /// <summary>The X modifier mask for a hotkey's <c>MOD_</c> flags: Shift, Control, Alt as Mod1, and the Windows key as
+    /// Mod4, which Chromium leaves out (DRIFT J3).</summary>
+    internal static ushort X11Modifiers(uint mod)
+        => X11Keys.Modifiers(alt: (mod & 0x1) != 0, control: (mod & 0x2) != 0, shift: (mod & 0x4) != 0, super: (mod & 0x8) != 0);
 }
 
 /// <summary>One OS's global shortcuts.</summary>
@@ -105,6 +111,62 @@ internal sealed class WindowsGlobalShortcutBackend : IGlobalShortcutBackend
     {
         foreach (var (_, entry) in _registered)
             if (entry.Id == id) entry.Callback();
+    }
+}
+
+/// <summary>Chromium's <c>XGlobalShortcutListener</c>, which Electron uses on X11: <c>XGrabKey</c> on the root window
+/// for each lock-modifier variant, failing when another client holds any of them. Like Chromium, a held key's
+/// auto-repeated presses each run the callback.</summary>
+[System.Runtime.Versioning.SupportedOSPlatform("linux")]
+internal sealed class LinuxGlobalShortcutBackend : IGlobalShortcutBackend
+{
+    // UI thread only.
+    private readonly Dictionary<HotKey, (byte Keycode, ushort Modifiers, Action Callback)> _registered = [];
+
+    public LinuxGlobalShortcutBackend() => X11System.KeyPressed += OnKeyPressed;
+
+    public bool Register(HotKey key, Action callback) => CefThread.InvokeOnUi(() =>
+    {
+        if (_registered.ContainsKey(key)) return false;
+        var modifiers = GlobalShortcuts.X11Modifiers(key.Modifiers);
+        if (X11System.GrabKey(X11Keys.KeysymOf((int)key.VirtualKey), modifiers) is not { } keycode) return false;
+        _registered[key] = (keycode, modifiers, callback);
+        return true;
+    });
+
+    public bool IsRegistered(HotKey key) => CefThread.InvokeOnUi(() => _registered.ContainsKey(key));
+
+    public void Unregister(HotKey key) => CefThread.InvokeOnUi(() =>
+    {
+        if (_registered.Remove(key, out var entry)) X11System.UngrabKey(entry.Keycode, entry.Modifiers);
+        return true;
+    });
+
+    public void UnregisterAll() => CefThread.InvokeOnUi(() =>
+    {
+        foreach (var (keycode, modifiers, _) in _registered.Values) X11System.UngrabKey(keycode, modifiers);
+        _registered.Clear();
+        return true;
+    });
+
+    // X event thread. A press that arrives after Unregister finds nothing, as Chromium's map lookup does.
+    private void OnKeyPressed(byte keycode, ushort state)
+    {
+        var modifiers = X11Keys.Relevant(state);
+        try
+        {
+            CefThread.PostUi(() =>
+            {
+                foreach (var entry in _registered.Values)
+                {
+                    if (entry.Keycode != keycode || entry.Modifiers != modifiers) continue;
+                    entry.Callback();
+                    return;
+                }
+            });
+        }
+        // CEF is shutting down.
+        catch (InvalidOperationException) { }
     }
 }
 

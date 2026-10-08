@@ -1,3 +1,4 @@
+using System.ComponentModel;
 using Oriel.Cef;
 using Oriel.Cef.Platform;
 
@@ -27,11 +28,13 @@ public sealed class SpeedLimitChangedEventArgs(int limit) : EventArgs
 }
 
 /// <summary>Power and session changes: sleep, wake, power source, screen lock, idle time. Electron's <c>powerMonitor</c>.</summary>
-/// <remarks>Windows only for now: macOS and Linux throw <see cref="PlatformNotSupportedException"/>. Use it once the app is
-/// ready; events are raised on the UI thread.</remarks>
+/// <remarks>Windows and Linux for now: macOS throws <see cref="PlatformNotSupportedException"/>. Use it once the app is
+/// ready; events are raised on the UI thread. On Linux, as in Electron, only suspend, resume and shutdown are raised
+/// (from logind), and the machine never counts as on battery.</remarks>
 public static class PowerMonitor
 {
     private static EventHandler? s_suspended, s_resumed, s_onAc, s_onBattery, s_locked, s_unlocked;
+    private static EventHandler<CancelEventArgs>? s_shutdown;
     private static EventHandler<SpeedLimitChangedEventArgs>? s_speedLimit;
     private static bool? s_onBatteryLast;
     private static Timer? s_speedLimitTimer;
@@ -44,16 +47,40 @@ public static class PowerMonitor
     /// <summary>The system woke. Electron's <c>'resume'</c>.</summary>
     public static event EventHandler? Resumed { add => Add(ref s_resumed, value); remove => s_resumed -= value; }
 
-    /// <summary>The machine switched to mains power. Electron's <c>'on-ac'</c>.</summary>
+    /// <summary>The machine switched to mains power. Never raised on Linux, where Chromium has no power source reader.
+    /// Electron's <c>'on-ac'</c>.</summary>
     public static event EventHandler? OnAc { add => Add(ref s_onAc, value); remove => s_onAc -= value; }
 
-    /// <summary>The machine switched to battery. Electron's <c>'on-battery'</c>.</summary>
+    /// <summary>The machine switched to battery. Never raised on Linux, where Chromium has no power source reader.
+    /// Electron's <c>'on-battery'</c>.</summary>
     public static event EventHandler? OnBattery { add => Add(ref s_onBattery, value); remove => s_onBattery -= value; }
 
-    /// <summary>The screen was locked. Electron's <c>'lock-screen'</c>.</summary>
+    /// <summary>The system is shutting down; set <see cref="CancelEventArgs.Cancel"/> (Electron's
+    /// <c>event.preventDefault()</c>) to hold the shutdown back for as long as logind allows. Linux only: never raised on
+    /// Windows, as in Electron. Electron's <c>'shutdown'</c>.</summary>
+    /// <remarks>While there is a handler, Oriel holds a logind shutdown delay lock, as Electron does.</remarks>
+    public static event EventHandler<CancelEventArgs>? Shutdown
+    {
+        add
+        {
+            if (!OperatingSystem.IsWindows() && !OperatingSystem.IsLinux()) throw NotYet();
+            if (OperatingSystem.IsWindows()) SystemHost.Start();
+            s_shutdown += value;
+            if (OperatingSystem.IsLinux()) LinuxPowerMonitor.Start().SetListeningForShutdown(s_shutdown is not null);
+        }
+        remove
+        {
+            s_shutdown -= value;
+            if (OperatingSystem.IsLinux()) LinuxPowerMonitor.Start().SetListeningForShutdown(s_shutdown is not null);
+        }
+    }
+
+    /// <summary>The screen was locked. Windows only; never raised on Linux, as in Electron. Electron's
+    /// <c>'lock-screen'</c>.</summary>
     public static event EventHandler? ScreenLocked { add => Add(ref s_locked, value); remove => s_locked -= value; }
 
-    /// <summary>The screen was unlocked. Electron's <c>'unlock-screen'</c>.</summary>
+    /// <summary>The screen was unlocked. Windows only; never raised on Linux, as in Electron. Electron's
+    /// <c>'unlock-screen'</c>.</summary>
     public static event EventHandler? ScreenUnlocked { add => Add(ref s_unlocked, value); remove => s_unlocked -= value; }
 
     /// <summary>The CPU speed limit changed, sampled once a second. Windows only; never raised on macOS or Linux. Electron's
@@ -62,6 +89,12 @@ public static class PowerMonitor
     {
         add
         {
+            if (OperatingSystem.IsLinux())
+            {
+                LinuxPowerMonitor.Start();
+                s_speedLimit += value;
+                return;
+            }
             if (!OperatingSystem.IsWindows()) throw NotYet();
             SystemHost.Start();
             s_speedLimit += value;
@@ -70,24 +103,43 @@ public static class PowerMonitor
         remove => s_speedLimit -= value;
     }
 
-    /// <summary>Whether the machine runs on battery. Electron's <c>powerMonitor.isOnBatteryPower()</c>.</summary>
-    public static bool IsOnBatteryPower() => OperatingSystem.IsWindows() ? WindowsSystem.OnBattery() ?? false : throw NotYet();
+    /// <summary>Whether the machine runs on battery; always false on Linux, where Chromium's power monitor source is a stub
+    /// that reports external power. Electron's <c>powerMonitor.isOnBatteryPower()</c>.</summary>
+    public static bool IsOnBatteryPower() => OperatingSystem.IsWindows() ? WindowsSystem.OnBattery() ?? false : OperatingSystem.IsLinux() ? false : throw NotYet();
 
     /// <summary>Electron's <c>powerMonitor.onBatteryPower</c>.</summary>
     public static bool OnBatteryPower => IsOnBatteryPower();
 
     /// <summary>Seconds since the last keyboard or mouse input. Electron's <c>powerMonitor.getSystemIdleTime()</c>.</summary>
-    public static int GetSystemIdleTime() => OperatingSystem.IsWindows() ? WindowsSystem.IdleSeconds() : throw NotYet();
+    /// <remarks>On Linux, the X screen saver extension's idle time; 0 when it cannot be read.</remarks>
+    public static int GetSystemIdleTime()
+        => OperatingSystem.IsWindows() ? WindowsSystem.IdleSeconds() : OperatingSystem.IsLinux() ? X11System.IdleSeconds() : throw NotYet();
 
     /// <summary>Locked, idle after <paramref name="idleThreshold"/> seconds without input, or active. Electron's
     /// <c>powerMonitor.getSystemIdleState()</c>.</summary>
+    /// <remarks>On Linux "locked" comes from the desktop's screen saver service on the session bus, or, until one has
+    /// answered, from the X screen saver, as Chromium's <c>CheckIdleStateIsLocked</c>.</remarks>
+    /// <exception cref="ArgumentOutOfRangeException"><paramref name="idleThreshold"/> is not above 0, where Electron throws
+    /// a <c>TypeError</c>.</exception>
     public static SystemIdleState GetSystemIdleState(int idleThreshold)
-        => OperatingSystem.IsWindows() ? PowerRules.IdleState(WindowsSystem.IdleSeconds(), idleThreshold, WindowsSystem.IsLocked()) : throw NotYet();
+    {
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(idleThreshold);
+        if (OperatingSystem.IsWindows()) return PowerRules.IdleState(WindowsSystem.IdleSeconds(), idleThreshold, WindowsSystem.IsLocked());
+        if (!OperatingSystem.IsLinux()) throw NotYet();
+        var locked = PowerRules.LinuxLocked(LinuxScreenSaverWatcher.Instance.Locked, X11System.ScreenSaverActive);
+        return PowerRules.IdleState(locked ? 0 : X11System.IdleSeconds(), idleThreshold, locked);
+    }
 
     private static PlatformNotSupportedException NotYet() => new("powerMonitor is not implemented on this OS yet.");
 
     private static void Add(ref EventHandler? field, EventHandler? handler)
     {
+        if (OperatingSystem.IsLinux())
+        {
+            LinuxPowerMonitor.Start();
+            field += handler;
+            return;
+        }
         if (!OperatingSystem.IsWindows()) throw NotYet();
         SystemHost.Start();
         s_onBatteryLast ??= WindowsSystem.OnBattery();
@@ -121,6 +173,30 @@ public static class PowerMonitor
         try { CefThread.PostUi(() => s_speedLimit?.Invoke(null, new SpeedLimitChangedEventArgs(limit))); }
         // CEF is shutting down.
         catch (InvalidOperationException) { }
+    }
+
+    /// <summary>logind's suspend or resume, raised on the UI thread before the bus thread goes on (the sleep lock waits).</summary>
+    internal static void RaiseOnUi(PowerEvent e)
+    {
+        try { CefThread.InvokeOnUi(() => { Raise(e); return true; }); }
+        // CEF is shutting down.
+        catch (InvalidOperationException) { }
+    }
+
+    /// <summary>Electron's <c>ShouldShutdown</c>: raises <see cref="Shutdown"/> on the UI thread and returns whether no
+    /// handler held it back.</summary>
+    internal static bool ShouldShutdown()
+    {
+        try
+        {
+            return CefThread.InvokeOnUi(() =>
+            {
+                var args = new CancelEventArgs();
+                s_shutdown?.Invoke(null, args);
+                return !args.Cancel;
+            });
+        }
+        catch (InvalidOperationException) { return true; }
     }
 
     private static void Raise(PowerEvent e)
@@ -182,6 +258,10 @@ internal static class PowerRules
         return total / cpus.Length;
     }
 
+    /// <summary>Chromium's Linux <c>CheckIdleStateIsLocked</c>: the D-Bus screen saver's state once known, else whether the
+    /// X screen saver is active (read only then).</summary>
+    internal static bool LinuxLocked(bool? dbusLocked, Func<bool> x11ScreenSaverActive) => dbusLocked ?? x11ScreenSaverActive();
+
     /// <summary>Electron's order: locked first, then idle once the input has been quiet for the threshold.</summary>
     internal static SystemIdleState IdleState(int idleSeconds, int threshold, bool locked)
         => locked ? SystemIdleState.Locked : idleSeconds >= threshold ? SystemIdleState.Idle : SystemIdleState.Active;
@@ -209,4 +289,20 @@ internal sealed class SpeedLimitFilter
         if (_samples.Count > WindowSize) _samples.Dequeue();
         return _samples.Count < WindowSize ? Max : (int)(_samples.Sum(static x => (long)x) / WindowSize);
     }
+}
+
+/// <summary>Electron's Linux <c>PowerMonitor</c>: its <c>PowerObserverLinux</c>, created with the first listener.</summary>
+[System.Runtime.Versioning.SupportedOSPlatform("linux")]
+internal static class LinuxPowerMonitor
+{
+    private static readonly Lazy<LinuxLogind> s_logind = new(() => new LinuxLogind(
+        Path.GetFileName(ProcessArgs.LinuxProgram() ?? Environment.ProcessPath ?? "oriel"),
+        () => PowerMonitor.RaiseOnUi(PowerEvent.Suspend),
+        () => PowerMonitor.RaiseOnUi(PowerEvent.Resume)));
+
+    internal static LinuxLogind Start() => s_logind.Value;
+
+    /// <summary>Electron's <c>setListeningForShutdown</c>, which its JS calls as shutdown listeners come and go.</summary>
+    internal static void SetListeningForShutdown(this LinuxLogind logind, bool listening)
+        => logind.SetShutdownHandler(listening ? PowerMonitor.ShouldShutdown : null);
 }

@@ -236,15 +236,17 @@ Entries marked _(branch `x`)_ are on that branch and not yet in `main`.
 
 | ID | Electron | Oriel | Why | Possible resolution |
 |---|---|---|---|---|
-| J1 | `globalShortcut` on macOS and Linux | Windows only: macOS and Linux throw `PlatformNotSupportedException` behind `IGlobalShortcutBackend` _(branch `power-shortcuts`)_ | OS | macOS Carbon `RegisterEventHotKey`; Linux X11 `XGrabKey` or the GlobalShortcuts portal |
+| J1 | `globalShortcut` on macOS | Windows and Linux X11 only: macOS throws `PlatformNotSupportedException` behind `IGlobalShortcutBackend` _(branch `power-shortcuts`)_ | OS | macOS Carbon `RegisterEventHotKey` |
 | J2 | A `Super`/`Command` global shortcut on Windows | Registers with `MOD_WIN`, so it fires on Windows key plus the key _(branch `power-shortcuts`)_ | Design: Chromium registers the bare key for Super shortcuts (`global_accelerator_listener_win.cc` drops `MOD_WIN`), which grabs it system-wide and never fires | Copy Chromium if bug-for-bug parity is wanted |
+| J3 | A `Super`/`Meta`/`Command` global shortcut on Linux X11: `XGlobalShortcutListener` grabs only Shift, Control and Alt (`GetNativeModifiers`), so it grabs the bare key system-wide; pressing it reaches `GlobalAcceleratorListener::NotifyKeyPressed` with an accelerator that is not in the map, which `CHECK`-fails | Grabs with `Mod4Mask`, so it fires on Super plus the key (checked) _(branch `linux-power-shortcuts`)_ | Design: copying Chromium means grabbing the bare key and then crashing the process | Copy the bare-key grab, without the crash, if bug-for-bug parity is wanted |
+| J4 | `globalShortcut` as a Wayland client: the `org.freedesktop.portal.GlobalShortcuts` session (`GlobalAcceleratorListenerLinux`, on by default; GNOME's consent dialog, bindings kept by the portal) | X11 key grabs only, also under XWayland, where the compositor passes keys to X clients only while one of their windows has focus (unchecked) _(branch `linux-power-shortcuts`)_ | CEF: Oriel runs on X11 (P2) | Follow P2, then port `GlobalAcceleratorListenerLinux` |
 
 ## powerMonitor, powerSaveBlocker
 
 | ID | Electron | Oriel | Why | Possible resolution |
 |---|---|---|---|---|
-| U1 | `powerMonitor` and `powerSaveBlocker` on macOS and Linux | Windows only: macOS and Linux throw `PlatformNotSupportedException` _(branch `power-shortcuts`)_ | OS | macOS IOKit power notifications and assertions; Linux logind over D-Bus and the Inhibit portal |
-| U2 | `thermal-state-change`, `getCurrentThermalState` (macOS), `shutdown` (Linux, macOS), `user-did-become-active`/`user-did-resign-active` (macOS) | Missing _(branch `power-shortcuts`)_ | OS: not emitted on Windows either (Chromium has no Windows thermal or shutdown source) | macOS IOKit and `NSProcessInfo` thermal state; Linux logind `PrepareForShutdown` |
+| U1 | `powerMonitor` and `powerSaveBlocker` on macOS | Windows and Linux only: macOS throws `PlatformNotSupportedException` _(branch `power-shortcuts`)_ | OS | macOS IOKit power notifications and assertions |
+| U2 | `thermal-state-change`, `getCurrentThermalState` (macOS), `shutdown` (macOS), `user-did-become-active`/`user-did-resign-active` (macOS) | Missing; `Shutdown` is raised on Linux from logind _(branches `power-shortcuts`, `linux-power-shortcuts`)_ | OS: not emitted on Windows either (Chromium has no Windows thermal or shutdown source) | macOS IOKit and `NSProcessInfo` thermal state, `NSWorkspaceWillPowerOffNotification` |
 
 ## shell
 

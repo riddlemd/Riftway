@@ -25,6 +25,11 @@ General items: [todo.md](todo.md).
       `ORIEL_WM=mutter|kwin|xfwm4 eng/docker/test-linux.sh` with the `oriel-linux-dev-wm` image
       (`eng/docker/linux-dev-wm.Dockerfile`). Not covered: GNOME Shell and Plasma themselves (panels, struts, portals)
 - [ ] Screen capture: Chromium's X11 desktop capturer dies with SIGILL under the Docker Xvfb (arm64) when getDisplayMedia starts; SessionTest skips the capture checks there (ORIEL_XVFB). Verify on a real X server; if it crashes there too, find the CHECK with CEF's symbols
+- [x] `GlobalShortcut`, `PowerMonitor`, `PowerSaveBlocker` (branch `linux-power-shortcuts`): X11 key grabs, logind sleep and
+      shutdown delay locks, the D-Bus inhibit services and screen saver lock state, read back in WindowTest against fake
+      services (`samples/Shared/FakeDBusService.cs`) and a private system bus (`eng/docker/with-system-bus.sh`)
+  - [ ] Check them on a real desktop: GNOME's session manager inhibit, logind's real `PrepareForSleep`/`PrepareForShutdown`,
+        and a real screen locker's `ActiveChanged`
 - [ ] nativeTheme against a real `xdg-desktop-portal` (GNOME, KDE): Docker has none, so the checks use a fake portal
       (`samples/Shared/FakePortal.cs`) that WindowTest starts before CEF
 - [ ] nativeTheme: with no portal preference, pages keep GTK's colours from startup (DRIFT Y2); a CEF patch to clear
