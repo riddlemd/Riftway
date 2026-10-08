@@ -16,6 +16,8 @@ static class WebContentsRowsTest
         await SavePageAsync(check);
         await PrintToPdfAsync(check);
         await WebRtcAsync(check);
+        await ImageAnimationAsync(check);
+        await CaretBrowsingAsync(check);
     }
 
     // The ids Chromium's own DevTools HTTP endpoint lists, by URL.
@@ -637,6 +639,92 @@ static class WebContentsRowsTest
             other.WebContents.GetWebRtcIpHandlingPolicy() == "default" && !otherFound.Any(c => c.StartsWith("udp", StringComparison.Ordinal)), string.Join(",", otherFound));
         wc.SetWebRtcIpHandlingPolicy("default");
         other.Destroy();
+        win.Destroy();
+    }
+    // A 1x1 GIF that loops red, blue, red, ... every 100 ms.
+    static readonly byte[] BlinkingGif =
+    [
+        .. "GIF89a"u8, 1, 0, 1, 0, 0x80, 0, 0, 0xFF, 0, 0, 0, 0, 0xFF,
+        0x21, 0xFF, 0x0B, .. "NETSCAPE2.0"u8, 3, 1, 0, 0, 0,
+        0x21, 0xF9, 4, 0, 10, 0, 0, 0, 0x2C, 0, 0, 0, 0, 1, 0, 1, 0, 0, 2, 2, 0x44, 0x01, 0,
+        0x21, 0xF9, 4, 0, 10, 0, 0, 0, 0x2C, 0, 0, 0, 0, 1, 0, 1, 0, 0, 2, 2, 0x4C, 0x01, 0,
+        0x3B,
+    ];
+
+    // Shows the GIF as a new image (a fresh blob URL, so no cached image keeps an older policy), then reads its pixel
+    // from the page's own rendering every 60 ms for 3 s: "r" or "b" per sample. A canvas would only ever draw
+    // the first frame, as the HTML spec has it.
+    static async Task<string> SampleGif(WebContents wc)
+    {
+        await wc.ExecuteJavaScriptAsync($$"""
+            (async () => {
+              const g = document.getElementById('g');
+              g.src = URL.createObjectURL(new Blob([Uint8Array.from(atob('{{Convert.ToBase64String(BlinkingGif)}}'), c => c.charCodeAt(0))], { type: 'image/gif' }));
+              await g.decode();
+              return 1;
+            })()
+            """).WaitAsync(TimeSpan.FromSeconds(10));
+        var seen = new System.Text.StringBuilder();
+        var clock = System.Diagnostics.Stopwatch.StartNew();
+        while (clock.ElapsedMilliseconds < 3000)
+        {
+            var pixel = (await wc.CapturePageAsync(new Rectangle(40, 40, 2, 2))).ToBitmap();
+            seen.Append(pixel[2] > pixel[0] ? 'r' : 'b');
+            await Task.Delay(60);
+        }
+        return seen.ToString();
+    }
+
+    static async Task ImageAnimationAsync(CheckFn check)
+    {
+        var win = new BrowserWindow(new BrowserWindowOptions { Show = true, Width = 300, Height = 200 });
+        var wc = win.WebContents;
+        await wc.LoadUrl("data:text/html,<body style='margin:0'><img id=g style='width:100px;height:100px;image-rendering:pixelated'></body>");
+        // Captures take longer than a frame, so the samples alias: looping shows red again after blue; playing once rests on blue.
+        static bool Loops(string s) => s.IndexOf('b') is >= 0 and var b && s.IndexOf('r', b) > b;
+        static bool PlayedOnce(string s) => s.IndexOf('b') is >= 0 and var b && s.IndexOf('r', b) < 0;
+
+        var animated = await SampleGif(wc);
+        check("a new image animates by default", Loops(animated), animated);
+        wc.SetImageAnimationPolicy("noAnimation");
+        var still = await SampleGif(wc);
+        check("SetImageAnimationPolicy(noAnimation) keeps a new image on its first frame", still.Length > 4 && still.All(c => c == 'r'), still);
+        wc.SetImageAnimationPolicy("bogus");
+        var ignored = await SampleGif(wc);
+        check("SetImageAnimationPolicy ignores an unknown policy, as Electron's", ignored.Length > 4 && ignored.All(c => c == 'r'), ignored);
+        wc.SetImageAnimationPolicy("animateOnce");
+        var once = await SampleGif(wc);
+        check("SetImageAnimationPolicy(animateOnce) plays a new image's frames once", PlayedOnce(once), once);
+        wc.SetImageAnimationPolicy("animate");
+        var again = await SampleGif(wc);
+        check("SetImageAnimationPolicy(animate) animates new images again", Loops(again), again);
+        win.Destroy();
+    }
+
+    static async Task CaretBrowsingAsync(CheckFn check)
+    {
+        var win = new BrowserWindow(new BrowserWindowOptions { Show = true, Width = 400, Height = 200 });
+        var wc = win.WebContents;
+        await wc.LoadUrl("data:text/html,<p id=p>caret browsing text</p>");
+        // A collapsed selection at the paragraph's start, then a right arrow: only caret browsing moves it.
+        async Task<int> ArrowFromStart()
+        {
+            await wc.ExecuteJavaScriptAsync("getSelection().collapse(document.getElementById('p').firstChild, 0); 1");
+            wc.Focus();
+            wc.SendInputEvent(new KeyboardInputEvent(KeyboardInputEventType.KeyDown, "Right"));
+            wc.SendInputEvent(new KeyboardInputEvent(KeyboardInputEventType.KeyUp, "Right"));
+            await Task.Delay(300);
+            return (int)(await wc.ExecuteJavaScriptAsync("getSelection().focusOffset"))!;
+        }
+
+        var off = await ArrowFromStart();
+        check("caret browsing is off by default: an arrow key leaves the caret", !wc.IsCaretBrowsingEnabled() && off == 0, off);
+        wc.SetCaretBrowsingEnabled(true);
+        var on = await ArrowFromStart();
+        check("SetCaretBrowsingEnabled(true) moves the caret with the arrow keys on the open page", wc.IsCaretBrowsingEnabled() && on == 1, on);
+        wc.SetCaretBrowsingEnabled(false);
+        var offAgain = await ArrowFromStart();
+        check("SetCaretBrowsingEnabled(false) turns it off again", !wc.IsCaretBrowsingEnabled() && offAgain == 0, offAgain);
         win.Destroy();
     }
 }

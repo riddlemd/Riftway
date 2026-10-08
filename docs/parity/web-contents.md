@@ -12,13 +12,13 @@ Percentages are over the non-n/a items; the second counts a partial item as half
 |---|---|---|---|---|---|---|---|
 | Static methods | 5 | 3 | 2 | 0 | 0 | 60.0% | 80.0% |
 | Instance events | 59 | 31 | 18 | 8 | 2 | 54.4% | 70.2% |
-| Instance methods | 118 | 43 | 31 | 36 | 8 | 39.1% | 53.2% |
-| Instance properties | 18 | 10 | 2 | 5 | 1 | 58.8% | 64.7% |
+| Instance methods | 118 | 43 | 34 | 33 | 8 | 39.1% | 54.5% |
+| Instance properties | 18 | 10 | 3 | 4 | 1 | 58.8% | 67.6% |
 | navigationHistory | 14 | 12 | 0 | 2 | 0 | 85.7% | 85.7% |
 | WebFrameMain events and statics | 3 | 1 | 1 | 1 | 0 | 33.3% | 50.0% |
 | WebFrameMain methods | 9 | 1 | 5 | 3 | 0 | 11.1% | 38.9% |
 | WebFrameMain properties | 15 | 10 | 3 | 2 | 0 | 66.7% | 76.7% |
-| **Total** | 241 | 111 | 62 | 57 | 11 | 48.3% | 61.7% |
+| **Total** | 241 | 111 | 66 | 53 | 11 | 48.3% | 62.6% |
 
 ## Checklist
 
@@ -146,8 +146,8 @@ Percentages are over the non-n/a items; the second counts a partial item as half
 | `setAudioMuted()` | `SetAudioMuted` | done |  |
 | `isAudioMuted()` | `IsAudioMuted` | done |  |
 | `isCurrentlyAudible()` | — | missing | CEF never reports audio for Chrome-style browsers (C23). |
-| `setCaretBrowsingEnabled()` | — | missing |  |
-| `isCaretBrowsingEnabled()` | — | missing |  |
+| `setCaretBrowsingEnabled()` | `SetCaretBrowsingEnabled` | partial | Applies to every page of the session (C53). |
+| `isCaretBrowsingEnabled()` | `IsCaretBrowsingEnabled` | partial | What this page set; the session's pages share the setting (C53). |
 | `setZoomMode()` | — | missing |  |
 | `getZoomMode()` | — | missing |  |
 | `setVisualZoomLevelLimits()` | `SetVisualZoomLevelLimits` | partial | Pinch on or off; off on Windows/Linux (C37) |
@@ -209,7 +209,7 @@ Percentages are over the non-n/a items; the second counts a partial item as half
 | `getBackgroundThrottling()` | — | missing |  |
 | `setBackgroundThrottling()` | — | missing |  |
 | `getType()` | `GetWebContentsType` | done | Renamed from .NET's `GetType` (C45); always `window`. |
-| `setImageAnimationPolicy()` | — | missing |  |
+| `setImageAnimationPolicy()` | `SetImageAnimationPolicy` | partial | Applies to every page of the session (C53). |
 | `canGoBack()` | — | n/a | Deprecated; use navigationHistory. |
 | `canGoForward()` | — | n/a | Deprecated; use navigationHistory. |
 | `canGoToOffset()` | — | n/a | Deprecated; use navigationHistory. |
@@ -232,7 +232,7 @@ Percentages are over the non-n/a items; the second counts a partial item as half
 | `hostWebContents` | — | n/a | <webview> only. |
 | `focusedFrame` | `FocusedFrame` | done | Not cross-site frames in another process (F3). |
 | `ipc` | `Ipc` | done |  |
-| `caretBrowsingEnabled` | — | missing |  |
+| `caretBrowsingEnabled` | `SetCaretBrowsingEnabled / IsCaretBrowsingEnabled` | partial | C53. |
 | `frameRate` | — | missing |  |
 | `id` | `Id` | done |  |
 | `session` | `Session` | done | See DRIFT E1-E11 for the session gaps. |

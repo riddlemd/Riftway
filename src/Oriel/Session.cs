@@ -257,12 +257,17 @@ public sealed unsafe partial class Session
         try { SetPreference(context, "partition.per_host_zoom_levels", value); }
         catch (ArgumentException e) { Console.Error.WriteLine($"[Oriel] Could not reset saved zoom levels: {e.Message}"); }
 
-        // Set per page through WebContents (drift C52); Electron never keeps them across launches.
-        foreach (var (name, text) in (ReadOnlySpan<(string, string)>)[("webrtc.ip_handling_policy", "default"), ("webrtc.udp_port_range", "")])
+        // Set per page through WebContents (drift C52, C53); Electron never keeps them across launches.
+        foreach (var (name, text) in (ReadOnlySpan<(string, string)>)[("webrtc.ip_handling_policy", "default"), ("webrtc.udp_port_range", ""),
+            ("settings.a11y.animation_policy", "allowed")])
         {
             try { SetStringPreference(context, name, text); }
             catch (ArgumentException e) { Console.Error.WriteLine($"[Oriel] Could not reset {name}: {e.Message}"); }
         }
+        var caret = CefNative.cef_value_create();
+        caret->set_bool(caret, 0);
+        try { SetPreference(context, "settings.a11y.caretbrowsing.enabled", caret); }
+        catch (ArgumentException e) { Console.Error.WriteLine($"[Oriel] Could not reset caret browsing: {e.Message}"); }
 
         ForgetRememberedPermissions(context);
     }
@@ -370,6 +375,14 @@ public sealed unsafe partial class Session
 
     // UI thread. Chromium copies it into the renderer preferences of every page in the profile.
     internal void SetRendererPreference(string name, string text) => SetStringPreference(_context, name, text);
+
+    // UI thread, as above.
+    internal void SetRendererPreference(string name, bool flag)
+    {
+        var value = CefNative.cef_value_create();
+        value->set_bool(value, flag ? 1 : 0);
+        SetPreference(_context, name, value);
+    }
 
     private static void SetStringPreference(cef_request_context_t* context, string name, string text)
     {
