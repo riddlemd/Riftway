@@ -3175,9 +3175,15 @@ async Task TransparencyAsync()
 
 async Task ShellAsync()
 {
+    // Linux's backend has its own end-to-end run, samples/Oriel.ShellTest, with fake tools and bus services.
+    if (OperatingSystem.IsLinux())
+    {
+        Check("Shell's shortcut links throw PlatformNotSupportedException on Linux", Throws<PlatformNotSupportedException>(() => Shell.ReadShortcutLink("/nonexistent.lnk")));
+        return;
+    }
     if (!OperatingSystem.IsWindows())
     {
-        Check("Shell throws PlatformNotSupportedException off Windows", Throws<PlatformNotSupportedException>(Shell.Beep));
+        Check("Shell throws PlatformNotSupportedException on macOS", Throws<PlatformNotSupportedException>(Shell.Beep));
         return;
     }
 

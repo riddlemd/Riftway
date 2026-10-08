@@ -1,4 +1,5 @@
 using System.Text;
+using Oriel.Cef;
 using Oriel.Cef.Platform;
 
 namespace Oriel;
@@ -65,24 +66,29 @@ public sealed record ShortcutDetails
 }
 
 /// <summary>The desktop's own handling of files and URLs. Electron's <c>shell</c>.</summary>
-/// <remarks>Windows only for now: macOS and Linux throw <see cref="PlatformNotSupportedException"/>.</remarks>
+/// <remarks>Windows and Linux for now: macOS throws <see cref="PlatformNotSupportedException"/>.</remarks>
 public static class Shell
 {
-    private static readonly IShellBackend s_backend = OperatingSystem.IsWindows() ? new WindowsShellBackend() : new UnsupportedShellBackend();
+    private static readonly IShellBackend s_backend = OperatingSystem.IsWindows() ? new WindowsShellBackend()
+        : OperatingSystem.IsLinux() ? new LinuxShellBackend()
+        : new UnsupportedShellBackend();
 
     /// <summary>Opens <paramref name="url"/> with the desktop's handler for its scheme. Electron's <c>shell.openExternal()</c>.</summary>
-    /// <remarks>As in Electron, the URL is canonicalized, escaped and quoted, then handed to the shell: there is no scheme
-    /// check, and a string that is not a URL goes as an empty one, which the shell refuses.</remarks>
-    /// <exception cref="InvalidOperationException">The shell refused: <c>Failed to open: </c> and the system's message,
-    /// Electron's rejection.</exception>
+    /// <remarks>As in Electron, the URL is canonicalized and handed on with no scheme check. Windows escapes and quotes it
+    /// for the shell, and a string that is not a URL goes as an empty one, which the shell refuses. Linux starts
+    /// <c>xdg-email</c> for <c>mailto:</c>, else <c>xdg-open</c>, and does not wait for it, so only a failure to start
+    /// rejects; <paramref name="options"/> do nothing there.</remarks>
+    /// <exception cref="InvalidOperationException">Windows: the shell refused, <c>Failed to open: </c> and the system's
+    /// message. Linux: the handler could not be started, <c>Failed to open path</c>. Electron's rejections.</exception>
     public static Task OpenExternalAsync(string url, OpenExternalOptions? options = null)
     {
         ArgumentNullException.ThrowIfNull(url);
         return s_backend.OpenExternalAsync(url, options ?? new OpenExternalOptions());
     }
 
-    /// <summary>Opens a file or folder the way the desktop does; <c>Failed to open path</c> if it could not, or an empty
-    /// string. Electron's <c>shell.openPath()</c>.</summary>
+    /// <summary>Opens a file or folder the way the desktop does; an empty string, or Electron's error text: Windows'
+    /// <c>Failed to open path</c>, or Linux's <c>Failed to launch xdg-open</c>. Electron's <c>shell.openPath()</c>.</summary>
+    /// <remarks>On Linux <c>xdg-open</c> is not waited for, so a path it cannot open still gives "".</remarks>
     public static Task<string> OpenPathAsync(string path)
     {
         ArgumentNullException.ThrowIfNull(path);
@@ -97,8 +103,11 @@ public static class Shell
     }
 
     /// <summary>Moves a file or folder to the trash. Electron's <c>shell.trashItem()</c>.</summary>
-    /// <exception cref="IOException">It could not be moved, with Electron's rejection message; that includes an item too big
-    /// for the Recycle Bin (<c>Operation was aborted</c>), which is left in place rather than deleted.</exception>
+    /// <remarks>On Linux this runs the tool Electron picks: <c>ELECTRON_TRASH</c>, <c>kioclient5</c> or <c>kioclient</c>
+    /// under KDE, else <c>gio trash</c>.</remarks>
+    /// <exception cref="IOException">It could not be moved, with Electron's rejection message; on Windows that includes an
+    /// item too big for the Recycle Bin (<c>Operation was aborted</c>), which is left in place rather than deleted; on
+    /// Linux any failure of the tool is <c>Failed to move item to trash</c>.</exception>
     public static Task TrashItemAsync(string path)
     {
         ArgumentNullException.ThrowIfNull(path);
@@ -111,12 +120,11 @@ public static class Shell
     /// <summary>Writes a Windows shortcut (.lnk); false if it could not. Electron's <c>shell.writeShortcutLink()</c>.</summary>
     /// <exception cref="ArgumentException">Creating or replacing a shortcut with no <see cref="ShortcutDetails.Target"/>,
     /// where Chromium stops the process (<c>NOTREACHED</c>).</exception>
+    /// <exception cref="PlatformNotSupportedException">Not Windows, where Electron has no such method.</exception>
     public static bool WriteShortcutLink(string shortcutPath, ShortcutLinkOperation operation, ShortcutDetails options)
     {
         ArgumentNullException.ThrowIfNull(shortcutPath);
         ArgumentNullException.ThrowIfNull(options);
-        if (operation != ShortcutLinkOperation.Update && options.Target is null)
-            throw new ArgumentException("Creating or replacing a shortcut needs a Target.", nameof(options));
         return s_backend.WriteShortcutLink(shortcutPath, operation, options);
     }
 
@@ -126,6 +134,7 @@ public static class Shell
     /// <summary>Reads a Windows shortcut (.lnk). Electron's <c>shell.readShortcutLink()</c>.</summary>
     /// <exception cref="IOException">The file is not a shortcut that can be read: Electron's <c>Failed to read shortcut
     /// link</c>.</exception>
+    /// <exception cref="PlatformNotSupportedException">Not Windows, where Electron has no such method.</exception>
     public static ShortcutDetails ReadShortcutLink(string shortcutPath)
     {
         ArgumentNullException.ThrowIfNull(shortcutPath);
@@ -201,10 +210,50 @@ internal sealed class WindowsShellBackend : IShellBackend
     public void Beep() => WindowsShellOps.Beep();
 
     public bool WriteShortcutLink(string shortcutPath, ShortcutLinkOperation operation, ShortcutDetails options)
-        => WindowsSta.Run(() => WindowsShellOps.WriteShortcut(shortcutPath, ShortcutRules.ToWindows(options), ShortcutRules.ToWindows(operation))).GetAwaiter().GetResult();
+    {
+        if (operation != ShortcutLinkOperation.Update && options.Target is null)
+            throw new ArgumentException("Creating or replacing a shortcut needs a Target.", nameof(options));
+        return WindowsSta.Run(() => WindowsShellOps.WriteShortcut(shortcutPath, ShortcutRules.ToWindows(options), ShortcutRules.ToWindows(operation))).GetAwaiter().GetResult();
+    }
 
     public ShortcutDetails ReadShortcutLink(string shortcutPath)
         => ShortcutRules.FromWindows(WindowsSta.Run(() => WindowsShellOps.ReadShortcut(shortcutPath)).GetAwaiter().GetResult());
+}
+
+[System.Runtime.Versioning.SupportedOSPlatform("linux")]
+internal sealed class LinuxShellBackend : IShellBackend
+{
+    public Task OpenExternalAsync(string url, OpenExternalOptions options)
+    {
+        var spec = Gurl.Spec(url);
+        return Task.Run(() =>
+        {
+            if (LinuxShellOps.OpenExternal(spec) is { } error) throw new InvalidOperationException(error);
+        });
+    }
+
+    public Task<string> OpenPathAsync(string path) => Task.Run(() => LinuxShellOps.OpenPath(path));
+
+    public void ShowItemInFolder(string fullPath) => LinuxShowItemHelper.Instance.ShowItemInFolder(fullPath);
+
+    public Task TrashItemAsync(string path) => Task.Run(() =>
+    {
+        if (!LinuxShellOps.MoveItemToTrash(path)) throw new IOException("Failed to move item to trash");
+    });
+
+    // GDK belongs to CEF's UI thread. Before Ready GTK has no display, where Electron's beep does nothing too.
+    public void Beep()
+    {
+        if (OrielApp.CurrentOrNull is not { IsReady: true }) return;
+        try { CefThread.RunOnUi(LinuxShellOps.Beep); }
+        catch (InvalidOperationException) { }
+    }
+
+    public bool WriteShortcutLink(string shortcutPath, ShortcutLinkOperation operation, ShortcutDetails options) => throw WindowsOnly();
+
+    public ShortcutDetails ReadShortcutLink(string shortcutPath) => throw WindowsOnly();
+
+    private static PlatformNotSupportedException WindowsOnly() => new("Shortcut links are Windows only, as in Electron.");
 }
 
 /// <summary>Electron's string handling around the shell calls: pure code.</summary>

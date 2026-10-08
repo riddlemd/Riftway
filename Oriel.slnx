@@ -9,6 +9,7 @@
     <Project Path="samples/Oriel.ProtocolTest/Oriel.ProtocolTest.csproj" />
     <Project Path="samples/Oriel.SessionTest/Oriel.SessionTest.csproj" />
     <Project Path="samples/Oriel.Sample/Oriel.Sample.csproj" />
+    <Project Path="samples/Oriel.ShellTest/Oriel.ShellTest.csproj" />
     <Project Path="samples/Oriel.WindowTest/Oriel.WindowTest.csproj" />
   </Folder>
   <Folder Name="/tests/">

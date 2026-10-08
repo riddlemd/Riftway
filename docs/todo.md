@@ -65,6 +65,7 @@ Cross-platform work. Platform-specific items: [linux-todo.md](linux-todo.md), [w
 
 ## Later milestones
 
-- [x] `Shell` and `Clipboard` on Windows (branch `shell-clipboard`); macOS and Linux backends to come (DRIFT H1, K1)
+- [x] `Shell` and `Clipboard` on Windows (branch `shell-clipboard`); `Shell` on Linux (branch `linux-shell`); the macOS
+      `Shell` and the Linux `Clipboard` backends to come (DRIFT H1, K1)
 - [ ] M3 Blazor Hybrid · M4 ship it · M5 desktop integration · M6 session/network/processes · M7 own CEF builds
       (see [PLAN.md](PLAN.md#milestones))

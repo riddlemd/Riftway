@@ -34,7 +34,11 @@ public sealed class ShellTests
         var path = Path.Combine(Path.GetTempPath(), $"oriel-never-written-{Guid.NewGuid():N}.lnk");
         try
         {
-            Assert.Throws<ArgumentException>(() => Shell.WriteShortcutLink(path, operation, new ShortcutDetails { Description = "x" }));
+            // Electron has no shortcut methods off Windows, so there the call fails before any argument check.
+            if (OperatingSystem.IsWindows())
+                Assert.Throws<ArgumentException>(() => Shell.WriteShortcutLink(path, operation, new ShortcutDetails { Description = "x" }));
+            else
+                Assert.Throws<PlatformNotSupportedException>(() => Shell.WriteShortcutLink(path, operation, new ShortcutDetails { Description = "x" }));
             Assert.False(File.Exists(path));
         }
         finally { File.Delete(path); }
