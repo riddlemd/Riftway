@@ -32,15 +32,19 @@ openbox > /dev/null 2>&1 &
 sleep 1
 
 # A session bus of the run's own, as a desktop has: the launcher entry checks read its signals back.
+# A run that never exits hangs the job instead of failing it; the cap is generous next to the slowest suite.
+limit="timeout -k 10 ${ORIEL_RUN_LIMIT:-1800}"
 status=0
 if [ "$sandbox" = 1 ]; then
   chown root:root /work/out/app/chrome-sandbox
   chmod 4755 /work/out/app/chrome-sandbox
   chmod -R a+rX /work/out
-  runuser -u oriel -- env DISPLAY=:99 ORIEL_XVFB=1 ORIEL_TRACE_DEVTOOLS="${ORIEL_TRACE_DEVTOOLS:-}" dbus-run-session -- "/work/out/app/$exe" --enable-sandbox ${ORIEL_EXTRA_ARGS:-} 2> /work/app.err || status=$?
+  runuser -u oriel -- env DISPLAY=:99 ORIEL_XVFB=1 ORIEL_TRACE_DEVTOOLS="${ORIEL_TRACE_DEVTOOLS:-}" $limit dbus-run-session -- "/work/out/app/$exe" --enable-sandbox ${ORIEL_EXTRA_ARGS:-} 2> /work/app.err || status=$?
 else
-  dbus-run-session -- "/work/out/app/$exe" ${ORIEL_EXTRA_ARGS:-} 2> /work/app.err || status=$?
+  $limit dbus-run-session -- "/work/out/app/$exe" ${ORIEL_EXTRA_ARGS:-} 2> /work/app.err || status=$?
 fi
+
+if [ "$status" = 124 ] || [ "$status" = 137 ]; then echo "FAIL  the app exits by itself within ${ORIEL_RUN_LIMIT:-1800} s  [killed]"; fi
 
 mkdir -p /src/artifacts/linux && cp /work/app.err "/src/artifacts/linux/$exe.err"
 

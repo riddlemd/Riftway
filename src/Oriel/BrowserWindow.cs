@@ -1076,7 +1076,7 @@ public sealed unsafe partial class BrowserWindow
         if (browser is not null)
         {
             var host = browser->get_host(browser);
-            host->close_browser(host, 1);
+            WebContents.CloseWithoutUnload(host);
             NativeObject.Release(host);
         }
         w->close(w);

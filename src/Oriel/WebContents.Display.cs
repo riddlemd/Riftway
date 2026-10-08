@@ -80,6 +80,13 @@ public sealed unsafe partial class WebContents
     private bool _ignoreMenuShortcuts;
     private bool _closingWithoutUnload;
 
+    // UI thread: a forced close, which Chrome style still asks beforeunload of (drift C32).
+    internal void CloseWithoutUnload(cef_browser_host_t* host)
+    {
+        _closingWithoutUnload = true;
+        host->close_browser(host, 1);
+    }
+
     /// <summary>Handlers and listeners for this page's messages, asked before <see cref="IpcMain"/>'s. Electron's
     /// <c>webContents.ipc</c>.</summary>
     public IpcMainScope Ipc { get; } = new();
