@@ -18,6 +18,7 @@ static class WebContentsRowsTest
         await WebRtcAsync(check);
         await ImageAnimationAsync(check);
         await CaretBrowsingAsync(check);
+        await SharedWorkersAsync(check, debugPort);
     }
 
     // The ids Chromium's own DevTools HTTP endpoint lists, by URL.
@@ -726,5 +727,85 @@ static class WebContentsRowsTest
         var offAgain = await ArrowFromStart();
         check("SetCaretBrowsingEnabled(false) turns it off again", !wc.IsCaretBrowsingEnabled() && offAgain == 0, offAgain);
         win.Destroy();
+    }
+    // A loopback HTTP server answering GET paths from `files`; 404 otherwise. Stop the listener when done.
+    static (System.Net.Sockets.TcpListener Listener, int Port) Serve(Dictionary<string, (string Type, string Body)> files)
+    {
+        var listener = new System.Net.Sockets.TcpListener(System.Net.IPAddress.Loopback, 0);
+        listener.Start();
+        _ = Task.Run(async () =>
+        {
+            while (true)
+            {
+                System.Net.Sockets.TcpClient client;
+                try { client = await listener.AcceptTcpClientAsync(); } catch (Exception) { return; }
+                _ = Task.Run(async () =>
+                {
+                    using var _ = client;
+                    try
+                    {
+                        var stream = client.GetStream();
+                        var reader = new StreamReader(stream);
+                        var path = (await reader.ReadLineAsync() ?? "").Split(' ').ElementAtOrDefault(1) ?? "";
+                        while (!string.IsNullOrEmpty(await reader.ReadLineAsync())) { }
+                        var found = files.TryGetValue(path.Split('?')[0], out var file);
+                        var body = System.Text.Encoding.UTF8.GetBytes(found ? file.Body : "");
+                        await stream.WriteAsync(System.Text.Encoding.ASCII.GetBytes($"HTTP/1.1 {(found ? "200 OK" : "404 Not Found")}\r\nContent-Type: {(found ? file.Type : "text/plain")}\r\nCache-Control: no-store\r\nContent-Length: {body.Length}\r\nConnection: close\r\n\r\n"));
+                        await stream.WriteAsync(body);
+                    }
+                    catch (Exception) { }
+                });
+            }
+        });
+        return (listener, ((System.Net.IPEndPoint)listener.LocalEndpoint).Port);
+    }
+
+    static async Task SharedWorkersAsync(CheckFn check, int debugPort)
+    {
+        var (listener, port) = Serve(new()
+        {
+            ["/page"] = ("text/html", "<!doctype html><title>workers</title>"),
+            ["/worker.js"] = ("text/javascript", "onconnect = e => e.ports[0].postMessage('ready');"),
+        });
+        var origin = $"http://127.0.0.1:{port}";
+        var win = new BrowserWindow(new BrowserWindowOptions { Show = false });
+        var other = new BrowserWindow(new BrowserWindowOptions { Show = false });
+        var closed = new BrowserWindow(new BrowserWindowOptions { Show = false, WebPreferences = new WebPreferences { DevTools = false } });
+        var wc = win.WebContents;
+        await wc.LoadUrl($"{origin}/page");
+        await other.WebContents.LoadUrl("data:text/html,<p>other</p>");
+        await closed.WebContents.LoadUrl("data:text/html,<p>no devtools</p>");
+        static string Show(IReadOnlyList<SharedWorkerInfo> list) => string.Join(",", list.Select(w => $"{w.Id[..Math.Min(8, w.Id.Length)]} {w.Url}"));
+
+        var none = wc.GetAllSharedWorkers();
+        check("GetAllSharedWorkers is empty with no shared worker running", none.Count == 0, Show(none));
+        string Start(string query) => $"new Promise(r => {{ const w = new SharedWorker('/worker.js{query}'); w.port.onmessage = e => r(e.data); }})";
+        var started = await wc.ExecuteJavaScriptAsync($"Promise.all([{Start("?a")}, {Start("?b")}])");
+        using var http = new HttpClient { Timeout = TimeSpan.FromSeconds(10) };
+        var listed = System.Text.Json.Nodes.JsonNode.Parse(await http.GetStringAsync($"http://127.0.0.1:{debugPort}/json/list"))!.AsArray()
+            .Where(t => (string?)t!["type"] == "shared_worker").ToDictionary(t => (string)t!["id"]!, t => (string)t!["url"]!);
+        var two = wc.GetAllSharedWorkers();
+        check("GetAllSharedWorkers lists each shared worker with the id and URL Chromium's DevTools endpoint gives it",
+            started?.ToJsonString() == "[\"ready\",\"ready\"]" && two.Count == 2 && listed.Count == 2
+            && two.All(w => listed.GetValueOrDefault(w.Id) == w.Url) && two.Select(w => w.Url).Order().SequenceEqual([$"{origin}/worker.js?a", $"{origin}/worker.js?b"]),
+            $"{Show(two)} listed={listed.Count}");
+        var fromOther = other.WebContents.GetAllSharedWorkers();
+        check("GetAllSharedWorkers lists the app's shared workers from any page", fromOther.Select(w => w.Id).Order().SequenceEqual(two.Select(w => w.Id).Order()), Show(fromOther));
+        check("GetAllSharedWorkers is empty for a page whose devTools preference is off", closed.WebContents.GetAllSharedWorkers().Count == 0);
+        var fresh = new BrowserWindow(new BrowserWindowOptions { Show = false });
+        await fresh.WebContents.LoadUrl("data:text/html,<p>fresh</p>");
+        var fromUi = Oriel.Cef.CefThread.InvokeOnUi(() => fresh.WebContents.GetAllSharedWorkers().Count);
+        check("GetAllSharedWorkers on the UI thread answers a page's first call before any worker is known (drift C54)", fromUi == 0, fromUi);
+        fresh.Destroy();
+
+        // Closing the only page connected to them ends both workers.
+        win.Destroy();
+        var deadline = DateTime.UtcNow.AddSeconds(10);
+        IReadOnlyList<SharedWorkerInfo> after;
+        while ((after = other.WebContents.GetAllSharedWorkers()).Count > 0 && DateTime.UtcNow < deadline) await Task.Delay(100);
+        check("GetAllSharedWorkers drops a worker once it ends", after.Count == 0, Show(after));
+        other.Destroy();
+        closed.Destroy();
+        listener.Stop();
     }
 }

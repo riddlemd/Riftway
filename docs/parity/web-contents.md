@@ -12,13 +12,13 @@ Percentages are over the non-n/a items; the second counts a partial item as half
 |---|---|---|---|---|---|---|---|
 | Static methods | 5 | 3 | 2 | 0 | 0 | 60.0% | 80.0% |
 | Instance events | 59 | 31 | 18 | 8 | 2 | 54.4% | 70.2% |
-| Instance methods | 118 | 43 | 34 | 33 | 8 | 39.1% | 54.5% |
+| Instance methods | 118 | 43 | 35 | 32 | 8 | 39.1% | 55.0% |
 | Instance properties | 18 | 10 | 3 | 4 | 1 | 58.8% | 67.6% |
 | navigationHistory | 14 | 12 | 0 | 2 | 0 | 85.7% | 85.7% |
 | WebFrameMain events and statics | 3 | 1 | 1 | 1 | 0 | 33.3% | 50.0% |
 | WebFrameMain methods | 9 | 1 | 5 | 3 | 0 | 11.1% | 38.9% |
 | WebFrameMain properties | 15 | 10 | 3 | 2 | 0 | 66.7% | 76.7% |
-| **Total** | 241 | 111 | 66 | 53 | 11 | 48.3% | 62.6% |
+| **Total** | 241 | 111 | 67 | 52 | 11 | 48.3% | 62.8% |
 
 ## Checklist
 
@@ -178,7 +178,7 @@ Percentages are over the non-n/a items; the second counts a partial item as half
 | `inspectElement()` | `InspectElement` | done | Which element DevTools selects is unverified: the selection is not visible from the page. |
 | `inspectSharedWorker()` | — | missing |  |
 | `inspectSharedWorkerById()` | — | missing |  |
-| `getAllSharedWorkers()` | — | missing |  |
+| `getAllSharedWorkers()` | `GetAllSharedWorkers` | partial | Through DevTools' target discovery; a page's first call on the UI thread lists none (C54). |
 | `inspectServiceWorker()` | — | missing |  |
 | `sendToFrame()` | — | missing |  |
 | `postMessage(channel, message, transfer)` | `PostMessage` | partial | JSON messages (I1). |
