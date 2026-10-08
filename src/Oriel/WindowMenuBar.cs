@@ -12,7 +12,6 @@ internal sealed unsafe class WindowMenuBar
     private const int AltKeyCode = 0x12;
 
     private readonly BrowserWindow _owner;
-    private readonly MenuModelDelegate _modelDelegate;
     private readonly List<int> _accelerators = [];
     // Button positions by mnemonic letter, for Alt+letter.
     private readonly Dictionary<char, int> _mnemonics = [];
@@ -26,7 +25,6 @@ internal sealed unsafe class WindowMenuBar
     internal WindowMenuBar(BrowserWindow owner)
     {
         _owner = owner;
-        _modelDelegate = new MenuModelDelegate { CommandExecuted = Execute, Closed = OnMenuClosed };
     }
 
     private cef_menu_button_pressed_lock_t* _pressedLock;
@@ -210,8 +208,16 @@ internal sealed unsafe class WindowMenuBar
             return;
         }
 
-        NativeObject.AddRef(_modelDelegate.Native);
-        var model = CefNative.cef_menu_model_create(_modelDelegate.Native);
+        // Electron's MenuBar runs the dropdown on the item's submenu model, so the submenu raises the menu events.
+        var run = new MenuRun(submenu);
+        var modelDelegate = new MenuModelDelegate
+        {
+            CommandExecuted = Execute,
+            WillShow = run.WillShow,
+            Closed = closed => { if (run.Closed(closed)) OnMenuClosed(); },
+        };
+        NativeObject.AddRef(modelDelegate.Native);
+        var model = CefNative.cef_menu_model_create(modelDelegate.Native);
         MenuModels.Fill(model, submenu);
 
         var view = (cef_view_t*)button;

@@ -24,6 +24,32 @@ public static unsafe class MacMenu
     /// <summary>An item sent to the target was chosen; the argument is its tag.</summary>
     public static Action<nint>? Chosen { get; set; }
 
+    /// <summary>A menu whose delegate is the target is opening (<c>menuWillOpen:</c>); the argument is the NSMenu.</summary>
+    public static Action<nint>? Opened { get; set; }
+
+    /// <summary>A menu whose delegate is the target closed (<c>menuDidClose:</c>); the argument is the NSMenu.</summary>
+    public static Action<nint>? Closed { get; set; }
+
+    /// <summary>Makes the target the menu's delegate, for <see cref="Opened"/> and <see cref="Closed"/>. The delegate is
+    /// a weak reference; the target lives for the process.</summary>
+    public static void SetDelegate(nint menu) => Send(menu, Sel("setDelegate:"u8), Target());
+
+    /// <summary>The menu that holds <paramref name="menu"/> as a submenu, or 0.</summary>
+    public static nint Supermenu(nint menu) => Send(menu, Sel("supermenu"u8));
+
+    /// <summary>Sends <paramref name="selector"/> (<c>menuWillOpen:</c>, <c>menuDidClose:</c>) with the menu to the menu's
+    /// delegate, as AppKit does around tracking; false if it has none. For tests, as Electron's
+    /// <c>SimulateSubmenuCloseSequenceForTesting</c>.</summary>
+    public static bool SendToDelegate(nint menu, string selector)
+    {
+        var target = Send(menu, Sel("delegate"u8));
+        if (target == 0) return false;
+        Send(target, Sel(selector), menu);
+        return true;
+    }
+
+    public static void RemoveItem(nint menu, nint item) => Send(menu, Sel("removeItem:"u8), item);
+
     /// <summary>Opens an autorelease pool for the objects AppKit hands back autoreleased; pass the result to <see cref="PopPool"/>.</summary>
     public static nint PushPool() => objc_autoreleasePoolPush();
 
@@ -178,6 +204,8 @@ public static unsafe class MacMenu
             var cls = objc_allocateClassPair(Class("NSObject"u8), name, 0);
             class_addMethod(cls, ChosenSelector(), (delegate* unmanaged<nint, nint, nint, void>)&OnChosen, types);
             class_addMethod(cls, PerformSelector(), (delegate* unmanaged<nint, nint, nint, void>)&OnPerform, types);
+            class_addMethod(cls, Sel("menuWillOpen:"u8), (delegate* unmanaged<nint, nint, nint, void>)&OnMenuWillOpen, types);
+            class_addMethod(cls, Sel("menuDidClose:"u8), (delegate* unmanaged<nint, nint, nint, void>)&OnMenuDidClose, types);
             objc_registerClassPair(cls);
             s_target = Send(Send(cls, Sel("alloc"u8)), Sel("init"u8));
         }
@@ -190,6 +218,20 @@ public static unsafe class MacMenu
         var tag = Send(sender, Sel("tag"u8));
         try { Chosen?.Invoke(tag); }
         catch (Exception e) { Console.Error.WriteLine($"[Oriel] Unhandled exception in a menu action: {e}"); }
+    }
+
+    [UnmanagedCallersOnly]
+    private static void OnMenuWillOpen(nint self, nint cmd, nint menu)
+    {
+        try { Opened?.Invoke(menu); }
+        catch (Exception e) { Console.Error.WriteLine($"[Oriel] Unhandled exception in menuWillOpen: {e}"); }
+    }
+
+    [UnmanagedCallersOnly]
+    private static void OnMenuDidClose(nint self, nint cmd, nint menu)
+    {
+        try { Closed?.Invoke(menu); }
+        catch (Exception e) { Console.Error.WriteLine($"[Oriel] Unhandled exception in menuDidClose: {e}"); }
     }
 
     private static nint NewString(string value)

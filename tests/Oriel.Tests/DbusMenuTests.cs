@@ -221,8 +221,12 @@ public sealed class DbusMenuTests
             new MenuItem { Label = "S", Submenu = [new MenuItem { Label = "Deep" }] },
             new MenuItem { Label = "T", Type = MenuItemType.Submenu },
         ])!;
-        Assert.Equal("Command:_Open:0 Separator::0 Radio:R1:1 Radio:R2:1 Separator::1 Radio:R3:2 Check:C:2 Submenu:S:2 Command:T:2",
-            string.Join(" ", model.Select(i => $"{i.Type}:{i.Label}:{i.GroupId}")));
+        Assert.Equal("Command:_Open Separator: Radio:R1 Radio:R2 Separator: Radio:R3 Check:C Submenu:S Command:T",
+            string.Join(" ", model.Select(i => $"{i.Type}:{i.Label}")));
+        // Radio items carry Electron's groupId: a separator starts a new group.
+        Assert.Equal(model[2].GroupId, model[3].GroupId);
+        Assert.NotEqual(model[3].GroupId, model[5].GroupId);
+        Assert.NotEqual(0, model[5].GroupId);
         Assert.True(model[5].IsChecked() && !model[5].IsEnabled() && !model[5].IsVisible());
         Assert.True(model[1].IsEnabled() && model[1].IsVisible() && model[1].Activated is null);
         // Electron never hides a separator: its command id is -1.

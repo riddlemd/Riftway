@@ -12,11 +12,14 @@ internal static class MacApplicationMenu
     private static Menu? s_shown;
     private static Menu? s_dock;
     private static bool s_rebuildPosted;
+    private static MacMenuController? s_barController;
+    private static MacMenuController? s_dockController;
 
     /// <summary>Starts following the application menu; call on the UI thread once CEF is ready.</summary>
     internal static void Install()
     {
         MacMenu.Chosen = OnChosen;
+        InstallMenuEvents();
         Menu.ApplicationMenuChanged += _ => PostRebuild();
         PostRebuild();
     }
@@ -45,11 +48,14 @@ internal static class MacApplicationMenu
         {
             if (menu is null)
             {
+                s_barController = null;
                 MacMenu.SetMainMenu(0);
                 return;
             }
             var bar = MacMenu.CreateMenu(string.Empty);
             foreach (var item in menu.Items) AddItem(bar, item);
+            MacMenu.SetDelegate(bar);
+            s_barController = new MacMenuController(menu, bar);
             MacMenu.SetMainMenu(bar);
             MacMenu.Release(bar);
         }
@@ -63,6 +69,7 @@ internal static class MacApplicationMenu
     internal static void SetDockMenu(Menu menu)
     {
         MacMenu.Chosen = OnChosen;
+        InstallMenuEvents();
         s_dock = menu;
         MacActivation.InstallDockMenu(BuildDockMenu);
     }
@@ -72,6 +79,8 @@ internal static class MacApplicationMenu
         if (s_dock is null) return 0;
         var nsMenu = MacMenu.CreateMenu(string.Empty);
         foreach (var item in s_dock.Items) AddItem(nsMenu, item, inMenuBar: false);
+        MacMenu.SetDelegate(nsMenu);
+        s_dockController = new MacMenuController(s_dock, nsMenu);
         return MacMenu.Autorelease(nsMenu);
     }
 
@@ -97,6 +106,7 @@ internal static class MacApplicationMenu
         var nsSubmenu = MacMenu.CreateMenu(MenuLabels.WithoutMnemonics(item.Label));
         foreach (var child in submenu.Items) AddItem(nsSubmenu, child, inMenuBar);
         MacMenu.SetSubmenu(native, nsSubmenu);
+        MacMenu.SetDelegate(nsSubmenu);
         // Only the menu bar's submenus become the app's Services, Window and Help menus.
         if (inMenuBar) switch (item.Role)
         {
@@ -105,6 +115,32 @@ internal static class MacApplicationMenu
             case MenuItemRole.Help: MacMenu.SetHelpMenu(nsSubmenu); break;
         }
         MacMenu.Release(nsSubmenu);
+    }
+
+    // Electron's ElectronMenuController is the delegate of its NSMenu and every submenu, and reports them all on the
+    // one Menu it was made for: the application menu, or the Dock menu.
+    private static void InstallMenuEvents()
+    {
+        MacMenu.Opened = menu => ControllerOf(menu)?.WillOpen(menu, RemoveInjectedFullScreenItems);
+        MacMenu.Closed = menu => ControllerOf(menu)?.DidClose(menu, MacMenu.Supermenu(menu));
+    }
+
+    private static MacMenuController? ControllerOf(nint menu)
+    {
+        var top = menu;
+        for (var up = MacMenu.Supermenu(top); up != 0; up = MacMenu.Supermenu(top)) top = up;
+        if (s_barController?.NativeMenu == top) return s_barController;
+        return s_dockController?.NativeMenu == top ? s_dockController : null;
+    }
+
+    // macOS adds a hidden duplicate "Toggle Full Screen" to a submenu that has a delegate; Electron removes it.
+    private static void RemoveInjectedFullScreenItems(nint menu)
+    {
+        for (var i = MacMenu.ItemCount(menu) - 1; i >= 0; i--)
+        {
+            var item = MacMenu.ItemAt(menu, i);
+            if (MacMenu.IsHidden(item) && MacMenu.ActionName(item) == "toggleFullScreenMode:") MacMenu.RemoveItem(menu, item);
+        }
     }
 
     private static ulong MaskOf(AcceleratorModifiers modifiers)
@@ -118,5 +154,36 @@ internal static class MacApplicationMenu
         if ((s_shown?.FindByCommandId((int)tag) ?? s_dock?.FindByCommandId((int)tag)) is not { } item) return;
         var (flags, keyDown) = MacMenu.CurrentEvent();
         item.Activate(BrowserWindow.GetFocusedWindow(), KeyboardEvent.FromMacModifiers(flags, keyDown));
+    }
+}
+
+/// <summary>The menu events of Electron's <c>ElectronMenuController</c> for a menu without a popup close callback (the
+/// application menu, the Dock menu): every NSMenu that opens under <see cref="NativeMenu"/> raises <c>menu-will-show</c>
+/// on <see cref="Menu"/>, and <c>menu-will-close</c> comes when <see cref="NativeMenu"/> or one of its direct submenus
+/// closes. Main thread only.</summary>
+internal sealed class MacMenuController(Menu menu, nint nativeMenu)
+{
+    private bool _isMenuOpen;
+
+    internal Menu Menu { get; } = menu;
+
+    internal nint NativeMenu { get; } = nativeMenu;
+
+    /// <summary><c>menuWillOpen:</c>, for <paramref name="menu"/> or any submenu.</summary>
+    internal void WillOpen(nint menu, Action<nint> removeInjectedItems)
+    {
+        _isMenuOpen = true;
+        removeInjectedItems(menu);
+        Menu.OnMenuWillShow();
+    }
+
+    /// <summary><c>menuDidClose:</c>; <paramref name="supermenu"/> is the closing menu's.</summary>
+    internal void DidClose(nint menu, nint supermenu)
+    {
+        if (!_isMenuOpen) return;
+        // A deeper submenu closes before the menu above it; only the top level ends the menu.
+        if (menu != NativeMenu && supermenu != NativeMenu) return;
+        _isMenuOpen = false;
+        Menu.OnMenuWillClose();
     }
 }

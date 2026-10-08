@@ -7,3 +7,4 @@ General items: [todo.md](todo.md).
 - [ ] osx-x64: the `objc_msgSend_stret` path in `MacWindow` is untested
 - [ ] Sandbox: move the helper from NativeAOT `Oriel.Subprocess` to the native one and link CEF's sandbox library
 - [ ] Signing and notarisation; drop `--use-mock-keychain` for signed builds (M4)
+- [ ] Run the menu-event checks (WindowTest `MenuEventsAsync`: popup, application menu through its NSMenu delegates)
