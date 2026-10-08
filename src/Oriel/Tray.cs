@@ -74,8 +74,9 @@ public sealed record DisplayBalloonOptions
 }
 
 /// <summary>An icon in the notification area (Windows), menu bar (macOS) or system tray (Linux). Electron's <c>Tray</c>.</summary>
-/// <remarks>Windows only for now: macOS and Linux throw <see cref="PlatformNotSupportedException"/>. Create it once the app
-/// is ready; its events are raised on the UI thread.</remarks>
+/// <remarks>Windows and Linux (a StatusNotifierItem with a DBusMenu, or a <c>GtkStatusIcon</c> when no host answers, as
+/// Electron); macOS throws <see cref="PlatformNotSupportedException"/>. Create it once the app is ready; its events are
+/// raised on the UI thread.</remarks>
 public sealed class Tray
 {
     private readonly ITrayBackend _backend;
@@ -90,7 +91,9 @@ public sealed class Tray
     public Tray(NativeImage image, Guid? guid = null)
     {
         ArgumentNullException.ThrowIfNull(image);
-        _backend = OperatingSystem.IsWindows() ? new WindowsTrayBackend(this) : new UnsupportedTrayBackend();
+        _backend = OperatingSystem.IsWindows() ? new WindowsTrayBackend(this)
+            : OperatingSystem.IsLinux() ? new LinuxTrayBackend(this)
+            : new UnsupportedTrayBackend();
         CefThread.InvokeOnUi(() =>
         {
             _backend.Create(image, guid);
@@ -101,7 +104,8 @@ public sealed class Tray
     /// <summary>Puts a PNG or JPEG file in the tray. Electron's <c>new Tray(path, guid)</c>.</summary>
     public Tray(string imagePath, Guid? guid = null) : this(NativeImage.CreateFromBuffer(File.ReadAllBytes(imagePath)), guid) { }
 
-    /// <summary>A left click. Electron's <c>'click'</c>.</summary>
+    /// <summary>A left click; on Linux the host's activation (<c>Activate</c> or <c>SecondaryActivate</c>), with no bounds,
+    /// position or keys. Electron's <c>'click'</c>.</summary>
     public event EventHandler<TrayEventArgs>? Clicked;
 
     /// <summary>A right click when there is no context menu. Electron's <c>'right-click'</c>.</summary>
@@ -187,20 +191,26 @@ public sealed class Tray
     /// <summary>Gives the icon keyboard focus. Electron's <c>tray.focus()</c>.</summary>
     public void Focus() => Live(_backend.Focus);
 
-    /// <summary>Sets the menu a right click opens, or none. Electron's <c>tray.setContextMenu()</c>.</summary>
-    public void SetContextMenu(Menu? menu) => OnUi(() => _contextMenu = menu);
+    /// <summary>Sets the menu a right click opens, or none. On Linux the host gets the menu as it is now: set it again
+    /// after changing its items, as in Electron. Electron's <c>tray.setContextMenu()</c>.</summary>
+    public void SetContextMenu(Menu? menu) => OnUi(() =>
+    {
+        _contextMenu = menu;
+        if (!_destroyed) _backend.SetContextMenu(menu);
+    });
 
     /// <summary>Opens <paramref name="menu"/>, or the context menu, at <paramref name="position"/> (screen DIPs) or, when
-    /// it is null or (0, 0), the pointer. Returns at once; the menu stays open until chosen from or dismissed.
-    /// Electron's <c>tray.popUpContextMenu()</c>.</summary>
+    /// it is null or (0, 0), the pointer. Returns at once; the menu stays open until chosen from or dismissed. Does
+    /// nothing on Linux, as in Electron. Electron's <c>tray.popUpContextMenu()</c>.</summary>
     public void PopUpContextMenu(Menu? menu = null, Point? position = null)
-        => Live(() => { if ((menu ?? _contextMenu) is { } m) PopUp(m, position); });
+        => Live(() => { if (_backend.PopsUpMenus && (menu ?? _contextMenu) is { } m) PopUp(m, position); });
 
-    /// <summary>Closes the menu the icon opened, if any. Electron's <c>tray.closeContextMenu()</c>.</summary>
-    public void CloseContextMenu() => Live(_menu.Close);
+    /// <summary>Closes the menu the icon opened, if any; does nothing on Linux, as in Electron.
+    /// Electron's <c>tray.closeContextMenu()</c>.</summary>
+    public void CloseContextMenu() => Live(() => { if (_backend.PopsUpMenus) _menu.Close(); });
 
     /// <summary>The icon's bounds on screen in DIPs; empty when the shell cannot place it (on Windows 11, while it sits in
-    /// the overflow). Electron's <c>tray.getBounds()</c>.</summary>
+    /// the overflow) and always on Linux. Electron's <c>tray.getBounds()</c>.</summary>
     public Rectangle GetBounds() => CefThread.InvokeOnUi(() => _destroyed ? default : _backend.GetBounds());
 
     // Electron's NotifyIcon::PopUpContextMenu: no menu without the foreground, and (0, 0) means the pointer.
@@ -236,6 +246,29 @@ public sealed class Tray
         };
         handler?.Invoke(this, new TrayEventArgs(bounds, position, keys.Shift, keys.Ctrl, keys.Alt, keys.Meta));
     }
+
+    /// <summary>Linux: the host activated the icon. <c>TrayIconLinux::OnClick</c> notifies a click with no bounds,
+    /// position or modifier keys. UI thread.</summary>
+    internal void RaiseActivated()
+    {
+        if (!_destroyed) Clicked?.Invoke(this, new TrayEventArgs(default, default, false, false, false, false));
+    }
+
+    /// <summary>Linux: the host asked for the menu (<c>ContextMenu</c>) without showing one itself; Chromium runs its
+    /// Views menu there, anchored top right, and ignores the request while that menu is open. UI thread.</summary>
+    internal void ShowShellContextMenu(Point at)
+    {
+        if (!_destroyed && !_menu.IsOpen && _contextMenu is { } menu) _menu.Show(menu, at, cef_menu_anchor_position_t.CEF_MENU_ANCHOR_TOPRIGHT);
+    }
+
+    /// <summary>Linux: the menu model was replaced, which closes the Views menu the host opened. UI thread.</summary>
+    internal void CloseShellContextMenu() => _menu.Close();
+
+    /// <summary>The backend; for tests.</summary>
+    internal object Backend => _backend;
+
+    /// <summary>Whether the icon's Views menu is showing; for tests.</summary>
+    internal bool MenuOpen => CefThread.InvokeOnUi(() => _menu.IsOpen);
 
     private void Live(Action action) => OnUi(() =>
     {
@@ -391,7 +424,7 @@ internal sealed unsafe class TrayMenu
 
     /// <summary>Shows <paramref name="menu"/> at <paramref name="at"/> (screen DIPs), closing any menu shown before. Returns
     /// at once: Views runs the menu in the normal message loop.</summary>
-    public void Show(Menu menu, Point at)
+    public void Show(Menu menu, Point at, cef_menu_anchor_position_t anchor = cef_menu_anchor_position_t.CEF_MENU_ANCHOR_TOPLEFT)
     {
         Close();
         var windowDelegate = new WindowDelegate { Frameless = true, Resizable = false, Minimizable = false, Maximizable = false };
@@ -410,8 +443,11 @@ internal sealed unsafe class TrayMenu
         MenuModels.Fill(model, menu);
         var point = new cef_point_t { x = at.X, y = at.Y };
         // The model reference passes to CEF, which keeps it, and through it the delegate, until the menu closes.
-        window->show_menu(window, model, &point, cef_menu_anchor_position_t.CEF_MENU_ANCHOR_TOPLEFT);
+        window->show_menu(window, model, &point, anchor);
     }
+
+    /// <summary>Whether a menu is showing.</summary>
+    public bool IsOpen => _window is not null;
 
     /// <summary>Closes the menu, if one is open, and its window.</summary>
     public void Close()
@@ -428,7 +464,10 @@ internal sealed unsafe class TrayMenu
 /// <summary>One OS's tray icon.</summary>
 internal interface ITrayBackend
 {
+    /// <summary>Whether <c>popUpContextMenu</c> and <c>closeContextMenu</c> do anything; Electron leaves them out on Linux.</summary>
+    bool PopsUpMenus { get; }
     void Create(NativeImage image, Guid? guid);
+    void SetContextMenu(Menu? menu);
     void SetImage(NativeImage image);
     void SetToolTip(string toolTip);
     void DisplayBalloon(DisplayBalloonOptions options);
@@ -450,6 +489,11 @@ internal sealed unsafe class WindowsTrayBackend(Tray owner) : ITrayBackend, ITra
     private nint _icon;
 
     public uint Id => _id;
+
+    public bool PopsUpMenus => true;
+
+    // The menu stays with the Tray, which shows it on a right click.
+    public void SetContextMenu(Menu? menu) { }
 
     public void Create(NativeImage image, Guid? guid)
     {
@@ -541,7 +585,9 @@ internal sealed class UnsupportedTrayBackend : ITrayBackend
 {
     private static PlatformNotSupportedException NotYet() => new("Tray is not implemented on this OS yet.");
 
+    public bool PopsUpMenus => throw NotYet();
     public void Create(NativeImage image, Guid? guid) => throw NotYet();
+    public void SetContextMenu(Menu? menu) => throw NotYet();
     public void SetImage(NativeImage image) => throw NotYet();
     public void SetToolTip(string toolTip) => throw NotYet();
     public void DisplayBalloon(DisplayBalloonOptions options) => throw NotYet();

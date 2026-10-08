@@ -2971,9 +2971,14 @@ async Task TrayAsync()
         for (var i = 0; i < pixels.Length; i += 4) (pixels[i], pixels[i + 1], pixels[i + 2], pixels[i + 3]) = (b, g, r, 255);
         return NativeImage.CreateFromBitmap(pixels, new NativeImageBitmapOptions { Width = 16, Height = 16 });
     }
+    if (OperatingSystem.IsLinux())
+    {
+        await LinuxTrayTest.RunAsync(Check, step);
+        return;
+    }
     if (!OperatingSystem.IsWindows())
     {
-        Check("Tray throws PlatformNotSupportedException off Windows", Throws<PlatformNotSupportedException>(() => _ = new Tray(Square(0, 0, 255))));
+        Check("Tray throws PlatformNotSupportedException on macOS", Throws<PlatformNotSupportedException>(() => _ = new Tray(Square(0, 0, 255))));
         return;
     }
 

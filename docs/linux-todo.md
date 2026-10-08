@@ -24,6 +24,11 @@ General items: [todo.md](todo.md).
       Xfwm4 4.18 as under openbox, including maximize, minimize, full screen, always on top, focus and workspaces.
       `ORIEL_WM=mutter|kwin|xfwm4 eng/docker/test-linux.sh` with the `oriel-linux-dev-wm` image
       (`eng/docker/linux-dev-wm.Dockerfile`). Not covered: GNOME Shell and Plasma themselves (panels, struts, portals)
+- [x] `Tray` (branch `linux-tray`): Chromium 154's StatusNotifierItem and DBusMenu with Electron v44.5.1's patches,
+      falling back to a `GtkStatusIcon`; WindowTest drives it through a fake watcher and DBusMenu client
+      (`samples/Shared/FakeStatusNotifierWatcher.cs`) and through GTK
+  - [ ] Check against real hosts: Plasma's system tray, GNOME Shell with the AppIndicator extension (icon files),
+        an XEmbed tray for the GTK fallback (Docker has none of them)
 - [ ] Screen capture: Chromium's X11 desktop capturer dies with SIGILL under the Docker Xvfb (arm64) when getDisplayMedia starts; SessionTest skips the capture checks there (ORIEL_XVFB). Verify on a real X server; if it crashes there too, find the CHECK with CEF's symbols
 - [ ] nativeTheme against a real `xdg-desktop-portal` (GNOME, KDE): Docker has none, so the checks use a fake portal
       (`samples/Shared/FakePortal.cs`) that WindowTest starts before CEF
