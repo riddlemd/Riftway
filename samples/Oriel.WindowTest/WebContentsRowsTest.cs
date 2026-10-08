@@ -588,10 +588,15 @@ static class WebContentsRowsTest
         var win = new BrowserWindow(new BrowserWindowOptions { Show = false });
         var wc = win.WebContents;
         await wc.LoadUrl("data:text/html,<p>webrtc</p>");
+        // A gathering that fails reports a "failed" candidate, which every check below refuses.
         async Task<List<(string Protocol, int Port)>> Gather()
         {
-            var list = await wc.ExecuteJavaScriptAsync(GatherCandidates).WaitAsync(TimeSpan.FromSeconds(20));
-            return [.. list!.AsArray().Select(n => ((string)n!).Split(' ')).Select(p => (p[0], int.Parse(p[1], System.Globalization.CultureInfo.InvariantCulture)))];
+            try
+            {
+                var list = await wc.ExecuteJavaScriptAsync(GatherCandidates).WaitAsync(TimeSpan.FromSeconds(20));
+                return [.. list!.AsArray().Select(n => ((string)n!).Split(' ')).Select(p => (p[0], int.Parse(p[1], System.Globalization.CultureInfo.InvariantCulture)))];
+            }
+            catch (Exception) { return [("failed", -1)]; }
         }
         static string Show(List<(string Protocol, int Port)> found) => string.Join(",", found.Select(c => $"{c.Protocol}:{c.Port}"));
 
@@ -600,7 +605,7 @@ static class WebContentsRowsTest
         wc.SetWebRtcIpHandlingPolicy("disable_non_proxied_udp");
         var blocked = await Gather();
         check("SetWebRtcIpHandlingPolicy(disable_non_proxied_udp) stops UDP candidates on the open page",
-            wc.GetWebRtcIpHandlingPolicy() == "disable_non_proxied_udp" && !blocked.Any(c => c.Protocol == "udp"), Show(blocked));
+            wc.GetWebRtcIpHandlingPolicy() == "disable_non_proxied_udp" && blocked.All(c => c.Protocol is not ("udp" or "failed")), Show(blocked));
         wc.SetWebRtcIpHandlingPolicy("nonsense");
         var reset = await Gather();
         check("SetWebRtcIpHandlingPolicy of an unknown policy is default, as Electron's", wc.GetWebRtcIpHandlingPolicy() == "default" && reset.Any(c => c.Protocol == "udp"), Show(reset));
@@ -634,10 +639,11 @@ static class WebContentsRowsTest
         var other = new BrowserWindow(new BrowserWindowOptions { Show = false });
         await other.WebContents.LoadUrl("data:text/html,<p>other</p>");
         wc.SetWebRtcIpHandlingPolicy("disable_non_proxied_udp");
-        var otherList = await other.WebContents.ExecuteJavaScriptAsync(GatherCandidates).WaitAsync(TimeSpan.FromSeconds(20));
-        var otherFound = otherList!.AsArray().Select(n => (string)n!).ToList();
+        List<string> otherFound;
+        try { otherFound = [.. (await other.WebContents.ExecuteJavaScriptAsync(GatherCandidates).WaitAsync(TimeSpan.FromSeconds(20)))!.AsArray().Select(n => (string)n!)]; }
+        catch (Exception) { otherFound = ["failed"]; }
         check("SetWebRtcIpHandlingPolicy reaches the session's other pages, whose own getter stays default (drift C52)",
-            other.WebContents.GetWebRtcIpHandlingPolicy() == "default" && !otherFound.Any(c => c.StartsWith("udp", StringComparison.Ordinal)), string.Join(",", otherFound));
+            other.WebContents.GetWebRtcIpHandlingPolicy() == "default" && !otherFound.Any(c => c == "failed" || c.StartsWith("udp", StringComparison.Ordinal)), string.Join(",", otherFound));
         wc.SetWebRtcIpHandlingPolicy("default");
         other.Destroy();
         win.Destroy();
@@ -657,29 +663,42 @@ static class WebContentsRowsTest
     // the first frame, as the HTML spec has it.
     static async Task<string> SampleGif(WebContents wc)
     {
-        await wc.ExecuteJavaScriptAsync($$"""
-            (async () => {
-              const g = document.getElementById('g');
-              g.src = URL.createObjectURL(new Blob([Uint8Array.from(atob('{{Convert.ToBase64String(BlinkingGif)}}'), c => c.charCodeAt(0))], { type: 'image/gif' }));
-              await g.decode();
-              return 1;
-            })()
-            """).WaitAsync(TimeSpan.FromSeconds(10));
+        // The load event, not decode(): decode() waits on the compositor, which stops while Chromium thinks the window hidden.
+        try
+        {
+            await wc.ExecuteJavaScriptAsync($$"""
+                new Promise(loaded => {
+                  const g = document.getElementById('g');
+                  g.onload = () => loaded(1);
+                  g.src = URL.createObjectURL(new Blob([Uint8Array.from(atob('{{Convert.ToBase64String(BlinkingGif)}}'), c => c.charCodeAt(0))], { type: 'image/gif' }));
+                })
+                """).WaitAsync(TimeSpan.FromSeconds(10));
+        }
+        catch (Exception e) { return $"no image ({e.GetType().Name}; page {await VisibilityOf(wc)})"; }
         var seen = new System.Text.StringBuilder();
         var clock = System.Diagnostics.Stopwatch.StartNew();
         while (clock.ElapsedMilliseconds < 3000)
         {
-            var pixel = (await wc.CapturePageAsync(new Rectangle(40, 40, 2, 2))).ToBitmap();
+            byte[] pixel;
+            try { pixel = (await wc.CapturePageAsync(new Rectangle(40, 40, 2, 2)).WaitAsync(TimeSpan.FromSeconds(5))).ToBitmap(); }
+            catch (Exception e) { return $"{seen} capture failed ({e.GetType().Name}; page {await VisibilityOf(wc)})"; }
             seen.Append(pixel[2] > pixel[0] ? 'r' : 'b');
             await Task.Delay(60);
         }
         return seen.ToString();
     }
 
+    static async Task<string> VisibilityOf(WebContents wc)
+    {
+        try { return (string?)await wc.ExecuteJavaScriptAsync("document.visibilityState").WaitAsync(TimeSpan.FromSeconds(5)) ?? "?"; }
+        catch (Exception e) { return e.GetType().Name; }
+    }
+
     static async Task ImageAnimationAsync(CheckFn check)
     {
         var win = new BrowserWindow(new BrowserWindowOptions { Show = true, Width = 300, Height = 200 });
         var wc = win.WebContents;
+        win.Focus();
         await wc.LoadUrl("data:text/html,<body style='margin:0'><img id=g style='width:100px;height:100px;image-rendering:pixelated'></body>");
         // Captures take longer than a frame, so the samples alias: looping shows red again after blue; playing once rests on blue.
         static bool Loops(string s) => s.IndexOf('b') is >= 0 and var b && s.IndexOf('r', b) > b;
@@ -708,14 +727,19 @@ static class WebContentsRowsTest
         var wc = win.WebContents;
         await wc.LoadUrl("data:text/html,<p id=p>caret browsing text</p>");
         // A collapsed selection at the paragraph's start, then a right arrow: only caret browsing moves it.
+        // -1 when the page does not answer.
         async Task<int> ArrowFromStart()
         {
-            await wc.ExecuteJavaScriptAsync("getSelection().collapse(document.getElementById('p').firstChild, 0); 1");
-            wc.Focus();
-            wc.SendInputEvent(new KeyboardInputEvent(KeyboardInputEventType.KeyDown, "Right"));
-            wc.SendInputEvent(new KeyboardInputEvent(KeyboardInputEventType.KeyUp, "Right"));
-            await Task.Delay(300);
-            return (int)(await wc.ExecuteJavaScriptAsync("getSelection().focusOffset"))!;
+            try
+            {
+                await wc.ExecuteJavaScriptAsync("getSelection().collapse(document.getElementById('p').firstChild, 0); 1").WaitAsync(TimeSpan.FromSeconds(10));
+                wc.Focus();
+                wc.SendInputEvent(new KeyboardInputEvent(KeyboardInputEventType.KeyDown, "Right"));
+                wc.SendInputEvent(new KeyboardInputEvent(KeyboardInputEventType.KeyUp, "Right"));
+                await Task.Delay(300);
+                return (int)(await wc.ExecuteJavaScriptAsync("getSelection().focusOffset").WaitAsync(TimeSpan.FromSeconds(10)))!;
+            }
+            catch (Exception) { return -1; }
         }
 
         var off = await ArrowFromStart();
@@ -780,7 +804,9 @@ static class WebContentsRowsTest
         var none = wc.GetAllSharedWorkers();
         check("GetAllSharedWorkers is empty with no shared worker running", none.Count == 0, Show(none));
         string Start(string query) => $"new Promise(r => {{ const w = new SharedWorker('/worker.js{query}'); w.port.onmessage = e => r(e.data); }})";
-        var started = await wc.ExecuteJavaScriptAsync($"Promise.all([{Start("?a")}, {Start("?b")}])");
+        System.Text.Json.Nodes.JsonNode? started;
+        try { started = await wc.ExecuteJavaScriptAsync($"Promise.all([{Start("?a")}, {Start("?b")}])").WaitAsync(TimeSpan.FromSeconds(10)); }
+        catch (Exception) { started = null; }
         using var http = new HttpClient { Timeout = TimeSpan.FromSeconds(10) };
         var listed = System.Text.Json.Nodes.JsonNode.Parse(await http.GetStringAsync($"http://127.0.0.1:{debugPort}/json/list"))!.AsArray()
             .Where(t => (string?)t!["type"] == "shared_worker").ToDictionary(t => (string)t!["id"]!, t => (string)t!["url"]!);
