@@ -155,8 +155,7 @@ Counted from the Checklist at the end: `BaseWindow` and `BrowserWindow` are one 
      `accessibleTitle`, `scrollBounce`, `imageAnimationPolicy`, `zoomMode`, `focusOnNavigation`,
      `disableHtmlFullscreenWindowResize`, `additionalArguments`.
    - `contextIsolation` is always on; `false` is not offered.
-2. `setParentWindow` on macOS and Linux — CEF Views sets the parent only at creation; `addChildWindow:`,
-   `XSetTransientForHint` (W8).
+2. `setParentWindow` on macOS — CEF Views sets the parent only at creation; `addChildWindow:` (W8).
 3. `titleBarStyle` on macOS, `trafficLightPosition`, the Window Controls Overlay page API (W34, W37) — OS, Patch.
 4. `showInactive`, `opacity`, `setIgnoreMouseEvents`, content protection, `will-resize`/`will-move` on macOS and Linux (W30) — OS.
 5. `hasShadow` on macOS and Linux (W31), kiosk presentation options on macOS (W33), the Windows window state on macOS and Linux (W43) — OS.
@@ -424,7 +423,7 @@ Parameters in brackets are optional in Electron. `webContents` members are in [w
 | `isContentProtected()` | `IsContentProtected` | partial | Windows only for now (W30). |
 | `setFocusable(focusable)` | `SetFocusable` | partial | Windows: style, taskbar button, blur, as Electron; stored only elsewhere (W43). |
 | `isFocusable()` | `IsFocusable` | partial | Windows reads `WS_EX_NOACTIVATE` too (W43). |
-| `setParentWindow(parent)` | `SetParentWindow` | partial | Windows: as Electron (`GWLP_HWNDPARENT`, re-show, modal throws) with Oriel's parent/child bookkeeping; macOS and Linux throw (W8). |
+| `setParentWindow(parent)` | `SetParentWindow` | partial | Windows: as Electron (`GWLP_HWNDPARENT`, re-show, modal throws) with Oriel's parent/child bookkeeping; Linux: as Electron (`WM_TRANSIENT_FOR`, the root window when cleared); macOS throws (W8). |
 | `getParentWindow()` | `GetParentWindow` | done |  |
 | `getChildWindows()` | `GetChildWindows` | done |  |
 | `setAutoHideCursor(autoHide)` | — | missing |  |
