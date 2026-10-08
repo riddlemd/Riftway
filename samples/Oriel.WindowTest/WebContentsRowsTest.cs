@@ -14,6 +14,7 @@ static class WebContentsRowsTest
         await CopyImageAsync(check, step);
         await OpenerAsync(check, step);
         await SavePageAsync(check);
+        await PrintToPdfAsync(check);
     }
 
     // The ids Chromium's own DevTools HTTP endpoint lists, by URL.
@@ -455,5 +456,110 @@ static class WebContentsRowsTest
         check("SavePageAsync rejects a path it cannot write", await Save(Path.Combine(dir, "missing", "x.mhtml"), SavePageType.Mhtml) == "Failed to save the page");
         win.Destroy();
         try { Directory.Delete(dir, recursive: true); } catch (IOException) { }
+    }
+
+    // What a PDF says of itself: its page boxes in points, and every content stream inflated.
+    static (List<(double W, double H)> Pages, string Content) ReadPdf(byte[]? pdf)
+    {
+        if (pdf is null) return ([], string.Empty);
+        var text = System.Text.Encoding.Latin1.GetString(pdf);
+        var invariant = System.Globalization.CultureInfo.InvariantCulture;
+        var pages = System.Text.RegularExpressions.Regex.Matches(text, @"/Type\s*/Page(?![a-zA-Z])[\s\S]*?/MediaBox\s*\[\s*[\d.]+\s+[\d.]+\s+([\d.]+)\s+([\d.]+)\s*\]")
+            .Select(m => (double.Parse(m.Groups[1].Value, invariant), double.Parse(m.Groups[2].Value, invariant))).ToList();
+        var content = new System.Text.StringBuilder();
+        foreach (System.Text.RegularExpressions.Match m in System.Text.RegularExpressions.Regex.Matches(text, @"stream\r?\n"))
+        {
+            var start = m.Index + m.Length;
+            var end = text.IndexOf("endstream", start, StringComparison.Ordinal);
+            if (end < 0) continue;
+            try
+            {
+                using var inflate = new System.IO.Compression.ZLibStream(new MemoryStream(pdf, start, end - start), System.IO.Compression.CompressionMode.Decompress);
+                using var inflated = new MemoryStream();
+                inflate.CopyTo(inflated);
+                content.Append(System.Text.Encoding.Latin1.GetString(inflated.ToArray())).Append('\n');
+            }
+            catch (InvalidDataException) { }
+        }
+        return (pages, content.ToString());
+    }
+
+    static async Task PrintToPdfAsync(CheckFn check)
+    {
+        var win = new BrowserWindow(new BrowserWindowOptions { Show = false });
+        var wc = win.WebContents;
+        // Three pages; a red page background and a blue block that print only as backgrounds.
+        var page = Path.Combine(Path.GetTempPath(), $"oriel-pdf-{Environment.ProcessId}.html");
+        File.WriteAllText(page, "<!doctype html><title>pdf</title><style>html{background:rgb(255,0,0)}section{break-after:page}"
+            + "div{width:100px;height:100px;background:rgb(0,0,255)}</style><section>one<div></div></section><section>two</section><section>three"
+            + "<iframe srcdoc='<p>inner</p>'></iframe></section>");
+        await wc.LoadFile(page);
+        async Task<(byte[]? Pdf, string? Error)> Print(PrintToPdfOptions? options, WebFrameMain? frame = null)
+        {
+            try { return (await (frame is null ? wc.PrintToPdfAsync(options) : frame.PrintToPdfAsync(options)).WaitAsync(TimeSpan.FromSeconds(30)), null); }
+            catch (Exception e) { return (null, $"{e.GetType().Name}: {e.Message}"); }
+        }
+        static bool Near(double a, double b) => Math.Abs(a - b) < 1.5;
+        static string Sizes((List<(double W, double H)> Pages, string Content) read) => string.Join(",", read.Pages);
+
+        var (pdf, error) = await Print(null);
+        var read = ReadPdf(pdf);
+        check("PrintToPdfAsync returns a PDF of every page on Letter paper by default",
+            error is null && pdf!.AsSpan(0, 5).SequenceEqual("%PDF-"u8) && read.Pages.Count == 3 && read.Pages.All(p => Near(p.W, 612) && Near(p.H, 792)),
+            error ?? Sizes(read));
+        check("PrintToPdfAsync leaves backgrounds out by default", error is null && !read.Content.Contains("0 0 1 rg", StringComparison.Ordinal), error);
+
+        (pdf, error) = await Print(new PrintToPdfOptions { PageSize = "A4", Landscape = true, PrintBackground = true, PageRanges = "2-3" });
+        read = ReadPdf(pdf);
+        check("PrintToPdfAsync takes a named paper in any case, landscape and page ranges",
+            error is null && read.Pages.Count == 2 && read.Pages.All(p => Near(p.W, Math.Ceiling(11.7 * 72)) && Near(p.H, Math.Ceiling(8.27 * 72))),
+            error ?? Sizes(read));
+        check("PrintToPdfAsync prints backgrounds when asked", error is null && read.Content.Contains("1 0 0 rg", StringComparison.Ordinal), error);
+
+        (pdf, error) = await Print(new PrintToPdfOptions { PageSize = PdfPageSize.Inches(4, 5), PageRanges = "1", PrintBackground = true });
+        read = ReadPdf(pdf);
+        check("PrintToPdfAsync takes a paper size in inches", error is null && read.Pages.Count == 1 && Near(read.Pages[0].W, 288) && Near(read.Pages[0].H, 360)
+            && read.Content.Contains("0 0 1 rg", StringComparison.Ordinal), error ?? Sizes(read));
+
+        (pdf, error) = await Print(new PrintToPdfOptions
+        {
+            DisplayHeaderFooter = true,
+            PageRanges = "1",
+            HeaderTemplate = "<div style='width:50px;height:20px;background:rgb(0,255,0);-webkit-print-color-adjust:exact'></div>",
+        });
+        read = ReadPdf(pdf);
+        check("PrintToPdfAsync prints the header template", error is null && read.Content.Contains("0 1 0 rg", StringComparison.Ordinal), error);
+
+        var (_, paperError) = await Print(new PrintToPdfOptions { PageSize = "A9" });
+        check("PrintToPdfAsync rejects an unknown paper with Electron's message", paperError == "InvalidOperationException: Invalid pageSize A9", paperError);
+        var (_, marginError) = await Print(new PrintToPdfOptions { PageSize = PdfPageSize.Inches(4, 5), Margins = new PdfMargins { Left = 4.5 } });
+        check("PrintToPdfAsync rejects margins larger than the paper", marginError == "InvalidOperationException: margins must be less than or equal to pageSize", marginError);
+        var (_, scaleError) = await Print(new PrintToPdfOptions { Scale = 3 });
+        check("PrintToPdfAsync rejects a scale outside 0.1 to 2 with Chromium's message",
+            scaleError == "InvalidOperationException: Invalid print parameters: scale is outside of [0.1 - 2] range", scaleError);
+        // Each margin fits the paper, as Electron checks, but together they leave nothing to print on.
+        var (_, areaError) = await Print(new PrintToPdfOptions { PageSize = PdfPageSize.Inches(1, 1), Margins = new PdfMargins { Top = 0.6, Bottom = 0.6 } });
+        check("PrintToPdfAsync rejects margins that leave no content area with Chromium's message",
+            areaError == "InvalidOperationException: Invalid print parameters: invalid print parameters: content area is empty", areaError);
+        var (_, syntaxError) = await Print(new PrintToPdfOptions { PageRanges = "abc" });
+        check("PrintToPdfAsync rejects a page range it cannot read", syntaxError == "InvalidOperationException: Failed to generate PDF: Page range syntax error", syntaxError);
+        var (_, countError) = await Print(new PrintToPdfOptions { PageRanges = "7" });
+        check("PrintToPdfAsync rejects a page range past the last page", countError == "InvalidOperationException: Failed to generate PDF: Page range exceeds page count", countError);
+
+        var all = await Task.WhenAll(Enumerable.Range(1, 3).Select(i => Print(new PrintToPdfOptions { PageRanges = $"{i}-3" })));
+        check("PrintToPdfAsync queues jobs started together, each printing its own pages",
+            all.Select((r, i) => r.Error is null && ReadPdf(r.Pdf!).Pages.Count == 3 - i).All(ok => ok), string.Join(" | ", all.Select(r => r.Error ?? Sizes(ReadPdf(r.Pdf!)))));
+
+        (pdf, error) = await Print(new PrintToPdfOptions { PageRanges = "1" }, wc.MainFrame);
+        check("WebFrameMain.PrintToPdfAsync prints the main frame", error is null && ReadPdf(pdf!).Pages.Count == 1, error);
+        var inner = wc.MainFrame!.Frames.FirstOrDefault();
+        var (_, innerError) = inner is null ? (null, "no iframe") : await Print(null, inner);
+        check("WebFrameMain.PrintToPdfAsync refuses a subframe (drift C51)", innerError?.StartsWith("NotSupportedException:", StringComparison.Ordinal) == true, innerError);
+        await wc.LoadUrl("data:text/html,<p>after</p>");
+        var (_, goneError) = inner is null ? (null, "no iframe") : await Print(null, inner);
+        check("WebFrameMain.PrintToPdfAsync of a frame that has gone rejects with Electron's message",
+            goneError == "InvalidOperationException: Render frame was disposed before WebFrameMain could be accessed", goneError);
+        win.Destroy();
+        File.Delete(page);
     }
 }

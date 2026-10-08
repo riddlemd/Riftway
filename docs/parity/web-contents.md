@@ -12,13 +12,13 @@ Percentages are over the non-n/a items; the second counts a partial item as half
 |---|---|---|---|---|---|---|---|
 | Static methods | 5 | 3 | 2 | 0 | 0 | 60.0% | 80.0% |
 | Instance events | 59 | 31 | 18 | 8 | 2 | 54.4% | 70.2% |
-| Instance methods | 118 | 43 | 26 | 41 | 8 | 39.1% | 50.9% |
+| Instance methods | 118 | 43 | 27 | 40 | 8 | 39.1% | 51.4% |
 | Instance properties | 18 | 10 | 2 | 5 | 1 | 58.8% | 64.7% |
 | navigationHistory | 14 | 12 | 0 | 2 | 0 | 85.7% | 85.7% |
 | WebFrameMain events and statics | 3 | 1 | 1 | 1 | 0 | 33.3% | 50.0% |
-| WebFrameMain methods | 9 | 1 | 4 | 4 | 0 | 11.1% | 33.3% |
+| WebFrameMain methods | 9 | 1 | 5 | 3 | 0 | 11.1% | 38.9% |
 | WebFrameMain properties | 15 | 10 | 3 | 2 | 0 | 66.7% | 76.7% |
-| **Total** | 241 | 111 | 56 | 63 | 11 | 48.3% | 60.4% |
+| **Total** | 241 | 111 | 58 | 61 | 11 | 48.3% | 60.9% |
 
 ## Checklist
 
@@ -168,7 +168,7 @@ Percentages are over the non-n/a items; the second counts a partial item as half
 | `isBeingCaptured()` | — | missing |  |
 | `getPrintersAsync()` | — | missing |  |
 | `print()` | — | missing |  |
-| `printToPDF()` | — | missing |  |
+| `printToPDF()` | `PrintToPdfAsync` | partial | Through DevTools; always the main frame, even with a selection in a focused iframe (C51). |
 | `addWorkSpace()` | — | missing |  |
 | `removeWorkSpace()` | — | missing |  |
 | `setDevToolsWebContents()` | — | missing |  |
@@ -281,7 +281,7 @@ Percentages are over the non-n/a items; the second counts a partial item as half
 | `collectJavaScriptCallStack()` | — | missing | F5. |
 | `copyVideoFrameAt(x, y)` | — | missing |  |
 | `saveVideoFrameAs(x, y)` | — | missing |  |
-| `printToPDF(options)` | — | missing |  |
+| `printToPDF(options)` | `WebFrameMain.PrintToPdfAsync` | partial | The main frame only; a subframe throws (C51). |
 
 ### `WebFrameMain` instance properties
 

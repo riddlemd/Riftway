@@ -142,6 +142,12 @@ public sealed class WebFrameMain
     /// <exception cref="InvalidOperationException">The frame is detached, not loaded yet, or in another process.</exception>
     public Task<JsonNode?> ExecuteJavaScriptAsync(string code, bool userGesture = false) => _page.EvaluateAsync(code, userGesture, _state);
 
+    /// <summary>Prints this frame to PDF and returns the file's bytes. Electron's <c>frame.printToPDF()</c>; the main
+    /// frame only (drift C51).</summary>
+    /// <exception cref="InvalidOperationException">The frame has gone, or as <see cref="WebContents.PrintToPdfAsync"/>.</exception>
+    /// <exception cref="NotSupportedException">The frame is not its page's main frame.</exception>
+    public Task<byte[]> PrintToPdfAsync(PrintToPdfOptions? options = null) => _page.PrintToPdf(_state, options);
+
     /// <summary>Reloads the frame. Electron's <c>frame.reload()</c>.</summary>
     public void Reload() => _ = _page.EvaluateAsync("location.reload()", false, _state).ContinueWith(t => _ = t.Exception, TaskScheduler.Default);
 
