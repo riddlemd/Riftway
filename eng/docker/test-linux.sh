@@ -3,6 +3,7 @@
 # Xvfb. The exit code is the app's: the number of failed checks (non-zero = failure).
 # Usage: test-linux.sh [--sandbox] <project-dir> <exe-name>
 #   ORIEL_EXTRA_ARGS: extra switches for the app (e.g. Chromium flags while diagnosing).
+#   ORIEL_WM: openbox (default), mutter, kwin or xfwm4; all but openbox need the oriel-linux-dev-wm image.
 #   --sandbox  run as the non-root user with Chromium's sandbox on (needs --cap-add SYS_ADMIN).
 set -euo pipefail
 sandbox=0
@@ -27,8 +28,20 @@ export DISPLAY=:99
 # Chromium's X11 desktop capturer dies (SIGILL) on this Xvfb; tests skip real screen capture under it.
 export ORIEL_XVFB=1
 sleep 1
-# Maximize, minimize and full screen are window-manager operations.
-openbox > /dev/null 2>&1 &
+# Maximize, minimize and full screen are window-manager operations. The other window managers
+# need the oriel-linux-dev-wm image; each gets a bus of its own so the app's bus stays the app's.
+case "${ORIEL_WM:-openbox}" in
+  openbox) wm=(openbox) ;;
+  mutter) wm=(mutter --x11 --replace --sm-disable) ;;
+  kwin) wm=(kwin_x11 --replace) ;;
+  xfwm4) wm=(xfwm4 --replace) ;;
+  *) echo "ORIEL_WM must be openbox, mutter, kwin or xfwm4, not ${ORIEL_WM}"; exit 1 ;;
+esac
+command -v "${wm[0]}" > /dev/null || { echo "${wm[0]} is not installed: use the oriel-linux-dev-wm image"; exit 1; }
+dbus-run-session -- "${wm[@]}" > /work/wm.log 2>&1 &
+# Mutter and KWin take seconds to claim the screen; windows mapped before then are never managed.
+for _ in $(seq 1 30); do wmctrl -m > /dev/null 2>&1 && break; sleep 1; done
+wmctrl -m > /dev/null 2>&1 || { echo "FAIL  ${wm[0]} manages the screen"; cat /work/wm.log; exit 1; }
 sleep 1
 
 # A session bus of the run's own, as a desktop has: the launcher entry checks read its signals back.
@@ -46,7 +59,7 @@ fi
 
 if [ "$status" = 124 ] || [ "$status" = 137 ]; then echo "FAIL  the app exits by itself within ${ORIEL_RUN_LIMIT:-1800} s  [killed]"; fi
 
-mkdir -p /src/artifacts/linux && cp /work/app.err "/src/artifacts/linux/$exe.err"
+mkdir -p /src/artifacts/linux && cp /work/app.err "/src/artifacts/linux/$exe.err" && cp /work/wm.log "/src/artifacts/linux/$exe.wm.log"
 
 # A failing run's stderr is the only place Chromium explains itself.
 if [ "$status" != 0 ]; then

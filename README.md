@@ -38,6 +38,9 @@ docker run --rm -v "$PWD":/src -v "$HOME/.cache/oriel/cef":/cef-cache --shm-size
 # artifacts/linux/screen.png, app.log, exit.txt
 # Sandboxed, as a non-root user (sandbox.txt shows each process's seccomp mode and namespaces):
 docker run --rm --cap-add SYS_ADMIN --cap-add SYS_PTRACE --security-opt seccomp=unconfined -v "$PWD":/src -v "$HOME/.cache/oriel/cef":/cef-cache --shm-size=1g oriel-linux-dev /src/eng/docker/run-linux.sh --sandbox
+# A test app under another window manager (mutter, kwin or xfwm4; openbox by default), from an image that adds them:
+docker build -t oriel-linux-dev-wm -f eng/docker/linux-dev-wm.Dockerfile eng/docker
+docker run --rm -e ORIEL_WM=mutter -v "$PWD":/src -v "$HOME/.cache/oriel/cef":/cef-cache --shm-size=1g oriel-linux-dev-wm /src/eng/docker/test-linux.sh samples/Oriel.WindowTest Oriel.WindowTest
 ```
 
 ## Try it (Windows)
