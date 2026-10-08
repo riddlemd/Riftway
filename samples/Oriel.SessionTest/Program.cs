@@ -46,6 +46,54 @@ const string Site = "https://oriel.test/";
 const string CustomScheme = "x-webrequest";
 const string Page = "<!doctype html><title>session</title><p>session test</p>";
 
+// Linux without an XDG portal on the bus (none is installed here): Chromium's fallback is GTK's theme.
+#pragma warning disable CA1416 // Called only on Linux.
+async Task NoPortalThemeAsync()
+{
+    var w = new BrowserWindow(new BrowserWindowOptions { Show = false });
+    await w.WebContents.LoadUrl("about:blank");
+    async Task<bool?> Page(string query) => (await w.WebContents.ExecuteJavaScriptAsync($"matchMedia('{query}').matches"))?.GetValue<bool>();
+    void Gtk(string name, object value) => Oriel.Cef.CefThread.InvokeOnUi(() =>
+    {
+        Oriel.Cef.Platform.LinuxGtkTheme.SetSetting(name, value);
+        return true;
+    });
+    var updates = 0;
+    EventHandler counter = (_, _) => Interlocked.Increment(ref updates);
+    NativeTheme.Updated += counter;
+    long? Latency(Action change)
+    {
+        var before = Volatile.Read(ref updates);
+        var clock = System.Diagnostics.Stopwatch.StartNew();
+        change();
+        var deadline = DateTime.UtcNow.AddSeconds(2);
+        while (Volatile.Read(ref updates) == before && DateTime.UtcNow < deadline) Thread.Sleep(10);
+        return Volatile.Read(ref updates) > before ? clock.ElapsedMilliseconds : null;
+    }
+
+    var settled = Oriel.Cef.Platform.LinuxPortalSettings.WaitSettled(TimeSpan.FromSeconds(5));
+    Check("NativeTheme: without a portal Linux reads none", settled && !Oriel.Cef.Platform.LinuxPortalSettings.Appearance.Present,
+        Oriel.Cef.Platform.LinuxPortalSettings.Appearance);
+    Check("NativeTheme: without a portal GTK's Adwaita is light and not high contrast, for Oriel and the page",
+        !NativeTheme.ShouldUseDarkColors && !NativeTheme.ShouldUseHighContrastColors && await Page("(prefers-color-scheme: dark)") == false
+        && await Page("(prefers-contrast: more)") == false);
+    // The image's settings.ini names Yaru, which is not installed, and GTK's stand-in for it has no dark variant.
+    Gtk("gtk-theme-name", "Adwaita");
+    var variant = Latency(() => Gtk("gtk-application-prefer-dark-theme", true));
+    Check("NativeTheme: without a portal GTK's prefer-dark variant is dark, raised at once", variant is < 300 && NativeTheme.ShouldUseDarkColors,
+        $"{variant} ms; page dark={await Page("(prefers-color-scheme: dark)")} (CEF keeps GTK's first colours, DRIFT Y2)");
+    var light = Latency(() => Gtk("gtk-application-prefer-dark-theme", false));
+    Check("NativeTheme: and back to light, raised at once", light is < 300 && !NativeTheme.ShouldUseDarkColors, $"{light} ms");
+    var contrast = Latency(() => Gtk("gtk-theme-name", "HighContrast"));
+    Check("NativeTheme: without a portal a GTK theme named high contrast is high contrast, raised at once, for Oriel and the page",
+        contrast is < 300 && NativeTheme.ShouldUseHighContrastColors && !NativeTheme.ShouldUseDarkColors && await Page("(prefers-contrast: more)") == true,
+        $"{contrast} ms");
+    Gtk("gtk-theme-name", "Adwaita");
+    NativeTheme.Updated -= counter;
+    w.Destroy();
+}
+#pragma warning restore CA1416
+
 async Task RunAsync()
 {
     // Identity and storage.
@@ -2235,7 +2283,12 @@ Protocol.RegisterSchemesAsPrivileged(new PrivilegedScheme(CustomScheme, new Sche
 
 app.Ready += (_, _) => _ = Task.Run(async () =>
 {
-    try { await (mediaChild ? PermissionChecks(mediaOnly: true) : RunAsync()); }
+    try
+    {
+        await (mediaChild ? PermissionChecks(mediaOnly: true) : RunAsync());
+        // Last: a window opened before the session checks above stalls them.
+        if (!mediaChild && OperatingSystem.IsLinux()) await NoPortalThemeAsync();
+    }
     catch (Exception e) { Check("run completed", false, e); }
     failures = results.Count(r => r.StartsWith("FAIL"));
     app.Quit();

@@ -7,6 +7,8 @@ using Oriel;
 // The process checks crash or hang a process of their own, started with ProcessChild.
 const string ProcessChild = "--oriel-process-child";
 if (args.Length >= 2 && args[0] == ProcessChild) return ProcessChildMain(args[1], args.Length > 2 ? args[2] : "");
+// Before the app, so Chromium's own portal reads find it as Oriel's do.
+using var portal = OperatingSystem.IsLinux() ? Oriel.Samples.FakePortal.Start(("color-scheme", 2u), ("contrast", 0u), ("accent-color", (0.2, 0.4, 0.6))) : null;
 var app = OrielApp.Create("Oriel.WindowTest");
 // Chromium's DevTools server on a free port: a switch only Chromium acts on, read back over HTTP.
 var debugPort = FreePort();
@@ -3860,16 +3862,133 @@ async Task ThemeAsync(BrowserWindow win)
     }
     else if (OperatingSystem.IsLinux())
     {
-        // GTK_THEME is one of the settings Oriel reads on Linux, and a test can change it.
-        var (before, checks) = (updates, NativeTheme.Checks);
-        Environment.SetEnvironmentVariable("GTK_THEME", "Adwaita:dark");
-        Check("NativeTheme: Linux polls the system setting and raises Updated",
-            Eventually(() => updates > before, TimeSpan.FromSeconds(3)) && NativeTheme.ShouldUseDarkColors, $"{checks} -> {NativeTheme.Checks} checks");
-        Environment.SetEnvironmentVariable("GTK_THEME", null);
-        Eventually(() => updates > before + 1, TimeSpan.FromSeconds(3));
+        await LinuxThemeAsync(win, () => updates);
     }
     NativeTheme.Updated -= counter;
 }
+
+// Linux: a fake XDG portal (started before the app, so Chromium reads it too) and GTK's settings, changed in process.
+// Chromium's page is the independent reading of the same settings.
+#pragma warning disable CA1416 // Called only on Linux.
+async Task LinuxThemeAsync(BrowserWindow win, Func<int> updateCount)
+{
+    async Task<bool> PageMatches(string query, bool expected)
+    {
+        for (var i = 0; i < 30; i++)
+        {
+            if ((await win.WebContents.ExecuteJavaScriptAsync($"matchMedia('{query}').matches"))?.GetValue<bool>() == expected) return true;
+            await Task.Delay(100);
+        }
+        return false;
+    }
+    async Task<bool?> PageNow(string query) => (await win.WebContents.ExecuteJavaScriptAsync($"matchMedia('{query}').matches"))?.GetValue<bool>();
+    const string Dark = "(prefers-color-scheme: dark)", More = "(prefers-contrast: more)";
+    void Gtk(string name, object value) => Oriel.Cef.CefThread.InvokeOnUi(() =>
+    {
+        LinuxGtkTheme.SetSetting(name, value);
+        return true;
+    });
+    // Milliseconds from a change to Updated; null when it never came. The old poll took up to a second.
+    long? Latency(Action change)
+    {
+        var before = updateCount();
+        var clock = System.Diagnostics.Stopwatch.StartNew();
+        change();
+        return Eventually(() => updateCount() > before, TimeSpan.FromSeconds(2)) ? clock.ElapsedMilliseconds : null;
+    }
+
+    Check("NativeTheme: a fake XDG portal owns org.freedesktop.portal.Desktop", portal is not null);
+    if (portal is null) return;
+    var settled = LinuxPortalSettings.WaitSettled(step);
+    var initial = LinuxPortalSettings.Appearance;
+    Check("NativeTheme: Linux finds the portal and reads its color-scheme and accent-color",
+        settled && initial == new LinuxPortalAppearance(true, 2u, (0.2, 0.4, 0.6)), initial);
+    Check("NativeTheme: the portal's light is light, for Oriel and the page", !NativeTheme.ShouldUseDarkColors && await PageMatches(Dark, false));
+
+    var idle = NativeTheme.Checks;
+    await Task.Delay(2500);
+    Check("NativeTheme: Linux waits for the portal and GTK instead of polling", NativeTheme.Checks == idle, $"{idle} -> {NativeTheme.Checks}");
+
+    var toDark = Latency(() => portal.Set("color-scheme", 1u));
+    Check("NativeTheme: the portal's SettingChanged to dark raises Updated at once", toDark is < 300, $"{toDark} ms");
+    Check("NativeTheme: the portal's dark is dark, for Oriel and the page", NativeTheme.ShouldUseDarkColors && await PageMatches(Dark, true));
+
+    var child = await ThemeChildAsync();
+    Check("NativeTheme: a process started while the portal says dark reads dark, as its page does",
+        child == "THEME dark=True page=True contrast=False", child);
+
+    var quiet = updateCount();
+    portal.Set("contrast", 1u);
+    await Task.Delay(700);
+    Check("NativeTheme: the portal's contrast is not read and raises nothing, as Chromium 154",
+        !NativeTheme.ShouldUseHighContrastColors && updateCount() == quiet && await PageMatches(More, false), $"updates {quiet} -> {updateCount()}");
+    portal.Set("contrast", 0u);
+
+    var accent = Latency(() => portal.Set("accent-color", (0.9, 0.1, 0.1)));
+    Check("NativeTheme: a portal accent-color change raises Updated, as Chromium's user colour does", accent is < 300, $"{accent} ms");
+
+    var toLight = Latency(() => portal.Set("color-scheme", 2u));
+    Check("NativeTheme: the portal's SettingChanged back to light raises Updated, for Oriel and the page",
+        toLight is < 300 && !NativeTheme.ShouldUseDarkColors && await PageMatches(Dark, false), $"{toLight} ms");
+
+    // HighContrastInverse is one of GTK 3's built-in themes: dark, and named high contrast.
+    var contrast = Latency(() => Gtk("gtk-theme-name", "HighContrastInverse"));
+    Check("NativeTheme: a GTK theme named high contrast is high contrast, raised at once, for Oriel and the page",
+        contrast is < 300 && NativeTheme.ShouldUseHighContrastColors && await PageMatches(More, true), $"{contrast} ms");
+    Check("NativeTheme: the portal's light wins over a dark GTK theme", !NativeTheme.ShouldUseDarkColors && await PageMatches(Dark, false));
+    var fallback = Latency(() => portal.Set("color-scheme", 0u));
+    Check("NativeTheme: with no portal preference, GTK's dark window background is dark",
+        fallback is < 300 && NativeTheme.ShouldUseDarkColors, $"{fallback} ms; page dark={await PageNow(Dark)} (CEF keeps GTK's first colours, DRIFT Y2)");
+    var restored = Latency(() => Gtk("gtk-theme-name", "Adwaita"));
+    Check("NativeTheme: back to Adwaita is light and not high contrast, raised at once",
+        restored is < 300 && !NativeTheme.ShouldUseDarkColors && !NativeTheme.ShouldUseHighContrastColors && await PageMatches(More, false), $"{restored} ms");
+    var variant = Latency(() => Gtk("gtk-application-prefer-dark-theme", true));
+    Check("NativeTheme: with no portal preference, GTK's prefer-dark variant is dark, raised at once",
+        variant is < 300 && NativeTheme.ShouldUseDarkColors, $"{variant} ms");
+    Gtk("gtk-application-prefer-dark-theme", false);
+    Check("NativeTheme: Linux has no inverted scheme, forced colours or reduced transparency, as Electron",
+        !NativeTheme.ShouldUseInvertedColorScheme && !NativeTheme.InForcedColorsMode && !NativeTheme.PrefersReducedTransparency);
+    portal.Set("color-scheme", 2u);
+    portal.Set("accent-color", (0.2, 0.4, 0.6));
+    Eventually(() => LinuxPortalSettings.Appearance.ColorScheme == 2u, step);
+
+    // DRIFT Y3: a Views menu takes its colour mode from its window's profile, which ThemeSource sets; read off the X screen.
+    async Task<(int R, int G, int B)?> MenuBackground(ThemeSource source)
+    {
+        NativeTheme.ThemeSource = source;
+        await Task.Delay(500);
+        var menu = new Menu { new MenuItem { Label = "Theme probe" } };
+        using var closed = new ManualResetEventSlim();
+        menu.Popup(new PopupOptions { Window = win, X = 20, Y = 20, Closed = closed.Set });
+        await Task.Delay(800);
+        var content = win.GetContentBounds();
+        // The menu's top padding, right of its rounded corner and above the item's text.
+        var pixel = LinuxScreen.CommonColour(content.X + 40, content.Y + 21, 30, 2);
+        menu.ClosePopup(win);
+        closed.Wait(step);
+        return pixel;
+    }
+    var darkMenu = await MenuBackground(ThemeSource.Dark);
+    var lightMenu = await MenuBackground(ThemeSource.Light);
+    NativeTheme.ThemeSource = ThemeSource.System;
+    Check("NativeTheme: a popup menu follows ThemeSource on Linux, as Electron's (screen pixels)",
+        darkMenu is { } d && d.R + d.G + d.B < 300 && lightMenu is { } l && l.R + l.G + l.B > 540, $"dark={darkMenu} light={lightMenu}");
+}
+
+// A second process's first reading: Oriel's at ready, and its page's.
+async Task<string?> ThemeChildAsync()
+{
+    var start = new System.Diagnostics.ProcessStartInfo(Environment.ProcessPath!) { RedirectStandardOutput = true, RedirectStandardError = true };
+    start.ArgumentList.Add(ProcessChild);
+    start.ArgumentList.Add("theme");
+    start.ArgumentList.Add(Directory.CreateTempSubdirectory("oriel-theme-child-").FullName);
+    using var child = System.Diagnostics.Process.Start(start)!;
+    _ = child.StandardError.ReadToEndAsync();
+    var output = await child.StandardOutput.ReadToEndAsync().WaitAsync(TimeSpan.FromSeconds(60));
+    await child.WaitForExitAsync().WaitAsync(TimeSpan.FromSeconds(30));
+    return output.Split('\n').FirstOrDefault(l => l.StartsWith("THEME ", StringComparison.Ordinal))?.Trim();
+}
+#pragma warning restore CA1416
 
 // The OS's own answer, read without Oriel.
 static bool SystemIsDark()
@@ -4747,6 +4866,7 @@ static int ProcessChildMain(string mode, string userData)
         OrielProcess.Crash();
         return 0;
     }
+    if (mode == "theme") return ThemeChildMain(userData);
     var child = OrielApp.Create("Oriel.WindowTest");
     // Its own data directory: Chromium's process singleton would hand this run to the main one.
     child.SetPath("userData", userData);
@@ -4795,6 +4915,28 @@ if (failures >= 0)
 }
 Console.WriteLine(failures < 0 ? "RESULT: did not finish" : $"RESULT: {failures} failure(s)");
 return failures;
+
+static int ThemeChildMain(string userData)
+{
+    var child = OrielApp.Create("Oriel.WindowTest");
+    child.SetPath("userData", userData);
+    child.Ready += (_, _) => Task.Run(async () =>
+    {
+        _ = LinuxPortalSettings.WaitSettled(TimeSpan.FromSeconds(5));
+        var (dark, contrast) = (NativeTheme.ShouldUseDarkColors, NativeTheme.ShouldUseHighContrastColors);
+        var w = new BrowserWindow(new BrowserWindowOptions { Show = false });
+        await w.WebContents.LoadUrl("about:blank");
+        var page = false;
+        for (var i = 0; i < 30 && !page; i++)
+        {
+            page = (await w.WebContents.ExecuteJavaScriptAsync("matchMedia('(prefers-color-scheme: dark)').matches"))?.GetValue<bool>() == true;
+            if (!page) await Task.Delay(100);
+        }
+        Console.WriteLine($"THEME dark={dark} page={page} contrast={contrast}");
+        child.Quit();
+    });
+    return child.Run();
+}
 
 static unsafe class HangProbe
 {
@@ -5084,6 +5226,27 @@ static class WinDialog
     [System.Runtime.InteropServices.DllImport("user32.dll", CharSet = System.Runtime.InteropServices.CharSet.Unicode)] internal static extern nint FindWindowW(string? className, string title);
     [System.Runtime.InteropServices.DllImport("user32.dll")] internal static extern bool IsWindowVisible(nint hwnd);
     [System.Runtime.InteropServices.DllImport("user32.dll")] internal static extern bool PostMessageW(nint hwnd, uint message, nint wParam, nint lParam);
+}
+
+// The X screen as ImageMagick's import reads it, independent of Oriel.
+static class LinuxScreen
+{
+    // The most frequent colour in a rectangle of the root window; null without import or a display.
+    internal static (int R, int G, int B)? CommonColour(int x, int y, int width, int height)
+    {
+        try
+        {
+            using var import = System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo("import",
+                ["-window", "root", "-crop", $"{width}x{height}+{x}+{y}", "-depth", "8", "txt:-"]) { RedirectStandardOutput = true, RedirectStandardError = true })!;
+            var output = import.StandardOutput.ReadToEnd();
+            import.WaitForExit(10000);
+            return System.Text.RegularExpressions.Regex.Matches(output, @"#([0-9A-Fa-f]{6})")
+                .Select(m => Convert.ToInt32(m.Groups[1].Value, 16))
+                .GroupBy(c => c).OrderByDescending(g => g.Count()).Select(g => ((int R, int G, int B)?)((g.Key >> 16) & 0xFF, (g.Key >> 8) & 0xFF, g.Key & 0xFF))
+                .FirstOrDefault();
+        }
+        catch (System.ComponentModel.Win32Exception) { return null; }
+    }
 }
 
 static unsafe class LinuxX11

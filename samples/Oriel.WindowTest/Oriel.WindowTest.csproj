@@ -14,6 +14,7 @@
 
   <ItemGroup>
     <Compile Include="..\Shared\LauncherEntryMonitor.cs" Link="LauncherEntryMonitor.cs" />
+    <Compile Include="..\Shared\FakePortal.cs" Link="FakePortal.cs" />
   </ItemGroup>
 
 </Project>

@@ -1,4 +1,3 @@
-using System.Diagnostics;
 using System.Runtime.InteropServices;
 using Oriel.Cef;
 using Oriel.Cef.Interop;
@@ -26,6 +25,8 @@ public static unsafe class NativeTheme
     private static EventHandler? s_updated;
     private static bool s_polling;
     private static Snapshot s_last;
+    // Set on the UI thread once CEF is up: GTK is read only there.
+    private static volatile bool s_linuxUi;
 
     private static readonly TimeSpan s_poll = TimeSpan.FromSeconds(1);
 
@@ -62,10 +63,12 @@ public static unsafe class NativeTheme
         _ => SystemPrefersDark(),
     };
 
-    /// <summary>Whether the system asks for high contrast (macOS "Increase contrast", Windows contrast themes).
-    /// Electron's <c>nativeTheme.shouldUseHighContrastColors</c>.</summary>
+    /// <summary>Whether the system asks for high contrast (macOS "Increase contrast", Windows contrast themes, a GTK theme
+    /// named high contrast on Linux). Electron's <c>nativeTheme.shouldUseHighContrastColors</c>.</summary>
     public static bool ShouldUseHighContrastColors
-        => OperatingSystem.IsMacOS() ? MacFlag(MacSetting.IncreaseContrast) : OperatingSystem.IsWindows() && WindowsHighContrast();
+        => OperatingSystem.IsMacOS() ? MacFlag(MacSetting.IncreaseContrast)
+            : OperatingSystem.IsWindows() ? WindowsHighContrast()
+            : OperatingSystem.IsLinux() && LinuxFlag(dark: false);
 
     /// <summary>Whether macOS inverts colours. Electron's <c>nativeTheme.shouldUseInvertedColorScheme</c>.</summary>
     public static bool ShouldUseInvertedColorScheme => OperatingSystem.IsMacOS() && MacFlag(MacSetting.InvertColors);
@@ -77,7 +80,7 @@ public static unsafe class NativeTheme
     public static bool PrefersReducedTransparency => OperatingSystem.IsMacOS() && MacFlag(MacSetting.ReduceTransparency);
 
     /// <summary>Something above changed: <see cref="ThemeSource"/> was set, or the system's settings changed (at once on
-    /// macOS; elsewhere checked once a second while there are handlers, DRIFT Y1). Electron's <c>updated</c> event.</summary>
+    /// macOS and Linux; on Windows checked once a second while there are handlers, DRIFT Y1). Electron's <c>updated</c> event.</summary>
     public static event EventHandler? Updated
     {
         add
@@ -103,6 +106,7 @@ public static unsafe class NativeTheme
     /// <summary>UI thread, once CEF is up: applies a source set before then, and starts polling for early handlers.</summary>
     internal static void OnReady()
     {
+        if (OperatingSystem.IsLinux()) ObserveLinux();
         ApplyEverywhere();
         bool start;
         lock (s_gate)
@@ -120,7 +124,7 @@ public static unsafe class NativeTheme
     {
         s_last = Take();
         if (OperatingSystem.IsMacOS()) CefThread.RunOnUi(ObserveMac);
-        else CefThread.PostUiDelayed(Poll, s_poll);
+        else if (!OperatingSystem.IsLinux()) CefThread.PostUiDelayed(Poll, s_poll);
     }
 
     [System.Runtime.Versioning.SupportedOSPlatform("macos")]
@@ -153,10 +157,12 @@ public static unsafe class NativeTheme
         if (OperatingSystem.IsMacOS()) MacAppearance.SetDark(ThemeSource switch { ThemeSource.Dark => true, ThemeSource.Light => false, _ => null });
     }
 
-    private readonly record struct Snapshot(bool Dark, bool HighContrast, bool Inverted, bool ReducedTransparency);
+    // Accent: the portal's, which Chromium's NativeTheme also takes as its user colour and notifies on.
+    private readonly record struct Snapshot(bool Dark, bool HighContrast, bool Inverted, bool ReducedTransparency, (double, double, double)? Accent);
 
     private static Snapshot Take()
-        => new(ShouldUseDarkColors, ShouldUseHighContrastColors, ShouldUseInvertedColorScheme, PrefersReducedTransparency);
+        => new(ShouldUseDarkColors, ShouldUseHighContrastColors, ShouldUseInvertedColorScheme, PrefersReducedTransparency,
+            OperatingSystem.IsLinux() && LinuxPortalSettings.Appearance.Present ? LinuxPortalSettings.Appearance.Accent : null);
 
     private static void Poll()
     {
@@ -199,7 +205,7 @@ public static unsafe class NativeTheme
     {
         if (OperatingSystem.IsMacOS()) return MacFlag(MacSetting.Dark);
         if (OperatingSystem.IsWindows()) return WindowsAppsUseDark();
-        if (OperatingSystem.IsLinux()) return LinuxPrefersDark();
+        if (OperatingSystem.IsLinux()) return LinuxFlag(dark: true);
         return false;
     }
 
@@ -207,23 +213,53 @@ public static unsafe class NativeTheme
     private static bool WindowsAppsUseDark()
         => Microsoft.Win32.Registry.GetValue(@"HKEY_CURRENT_USER\Software\Microsoft\Windows\CurrentVersion\Themes\Personalize", "AppsUseLightTheme", 1) is 0;
 
-    // The freedesktop colour-scheme setting through GNOME's schema; a GTK theme named dark otherwise.
-    private static bool LinuxPrefersDark()
+    /// <summary>Chromium 154 on Linux: no GTK UI, no system theme at all (the portal's preference is pushed only into GTK's
+    /// settings provider); else the portal's dark or light; else whether GTK's window background is dark.</summary>
+    internal static bool LinuxPrefersDark(bool toolkitLoaded, LinuxPortalAppearance portal, Func<bool> backgroundIsDark)
+        => toolkitLoaded && (LinuxPortalSettings.PrefersDark(portal.ColorScheme) ?? backgroundIsDark());
+
+    [System.Runtime.Versioning.SupportedOSPlatform("linux")]
+    private static bool LinuxFlag(bool dark)
     {
-        if (Environment.GetEnvironmentVariable("GTK_THEME") is { } theme && theme.EndsWith(":dark", StringComparison.OrdinalIgnoreCase)) return true;
-        try
+        if (!s_linuxUi) return false;
+        return CefThread.InvokeOnUi(() =>
         {
-            using var gsettings = Process.Start(new ProcessStartInfo("gsettings", "get org.gnome.desktop.interface color-scheme")
+            var toolkit = LinuxGtkTheme.IsLoaded;
+            return dark
+                ? LinuxPrefersDark(toolkit, LinuxPortalSettings.Appearance, () => LinuxGtkTheme.IsDark(LinuxGtkTheme.WindowBackground()))
+                : toolkit && LinuxGtkTheme.IsHighContrastThemeName(LinuxGtkTheme.ThemeName());
+        });
+    }
+
+    // UI thread. The portal's signals and GTK's setting notifications replace polling.
+    [System.Runtime.Versioning.SupportedOSPlatform("linux")]
+    private static void ObserveLinux()
+    {
+        s_linuxUi = true;
+        LinuxPortalSettings.Changed += () =>
+        {
+            try { CefThread.PostUi(OnLinuxChanged); }
+            catch (InvalidOperationException) { }
+        };
+        if (LinuxGtkTheme.IsLoaded) LinuxGtkTheme.Observe(&OnGtkSetting);
+    }
+
+    [UnmanagedCallersOnly]
+    private static void OnGtkSetting(nint settings, nint spec, nint data) => OnLinuxChanged();
+
+    // UI thread.
+    private static void OnLinuxChanged()
+    {
+        lock (s_gate)
+        {
+            if (!s_polling) return;
+            if (s_updated is null)
             {
-                RedirectStandardOutput = true,
-                RedirectStandardError = true,
-            });
-            if (gsettings is null) return false;
-            var output = gsettings.StandardOutput.ReadToEnd();
-            gsettings.WaitForExit(2000);
-            return output.Contains("prefer-dark", StringComparison.Ordinal);
+                s_polling = false;
+                return;
+            }
         }
-        catch (System.ComponentModel.Win32Exception) { return false; }
+        Check();
     }
 
     [StructLayout(LayoutKind.Sequential)]

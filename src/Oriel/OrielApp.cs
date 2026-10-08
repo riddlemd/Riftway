@@ -188,6 +188,8 @@ public sealed unsafe partial class OrielApp
         CefString.Set(&settings.cache_path, dataDirectory);
         CefString.Set(&settings.browser_subprocess_path, CefLayout.SubprocessPath());
 
+        // Before Chromium starts its own portal reads, so both see the portal from the same moment.
+        if (OperatingSystem.IsLinux()) LinuxPortalSettings.Start();
         NativeObject.AddRef(app.Native);
         var initialized = CefNative.cef_initialize((cef_main_args_t*)&args, &settings, app.Native, null) != 0;
         CefString.Clear(&settings.user_agent);

@@ -21,3 +21,7 @@ General items: [todo.md](todo.md).
       Check GNOME/KDE, which may honour `_NET_WM_STATE_MODAL`.
 - [ ] Window-manager behaviour beyond openbox (GNOME/Mutter, KDE/KWin): maximize, minimize, full screen
 - [ ] Screen capture: Chromium's X11 desktop capturer dies with SIGILL under the Docker Xvfb (arm64) when getDisplayMedia starts; SessionTest skips the capture checks there (ORIEL_XVFB). Verify on a real X server; if it crashes there too, find the CHECK with CEF's symbols
+- [ ] nativeTheme against a real `xdg-desktop-portal` (GNOME, KDE): Docker has none, so the checks use a fake portal
+      (`samples/Shared/FakePortal.cs`) that WindowTest starts before CEF
+- [ ] nativeTheme: with no portal preference, pages keep GTK's colours from startup (DRIFT Y2); a CEF patch to clear
+      Chromium's GTK style colour cache on theme notifications would let them follow
