@@ -1026,7 +1026,9 @@ async Task PageEventsAsync()
     var failed = new System.Collections.Concurrent.ConcurrentQueue<int>();
     w.WebContents.DidFailProvisionalLoad += (_, e) => provisional.Enqueue(e.ErrorCode);
     w.WebContents.DidFailLoad += (_, e) => failed.Enqueue(e.ErrorCode);
-    _ = w.LoadUrl("http://oriel-nowhere.invalid/").ContinueWith(_ => { });
+    // A refused local port fails at once; an .invalid host waits on the resolver, which can take longer than a step.
+    // Port 2 is outside Chromium's restricted list, so the load reaches the network and is refused.
+    _ = w.LoadUrl("http://127.0.0.1:2/").ContinueWith(_ => { });
     var unreachable = Eventually(() => !failed.IsEmpty, step);
     Check("a failed load raises DidFailProvisionalLoad and DidFailLoad", unreachable && provisional.SequenceEqual(failed) && failed.All(c => c < 0),
         $"{string.Join(",", provisional)} / {string.Join(",", failed)}");
