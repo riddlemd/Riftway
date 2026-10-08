@@ -1517,7 +1517,11 @@ async Task RunAsync()
             var parts = etime[(etime.IndexOf('-') + 1)..].Split(':').Select(p => double.Parse(p, CultureInfo.InvariantCulture)).Reverse().ToArray();
             return days * 86400 + parts[0] + (parts.Length > 1 ? parts[1] * 60 : 0) + (parts.Length > 2 ? parts[2] * 3600 : 0);
         }
-        var etimes = firstMetrics.Skip(1).Select(m => (m, Seconds: Elapsed(Output("/bin/ps", "-o", "etime=", "-p", m.Pid.ToString(CultureInfo.InvariantCulture))))).ToList();
+        // A child can exit between the metrics and ps, which then prints nothing for it.
+        var etimes = firstMetrics.Skip(1)
+            .Select(m => (m, Etime: Output("/bin/ps", "-o", "etime=", "-p", m.Pid.ToString(CultureInfo.InvariantCulture)).Trim()))
+            .Where(e => e.Etime.Length > 0)
+            .Select(e => (e.m, Seconds: Elapsed(e.Etime))).ToList();
         var nowMs = (DateTime.UtcNow - DateTime.UnixEpoch).TotalMilliseconds;
         Check("each child's creation time is when ps says it started", etimes.All(e => Math.Abs(nowMs - e.Seconds * 1000 - e.m.CreationTime) < 2500),
             string.Join(",", etimes.Select(e => $"{e.m.Pid}:{nowMs - e.Seconds * 1000 - e.m.CreationTime:F0}")));
