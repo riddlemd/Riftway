@@ -128,6 +128,48 @@ public enum MenuItemRole
 
     /// <summary>The default Window menu. Electron's <c>windowMenu</c>.</summary>
     WindowMenu,
+
+    /// <summary>Turns the spell checker of the focused page's session on or off. Electron's <c>toggleSpellChecker</c>.</summary>
+    ToggleSpellChecker,
+
+    /// <summary>macOS: reads the selection aloud. Electron's <c>startSpeaking</c>.</summary>
+    StartSpeaking,
+
+    /// <summary>macOS: stops reading aloud. Electron's <c>stopSpeaking</c>.</summary>
+    StopSpeaking,
+
+    /// <summary>macOS: the Substitutions panel. Electron's <c>showSubstitutions</c>.</summary>
+    ShowSubstitutions,
+
+    /// <summary>macOS: smart quotes on or off. Electron's <c>toggleSmartQuotes</c>.</summary>
+    ToggleSmartQuotes,
+
+    /// <summary>macOS: smart dashes on or off. Electron's <c>toggleSmartDashes</c>.</summary>
+    ToggleSmartDashes,
+
+    /// <summary>macOS: text replacement on or off. Electron's <c>toggleTextReplacement</c>.</summary>
+    ToggleTextReplacement,
+
+    /// <summary>macOS: shows or hides the window tab bar. Electron's <c>toggleTabBar</c>.</summary>
+    ToggleTabBar,
+
+    /// <summary>macOS: the next window tab. Electron's <c>selectNextTab</c>.</summary>
+    SelectNextTab,
+
+    /// <summary>macOS: the previous window tab. Electron's <c>selectPreviousTab</c>.</summary>
+    SelectPreviousTab,
+
+    /// <summary>macOS: the tab overview. Electron's <c>showAllTabs</c>.</summary>
+    ShowAllTabs,
+
+    /// <summary>macOS: merges every window into tabs of one. Electron's <c>mergeAllWindows</c>.</summary>
+    MergeAllWindows,
+
+    /// <summary>macOS: moves the tab to a window of its own. Electron's <c>moveTabToNewWindow</c>.</summary>
+    MoveTabToNewWindow,
+
+    /// <summary>macOS: empties the recent documents list. Electron's <c>clearRecentDocuments</c>.</summary>
+    ClearRecentDocuments,
 }
 
 /// <summary>An entry in a <see cref="Menu"/>; Electron's <c>MenuItem</c>.</summary>
@@ -220,9 +262,9 @@ public sealed class MenuItem
         init => _submenu = value is null ? null : Adopt(value);
     }
 
-    /// <summary>Runs when the item is chosen, with the focused window (or null); not for role items, whose role
-    /// runs instead. Electron's <c>click</c>.</summary>
-    public Action<MenuItem, BrowserWindow?>? Click { get; set; }
+    /// <summary>Runs when the item is chosen, with the focused window (or null) and the keys held; not for role items,
+    /// whose role runs instead. Electron's <c>click(menuItem, browserWindow, event)</c>.</summary>
+    public Action<MenuItem, BrowserWindow?, KeyboardEvent>? Click { get; set; }
 
     private Menu Adopt(Menu menu)
     {
@@ -240,12 +282,67 @@ public sealed class MenuItem
 
     /// <summary>Chooses the item as a click or accelerator would: toggles checkbox and radio state, then runs
     /// the role or <see cref="Click"/>.</summary>
-    internal void Activate(BrowserWindow? focusedWindow)
+    internal void Activate(BrowserWindow? focusedWindow, KeyboardEvent? keys = null)
     {
         if (!Enabled) return;
         if (Type == MenuItemType.Checkbox) Checked = !Checked;
         else if (Type == MenuItemType.Radio && Parent is { } parent) parent.CheckRadio(this);
-        if (!MenuRoles.Execute(Role, focusedWindow)) Click?.Invoke(this, focusedWindow);
+        if (!MenuRoles.Execute(Role, focusedWindow)) Click?.Invoke(this, focusedWindow, keys ?? new KeyboardEvent());
+    }
+
+    /// <summary>Chooses the item from its accelerator: the accelerator's modifiers were held. UI thread.</summary>
+    internal void ActivateByAccelerator(BrowserWindow? focusedWindow)
+        => Activate(focusedWindow, KeyboardEvent.ForAccelerator(Accelerator));
+}
+
+/// <summary>The keys held when a menu item was chosen. Electron's <c>KeyboardEvent</c> (a menu item's <c>click</c> event).</summary>
+public sealed record KeyboardEvent
+{
+    /// <summary>Shift was held.</summary>
+    public bool ShiftKey { get; init; }
+
+    /// <summary>Control was held.</summary>
+    public bool CtrlKey { get; init; }
+
+    /// <summary>Alt (Option on macOS) was held.</summary>
+    public bool AltKey { get; init; }
+
+    /// <summary>Command on macOS, the Windows or Super key elsewhere, was held.</summary>
+    public bool MetaKey { get; init; }
+
+    /// <summary>The item's accelerator chose it, not a click.</summary>
+    public bool TriggeredByAccelerator { get; init; }
+
+    internal static KeyboardEvent FromCefFlags(Oriel.Cef.Interop.cef_event_flags_t flags) => new()
+    {
+        ShiftKey = flags.HasFlag(Oriel.Cef.Interop.cef_event_flags_t.EVENTFLAG_SHIFT_DOWN),
+        CtrlKey = flags.HasFlag(Oriel.Cef.Interop.cef_event_flags_t.EVENTFLAG_CONTROL_DOWN),
+        AltKey = flags.HasFlag(Oriel.Cef.Interop.cef_event_flags_t.EVENTFLAG_ALT_DOWN),
+        MetaKey = flags.HasFlag(Oriel.Cef.Interop.cef_event_flags_t.EVENTFLAG_COMMAND_DOWN),
+    };
+
+    // NSEventModifierFlags: Shift, Control, Option, Command.
+    internal static KeyboardEvent FromMacModifiers(ulong flags, bool keyDown) => new()
+    {
+        ShiftKey = (flags & (1 << 17)) != 0,
+        CtrlKey = (flags & (1 << 18)) != 0,
+        AltKey = (flags & (1 << 19)) != 0,
+        MetaKey = (flags & (1 << 20)) != 0,
+        TriggeredByAccelerator = keyDown,
+    };
+
+    internal static KeyboardEvent ForAccelerator(string? accelerator)
+    {
+        if (accelerator is null) return new() { TriggeredByAccelerator = true };
+        var modifiers = Oriel.Accelerator.Parse(accelerator, OperatingSystem.IsMacOS()).Modifiers;
+        return new()
+        {
+            ShiftKey = modifiers.HasFlag(AcceleratorModifiers.Shift),
+            CtrlKey = modifiers.HasFlag(AcceleratorModifiers.Control),
+            AltKey = modifiers.HasFlag(AcceleratorModifiers.Alt),
+            MetaKey = modifiers.HasFlag(AcceleratorModifiers.Command),
+            TriggeredByAccelerator = true,
+        };
     }
 }
 

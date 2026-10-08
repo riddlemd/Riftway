@@ -121,6 +121,14 @@ async Task RunLoadUrlChecks(List<(string Name, bool Pass, string Detail)> result
     Check("loadURL postData: POST with raw bytes and file", withOptions.Method == "POST" && withOptions.BodyText == "a=1&b=2"
         && withOptions.UploadFiles.SequenceEqual([upload]),
         $"{withOptions.Method} body={withOptions.BodyText} files={string.Join(",", withOptions.UploadFiles)}");
+    // Electron's UploadFile ranges: "file part" from byte 5, 3 bytes.
+    var (slice, _) = await Load("app://test/nav?step=slice", new LoadUrlOptions { PostData = [new UploadFile(upload) { Offset = 5, Length = 3 }] });
+    Check("loadURL postData: an UploadFile range sends that part", slice.BodyText == "par" && slice.UploadFiles.Count == 0, slice.BodyText);
+    var stale = await Assert(() => window!.LoadUrl("app://test/nav?step=stale", new LoadUrlOptions { PostData = [new UploadFile(upload) { ModificationTime = 1 }] }));
+    Check("loadURL postData: a file changed since its modificationTime fails the load", stale is LoadFailedException { ErrorDescription: "ERR_UPLOAD_FILE_CHANGED" }, stale?.Message);
+    var written = new DateTimeOffset(File.GetLastWriteTimeUtc(upload)).ToUnixTimeMilliseconds() / 1000.0;
+    var (current, _) = await Load("app://test/nav?step=current", new LoadUrlOptions { PostData = [new UploadFile(upload) { ModificationTime = written }] });
+    Check("loadURL postData: an unchanged file's modificationTime passes", current.UploadFiles.SequenceEqual([upload]), string.Join(",", current.UploadFiles));
     Check("loadURL userAgent: request header", Header(withOptions, "User-Agent") == "OrielTest/1.0", Header(withOptions, "User-Agent"));
     Check("loadURL userAgent: navigator.userAgent", pageAgent == "OrielTest/1.0", pageAgent);
     Check("loadURL userAgent: getUserAgent", window!.WebContents.GetUserAgent() == "OrielTest/1.0", window.WebContents.GetUserAgent());
@@ -157,6 +165,34 @@ async Task RunLoadUrlChecks(List<(string Name, bool Pass, string Detail)> result
     Check("loadURL options apply once: the page's own reload of that URL sends none",
         again.Length == 2 && Header(again[0], "X-One") == "once" && Header(again[1], "X-One") is null,
         $"requests={again.Length} X-One={string.Join(",", again.Select(r => Header(r, "X-One") ?? "-"))}");
+    // The page's own navigation made a new entry without the options, so a reload sends none either.
+    navPages.TryRemove("?step=again", out _);
+    var againReload = NavPage("?step=again");
+    window.WebContents.Reload();
+    await againReload.Task.WaitAsync(TimeSpan.FromSeconds(10));
+    Check("reload after the page replaced loadURL's entry sends none of its options", Header(navRequests["?step=again"].Last(), "X-One") is null,
+        Header(navRequests["?step=again"].Last(), "X-One"));
+
+    // Chromium keeps loadURL's headers and referrer on the navigation entry, so webContents.reload() sends them again.
+    await Load("app://test/nav?step=reloaded", new LoadUrlOptions { ExtraHeaders = "X-One: kept", HttpReferrer = new Referrer("https://example.com/r", ReferrerPolicy.UnsafeUrl) });
+    var beforeReload = navRequests["?step=reloaded"].Count;
+    var historyBefore = window.WebContents.NavigationHistory.Length();
+    navPages.TryRemove("?step=reloaded", out _);
+    var reloadSeen = NavPage("?step=reloaded");
+    window.WebContents.Reload();
+    await reloadSeen.Task.WaitAsync(TimeSpan.FromSeconds(10));
+    var reloaded = navRequests["?step=reloaded"].Last();
+    Check("reload sends loadURL's extraHeaders and referrer again, as Chromium's navigation entry keeps them",
+        navRequests["?step=reloaded"].Count == beforeReload + 1 && Header(reloaded, "X-One") == "kept" && Referrer(reloaded) == "https://example.com/r"
+        && window.WebContents.NavigationHistory.Length() == historyBefore,
+        $"requests={navRequests["?step=reloaded"].Count - beforeReload} X-One={Header(reloaded, "X-One")} referrer={Referrer(reloaded)} history={historyBefore}->{window.WebContents.NavigationHistory.Length()}");
+    // Electron reloads with check_for_repost and has no repost dialog, so reloading a POST does nothing.
+    await Load("app://test/nav?step=posted", new LoadUrlOptions { PostData = [new UploadRawData("x=1"u8.ToArray())] });
+    var postsBefore = navRequests["?step=posted"].Count;
+    window.WebContents.Reload();
+    await Task.Delay(1500);
+    Check("reloading a page loaded with postData sends nothing, as Electron's", navRequests["?step=posted"].Count == postsBefore,
+        $"requests={navRequests["?step=posted"].Count - postsBefore} method={navRequests["?step=posted"].Last().Method}");
 
     // A javascript: URL makes no request, so its options stay pending while the page navigates elsewhere.
     _ = window.LoadUrl("javascript:location.href='app://test/nav?step=after-js'", new LoadUrlOptions { ExtraHeaders = "X-One: js" });
@@ -206,3 +242,9 @@ app.Ready += (_, _) =>
 app.Run();
 Console.WriteLine(failures < 0 ? "RESULT: no report" : $"RESULT: {failures} failure(s)");
 return failures;
+
+static async Task<Exception?> Assert(Func<Task> act)
+{
+    try { await act(); return null; }
+    catch (Exception e) { return e; }
+}

@@ -57,3 +57,14 @@ public sealed class ContextMenuMediaFlagsTests
         Assert.Equal(0, pairs.Count(p => p.Read(ContextMenuMediaFlags.From(cef_context_menu_media_state_flags_t.CM_MEDIAFLAG_NONE))));
     }
 }
+
+public sealed class UserAgentTests
+{
+    [Fact]
+    public void BuildUserAgent_IsElectronsFormat()
+    {
+        var platform = OperatingSystem.IsMacOS() ? "Macintosh; Intel Mac OS X 10_15_7" : OperatingSystem.IsWindows() ? "Windows NT 10.0; Win64; x64" : "X11; Linux x86_64";
+        Assert.Equal($"Mozilla/5.0 ({platform}) AppleWebKit/537.36 (KHTML, like Gecko) MyApp/1.2.3 Chrome/154.0.8037.94 Oriel/0.9.0 Safari/537.36",
+            OrielApp.BuildUserAgent("My App", "1.2.3", "154.0.8037.94", "0.9.0"));
+    }
+}

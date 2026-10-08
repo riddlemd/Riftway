@@ -192,6 +192,90 @@ public sealed unsafe class ClientHandler
 
     public cef_client_t* Native { get; }
 
+    /// <summary>Answers permission prompts and media access; null leaves them to CEF.</summary>
+    public PermissionHandler? Permission
+    {
+        get => _permission;
+        init
+        {
+            _permission = value;
+            if (value is not null) Native->get_permission_handler = &GetPermissionHandler;
+        }
+    }
+
+    private readonly PermissionHandler? _permission;
+
+    /// <summary>Reports find results; null leaves them to CEF.</summary>
+    public FindHandler? Find
+    {
+        get => _find;
+        init
+        {
+            _find = value;
+            if (value is not null) Native->get_find_handler = &GetFindHandler;
+        }
+    }
+
+    private readonly FindHandler? _find;
+
+    /// <summary>Reports focus; null leaves it to CEF.</summary>
+    public FocusHandler? Focus
+    {
+        get => _focus;
+        init
+        {
+            _focus = value;
+            if (value is not null) Native->get_focus_handler = &GetFocusHandler;
+        }
+    }
+
+    private readonly FocusHandler? _focus;
+
+    [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])]
+    private static cef_focus_handler_t* GetFocusHandler(cef_client_t* self)
+    {
+        var handler = NativeObject.Owner<ClientHandler>(self)._focus!.Native;
+        NativeObject.AddRef(handler);
+        return handler;
+    }
+
+    [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])]
+    private static cef_find_handler_t* GetFindHandler(cef_client_t* self)
+    {
+        var handler = NativeObject.Owner<ClientHandler>(self)._find!.Native;
+        NativeObject.AddRef(handler);
+        return handler;
+    }
+
+    /// <summary>Reports downloads; null leaves them to CEF.</summary>
+    public DownloadHandler? Download
+    {
+        get => _download;
+        init
+        {
+            _download = value;
+            if (value is not null) Native->get_download_handler = &GetDownloadHandler;
+        }
+    }
+
+    private readonly DownloadHandler? _download;
+
+    [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])]
+    private static cef_download_handler_t* GetDownloadHandler(cef_client_t* self)
+    {
+        var handler = NativeObject.Owner<ClientHandler>(self)._download!.Native;
+        NativeObject.AddRef(handler);
+        return handler;
+    }
+
+    [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])]
+    private static cef_permission_handler_t* GetPermissionHandler(cef_client_t* self)
+    {
+        var handler = NativeObject.Owner<ClientHandler>(self)._permission!.Native;
+        NativeObject.AddRef(handler);
+        return handler;
+    }
+
     [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])]
     private static cef_keyboard_handler_t* GetKeyboardHandler(cef_client_t* self)
     {
@@ -267,7 +351,97 @@ public sealed unsafe class RequestHandler
         _resource = resource;
         Native = NativeObject.Create<cef_request_handler_t>(this);
         Native->get_resource_request_handler = &GetResourceRequestHandler;
+        Native->on_certificate_error = &OnCertificateError;
+        Native->on_select_client_certificate = &OnSelectClientCertificate;
+        Native->on_before_browse = &OnBeforeBrowse;
+        Native->get_auth_credentials = &GetAuthCredentials;
+        Native->on_render_process_terminated = &OnRenderProcessTerminated;
+        Native->on_render_process_unresponsive = &OnRenderProcessUnresponsive;
+        Native->on_render_process_responsive = &OnRenderProcessResponsive;
     }
+
+    /// <summary>The page's renderer process ended other than by the page closing: CEF's status and exit code. UI thread.</summary>
+    public Action<cef_termination_status_t, int>? RenderProcessTerminated { get; init; }
+
+    /// <summary>The renderer stopped answering input. Setting it also suppresses Chrome's "page unresponsive" dialog. UI thread.</summary>
+    public Action? RenderProcessUnresponsive { get; init; }
+
+    /// <summary>The renderer answers again after <see cref="RenderProcessUnresponsive"/>. UI thread.</summary>
+    public Action? RenderProcessResponsive { get; init; }
+
+    [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])]
+    private static void OnRenderProcessTerminated(cef_request_handler_t* self, cef_browser_t* browser, cef_termination_status_t status, int errorCode, cef_string_utf16_t* errorString)
+    {
+        if (NativeObject.Owner<RequestHandler>(self).RenderProcessTerminated is { } callback) Guard.Run(() => callback(status, errorCode));
+        NativeObject.Release(browser);
+    }
+
+    // Claiming the event and telling CEF to keep waiting is Electron's behaviour: it shows no hung-page dialog.
+    [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])]
+    private static int OnRenderProcessUnresponsive(cef_request_handler_t* self, cef_browser_t* browser, cef_unresponsive_process_callback_t* callback)
+    {
+        var handler = NativeObject.Owner<RequestHandler>(self).RenderProcessUnresponsive;
+        if (handler is not null) Guard.Run(handler);
+        if (handler is not null) callback->wait(callback);
+        NativeObject.Release(callback);
+        NativeObject.Release(browser);
+        return handler is null ? 0 : 1;
+    }
+
+    [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])]
+    private static void OnRenderProcessResponsive(cef_request_handler_t* self, cef_browser_t* browser)
+    {
+        if (NativeObject.Owner<RequestHandler>(self).RenderProcessResponsive is { } callback) Guard.Run(callback);
+        NativeObject.Release(browser);
+    }
+
+    /// <summary>A frame is about to navigate or follow a redirect; true cancels it. UI thread.</summary>
+    public Func<BrowseRequest, bool>? BeforeBrowse { get; init; }
+
+    [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])]
+    private static int OnBeforeBrowse(cef_request_handler_t* self, cef_browser_t* browser, cef_frame_t* frame, cef_request_t* request,
+        int userGesture, int isRedirect)
+    {
+        var owner = NativeObject.Owner<RequestHandler>(self);
+        var cancel = false;
+        if (owner.BeforeBrowse is { } decide)
+        {
+            var browse = new BrowseRequest(CefString.ReadUserFree(request->get_url(request)), isRedirect != 0, userGesture != 0,
+                (uint)request->get_transition_type(request), HeaderMap.FramePath(frame));
+            cancel = Guard.Run(() => decide(browse), false);
+        }
+        NativeObject.Release(request);
+        NativeObject.Release(frame);
+        NativeObject.Release(browser);
+        return cancel ? 1 : 0;
+    }
+
+
+    /// <summary>A server asks for a client certificate; the task's result is the index of the one to use, or null for
+    /// none. Null picks the first. UI thread.</summary>
+    public Func<ClientCertificateRequest, Task<int?>>? SelectClientCertificate { get; init; }
+
+    [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])]
+    private static int OnSelectClientCertificate(cef_request_handler_t* self, cef_browser_t* browser, int isProxy, cef_string_utf16_t* host,
+        int port, nuint count, cef_x509_certificate_t** certificates, cef_select_client_certificate_callback_t* callback)
+        => SecurityHandlers.OnSelectClientCertificate(NativeObject.Owner<RequestHandler>(self).SelectClientCertificate, browser, isProxy, host,
+            port, count, certificates, callback);
+
+    /// <summary>A navigation hit an invalid certificate; the task's result trusts it. Null cancels. UI thread.</summary>
+    public Func<CertificateErrorInfo, Task<bool>>? CertificateError { get; init; }
+
+    /// <summary>A server or proxy asks for credentials; the task's result answers, null cancels. IO thread.</summary>
+    public Func<AuthChallenge, Task<(string User, string Password)?>>? Login { get; init; }
+
+    [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])]
+    private static int OnCertificateError(cef_request_handler_t* self, cef_browser_t* browser, cef_errorcode_t error,
+        cef_string_utf16_t* url, cef_sslinfo_t* ssl, cef_callback_t* callback)
+        => SecurityHandlers.OnCertificateError(NativeObject.Owner<RequestHandler>(self).CertificateError, browser, error, url, ssl, callback);
+
+    [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])]
+    private static int GetAuthCredentials(cef_request_handler_t* self, cef_browser_t* browser, cef_string_utf16_t* originUrl, int isProxy,
+        cef_string_utf16_t* host, int port, cef_string_utf16_t* realm, cef_string_utf16_t* scheme, cef_auth_callback_t* callback)
+        => SecurityHandlers.GetAuthCredentials(NativeObject.Owner<RequestHandler>(self).Login, browser, originUrl, isProxy, host, port, realm, scheme, callback);
 
     public cef_request_handler_t* Native { get; }
 
@@ -282,6 +456,7 @@ public sealed unsafe class RequestHandler
     {
         var owner = NativeObject.Owner<RequestHandler>(self);
         var wants = owner.Wants is not { } predicate || Guard.Run(() => predicate(frame, request, isNavigation != 0), false);
+        if (wants) HeaderMap.NoteInitiator(request, requestInitiator, isNavigation != 0, browser is not null);
         NativeObject.Release(request);
         NativeObject.Release(frame);
         NativeObject.Release(browser);
@@ -300,6 +475,9 @@ public sealed unsafe class ResourceRequestHandler
     {
         Native = NativeObject.Create<cef_resource_request_handler_t>(this);
         Native->on_before_resource_load = &OnBeforeResourceLoad;
+        Native->on_resource_redirect = &OnResourceRedirect;
+        Native->on_resource_response = &OnResourceResponse;
+        Native->on_resource_load_complete = &OnResourceLoadComplete;
     }
 
     public cef_resource_request_handler_t* Native { get; }
@@ -307,17 +485,120 @@ public sealed unsafe class ResourceRequestHandler
     /// <summary>A request is about to be sent. Runs on the IO thread.</summary>
     public BeforeResourceLoadCallback? BeforeResourceLoad { get; init; }
 
+    /// <summary>After <see cref="BeforeResourceLoad"/>: decides the request; null sends it unchanged without waiting.
+    /// Runs on the IO thread; the task may finish on any thread.</summary>
+    public Func<RequestInfo, Task<RequestDecision>?>? Decide { get; init; }
+
+    /// <summary>The request was sent; its headers are final. Runs on the IO thread.</summary>
+    public Action<RequestInfo>? Sent { get; init; }
+
+    /// <summary>The server redirected the request to the given URL. Runs on the IO thread.</summary>
+    public Action<RequestInfo, ResponseInfo, string>? Redirected { get; init; }
+
+    /// <summary>The response's headers arrived. Runs on the IO thread.</summary>
+    public Action<RequestInfo, ResponseInfo>? ResponseStarted { get; init; }
+
+    /// <summary>The request finished, failed or was cancelled. Runs on the IO thread.</summary>
+    public Action<RequestInfo, ResponseInfo, cef_urlrequest_status_t>? Completed { get; init; }
+
     [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])]
     private static cef_return_value_t OnBeforeResourceLoad(
         cef_resource_request_handler_t* self, cef_browser_t* browser, cef_frame_t* frame, cef_request_t* request, cef_callback_t* callback)
     {
         var owner = NativeObject.Owner<ResourceRequestHandler>(self);
         if (owner.BeforeResourceLoad is { } handler) Guard.Run(() => handler(frame, request));
-        NativeObject.Release(callback);
+        var info = HeaderMap.Info(request, frame);
+        var decision = owner.Decide is { } decide ? Guard.Run(() => decide(info), null) : null;
+        if (frame is not null) NativeObject.Release(frame);
+        if (browser is not null) NativeObject.Release(browser);
+        if (decision is null)
+        {
+            owner.Notify(owner.Sent, request, info.FramePath);
+            NativeObject.Release(callback);
+            NativeObject.Release(request);
+            return cef_return_value_t.RV_CONTINUE;
+        }
+        // The request and callback are kept until the decision comes; CEF reads the request again on continue.
+        decision.ContinueWith(t =>
+        {
+            var answer = t.IsCompletedSuccessfully ? t.Result : new RequestDecision(Cancel: true);
+            if (!t.IsCompletedSuccessfully) Console.Error.WriteLine($"[Oriel] A request decision failed; cancelling the request: {t.Exception?.InnerException}");
+            if (answer.Cancel) callback->cancel(callback);
+            else
+            {
+                if (answer.Headers is { } headers) HeaderMap.Write(request, headers);
+                if (answer.RedirectUrl is { } url)
+                {
+                    cef_string_utf16_t native = default;
+                    CefString.Set(&native, url);
+                    request->set_url(request, &native);
+                    CefString.Clear(&native);
+                }
+                else owner.Notify(owner.Sent, request, info.FramePath);
+                callback->cont(callback);
+            }
+            NativeObject.Release(callback);
+            NativeObject.Release(request);
+        }, TaskScheduler.Default);
+        return cef_return_value_t.RV_CONTINUE_ASYNC;
+    }
+
+    // The frame is gone once the decision comes, so its path is the one read before.
+    private void Notify(Action<RequestInfo>? action, cef_request_t* request, IReadOnlyList<(string Name, string Url)>? framePath)
+    {
+        if (action is null) return;
+        var info = HeaderMap.Info(request, null) with { FramePath = framePath };
+        Guard.Run(() => action(info));
+    }
+
+    [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])]
+    private static void OnResourceRedirect(cef_resource_request_handler_t* self, cef_browser_t* browser, cef_frame_t* frame,
+        cef_request_t* request, cef_response_t* response, cef_string_utf16_t* newUrl)
+    {
+        var owner = NativeObject.Owner<ResourceRequestHandler>(self);
+        if (owner.Redirected is { } redirected)
+        {
+            var (info, answer, url) = (HeaderMap.Info(request, frame), HeaderMap.Info(response), CefString.Read(newUrl));
+            Guard.Run(() => redirected(info, answer, url));
+        }
+        ReleaseAll(browser, frame, request, response);
+    }
+
+    [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])]
+    private static int OnResourceResponse(cef_resource_request_handler_t* self, cef_browser_t* browser, cef_frame_t* frame,
+        cef_request_t* request, cef_response_t* response)
+    {
+        var owner = NativeObject.Owner<ResourceRequestHandler>(self);
+        if (owner.ResponseStarted is { } started)
+        {
+            var (info, answer) = (HeaderMap.Info(request, frame), HeaderMap.Info(response));
+            Guard.Run(() => started(info, answer));
+        }
+        ReleaseAll(browser, frame, request, response);
+        return 0;
+    }
+
+    [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])]
+    private static void OnResourceLoadComplete(cef_resource_request_handler_t* self, cef_browser_t* browser, cef_frame_t* frame,
+        cef_request_t* request, cef_response_t* response, cef_urlrequest_status_t status, long receivedContentLength)
+    {
+        var owner = NativeObject.Owner<ResourceRequestHandler>(self);
+        if (owner.Completed is { } completed)
+        {
+            var (info, answer) = (HeaderMap.Info(request, frame), HeaderMap.Info(response));
+            Guard.Run(() => completed(info, answer, status));
+        }
+        HeaderMap.ForgetInitiator(request->get_identifier(request));
+        ReleaseAll(browser, frame, request, response);
+    }
+
+    // Browser and frame are null for requests without a page, such as a service worker's.
+    private static void ReleaseAll(cef_browser_t* browser, cef_frame_t* frame, cef_request_t* request, cef_response_t* response)
+    {
+        NativeObject.Release(response);
         NativeObject.Release(request);
-        NativeObject.Release(frame);
-        NativeObject.Release(browser);
-        return cef_return_value_t.RV_CONTINUE;
+        if (frame is not null) NativeObject.Release(frame);
+        if (browser is not null) NativeObject.Release(browser);
     }
 }
 
@@ -377,6 +658,28 @@ public sealed unsafe class JsDialogHandler
     {
         Native = NativeObject.Create<cef_jsdialog_handler_t>(this);
         Native->on_jsdialog = &OnJsDialog;
+        Native->on_before_unload_dialog = &OnBeforeUnloadDialog;
+    }
+
+    /// <summary>A beforeunload handler objects to leaving the page: (isReload) → whether to leave anyway. Answered at
+    /// once, with no dialog; null leaves CEF's dialog.</summary>
+    public Func<bool, bool>? BeforeUnload { get; init; }
+
+    [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])]
+    private static int OnBeforeUnloadDialog(cef_jsdialog_handler_t* self, cef_browser_t* browser, cef_string_utf16_t* message, int isReload, cef_jsdialog_callback_t* callback)
+    {
+        var handled = 0;
+        if (NativeObject.Owner<JsDialogHandler>(self).BeforeUnload is { } decide)
+        {
+            var leave = false;
+            Guard.Run(() => leave = decide(isReload != 0));
+            cef_string_utf16_t none = default;
+            callback->cont(callback, leave ? 1 : 0, &none);
+            handled = 1;
+        }
+        NativeObject.Release(callback);
+        NativeObject.Release(browser);
+        return handled;
     }
 
     public cef_jsdialog_handler_t* Native { get; }
@@ -403,6 +706,99 @@ public sealed unsafe class DisplayHandler
     {
         Native = NativeObject.Create<cef_display_handler_t>(this);
         Native->on_title_change = &OnTitleChange;
+        Native->on_favicon_urlchange = &OnFaviconUrlChange;
+        Native->on_fullscreen_mode_change = &OnFullscreenModeChange;
+        Native->on_console_message = &OnConsoleMessage;
+        Native->on_status_message = &OnStatusMessage;
+        Native->on_cursor_change = &OnCursorChange;
+        Native->on_contents_bounds_change = &OnContentsBoundsChange;
+    }
+
+    /// <summary>The page asked for new window bounds (<c>window.moveTo</c>, <c>resizeTo</c>), in DIP screen coordinates;
+    /// the callback applies them or not, and CEF's own handling is skipped.</summary>
+    public Action<cef_rect_t>? ContentsBoundsChanged { get; init; }
+
+    [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])]
+    private static int OnContentsBoundsChange(cef_display_handler_t* self, cef_browser_t* browser, cef_rect_t* newBounds)
+    {
+        var handled = 0;
+        if (NativeObject.Owner<DisplayHandler>(self).ContentsBoundsChanged is { } callback)
+        {
+            var bounds = *newBounds;
+            Guard.Run(() => callback(bounds));
+            handled = 1;
+        }
+        NativeObject.Release(browser);
+        return handled;
+    }
+
+    /// <summary>A console message: (severity, message, source, line). CEF still logs it.</summary>
+    public Action<cef_log_severity_t, string, string, int>? ConsoleMessage { get; init; }
+
+    [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])]
+    private static int OnConsoleMessage(cef_display_handler_t* self, cef_browser_t* browser, cef_log_severity_t level, cef_string_utf16_t* message, cef_string_utf16_t* source, int line)
+    {
+        var text = CefString.Read(message);
+        var from = CefString.Read(source);
+        if (NativeObject.Owner<DisplayHandler>(self).ConsoleMessage is { } callback) Guard.Run(() => callback(level, text, from, line));
+        NativeObject.Release(browser);
+        return 0;
+    }
+
+    /// <summary>The URL under the pointer changed, or empty when none: CEF's status message is Chromium's target URL.</summary>
+    public Action<string>? StatusMessage { get; init; }
+
+    [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])]
+    private static void OnStatusMessage(cef_display_handler_t* self, cef_browser_t* browser, cef_string_utf16_t* value)
+    {
+        var text = CefString.Read(value);
+        if (NativeObject.Owner<DisplayHandler>(self).StatusMessage is { } callback) Guard.Run(() => callback(text));
+        NativeObject.Release(browser);
+    }
+
+    /// <summary>The page set its cursor; a custom one comes with its image. CEF still shows it.</summary>
+    public Action<CursorChange>? CursorChanged { get; init; }
+
+    [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])]
+    private static int OnCursorChange(cef_display_handler_t* self, cef_browser_t* browser, void* cursor, cef_cursor_type_t type, cef_cursor_info_t* info)
+    {
+        CursorChange change = new(type, null, 1, 0, 0, 0, 0);
+        if (type == cef_cursor_type_t.CT_CUSTOM && info is not null && info->buffer is not null)
+        {
+            var bytes = new byte[info->size.width * info->size.height * 4];
+            new ReadOnlySpan<byte>(info->buffer, bytes.Length).CopyTo(bytes);
+            change = new(type, bytes, info->image_scale_factor, info->size.width, info->size.height, info->hotspot.x, info->hotspot.y);
+        }
+        if (NativeObject.Owner<DisplayHandler>(self).CursorChanged is { } callback) Guard.Run(() => callback(change));
+        NativeObject.Release(browser);
+        return 0;
+    }
+
+    /// <summary>The page entered (true) or left HTML full screen; Chrome style resizes the window itself.</summary>
+    public Action<bool>? FullscreenModeChanged { get; init; }
+
+    [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])]
+    private static void OnFullscreenModeChange(cef_display_handler_t* self, cef_browser_t* browser, int fullscreen)
+    {
+        if (NativeObject.Owner<DisplayHandler>(self).FullscreenModeChanged is { } callback) Guard.Run(() => callback(fullscreen != 0));
+        NativeObject.Release(browser);
+    }
+
+    /// <summary>The page's favicon URLs changed (all of them, in the page's order).</summary>
+    public Action<IReadOnlyList<string>>? FaviconUrlsChanged { get; init; }
+
+    [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])]
+    private static void OnFaviconUrlChange(cef_display_handler_t* self, cef_browser_t* browser, cef_string_list_t* iconUrls)
+    {
+        var urls = new List<string>();
+        for (nuint i = 0; iconUrls is not null && i < CefNative.cef_string_list_size(iconUrls); i++)
+        {
+            cef_string_utf16_t url = default;
+            if (CefNative.cef_string_list_value(iconUrls, i, &url) != 0) urls.Add(CefString.Read(&url));
+            CefString.Clear(&url);
+        }
+        if (NativeObject.Owner<DisplayHandler>(self).FaviconUrlsChanged is { } callback) Guard.Run(() => callback(urls));
+        NativeObject.Release(browser);
     }
 
     public cef_display_handler_t* Native { get; }
@@ -416,6 +812,31 @@ public sealed unsafe class DisplayHandler
         var owner = NativeObject.Owner<DisplayHandler>(self);
         var text = CefString.Read(title);
         if (owner.TitleChanged is { } callback) Guard.Run(() => callback(text));
+        NativeObject.Release(browser);
+    }
+}
+
+/// <summary>A cursor the page set: its type, and for a custom one its BGRA pixels, scale, size and hotspot.</summary>
+public sealed record CursorChange(cef_cursor_type_t Type, byte[]? Bgra, float Scale, int Width, int Height, int HotspotX, int HotspotY);
+
+/// <summary><c>cef_focus_handler_t</c>: the page's view took focus. Focus requests are left to CEF.</summary>
+public sealed unsafe class FocusHandler
+{
+    public FocusHandler()
+    {
+        Native = NativeObject.Create<cef_focus_handler_t>(this);
+        Native->on_got_focus = &OnGotFocus;
+    }
+
+    public cef_focus_handler_t* Native { get; }
+
+    /// <summary>The page's view took keyboard focus: Chromium's OnWebContentsFocused.</summary>
+    public Action? GotFocus { get; init; }
+
+    [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])]
+    private static void OnGotFocus(cef_focus_handler_t* self, cef_browser_t* browser)
+    {
+        if (NativeObject.Owner<FocusHandler>(self).GotFocus is { } callback) Guard.Run(callback);
         NativeObject.Release(browser);
     }
 }
@@ -498,9 +919,29 @@ public sealed unsafe class BrowserViewDelegate
         Native->on_browser_destroyed = &OnBrowserDestroyed;
         Native->get_delegate_for_popup_browser_view = &GetDelegateForPopupBrowserView;
         Native->on_popup_browser_view_created = &OnPopupBrowserViewCreated;
+        Native->@base.on_theme_changed = &OnThemeChanged;
+        Native->get_browser_runtime_style = &GetBrowserRuntimeStyle;
     }
 
     public cef_browser_view_delegate_t* Native { get; }
+
+    /// <summary>The view's theme was applied: CEF has just cleared any background colour set on it.</summary>
+    public Action? ThemeChanged { get; init; }
+
+    [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])]
+    private static void OnThemeChanged(cef_view_delegate_t* self, cef_view_t* view)
+    {
+        var owner = NativeObject.Owner<BrowserViewDelegate>(self);
+        if (owner.ThemeChanged is { } callback) Guard.Run(callback);
+        NativeObject.Release(view);
+    }
+    /// <summary>The browser's runtime style. A Chrome-style window hosts at most one Chrome-style browser, so
+    /// any other browser in it must be Alloy style.</summary>
+    public cef_runtime_style_t RuntimeStyle { get; init; }
+
+    [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])]
+    private static cef_runtime_style_t GetBrowserRuntimeStyle(cef_browser_view_delegate_t* self)
+        => NativeObject.Owner<BrowserViewDelegate>(self).RuntimeStyle;
 
     /// <summary>The delegate for a page popup's view, by the client its <c>on_before_popup</c> chose; null for the
     /// same delegate as this view. Not asked for DevTools.</summary>
@@ -593,9 +1034,21 @@ public sealed unsafe class WindowDelegate
         // The window delegate is also its root view's delegate, which owns size limits.
         Native->@base.@base.get_minimum_size = &GetMinimumSize;
         Native->@base.@base.get_maximum_size = &GetMaximumSize;
+        Native->@base.@base.on_theme_changed = &OnThemeChanged;
     }
 
     public cef_window_delegate_t* Native { get; }
+
+    /// <summary>The window's theme was applied: CEF has just cleared any background colour set on its root view.</summary>
+    public Action? ThemeChanged { get; init; }
+
+    [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])]
+    private static void OnThemeChanged(cef_view_delegate_t* self, cef_view_t* view)
+    {
+        var owner = NativeObject.Owner<WindowDelegate>(self);
+        if (owner.ThemeChanged is { } callback) Guard.Run(callback);
+        NativeObject.Release(view);
+    }
 
     public bool Resizable { get; set; } = true;
 

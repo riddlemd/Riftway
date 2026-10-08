@@ -22,8 +22,11 @@ internal sealed unsafe class DevToolsChannel
 
     public DevToolsChannel() => _observer = new DevToolsMessageObserver(OnMessage);
 
-    /// <summary>A protocol event: method name and its params.</summary>
+    /// <summary>A protocol event of the page's own session: method name and its params.</summary>
     public event Action<string, JsonElement>? EventReceived;
+
+    /// <summary>Every protocol event, with the child session it came from (null for the page's own).</summary>
+    public event Action<string, JsonElement, string?>? AnyEventReceived;
 
     public void Attach(cef_browser_t* browser)
     {
@@ -45,7 +48,8 @@ internal sealed unsafe class DevToolsChannel
     }
 
     /// <summary>Sends <paramref name="method"/>; <paramref name="onResult"/> gets the result, or an error message.</summary>
-    public void Send(string method, Action<Utf8JsonWriter>? writeParams = null, Action<JsonElement, string?>? onResult = null)
+    public void Send(string method, Action<Utf8JsonWriter>? writeParams = null, Action<JsonElement, string?>? onResult = null,
+        string? sessionId = null)
     {
         if (_browser is null) return;
 
@@ -56,6 +60,7 @@ internal sealed unsafe class DevToolsChannel
             writer.WriteStartObject();
             writer.WriteNumber("id", id);
             writer.WriteString("method", method);
+            if (sessionId is not null) writer.WriteString("sessionId", sessionId);
             if (writeParams is not null)
             {
                 writer.WritePropertyName("params");
@@ -108,7 +113,10 @@ internal sealed unsafe class DevToolsChannel
         else if (root.TryGetProperty("method", out var method))
         {
             var parameters = root.TryGetProperty("params", out var p) ? p.Clone() : default;
-            EventReceived?.Invoke(method.GetString()!, parameters);
+            var sessionId = root.TryGetProperty("sessionId", out var s) ? s.GetString() : null;
+            // A child session's events (a debugger's flattened attach) would read as the page's own.
+            if (sessionId is null) EventReceived?.Invoke(method.GetString()!, parameters);
+            AnyEventReceived?.Invoke(method.GetString()!, parameters, sessionId);
         }
     }
 }

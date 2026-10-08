@@ -78,13 +78,19 @@ public static unsafe class Protocol
         lock (s_gate) return s_handlers.ContainsKey(scheme);
     }
 
+    /// <summary>Whether <paramref name="scheme"/> was registered as a standard scheme.</summary>
+    internal static bool IsStandardScheme(string scheme)
+    {
+        lock (s_gate) return s_privileged.Any(s => s.Privileges.Standard && string.Equals(s.Scheme, scheme, StringComparison.OrdinalIgnoreCase));
+    }
+
     /// <summary>The privileged schemes as CEF registration flags; closes registration.</summary>
     internal static IReadOnlyList<CustomScheme> TakePrivilegedSchemes()
     {
         lock (s_gate)
         {
             s_started = true;
-            return [.. s_privileged.Select(s => new CustomScheme(s.Scheme, ToCefOptions(s.Privileges)))];
+            return [.. s_privileged.Select(s => new CustomScheme(s.Scheme, ToCefOptions(s.Privileges))), SyncIpc.Registration];
         }
     }
 
@@ -94,6 +100,7 @@ public static unsafe class Protocol
         lock (s_gate)
         {
             s_ready = true;
+            RegisterFactory(SyncIpc.Scheme, SyncIpc.Factory);
             foreach (var (scheme, factory) in s_handlers) RegisterFactory(scheme, factory);
         }
     }

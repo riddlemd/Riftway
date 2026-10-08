@@ -10,6 +10,7 @@ internal static class MacApplicationMenu
 {
     // UI thread only.
     private static Menu? s_shown;
+    private static Menu? s_dock;
     private static bool s_rebuildPosted;
 
     /// <summary>Starts following the application menu; call on the UI thread once CEF is ready.</summary>
@@ -58,7 +59,25 @@ internal static class MacApplicationMenu
         }
     }
 
-    private static void AddItem(nint nsMenu, MenuItem item)
+    /// <summary>Makes <paramref name="menu"/> the Dock menu, built afresh each time the Dock asks; UI thread.</summary>
+    internal static void SetDockMenu(Menu menu)
+    {
+        MacMenu.Chosen = OnChosen;
+        s_dock = menu;
+        MacActivation.InstallDockMenu(BuildDockMenu);
+    }
+
+    private static nint BuildDockMenu()
+    {
+        if (s_dock is null) return 0;
+        var nsMenu = MacMenu.CreateMenu(string.Empty);
+        foreach (var item in s_dock.Items) AddItem(nsMenu, item, inMenuBar: false);
+        return MacMenu.Autorelease(nsMenu);
+    }
+
+    private static void AddItem(nint nsMenu, MenuItem item) => AddItem(nsMenu, item, inMenuBar: true);
+
+    private static void AddItem(nint nsMenu, MenuItem item, bool inMenuBar)
     {
         if (item.Type == MenuItemType.Separator)
         {
@@ -76,9 +95,10 @@ internal static class MacApplicationMenu
 
         if (item.Submenu is not { } submenu) return;
         var nsSubmenu = MacMenu.CreateMenu(MenuLabels.WithoutMnemonics(item.Label));
-        foreach (var child in submenu.Items) AddItem(nsSubmenu, child);
+        foreach (var child in submenu.Items) AddItem(nsSubmenu, child, inMenuBar);
         MacMenu.SetSubmenu(native, nsSubmenu);
-        switch (item.Role)
+        // Only the menu bar's submenus become the app's Services, Window and Help menus.
+        if (inMenuBar) switch (item.Role)
         {
             case MenuItemRole.Services: MacMenu.SetServicesMenu(nsSubmenu); break;
             case MenuItemRole.Window or MenuItemRole.WindowMenu: MacMenu.SetWindowsMenu(nsSubmenu); break;
@@ -95,6 +115,8 @@ internal static class MacApplicationMenu
 
     private static void OnChosen(nint tag)
     {
-        if (s_shown?.FindByCommandId((int)tag) is { } item) item.Activate(BrowserWindow.GetFocusedWindow());
+        if ((s_shown?.FindByCommandId((int)tag) ?? s_dock?.FindByCommandId((int)tag)) is not { } item) return;
+        var (flags, keyDown) = MacMenu.CurrentEvent();
+        item.Activate(BrowserWindow.GetFocusedWindow(), KeyboardEvent.FromMacModifiers(flags, keyDown));
     }
 }

@@ -29,6 +29,23 @@ public sealed unsafe partial class Session
         _handler = handler;
         Cookies = new Cookies(this);
         Protocol = new SessionProtocol(this);
+        _downloadsAtCreation = OrielApp.CurrentOrNull?.GetPath("downloads");
+        s_justCreated.Add(this);
+    }
+
+    // Sessions made under s_gate, announced once it is released so a handler may ask for another.
+    private static readonly List<Session> s_justCreated = [];
+
+    private static T Announce<T>(T result)
+    {
+        Session[] created;
+        lock (s_gate)
+        {
+            created = [.. s_justCreated];
+            s_justCreated.Clear();
+        }
+        foreach (var session in created) OrielApp.CurrentOrNull?.RaiseSessionCreated(session);
+        return result;
     }
 
     /// <summary>The app's default session, used by windows that name no other. Electron's <c>session.defaultSession</c>.</summary>
@@ -38,10 +55,11 @@ public sealed unsafe partial class Session
         get
         {
             RequireReady();
-            lock (s_gate)
-            {
-                return s_default ??= new Session(CefNative.cef_request_context_get_global_context(), OrielApp.DataDirectory, null);
-            }
+            Session session;
+            lock (s_gate) session = s_default ??= new Session(CefNative.cef_request_context_get_global_context(), OrielApp.DataDirectory, null);
+            // Outside s_gate: this waits for the UI thread, which may itself be waiting for s_gate.
+            if (Interlocked.CompareExchange(ref s_sharingDefault, 1, 0) == 0) ShareDefaultForPageless(session._context);
+            return Announce(session);
         }
     }
 
@@ -54,15 +72,16 @@ public sealed unsafe partial class Session
         ArgumentNullException.ThrowIfNull(partition);
         if (partition.Length == 0) return DefaultSession;
         RequireReady();
+        Session session;
         lock (s_gate)
         {
             if (s_byPartition.TryGetValue(partition, out var existing)) return existing;
-            var session = partition.StartsWith(PersistPrefix, StringComparison.Ordinal)
+            session = partition.StartsWith(PersistPrefix, StringComparison.Ordinal)
                 ? FromPathLocked(Path.Combine(OrielApp.DataDirectory!, PartitionDirectory(partition[PersistPrefix.Length..])))
                 : Create(null);
             s_byPartition[partition] = session;
-            return session;
         }
+        return Announce(session);
     }
 
     /// <summary>The session stored at <paramref name="path"/>. Electron's <c>session.fromPath()</c>.</summary>
@@ -80,7 +99,9 @@ public sealed unsafe partial class Session
         if (string.Equals(full, root, PathComparison)) return DefaultSession;
         if (!string.Equals(Path.GetDirectoryName(full), root, PathComparison))
             throw new ArgumentException($"CEF only creates sessions directly inside the app's data directory ({root}).", nameof(path));
-        lock (s_gate) return FromPathLocked(full);
+        Session session;
+        lock (s_gate) session = FromPathLocked(full);
+        return Announce(session);
     }
 
     /// <summary>The session's cookies. Electron's <c>ses.cookies</c>.</summary>
@@ -156,6 +177,62 @@ public sealed unsafe partial class Session
         return Task.CompletedTask;
     }
 
+    /// <summary>Sets the user agent, and optionally the accepted languages (e.g. <c>en-US,fr</c>), of the session's
+    /// pages, open ones included; a page's own <see cref="WebContents.SetUserAgent"/> still wins. Electron's
+    /// <c>ses.setUserAgent()</c>.</summary>
+    public void SetUserAgent(string userAgent, string? acceptLanguages = null)
+    {
+        ArgumentNullException.ThrowIfNull(userAgent);
+        WebContents[] pages;
+        lock (_pages)
+        {
+            UserAgentOrNull = userAgent;
+            AcceptLanguages = acceptLanguages;
+            pages = [.. _pages.Select(p => p.TryGetTarget(out var page) ? page : null).OfType<WebContents>()];
+        }
+        CefThread.RunOnUi(() =>
+        {
+            foreach (var page in pages) page.OnSessionUserAgent(userAgent, acceptLanguages);
+        });
+    }
+
+    /// <summary>The session's user agent: its own, else the app's fallback. Electron's <c>ses.getUserAgent()</c>.</summary>
+    public string GetUserAgent() => UserAgentOrNull ?? OrielApp.Current.UserAgentFallback;
+
+    internal string? UserAgentOrNull { get; private set; }
+
+    internal string? AcceptLanguages { get; private set; }
+
+    private readonly List<WeakReference<WebContents>> _pages = [];
+
+    /// <summary>A page of this session, for <see cref="SetUserAgent"/>.</summary>
+    internal void Track(WebContents page)
+    {
+        lock (_pages)
+        {
+            _pages.RemoveAll(p => !p.TryGetTarget(out _));
+            _pages.Add(new WeakReference<WebContents>(page));
+        }
+    }
+
+    /// <summary>Decides the permissions the session's pages ask for: the handler gets the page, Electron's permission name
+    /// (<c>notifications</c>, <c>geolocation</c>, <c>media</c>, <c>clipboard-read</c>, ...) and details, and grants with
+    /// true. With none, every permission is granted, as Electron. Electron's <c>ses.setPermissionRequestHandler()</c>.</summary>
+    /// <remarks>Chromium remembers a grant for the origin for the rest of the session (drift E29).</remarks>
+    public void SetPermissionRequestHandler(Func<WebContents, string, PermissionRequestDetails, Task<bool>>? handler)
+        => _permissionRequestHandler = handler;
+
+    private volatile Func<WebContents, string, PermissionRequestDetails, Task<bool>>? _permissionRequestHandler;
+
+    /// <summary>Watches and changes this session's requests. Electron's <c>ses.webRequest</c>.</summary>
+    public WebRequest WebRequest { get; } = new();
+
+    /// <summary>Every session made from a partition or path; the default session is CEF's global context.</summary>
+    internal static IReadOnlyList<Session> Created()
+    {
+        lock (s_gate) return [.. s_byPath.Values.Concat(s_byPartition.Values).Distinct()];
+    }
+
     /// <summary>The native context with a reference for the caller.</summary>
     internal cef_request_context_t* AddRefNative()
     {
@@ -172,11 +249,15 @@ public sealed unsafe partial class Session
         context->set_content_setting(context, null, null, cef_content_setting_types_t.CEF_CONTENT_SETTING_TYPE_POPUPS,
             cef_content_setting_values_t.CEF_CONTENT_SETTING_VALUE_ALLOW);
 
+        NativeTheme.ApplyTo(context);
+
         // Chrome-style profiles save each origin's zoom across launches; Electron keeps zoom for the session only.
         var value = CefNative.cef_value_create();
         value->set_dictionary(value, CefNative.cef_dictionary_value_create());
         try { SetPreference(context, "partition.per_host_zoom_levels", value); }
         catch (ArgumentException e) { Console.Error.WriteLine($"[Oriel] Could not reset saved zoom levels: {e.Message}"); }
+
+        ForgetRememberedPermissions(context);
     }
 
     internal static string ProxyModeName(ProxyMode mode) => mode switch
@@ -216,7 +297,13 @@ public sealed unsafe partial class Session
     // An empty cache path gives an in-memory profile; a path inside the root cache path gives a profile on disk.
     private static Session Create(string? path)
     {
-        var handler = new RequestContextHandler { Initialized = context => ApplyElectronDefaults((cef_request_context_t*)context) };
+        var initialized = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        Session? session = null;
+        var handler = WebRequest.PagelessHandler(() => session?.WebRequest, context =>
+        {
+            ApplyElectronDefaults((cef_request_context_t*)context);
+            initialized.TrySetResult();
+        });
         var context = CefThread.InvokeOnUi(() =>
         {
             var settings = new cef_request_context_settings_t { size = (nuint)sizeof(cef_request_context_settings_t) };
@@ -227,7 +314,32 @@ public sealed unsafe partial class Session
             return (nint)created;
         });
         if (context == 0) throw new InvalidOperationException($"CEF could not create a session{(path is null ? "" : $" at {path}")}.");
-        return new Session((cef_request_context_t*)context, path, handler);
+        return session = new Session((cef_request_context_t*)context, path, handler) { _initialized = initialized.Task };
+    }
+
+    // The global context can have no handler, but CEF hands a profile's worker requests to the handler of any context
+    // sharing it (CefBrowserContext::UpdateWorkerRequestContextHandler), so this context exists only to carry one.
+    private static readonly RequestContextHandler s_defaultPageless = WebRequest.PagelessHandler(() => Volatile.Read(ref s_default)?.WebRequest);
+    private static nint s_defaultPagelessContext;
+    private static int s_sharingDefault;
+
+    private static void ShareDefaultForPageless(cef_request_context_t* global) => s_defaultPagelessContext = CefThread.InvokeOnUi(() =>
+    {
+        NativeObject.AddRef(s_defaultPageless.Native);
+        NativeObject.AddRef(global);
+        return (nint)CefNative.cef_request_context_cef_create_context_shared(global, s_defaultPageless.Native);
+    });
+
+    // Preferences read before the profile finishes loading can be wrong. The default session is ready with the app.
+    private Task _initialized = Task.CompletedTask;
+
+    /// <summary>Completes once the session's profile has loaded.</summary>
+    internal Task Initialized => _initialized;
+
+    /// <summary>Waits, off the UI thread, until the session's profile has loaded.</summary>
+    internal void WaitUntilInitialized()
+    {
+        if (!CefThread.IsOnUiThread) _initialized.Wait(TimeSpan.FromSeconds(10));
     }
 
     private Task Complete(CompletionStart start)
@@ -266,6 +378,17 @@ public sealed unsafe partial class Session
 // Outside the unsafe part: C# does not allow await in an unsafe context.
 public sealed partial class Session
 {
+    internal async Task<bool> DecidePermissionAsync(WebContents page, string permission, PermissionRequestDetails details)
+    {
+        if (_permissionRequestHandler is not { } handler) return true;
+        try { return await handler(page, permission, details).ConfigureAwait(false); }
+        catch (Exception e)
+        {
+            Console.Error.WriteLine($"[Oriel] The permission request handler failed; denying {permission}: {e}");
+            return false;
+        }
+    }
+
     /// <summary>Resolves <paramref name="host"/> with the session's network settings. Electron's <c>ses.resolveHost()</c>.</summary>
     /// <exception cref="HostResolutionException">The host could not be resolved.</exception>
     public async Task<ResolvedHost> ResolveHostAsync(string host)

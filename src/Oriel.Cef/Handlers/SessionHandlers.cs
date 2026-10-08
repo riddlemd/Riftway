@@ -4,21 +4,47 @@ using Oriel.Cef.Interop;
 
 namespace Oriel.Cef.Handlers;
 
-/// <summary>A cookie as CEF reports it, copied out of CEF's memory.</summary>
+/// <summary>A cookie as CEF reports it, copied out of CEF's memory; times in CEF's microseconds since 1601.</summary>
 public sealed record CefCookie(
     string Name, string Value, string Domain, string Path, bool Secure, bool HttpOnly,
-    long? Expires, cef_cookie_same_site_t SameSite);
+    long? Expires, cef_cookie_same_site_t SameSite, long Creation = 0);
 
-/// <summary><c>cef_request_context_handler_t</c>: tells when a request context can be configured.</summary>
+/// <summary><c>cef_request_context_handler_t</c>: tells when a request context can be configured, and hooks the
+/// context's requests that have no page.</summary>
 public sealed unsafe class RequestContextHandler
 {
     public RequestContextHandler()
     {
         Native = NativeObject.Create<cef_request_context_handler_t>(this);
         Native->on_request_context_initialized = &OnRequestContextInitialized;
+        Native->get_resource_request_handler = &GetResourceRequestHandler;
     }
 
     public cef_request_context_handler_t* Native { get; }
+
+    /// <summary>Hooks for requests without a browser (service and shared workers); null for none.</summary>
+    public ResourceRequestHandler? Resource { get; init; }
+
+    /// <summary>Which page-less requests reach <see cref="Resource"/>; null for all. Runs on the IO thread.</summary>
+    public Func<bool>? Wants { get; init; }
+
+    // A request with a browser only comes here when the browser's own handler declined it.
+    [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])]
+    private static cef_resource_request_handler_t* GetResourceRequestHandler(cef_request_context_handler_t* self, cef_browser_t* browser,
+        cef_frame_t* frame, cef_request_t* request, int isNavigation, int isDownload, cef_string_utf16_t* requestInitiator, int* disableDefaultHandling)
+    {
+        var owner = NativeObject.Owner<RequestContextHandler>(self);
+        var wants = browser is null && owner.Resource is not null
+            && (owner.Wants is not { } predicate || Guard.Run(predicate, false));
+        if (wants) HeaderMap.NoteInitiator(request, requestInitiator, isNavigation != 0, browser is not null);
+        NativeObject.Release(request);
+        if (frame is not null) NativeObject.Release(frame);
+        if (browser is not null) NativeObject.Release(browser);
+        if (!wants) return null;
+        var handler = owner.Resource!.Native;
+        NativeObject.AddRef(handler);
+        return handler;
+    }
 
     /// <summary>UI thread; the context argument is only valid during the call.</summary>
     public Action<nint>? Initialized { get; init; }
@@ -84,7 +110,7 @@ public sealed unsafe class CookieVisitor : IReleaseObserver
         var copy = new CefCookie(
             CefString.Read(&cookie->name), CefString.Read(&cookie->value), CefString.Read(&cookie->domain),
             CefString.Read(&cookie->path), cookie->secure != 0, cookie->httponly != 0,
-            cookie->has_expires != 0 ? cookie->expires.val : null, cookie->same_site);
+            cookie->has_expires != 0 ? cookie->expires.val : null, cookie->same_site, cookie->creation.val);
         lock (owner._cookies) owner._cookies.Add(copy);
         return 1;
     }
@@ -168,4 +194,26 @@ public sealed unsafe class ResolveCallback : IReleaseObserver
         }
         owner._done.TrySetResult((error, list));
     }
+}
+
+/// <summary><c>cef_end_tracing_callback_t</c>: completes with the trace file's path.</summary>
+public sealed unsafe class EndTracingCallback : IReleaseObserver
+{
+    private readonly TaskCompletionSource<string> _done = new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+    public EndTracingCallback()
+    {
+        Native = NativeObject.Create<cef_end_tracing_callback_t>(this);
+        Native->on_end_tracing_complete = &OnEndTracingComplete;
+    }
+
+    public cef_end_tracing_callback_t* Native { get; }
+
+    public Task<string> Task => _done.Task;
+
+    void IReleaseObserver.Released() => _done.TrySetException(new InvalidOperationException("CEF dropped the operation."));
+
+    [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])]
+    private static void OnEndTracingComplete(cef_end_tracing_callback_t* self, cef_string_utf16_t* tracingFile)
+        => NativeObject.Owner<EndTracingCallback>(self)._done.TrySetResult(CefString.Read(tracingFile));
 }

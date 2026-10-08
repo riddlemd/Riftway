@@ -6,6 +6,8 @@ using Oriel;
 // number of failures (or -1 when no report arrives), so CI can run it under Xvfb.
 var app = OrielApp.Create("Oriel.IpcTest");
 if (args.Contains("--enable-sandbox")) app.EnableSandbox();
+// The page's contextBridge lifetime checks need V8's gc(); Electron apps get it the same way.
+app.CommandLine.AppendSwitch("js-flags", "--expose-gc");
 var failures = -1;
 BrowserWindow? window = null;
 

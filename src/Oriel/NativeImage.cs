@@ -39,8 +39,9 @@ public sealed record ResizeOptions
     /// <summary>The new height in DIPs; null keeps the aspect ratio. Electron's <c>height</c>.</summary>
     public int? Height { get; init; }
 
-    /// <summary>Electron's <c>quality</c>. Every value uses the same filter in Oriel.</summary>
-    public ResizeQuality Quality { get; init; } = ResizeQuality.Good;
+    /// <summary>Electron's <c>quality</c>; <c>Good</c> and <c>Better</c> filter with Hamming-1, <c>Best</c> with Lanczos-3,
+    /// as Chromium's Skia does. Electron defaults to <c>best</c>.</summary>
+    public ResizeQuality Quality { get; init; } = ResizeQuality.Best;
 }
 
 /// <summary>A representation for <see cref="NativeImage.AddRepresentation"/>; Electron's <c>options</c>.</summary>
@@ -75,12 +76,32 @@ public sealed unsafe class NativeImage
     /// <summary>An empty image. Electron's <c>nativeImage.createEmpty()</c>.</summary>
     public static NativeImage CreateEmpty() => new();
 
-    /// <summary>Loads a PNG or JPEG file, and its <c>@2x</c>-style siblings as further scale factors; empty if the file
+    /// <summary>Loads a PNG or JPEG file (on Windows also an <c>.ico</c>, as its 256x256 icon), and its <c>@2x</c>-style siblings as further scale factors; empty if the file
     /// cannot be read or decoded. Electron's <c>nativeImage.createFromPath()</c>.</summary>
-    public static NativeImage CreateFromPath(string path)
+    public static NativeImage CreateFromPath(string path) => CreateFromPath(path, OperatingSystem.IsWindows());
+
+    // Electron reads .ico only on Windows, where it keeps the 256x256 icon as the single 1x representation and skips the
+    // @Nx siblings. createFromBuffer never reads ICO.
+    internal static NativeImage CreateFromPath(string path, bool readIco)
     {
         ArgumentNullException.ThrowIfNull(path);
         var image = new NativeImage();
+        if (readIco && path.EndsWith(".ico", StringComparison.OrdinalIgnoreCase))
+        {
+            // Windows' own LoadImage, as Electron, picks the entry and stretches it; the managed decoder stands in elsewhere.
+            if (OperatingSystem.IsWindows())
+            {
+                if (File.Exists(path) && Oriel.Cef.Platform.WindowsIcon.Load(Path.GetFullPath(path), 256) is var (w, h, bgra)) image.Add(1f, new ImageBitmap(w, h, bgra));
+                return image;
+            }
+            try
+            {
+                if (IcoDecoder.Decode(File.ReadAllBytes(path), 256, bytes => ImageCodec.Decode(bytes)) is { } icon) image.Add(1f, icon);
+            }
+            catch (IOException) { }
+            catch (UnauthorizedAccessException) { }
+            return image;
+        }
         foreach (var (candidate, scale) in ImagePixels.ScaleVariants(path))
         {
             byte[] bytes;
@@ -190,7 +211,7 @@ public sealed unsafe class NativeImage
         var image = new NativeImage();
         foreach (var (scale, bitmap) in Snapshot())
         {
-            var resized = ImagePixels.Resize(bitmap, (int)Math.Round(target.Width * scale), (int)Math.Round(target.Height * scale));
+            var resized = ImagePixels.Resize(bitmap, (int)Math.Round(target.Width * scale), (int)Math.Round(target.Height * scale), options.Quality);
             if (resized.Width > 0) image.Add(scale, resized);
         }
         return image;

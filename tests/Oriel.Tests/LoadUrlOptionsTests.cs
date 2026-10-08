@@ -37,10 +37,19 @@ public sealed class LoadUrlOptionsTests
             PendingLoad.Create("data:text/html,x", new LoadUrlOptions { BaseUrlForDataUrl = "app://x/" }));
 
     [Theory]
+    [InlineData(-1, 0)]
+    [InlineData(0, -10)]
+    public void Create_NegativeUploadRange_Throws(long offset, long length)
+        => Assert.Throws<ArgumentOutOfRangeException>(() => PendingLoad.Create("app://x/", new LoadUrlOptions
+        {
+            PostData = [new UploadFile("/tmp/f") { Offset = offset, Length = length }],
+        }));
+
+    [Theory]
     [InlineData(1, 0)]
     [InlineData(0, 10)]
-    public void Create_PartialUploadFile_NotSupported(long offset, long length)
-        => Assert.Throws<NotSupportedException>(() => PendingLoad.Create("app://x/", new LoadUrlOptions
+    public void Create_PartialUploadFile_IsAccepted(long offset, long length)
+        => Assert.NotNull(PendingLoad.Create("app://x/", new LoadUrlOptions
         {
             PostData = [new UploadFile("/tmp/f") { Offset = offset, Length = length }],
         }));

@@ -42,7 +42,7 @@ public sealed class MenuTests
     public void Activate_RunsClickWithTheItemAndWindow()
     {
         MenuItem? clicked = null;
-        var item = new MenuItem { Click = (i, _) => clicked = i };
+        var item = new MenuItem { Click = (i, _, _) => clicked = i };
         item.Activate(null);
         Assert.Same(item, clicked);
     }
@@ -51,7 +51,7 @@ public sealed class MenuTests
     public void Activate_RunsTheRoleInsteadOfClick()
     {
         var clicked = false;
-        new MenuItem { Role = MenuItemRole.Copy, Click = (_, _) => clicked = true }.Activate(null);
+        new MenuItem { Role = MenuItemRole.Copy, Click = (_, _, _) => clicked = true }.Activate(null);
         Assert.False(clicked);
     }
 
@@ -59,7 +59,7 @@ public sealed class MenuTests
     public void Activate_RunsClickForARoleWithNoActionHere()
     {
         var clicked = false;
-        new MenuItem { Role = MenuItemRole.About, Click = (_, _) => clicked = true }.Activate(null);
+        new MenuItem { Role = MenuItemRole.About, Click = (_, _, _) => clicked = true }.Activate(null);
         Assert.True(clicked);
     }
 
@@ -67,7 +67,7 @@ public sealed class MenuTests
     public void Activate_DoesNothingWhenDisabled()
     {
         var clicked = false;
-        var item = new MenuItem { Type = MenuItemType.Checkbox, Enabled = false, Click = (_, _) => clicked = true };
+        var item = new MenuItem { Type = MenuItemType.Checkbox, Enabled = false, Click = (_, _, _) => clicked = true };
         item.Activate(null);
         Assert.False(clicked);
         Assert.False(item.Checked);
@@ -93,6 +93,56 @@ public sealed class MenuTests
         Assert.Contains(edit.Submenu!.Items, i => i.Role == MenuItemRole.Paste);
         Assert.Same(edit.Submenu, edit.Submenu);
     }
+
+    // Electron v44's role table (electron_api_menu_roles.cc), as this OS sees it.
+    [Fact]
+    public void RoleLabels_AreElectrons()
+    {
+        string? Label(MenuItemRole role) => new MenuItem { Role = role }.Label;
+        Assert.Equal(OperatingSystem.IsMacOS() ? "Close Window" : "Close", Label(MenuItemRole.Close));
+        if (OperatingSystem.IsMacOS()) Assert.StartsWith("Quit ", Label(MenuItemRole.Quit));
+        else Assert.Equal(OperatingSystem.IsWindows() ? "Exit" : "Quit", Label(MenuItemRole.Quit));
+        Assert.Equal(["File", "Edit", "View", "Window", "Help"], new[] { MenuItemRole.FileMenu, MenuItemRole.EditMenu, MenuItemRole.ViewMenu, MenuItemRole.WindowMenu, MenuItemRole.Help }.Select(Label));
+        Assert.Equal("Check Spelling While Typing", Label(MenuItemRole.ToggleSpellChecker));
+        Assert.Equal(["Start Speaking", "Stop Speaking", "Show Substitutions", "Smart Quotes", "Smart Dashes", "Text Replacement", "Clear Menu"],
+            new[] { MenuItemRole.StartSpeaking, MenuItemRole.StopSpeaking, MenuItemRole.ShowSubstitutions, MenuItemRole.ToggleSmartQuotes,
+                MenuItemRole.ToggleSmartDashes, MenuItemRole.ToggleTextReplacement, MenuItemRole.ClearRecentDocuments }.Select(Label));
+    }
+
+    [Fact]
+    public void Redo_IsControlYOnWindowsOnly()
+        => Assert.Equal(OperatingSystem.IsWindows() ? "Control+Y" : "Shift+CmdOrCtrl+Z", new MenuItem { Role = MenuItemRole.Redo }.Accelerator);
+
+    [Fact]
+    public void EditMenu_OnMacHasSubstitutionsAndSpeech()
+    {
+        var items = new MenuItem { Role = MenuItemRole.EditMenu }.Submenu!.Items;
+        if (!OperatingSystem.IsMacOS())
+        {
+            Assert.DoesNotContain(items, i => i.Label is "Substitutions" or "Speech");
+            return;
+        }
+        var substitutions = items.Single(i => i.Label == "Substitutions").Submenu!.Items.Select(i => i.Role);
+        Assert.Equal([MenuItemRole.ShowSubstitutions, MenuItemRole.None, MenuItemRole.ToggleSmartQuotes, MenuItemRole.ToggleSmartDashes, MenuItemRole.ToggleTextReplacement], substitutions);
+        Assert.Equal([MenuItemRole.StartSpeaking, MenuItemRole.StopSpeaking], items.Single(i => i.Label == "Speech").Submenu!.Items.Select(i => i.Role));
+        Assert.Equal(MenuItemType.Separator, items[^3].Type);
+    }
+
+    [Theory]
+    [InlineData(MenuItemRole.StartSpeaking, "startSpeaking:")]
+    [InlineData(MenuItemRole.StopSpeaking, "stopSpeaking:")]
+    [InlineData(MenuItemRole.ShowSubstitutions, "orderFrontSubstitutionsPanel:")]
+    [InlineData(MenuItemRole.ToggleSmartQuotes, "toggleAutomaticQuoteSubstitution:")]
+    [InlineData(MenuItemRole.ToggleSmartDashes, "toggleAutomaticDashSubstitution:")]
+    [InlineData(MenuItemRole.ToggleTextReplacement, "toggleAutomaticTextReplacement:")]
+    [InlineData(MenuItemRole.ToggleTabBar, "toggleTabBar:")]
+    [InlineData(MenuItemRole.SelectNextTab, "selectNextTab:")]
+    [InlineData(MenuItemRole.SelectPreviousTab, "selectPreviousTab:")]
+    [InlineData(MenuItemRole.ShowAllTabs, "toggleTabOverview:")]
+    [InlineData(MenuItemRole.MergeAllWindows, "mergeAllWindows:")]
+    [InlineData(MenuItemRole.MoveTabToNewWindow, "moveTabToNewWindow:")]
+    [InlineData(MenuItemRole.ClearRecentDocuments, "clearRecentDocuments:")]
+    public void MacRoles_UseElectronsSelectors(MenuItemRole role, string selector) => Assert.Equal(selector, MenuRoles.MacSelector(role));
 
     [Fact]
     public void Accelerator_RejectsAnInvalidValue()
@@ -167,4 +217,38 @@ public sealed class MenuTests
     [InlineData("&1st", null)]
     [InlineData("None", null)]
     public void MnemonicOf_FindsTheMarkedLetter(string label, char? letter) => Assert.Equal(letter, WindowMenuBar.MnemonicOf(label));
+}
+
+public sealed class KeyboardEventTests
+{
+    [Fact]
+    public void FromCefFlags_ReadsEachModifier()
+    {
+        Assert.Equal(new KeyboardEvent { ShiftKey = true, CtrlKey = true, AltKey = true, MetaKey = true },
+            KeyboardEvent.FromCefFlags(Oriel.Cef.Interop.cef_event_flags_t.EVENTFLAG_SHIFT_DOWN | Oriel.Cef.Interop.cef_event_flags_t.EVENTFLAG_CONTROL_DOWN
+                | Oriel.Cef.Interop.cef_event_flags_t.EVENTFLAG_ALT_DOWN | Oriel.Cef.Interop.cef_event_flags_t.EVENTFLAG_COMMAND_DOWN));
+        Assert.Equal(new KeyboardEvent { AltKey = true }, KeyboardEvent.FromCefFlags(Oriel.Cef.Interop.cef_event_flags_t.EVENTFLAG_ALT_DOWN));
+        Assert.Equal(new KeyboardEvent(), KeyboardEvent.FromCefFlags(Oriel.Cef.Interop.cef_event_flags_t.EVENTFLAG_LEFT_MOUSE_BUTTON));
+    }
+
+    [Theory]
+    [InlineData(1UL << 17, true, false, false, false)]
+    [InlineData(1UL << 18, false, true, false, false)]
+    [InlineData(1UL << 19, false, false, true, false)]
+    [InlineData(1UL << 20, false, false, false, true)]
+    public void FromMacModifiers_ReadsEachModifier(ulong flags, bool shift, bool ctrl, bool alt, bool meta)
+        => Assert.Equal(new KeyboardEvent { ShiftKey = shift, CtrlKey = ctrl, AltKey = alt, MetaKey = meta, TriggeredByAccelerator = true },
+            KeyboardEvent.FromMacModifiers(flags, keyDown: true));
+
+    [Fact]
+    public void FromMacModifiers_AClickIsNotAnAccelerator() => Assert.False(KeyboardEvent.FromMacModifiers(0, keyDown: false).TriggeredByAccelerator);
+
+    [Fact]
+    public void ForAccelerator_HoldsItsModifiers()
+    {
+        var keys = KeyboardEvent.ForAccelerator("CmdOrCtrl+Alt+K");
+        Assert.True(keys.TriggeredByAccelerator && keys.AltKey && !keys.ShiftKey);
+        Assert.Equal(OperatingSystem.IsMacOS(), keys.MetaKey);
+        Assert.Equal(!OperatingSystem.IsMacOS(), keys.CtrlKey);
+    }
 }
