@@ -194,7 +194,7 @@ Parameters in brackets are optional in Electron. `webContents` members are in [w
 | `hasShadow` | — | missing |  |
 | `opacity` | — | missing |  |
 | `darkTheme` | `DarkTheme` | done | Linux: `_GTK_THEME_VARIANT=dark` at creation, as Electron; Chromium 154 already writes dark when its GTK UI is loaded. |
-| `transparent` | `Transparent` | partial | Windows and macOS; not Linux (W24). |
+| `transparent` | `Transparent` | partial | Windows and macOS; Linux only with Oriel's CEF patch, not yet built (W24). |
 | `type` | — | missing |  |
 | `visualEffectState` | — | missing |  |
 | `titleBarStyle` | — | missing |  |

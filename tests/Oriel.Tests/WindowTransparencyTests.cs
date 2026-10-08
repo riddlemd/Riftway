@@ -60,6 +60,23 @@ public sealed class WindowTransparencyTests
     public void WindowFill_NothingLeavesCefDefault() =>
         Assert.Null(WindowTransparency.WindowFill(null, transparentPreference: false));
 
+    // Electron's NativeWindowViews::SetBackgroundColor on Linux: a transparent window's root view and compositor stay clear.
+    [Theory]
+    [InlineData("#FFFFFFFF", false)]
+    [InlineData("#80000000", true)]
+    [InlineData(null, true)]
+    [InlineData(null, false)]
+    public void WindowFill_ClearWindowStaysClearWhateverTheColour(string? window, bool transparentPreference) =>
+        Assert.Equal("#00000000", WindowTransparency.WindowFill(window, transparentPreference, clearWindow: true));
+
+    [Theory]
+    [InlineData(true, true, false, true)]
+    [InlineData(false, true, false, false)]
+    [InlineData(true, false, false, false)]
+    [InlineData(true, true, true, false)]
+    public void TranslucentWidget_TransparentWithPatchedCefOffWindows(bool transparent, bool patched, bool windows, bool expected) =>
+        Assert.Equal(expected, WindowTransparency.TranslucentWidget(transparent, patched, windows));
+
     [Theory]
     [InlineData(BackgroundMaterial.Mica, "#00000000")]
     [InlineData(BackgroundMaterial.Acrylic, "#00000000")]

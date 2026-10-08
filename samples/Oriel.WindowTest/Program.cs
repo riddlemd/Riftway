@@ -322,6 +322,7 @@ async Task RunAsync(BrowserWindow win, BrowserWindow simple)
     await WindowsApisAsync();
     await TransparencyAsync();
     await MacTransparencyAsync();
+    await LinuxTransparencyAsync();
     await NativeImageAsync();
     await WebContentsLifecycleAsync(win);
     await PageEventsAsync();
@@ -3010,6 +3011,117 @@ async Task MacTransparencyAsync()
     await Task.Delay(300);
 }
 
+async Task LinuxTransparencyAsync()
+{
+    if (!OperatingSystem.IsLinux()) return;
+
+    const string clear = "data:text/html,<html style='background:transparent'><body style='background:transparent'></body></html>";
+    static bool Red((int R, int G, int B)? c) => c is { } v && v.R > 150 && v.G < 90 && v.B < 90;
+    static bool White((int R, int G, int B)? c) => c is { } v && v.R > 200 && v.G > 200 && v.B > 200;
+    static bool Argb((int Depth, nuint Red, nuint Green, nuint Blue)? v) => v is { Depth: 32, Red: 0xFF0000, Green: 0xFF00, Blue: 0xFF };
+    // The middle of the window's page, as import reads the X screen: what the compositing manager painted.
+    static (int R, int G, int B)? CentrePixel(BrowserWindow w)
+    {
+        var bounds = w.GetContentBounds();
+        return LinuxScreen.CommonColour(bounds.X + bounds.Width / 2 - 2, bounds.Y + bounds.Height / 2 - 2, 5, 5);
+    }
+    async Task<BrowserWindow> Open(BrowserWindowOptions options)
+    {
+        var w = new BrowserWindow(options with { X = 200, Y = 150, Width = 400, Height = 300 });
+        await w.LoadUrl(clear);
+        await Task.Delay(1000);
+        return w;
+    }
+    async Task Close(BrowserWindow w)
+    {
+        w.Destroy();
+        await Task.Delay(300);
+    }
+
+    if (!Oriel.Cef.CefRuntime.IsPatched)
+    {
+        // Stock CEF creates every window opaque, so Transparent cannot take effect (DRIFT W24).
+        var stock = await Open(new BrowserWindowOptions { Title = "Oriel window test: transparent, stock CEF", Transparent = true });
+        Check("Linux, stock CEF: Transparent is ignored, the X window keeps a 24-bit visual (DRIFT W24)",
+            LinuxX11.Visual(stock.GetNativeWindowHandle()) is { Depth: 24 } && stock.GetBackgroundColor() is null,
+            $"{LinuxX11.Visual(stock.GetNativeWindowHandle())} {stock.GetBackgroundColor()}");
+        await Close(stock);
+        Console.WriteLine("SKIP  Linux transparent windows: the loaded libcef lacks Oriel's CEF patch (eng/cef)");
+        return;
+    }
+
+    var back = new BrowserWindow(new BrowserWindowOptions { Title = "Oriel window test: red backdrop", X = 60, Y = 60, Width = 800, Height = 600, BackgroundColor = "#FF0000" });
+    await back.LoadUrl("data:text/html,<body style='background:red'></body>");
+    System.Diagnostics.Process? compositor = null;
+    try
+    {
+        // Chromium asks for an ARGB visual only while a compositing manager owns _NET_WM_CM_S0, as in Electron.
+        if (!LinuxX11.HasCompositingManager())
+        {
+            var fallback = await Open(new BrowserWindowOptions { Title = "Oriel window test: transparent, no compositor", Transparent = true });
+            Check("Linux: without a compositing manager a transparent window gets the opaque visual and hides the window behind, as in Electron",
+                LinuxX11.Visual(fallback.GetNativeWindowHandle()) is { Depth: 24 } && !Red(CentrePixel(fallback)),
+                $"{LinuxX11.Visual(fallback.GetNativeWindowHandle())} {CentrePixel(fallback)}");
+            await Close(fallback);
+            try { compositor = System.Diagnostics.Process.Start("xcompmgr"); }
+            catch (Win32Exception) { }
+        }
+        Check("Linux: a compositing manager runs for the transparency checks (xcompmgr)", Eventually(LinuxX11.HasCompositingManager, step), compositor?.Id);
+        if (!LinuxX11.HasCompositingManager()) return;
+
+        var plain = await Open(new BrowserWindowOptions { Title = "Oriel window test: opaque" });
+        Check("Linux: an ordinary window keeps a 24-bit visual and covers the one behind it (control)",
+            LinuxX11.Visual(plain.GetNativeWindowHandle()) is { Depth: 24 } && Eventually(() => White(CentrePixel(plain)), step),
+            $"{LinuxX11.Visual(plain.GetNativeWindowHandle())} {CentrePixel(plain)}");
+        await Close(plain);
+
+        var framed = await Open(new BrowserWindowOptions { Title = "Oriel window test: transparent", Transparent = true });
+        var xid = framed.GetNativeWindowHandle();
+        Check("Linux: a transparent window's X window has a 32-bit ARGB visual", Argb(LinuxX11.Visual(xid)), LinuxX11.Visual(xid));
+        Check("Linux: Transparent shows the window behind through a transparent page (screen pixel)", Eventually(() => Red(CentrePixel(framed)), step), CentrePixel(framed));
+        Check("Linux: a transparent window stays resizable and maximizable, as Electron's", framed.IsResizable && framed.IsMaximizable, $"{framed.IsResizable} {framed.IsMaximizable}");
+        Check("Linux: a transparent window's background colour is transparent, as Electron's", framed.GetBackgroundColor() == "#00000000", framed.GetBackgroundColor());
+        var page = Path.Combine(Path.GetTempPath(), "oriel-transparent.html");
+        File.WriteAllText(page, "<html style='background:transparent'><body style='background:transparent'>file</body></html>");
+        await framed.LoadUrl(new Uri(page).AbsoluteUri);
+        Check("Linux: the page stays transparent after navigating to another origin (screen pixel)", Eventually(() => Red(CentrePixel(framed)), step), CentrePixel(framed));
+        File.Delete(page);
+        framed.SetBackgroundColor("#FFFFFF");
+        Check("Linux: SetBackgroundColor makes a transparent window's page opaque again (screen pixel)", Eventually(() => White(CentrePixel(framed)), step), CentrePixel(framed));
+        // Electron keeps the window itself clear on Linux, so half black is painted once, by the page: half the red.
+        framed.SetBackgroundColor("#80000000");
+        bool Half() => CentrePixel(framed) is { } c && c.R is > 100 and < 160 && c.G < 40 && c.B < 40;
+        Check("Linux: a translucent SetBackgroundColor is painted once, by the page, as Electron's (screen pixel)", Eventually(Half, step), CentrePixel(framed));
+        framed.Maximize();
+        Check("Linux: a transparent window maximizes through the window manager and stays see-through",
+            Eventually(() => framed.IsMaximized, step) && Argb(LinuxX11.Visual(xid)), $"{framed.IsMaximized} {LinuxX11.Visual(xid)}");
+        await Close(framed);
+
+        var frameless = await Open(new BrowserWindowOptions { Title = "Oriel window test: transparent frameless", Transparent = true, Frame = false });
+        Check("Linux: a frameless transparent window has an ARGB visual and shows the window behind (screen pixel)",
+            Argb(LinuxX11.Visual(frameless.GetNativeWindowHandle())) && Eventually(() => Red(CentrePixel(frameless)), step),
+            $"{LinuxX11.Visual(frameless.GetNativeWindowHandle())} {CentrePixel(frameless)}");
+        await Close(frameless);
+
+        var whitened = await Open(new BrowserWindowOptions { Title = "Oriel window test: transparent white", Transparent = true, BackgroundColor = "#FFFFFF" });
+        var opaqueColour = CentrePixel(whitened);
+        whitened.SetBackgroundColor("#00000000");
+        Check("Linux: an opaque BackgroundColor covers a transparent window until SetBackgroundColor clears the page (screen pixel)",
+            White(opaqueColour) && Eventually(() => Red(CentrePixel(whitened)), step), $"{opaqueColour} -> {CentrePixel(whitened)}");
+        await Close(whitened);
+    }
+    finally
+    {
+        if (compositor is not null)
+        {
+            compositor.Kill();
+            compositor.WaitForExit(5000);
+            compositor.Dispose();
+        }
+        await Close(back);
+    }
+}
+
 async Task TransparencyAsync()
 {
     if (!OperatingSystem.IsWindows()) return;
@@ -5301,6 +5413,19 @@ static unsafe class LinuxX11
         return found;
     }
 
+    // XWindowAttributes (LP64): depth at 20, Visual* at 24. Visual: red, green and blue masks at 24, 32 and 40.
+    internal static (int Depth, nuint Red, nuint Green, nuint Blue)? Visual(nint window)
+    {
+        var attributes = stackalloc byte[256];
+        if (XGetWindowAttributes(Display(), window, attributes) == 0) return null;
+        var visual = *(byte**)(attributes + 24);
+        if (visual == null) return null;
+        return (*(int*)(attributes + 20), *(nuint*)(visual + 24), *(nuint*)(visual + 32), *(nuint*)(visual + 40));
+    }
+
+    // A compositing manager owns _NET_WM_CM_S<screen>; Xvfb here has one screen.
+    internal static bool HasCompositingManager() => XGetSelectionOwner(Display(), XInternAtom(Display(), "_NET_WM_CM_S0", 0)) != 0;
+
     internal static string? StringProperty(nint window, string name)
     {
         var display = Display();
@@ -5317,6 +5442,8 @@ static unsafe class LinuxX11
     [System.Runtime.InteropServices.DllImport(Lib)] private static extern long* XGetWMHints(nint display, nint window);
     [System.Runtime.InteropServices.DllImport(Lib)] private static extern int XFree(void* data);
     [System.Runtime.InteropServices.DllImport(Lib)] private static extern nint XInternAtom(nint display, string name, int onlyIfExists);
+    [System.Runtime.InteropServices.DllImport(Lib)] private static extern int XGetWindowAttributes(nint display, nint window, byte* attributes);
+    [System.Runtime.InteropServices.DllImport(Lib)] private static extern nint XGetSelectionOwner(nint display, nint selection);
     [System.Runtime.InteropServices.DllImport(Lib)]
     private static extern int XGetWindowProperty(nint display, nint window, nint property, nint offset, nint length, int delete, nint type,
         out nint actualType, out int actualFormat, out nuint count, out nuint bytesAfter, out nint* data);

@@ -1008,9 +1008,20 @@ public sealed unsafe class BrowserViewDelegate
 /// <summary><c>cef_window_delegate_t</c>: events and policy for a top-level Views window.</summary>
 public sealed unsafe class WindowDelegate
 {
-    public WindowDelegate()
+    public WindowDelegate() : this(CefRuntime.IsPatched)
     {
-        Native = NativeObject.Create<cef_window_delegate_t>(this);
+    }
+
+    // CEF wraps the delegate at the process's API version and refuses a base.size that is not that version's struct.
+    internal WindowDelegate(bool patched)
+    {
+        if (patched)
+        {
+            var next = NativeObject.Create<cef_window_delegate_next_t>(this);
+            next->is_translucent = &IsTranslucent;
+            Native = &next->@base;
+        }
+        else Native = NativeObject.Create<cef_window_delegate_t>(this);
         Native->on_window_created = &OnWindowCreated;
         Native->on_window_destroyed = &OnWindowDestroyed;
         Native->can_close = &CanClose;
@@ -1075,6 +1086,10 @@ public sealed unsafe class WindowDelegate
     /// <summary>No title bar or border.</summary>
     public bool Frameless { get; init; }
 
+    /// <summary>Created translucent (<c>Widget::InitParams::opacity</c>), so that what the window leaves clear shows
+    /// the desktop behind it. Only a patched libcef asks (<see cref="CefRuntime.IsPatched"/>).</summary>
+    public bool Translucent { get; init; }
+
     /// <summary>The window this one belongs to, asked once at creation; null for a top-level window.</summary>
     public Func<nint>? Parent { get; init; }
 
@@ -1126,6 +1141,13 @@ public sealed unsafe class WindowDelegate
     {
         NativeObject.Release(window);
         return NativeObject.Owner<WindowDelegate>(self).Frameless ? 1 : 0;
+    }
+
+    [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])]
+    private static int IsTranslucent(cef_window_delegate_t* self, cef_window_t* window)
+    {
+        NativeObject.Release(window);
+        return NativeObject.Owner<WindowDelegate>(self).Translucent ? 1 : 0;
     }
 
     [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])]

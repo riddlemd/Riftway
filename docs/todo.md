@@ -20,7 +20,9 @@ Cross-platform work. Platform-specific items: [linux-todo.md](linux-todo.md), [w
   - [x] Linux taskbar progress and badge count (Unity launcher entry on the session bus), `app.setDesktopName`
   - [x] Windows: `setAppDetails`, `setThumbnailClip`, `setThumbnailToolTip`, `backgroundMaterial`/`setBackgroundMaterial`
   - [x] Make `backgroundMaterial` visible; `transparent` on Windows
-  - [ ] `transparent` on macOS and Linux (DRIFT W24)
+  - [x] `transparent` on macOS
+  - [ ] `transparent` on Linux (DRIFT W24): needs the CEF patch in [eng/cef](../eng/cef/README.md); written, to build and
+        run ([linux-todo.md](linux-todo.md))
   - [ ] `showInactive`
   - [x] `loadURL` options (userAgent, extraHeaders, httpReferrer, postData); `baseURLForDataURL` throws
   - [ ] Window state persistence (`getNormalBounds`, `persisted-state-restored`)
@@ -68,3 +70,5 @@ Cross-platform work. Platform-specific items: [linux-todo.md](linux-todo.md), [w
 - [x] `Shell` and `Clipboard` on Windows (branch `shell-clipboard`); macOS and Linux backends to come (DRIFT H1, K1)
 - [ ] M3 Blazor Hybrid · M4 ship it · M5 desktop integration · M6 session/network/processes · M7 own CEF builds
       (see [PLAN.md](PLAN.md#milestones))
+- [ ] M7: the first CEF patch is in [eng/cef](../eng/cef/README.md) (`CefWindowDelegate::IsTranslucent`); Oriel detects
+      a patched libcef by its next-version API hash (`CefRuntime.IsPatched`) and runs unchanged on stock CEF

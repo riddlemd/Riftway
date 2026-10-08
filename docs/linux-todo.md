@@ -9,6 +9,16 @@ General items: [todo.md](todo.md).
   - [ ] Check whether Chromium/libyuv already has a bug or fix; file one if not, then drop the override
   - [x] `Oriel.Subprocess.Native` builds and links on linux-x64 (clang 18, GNU ld; `--export-dynamic-symbol` is accepted).
         The override is `__aarch64__`-only, so x64 exports no `getauxval` by design.
+- [ ] **Transparent windows** (DRIFT W24): CEF patch [eng/cef](../eng/cef/README.md) 0001 and Oriel's side are written,
+      not yet built or run.
+  - [ ] Build the patched libcef (`eng/cef/apply-patches.sh`, then `cef-build-linux/build.sh --no-update --force-build`);
+        check its next-version hashes against `CefPatchedApi.cs`
+  - [ ] Rebuild `oriel-linux-dev` (adds xcompmgr, x11-utils) and run WindowTest with `ORIEL_CEF_DIR`; the
+        `LinuxTransparencyAsync` checks read the X visual and the screen over a red backdrop
+  - [ ] Compare with Electron what shows where the page is clear without a compositing manager: Electron also clears
+        the compositor colour, which CEF cannot
+  - [ ] Electron gives every frameless window on Linux a translucent widget, for its own client-side frame
+        (`ElectronFrameViewLinux`); Oriel only transparent ones. Check whether anything visible depends on it
 - [ ] Linux sandbox on Ubuntu 24.04+: AppArmor profile, or documented `--no-sandbox` (M4)
 - [ ] Wayland: CEF Views on Wayland is still being fixed upstream; Oriel targets X11/XWayland for now
 - [ ] linux-x64: only linux-arm64 is tested end to end (Docker on Apple Silicon). On linux-x64 (amd64 image under QEMU)
