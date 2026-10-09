@@ -82,6 +82,8 @@ Cross-platform work. Platform-specific items: [linux-todo.md](linux-todo.md), [w
       (DRIFT E13), pause/cancel before CEF hands a control. Unit tests pass; run the new SessionTest `HTTP:` download checks
       (local server: redirect, Content-Disposition, ETag, pause/resume, reset and Range resume, 403) on Linux and macOS.
       CEF patches for E13-E16, E39-E41
+- [ ] `Notification`: Windows (branch `notify-storage`) and Linux (branch `linux-notification`, WindowTest checks written,
+      not run: [linux-todo.md](linux-todo.md)); macOS not started (DRIFT Q3)
 - [ ] M3 Blazor Hybrid · M4 ship it · M5 desktop integration · M6 session/network/processes · M7 own CEF builds
       (see [PLAN.md](PLAN.md#milestones))
 - [ ] M7: CEF patches in [eng/cef](../eng/cef/README.md): 0001 `CefWindowDelegate::IsTranslucent` (W24), 0002
