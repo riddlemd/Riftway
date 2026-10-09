@@ -37,3 +37,9 @@ General items: [todo.md](todo.md).
       (ScreenCaptureKit list and `SCScreenshotManager` thumbnails, own windows as `window:N:N`, `NSRunningApplication`
       icons) and without it (`Failed to get sources.`); check a non-resizable window keeps its style mask after a
       capture. The unit run enumerates displays and CoreGraphics windows only. The pre-14.4 CoreGraphics path is untested
+- [ ] `app` audit (branch `app-audit`, [parity/app.md](parity/app.md)): run WindowTest `MacAppEventsTest` (open-url,
+      open-file and activate from dispatched Apple events, did-resign/become-active, activation policy, secure keyboard
+      entry, about panel) and SessionTest `AppAuditChecks` (launch order, single-instance lock, paths, locale, GPU status,
+      accessibility, host resolver, app render-process-gone, protocol info, delegate class). Not run: login items and
+      protocol registration writes (need a signed, bundled app); Handoff (A32) and `moveToApplicationsFolder` (A33) are
+      not ported

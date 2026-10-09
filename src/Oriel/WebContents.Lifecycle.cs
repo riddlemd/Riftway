@@ -103,8 +103,13 @@ public sealed unsafe partial class WebContents
         lock (s_registryGate) s_live.Remove(this);
     }
 
+    // Electron's page forwards to the app from a listener added before any of the app's, so the app hears first.
     private void OnRenderProcessTerminated(cef_termination_status_t status, int exitCode)
-        => RenderProcessGone?.Invoke(this, new RenderProcessGoneEventArgs(RenderProcessGoneReason.Of(status), exitCode));
+    {
+        var details = new RenderProcessGoneEventArgs(RenderProcessGoneReason.Of(status), exitCode);
+        OrielApp.CurrentOrNull?.RaiseRenderProcessGone(this, details);
+        RenderProcessGone?.Invoke(this, details);
+    }
 
     private void OnRenderProcessUnresponsive()
     {

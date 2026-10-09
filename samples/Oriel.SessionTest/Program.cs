@@ -26,6 +26,12 @@ if (mediaChild)
 }
 var failures = -1;
 var results = new List<string>();
+// Before Run: the lock is free (no other run), and WillFinishLaunching, Ready and WhenReady come in Electron's order.
+var gotSingleInstanceLock = mediaChild || app.RequestSingleInstanceLock(new System.Text.Json.Nodes.JsonObject { ["run"] = 1 });
+var launchOrder = new List<string>();
+app.WillFinishLaunching += (_, _) => { lock (launchOrder) launchOrder.Add("will-finish-launching"); };
+app.Ready += (_, _) => { lock (launchOrder) launchOrder.Add("ready"); };
+var whenReady = app.WhenReady().ContinueWith(_ => { lock (launchOrder) launchOrder.Add("whenReady"); }, TaskScheduler.Default);
 
 void Check(string name, bool pass, object? detail = null)
 {
@@ -1297,10 +1303,15 @@ async Task RunAsync()
             && app.GetPath("downloads") == Path.Combine(app.GetPath("home"), "Downloads"), downloadsDir);
     }
     var unknownPath = await Throws(() => Task.FromResult(app.GetPath("nope")));
-    var missingDir = await Throws(() => { app.SetPath("logs", Path.Combine(Path.GetTempPath(), "oriel-no-such-dir-" + Guid.NewGuid())); return Task.CompletedTask; });
+    var originalLogs = app.GetPath("logs");
+    var missingLogs = Path.Combine(Path.GetTempPath(), "oriel-no-such-dir-" + Guid.NewGuid());
+    var missingDir = await Throws(() => { app.SetPath("logs", missingLogs); return Task.CompletedTask; });
     var relativeDir = await Throws(() => { app.SetPath("logs", "relative"); return Task.CompletedTask; });
-    Check("GetPath and SetPath refuse what Electron refuses", unknownPath?.Message.StartsWith("Failed to get 'nope' path") == true
-        && missingDir is ArgumentException && relativeDir is ArgumentException, $"{unknownPath?.Message} | {missingDir?.Message} | {relativeDir?.Message}");
+    Check("GetPath and SetPath refuse what Electron refuses, and SetPath takes a directory that does not exist without making it",
+        unknownPath?.Message.StartsWith("Failed to get 'nope' path") == true && missingDir is null && app.GetPath("logs") == missingLogs
+        && !Directory.Exists(missingLogs) && relativeDir is ArgumentException, $"{unknownPath?.Message} | {missingDir?.Message} | {relativeDir?.Message}");
+    app.SetPath("logs", originalLogs);
+    await AppAuditChecks();
     var movedTo = Directory.CreateTempSubdirectory("oriel-userdata-").FullName;
     var originalUserData = app.GetPath("userData");
     app.SetPath("userData", movedTo);
@@ -2688,6 +2699,112 @@ static async Task<string> ServeOneProxyRequest(TcpListener listener)
     await stream.WriteAsync(head);
     await stream.WriteAsync(body);
     return first;
+}
+
+// app members added by the docs/parity/app.md audit; written for a macOS, Windows and Linux run.
+async Task AppAuditChecks()
+{
+    Check("WillFinishLaunching (Windows, Linux) comes before Ready, and WhenReady after the Ready handlers",
+        await Task.WhenAny(whenReady, Task.Delay(5000)) == whenReady
+        && string.Join(",", launchOrder) == (OperatingSystem.IsMacOS() ? "ready,whenReady,will-finish-launching" : "will-finish-launching,ready,whenReady"),
+        string.Join(",", launchOrder));
+    Check("RequestSingleInstanceLock was granted with no other run, and HasSingleInstanceLock says so", gotSingleInstanceLock && app.HasSingleInstanceLock());
+    app.ReleaseSingleInstanceLock();
+    Check("ReleaseSingleInstanceLock drops it, and asking again while running grants it without notifying itself",
+        !app.HasSingleInstanceLock() && app.RequestSingleInstanceLock() && app.HasSingleInstanceLock());
+
+    Check("GetPath(cache), (userCache) and (userDesktop) are Chromium's, userCache made under cache",
+        app.GetPath("userCache") == Path.Combine(app.GetPath("cache"), app.Name) && Directory.Exists(app.GetPath("userCache"))
+        && app.GetPath("userDesktop") == app.GetPath("desktop")
+        && app.GetPath("cache") == (OperatingSystem.IsMacOS() ? Path.Combine(app.GetPath("home"), "Library", "Caches")
+            : OperatingSystem.IsWindows() ? Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData)
+            : Environment.GetEnvironmentVariable("XDG_CACHE_HOME") is { Length: > 0 } x ? x : Path.Combine(app.GetPath("home"), ".cache")),
+        app.GetPath("cache"));
+    if (OperatingSystem.IsMacOS())
+        Check("GetPath(assets) fails on macOS, as Electron's", (await Throws(() => Task.FromResult(app.GetPath("assets"))))?.Message.StartsWith("Failed to get 'assets' path") == true);
+    var logsBefore = app.GetPath("logs");
+    var newLogs = Path.Combine(Path.GetTempPath(), "oriel-logs-" + Guid.NewGuid().ToString("N"), "nested");
+    app.SetAppLogsPath(newLogs);
+    // PathService::Override resolves symlinks: macOS's /var is /private/var.
+    Check("SetAppLogsPath makes the directory and GetPath(logs) answers it resolved", Directory.Exists(newLogs)
+        && app.GetPath("logs").EndsWith(newLogs, StringComparison.Ordinal), app.GetPath("logs"));
+    app.SetPath("logs", logsBefore);
+    Directory.Delete(Path.GetDirectoryName(newLogs)!, recursive: true);
+    Check("SetAppLogsPath refuses a relative path", (await Throws(() => { app.SetAppLogsPath("relative"); return Task.CompletedTask; }))?.Message.StartsWith("Path must be absolute") == true);
+
+    Check("GetAppPath is the app's directory", OrielApp.GetAppPath() == Path.TrimEndingDirectorySeparator(AppContext.BaseDirectory) && Directory.Exists(OrielApp.GetAppPath()));
+    Check("IsPackaged is true for the app's own executable", OrielApp.IsPackaged == !Path.GetFileNameWithoutExtension(Environment.ProcessPath ?? "").Equals("dotnet", StringComparison.OrdinalIgnoreCase));
+    var name = app.Name;
+    var userAgent = app.UserAgentFallback;
+    // Read just before, so Chromium's PathService cache holds it.
+    var userDataBefore = app.GetPath("userData");
+    app.Name = "Renamed App";
+    Check("Setting Name renames the default user agent and keeps a userData already read", app.UserAgentFallback.Contains(" RenamedApp/", StringComparison.Ordinal)
+        && app.GetPath("userData") == userDataBefore, app.UserAgentFallback);
+    app.Name = name;
+    Check("and the user agent comes back with the name", app.UserAgentFallback == userAgent);
+
+    var locale = app.GetLocale();
+    Check("GetLocale is the locale Chromium resolved: en-US from CEF's --lang on macOS and Windows", OperatingSystem.IsLinux() ? locale.Length > 0 : locale == "en-US", locale);
+    Check("IsHardwareAccelerationEnabled is on without --disable-gpu, and DisableHardwareAcceleration throws once ready",
+        app.IsHardwareAccelerationEnabled() == !app.CommandLine.HasSwitch("disable-gpu")
+        && (await Throws(() => { app.DisableHardwareAcceleration(); return Task.CompletedTask; }))?.Message == "app.disableHardwareAcceleration() can only be called before app is ready");
+
+    var gpuStatus = await app.GetGpuFeatureStatusAsync();
+    Check("GetGpuFeatureStatusAsync lists chrome://gpu's features", gpuStatus.ContainsKey("webgl") && gpuStatus.ContainsKey("gpu_compositing"), string.Join(",", gpuStatus.Select(p => $"{p.Key}={p.Value}")));
+    var gpuInfo = await app.GetGpuInfoAsync(GpuInfoType.Basic);
+    Check("GetGpuInfoAsync answers auxAttributes and gpuDevice, the active device first", gpuInfo["auxAttributes"] is System.Text.Json.Nodes.JsonObject
+        && gpuInfo["gpuDevice"] is System.Text.Json.Nodes.JsonArray { Count: > 0 } devices && devices[0]!["active"]!.GetValue<bool>(), gpuInfo.ToJsonString());
+
+    var a11yEvents = new List<bool>();
+    app.AccessibilitySupportChanged += (_, on) => a11yEvents.Add(on);
+    var a11yPage = new BrowserWindow(new BrowserWindowOptions { Show = false });
+    await a11yPage.WebContents.LoadUrl("data:text/html,<button>press</button>");
+    app.SetAccessibilitySupportEnabled(true);
+    Check("SetAccessibilitySupportEnabled(true) turns it on and says so", app.IsAccessibilitySupportEnabled() && app.AccessibilitySupportEnabled && a11yEvents.SequenceEqual([true]));
+    app.AccessibilitySupportEnabled = false;
+    Check("and false turns it off", !app.IsAccessibilitySupportEnabled() && a11yEvents.SequenceEqual([true, false]));
+    a11yPage.Destroy();
+
+    var resolverError = await Throws(() => { app.ConfigureHostResolver(new HostResolverOptions { SecureDnsServers = ["http://plain"] }); return Task.CompletedTask; });
+    app.ConfigureHostResolver(new HostResolverOptions { SecureDnsMode = SecureDnsMode.Off });
+    var resolved = await Oriel.Session.DefaultSession.ResolveHostAsync("localhost");
+    Check("ConfigureHostResolver refuses a non-HTTPS template and keeps resolving after a change", resolverError?.Message.StartsWith("not a valid DoH template: http://plain") == true
+        && resolved.Endpoints.Count > 0, resolverError?.Message);
+    app.ConfigureHostResolver(new HostResolverOptions { SecureDnsMode = SecureDnsMode.Automatic });
+
+    var goneEvents = new List<string>();
+    var crashPage = new BrowserWindow(new BrowserWindowOptions { Show = false });
+    await crashPage.WebContents.LoadUrl("about:blank");
+    void OnAppGone(object? _, AppRenderProcessGoneEventArgs e) { if (e.WebContents == crashPage.WebContents) lock (goneEvents) goneEvents.Add("app:" + e.Details.Reason); }
+    app.RenderProcessGone += OnAppGone;
+    crashPage.WebContents.RenderProcessGone += (_, e) => { lock (goneEvents) goneEvents.Add("page:" + e.Reason); };
+    crashPage.WebContents.ForcefullyCrashRenderer();
+    var bothGone = await Task.Run(() => SpinWait.SpinUntil(() => { lock (goneEvents) return goneEvents.Count >= 2; }, TimeSpan.FromSeconds(10)));
+    app.RenderProcessGone -= OnAppGone;
+    Check("app RenderProcessGone comes before the page's, with the page and its details", bothGone && goneEvents[0].StartsWith("app:", StringComparison.Ordinal)
+        && goneEvents[1].StartsWith("page:", StringComparison.Ordinal) && goneEvents[0][4..] == goneEvents[1][5..], string.Join(",", goneEvents));
+    crashPage.Destroy();
+
+    if (OperatingSystem.IsMacOS())
+    {
+        var https = await app.GetApplicationInfoForProtocol("https://example.com/");
+        Check("GetApplicationInfoForProtocol(https) names the default browser, its bundle and a 32-point icon on macOS",
+            https.Path.EndsWith(".app", StringComparison.Ordinal) && https.Name == app.GetApplicationNameForProtocol("https://example.com/")
+            && https.Icon.GetSize() == (32, 32), $"{https.Name} {https.Path} {https.Icon.GetSize()}");
+        Check("IsActive, IsInApplicationsFolder and IsSecureKeyboardEntryEnabled read without changing anything on macOS",
+            !app.IsSecureKeyboardEntryEnabled() && app.IsInApplicationsFolder() == AppContext.BaseDirectory.Split('/').Contains("Applications"), app.IsActive());
+        Check("the app delegate is Oriel's, and the login item reads ServiceManagement's status on macOS",
+            Oriel.Cef.Platform.MacApp.DelegateClassName() is "OrielAppDelegate" or "OrielApplicationDelegate"
+            && app.GetLoginItemSettings().Status is "not-registered" or "enabled" or "requires-approval" or "not-found",
+            Oriel.Cef.Platform.MacApp.DelegateClassName());
+        Check("IsEmojiPanelSupported is true on macOS", app.IsEmojiPanelSupported());
+    }
+    if (OperatingSystem.IsLinux())
+    {
+        Check("IsDefaultProtocolClient is false for a scheme no desktop file handles on Linux", !app.IsDefaultProtocolClient("oriel-none-" + Environment.ProcessId));
+        Check("IsEmojiPanelSupported is false on Linux, and login items read as off", !app.IsEmojiPanelSupported() && !app.GetLoginItemSettings().OpenAtLogin);
+    }
 }
 
 // Fresh, so the run shows CEF creating the persistent partition's directory.

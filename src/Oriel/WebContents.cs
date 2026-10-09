@@ -482,6 +482,10 @@ public sealed unsafe partial class WebContents
             ? description.GetString() ?? "Script error."
             : details.TryGetProperty("text", out var text) ? text.GetString() ?? "Script error." : "Script error.";
 
+    /// <summary>CEF's per-page stand-in for Chromium's process-wide accessibility mode: complete, or none.</summary>
+    internal void SetAccessibilityState(bool enabled)
+        => WithHost(host => host->set_accessibility_state(host, enabled ? cef_state_t.STATE_ENABLED : cef_state_t.STATE_DISABLED));
+
     // Host calls are only valid on the UI thread and while the browser exists.
     private void WithHost(HostAction action) => CefThread.RunOnUi(() =>
     {
@@ -967,6 +971,8 @@ public sealed unsafe partial class WebContents
         _devTools.Attach(browser);
         if (_preferences.DevTools) WatchDevTools();
 
+        // A page made after app.SetAccessibilitySupportEnabled(true) joins the process-wide mode it set.
+        if (OrielApp.CurrentOrNull?.AccessibilityRequested == true) SetAccessibilityState(true);
         _devTools.Send("Page.enable");
         // Per-frame DOMContentLoaded for dom-ready.
         _devTools.Send("Page.setLifecycleEventsEnabled", w => w.WriteBoolean("enabled", true));

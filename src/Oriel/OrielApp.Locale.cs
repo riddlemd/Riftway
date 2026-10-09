@@ -4,6 +4,93 @@ namespace Oriel;
 
 public sealed unsafe partial class OrielApp
 {
+    /// <summary>The locale Chromium runs the app in (its UI strings and the renderers' default locale), or empty before
+    /// <see cref="Ready"/>. Electron's <c>app.getLocale()</c>: Chromium's choice is recomputed from its inputs, CEF's
+    /// <c>--lang</c> on macOS and Windows (en-US unless set) and the environment's languages on Linux, against the locale
+    /// files that ship (drift A30).</summary>
+    public string GetLocale()
+    {
+        if (!IsReady) return "";
+        var lang = GlobalSwitch("lang") ?? "";
+        var candidates = OperatingSystem.IsLinux() ? LinuxLanguages(Environment.GetEnvironmentVariable) : [];
+        return ResolveApplicationLocale(OperatingSystem.IsLinux() ? "" : lang, candidates, LocalePakExists);
+    }
+
+    private static unsafe string? GlobalSwitch(string name)
+    {
+        var line = Oriel.Cef.Interop.CefNative.cef_command_line_get_global();
+        if (line is null) return null;
+        Oriel.Cef.Interop.cef_string_utf16_t key = default;
+        Oriel.Cef.CefString.Set(&key, name);
+        try { return line->has_switch(line, &key) != 0 ? Oriel.Cef.CefString.ReadUserFree(line->get_switch_value(line, &key)) : null; }
+        finally
+        {
+            Oriel.Cef.CefString.Clear(&key);
+            Oriel.Cef.NativeObject.Release(line);
+        }
+    }
+
+    // ResourceBundle::LocaleDataPakExists: <locale>.pak in locales/ beside libcef; on macOS <locale>.lproj/locale.pak in the
+    // framework's Resources, with en-US as "en" and "_" for "-".
+    private static bool LocalePakExists(string locale)
+    {
+        var module = Path.GetDirectoryName(CefLayout.MainProcessLibrary())!;
+        if (!OperatingSystem.IsMacOS()) return File.Exists(Path.Combine(module, "locales", locale + ".pak"));
+        var macLocale = locale == "en-US" ? "en" : locale.Replace('-', '_');
+        return File.Exists(Path.Combine(module, "Resources", macLocale + ".lproj", "locale.pak"));
+    }
+
+    // l10n_util::GetApplicationLocaleInternal: the preferred locale if it resolves; else the first candidate with its own
+    // locale file, else the first that resolves; else en-US if it ships.
+    internal static string ResolveApplicationLocale(string preferred, IReadOnlyList<string> candidates, Func<string, bool> pakExists)
+    {
+        if (preferred.Length > 0 && ResolveLocale(preferred, pakExists) is { } resolved) return resolved;
+        string? matched = null;
+        foreach (var raw in candidates)
+        {
+            var candidate = CanonicalTag(raw);
+            if (candidate.Length == 0) continue;
+            if (pakExists(candidate)) return candidate;
+            matched ??= ResolveLocale(candidate, pakExists);
+        }
+        return matched ?? (pakExists("en-US") ? "en-US" : "");
+    }
+
+    // CheckAndResolveLocale: the locale itself when it ships, else what Chromium's language matcher maps it to, when
+    // that ships. The matcher is reduced to the regional fallbacks Chromium's l10n tests pin down.
+    internal static string? ResolveLocale(string locale, Func<string, bool> pakExists)
+    {
+        var tag = CanonicalTag(locale);
+        if (tag.Length == 0) return null;
+        if (pakExists(tag)) return tag;
+        var dash = tag.IndexOf('-');
+        var language = dash < 0 ? tag : tag[..dash];
+        var region = dash < 0 ? "" : tag[(dash + 1)..];
+        var match = language switch
+        {
+            "en" => region is "AU" or "NZ" or "CA" or "ZA" or "IN" or "IE" or "GB" ? "en-GB" : "en-US",
+            "es" => region is "" or "ES" ? "es" : "es-419",
+            "pt" => region is "" or "BR" ? "pt-BR" : "pt-PT",
+            "zh" => region is "HK" or "MO" or "TW" || region.StartsWith("Hant", StringComparison.Ordinal) ? "zh-TW" : "zh-CN",
+            "iw" => "he",
+            "no" or "nn" => "nb",
+            "tl" => "fil",
+            _ => language,
+        };
+        return pakExists(match) ? match : null;
+    }
+
+    // A POSIX or BCP 47 name as a tag: no codeset or modifier, "-" between the parts, the region upper-cased.
+    private static string CanonicalTag(string locale)
+    {
+        var end = locale.IndexOfAny(['.', '@']);
+        var parts = (end >= 0 ? locale[..end] : locale).Replace('_', '-').Split('-', StringSplitOptions.RemoveEmptyEntries);
+        if (parts.Length == 0 || parts[0] is "C" or "POSIX") return "";
+        parts[0] = parts[0].ToLowerInvariant();
+        for (var i = 1; i < parts.Length; i++) parts[i] = parts[i].Length == 2 ? parts[i].ToUpperInvariant() : parts[i];
+        return string.Join('-', parts);
+    }
+
     /// <summary>The user's languages in order of preference. Electron's <c>app.getPreferredSystemLanguages()</c>.</summary>
     public IReadOnlyList<string> GetPreferredSystemLanguages()
     {
