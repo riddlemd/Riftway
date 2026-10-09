@@ -19,6 +19,19 @@ public static unsafe class ProcessArgs
     [SupportedOSPlatform("linux")]
     public static cef_main_args_posix_t Linux() => FromCmdline(File.ReadAllBytes("/proc/self/cmdline"));
 
+    /// <summary>argv[0] as given, which Chromium's <c>CommandLine::GetProgram()</c> returns on Linux; null if unreadable.</summary>
+    [SupportedOSPlatform("linux")]
+    public static string? LinuxProgram()
+    {
+        try
+        {
+            var cmdline = File.ReadAllBytes("/proc/self/cmdline");
+            var end = Array.IndexOf(cmdline, (byte)0);
+            return System.Text.Encoding.UTF8.GetString(cmdline, 0, end < 0 ? cmdline.Length : end);
+        }
+        catch (IOException) { return null; }
+    }
+
     /// <summary>argc/argv from /proc/&lt;pid&gt;/cmdline content: NUL-terminated arguments, the last one included.</summary>
     internal static cef_main_args_posix_t FromCmdline(ReadOnlySpan<byte> cmdline)
     {

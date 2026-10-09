@@ -13,10 +13,11 @@ public enum PowerSaveBlockerType
 }
 
 /// <summary>Keeps the system or screen from going to sleep. Electron's <c>powerSaveBlocker</c>.</summary>
-/// <remarks>Windows only for now: macOS and Linux throw <see cref="PlatformNotSupportedException"/>.</remarks>
+/// <remarks>Windows and Linux for now: macOS throws <see cref="PlatformNotSupportedException"/>.</remarks>
 public static class PowerSaveBlocker
 {
-    private static readonly IPowerSaveBlockerBackend s_backend = OperatingSystem.IsWindows() ? new WindowsPowerSaveBlockerBackend() : new UnsupportedPowerSaveBlockerBackend();
+    private static readonly IPowerSaveBlockerBackend s_backend = OperatingSystem.IsWindows() ? new WindowsPowerSaveBlockerBackend()
+        : OperatingSystem.IsLinux() ? new LinuxPowerSaveBlockerBackend() : new UnsupportedPowerSaveBlockerBackend();
 
     /// <summary>Starts blocking and returns the blocker's id. Electron's <c>powerSaveBlocker.start()</c>.</summary>
     /// <remarks>Like Electron it returns an id even if the system refuses the request.</remarks>
@@ -54,6 +55,13 @@ internal static class PowerSaveBlockers
     /// executable's product name, else the app's name.</summary>
     internal static string Reason(string? fileProductName, string? appName)
         => !string.IsNullOrWhiteSpace(fileProductName) ? fileProductName : !string.IsNullOrWhiteSpace(appName) ? appName : "Oriel";
+
+    /// <summary>The executable's product name, when its version resource has one.</summary>
+    internal static string? ProductName()
+    {
+        try { return Environment.ProcessPath is { } path ? System.Diagnostics.FileVersionInfo.GetVersionInfo(path).ProductName : null; }
+        catch (IOException) { return null; }
+    }
 }
 
 /// <summary>One OS's power save blockers.</summary>
@@ -110,15 +118,67 @@ internal sealed class WindowsPowerSaveBlockerBackend : IPowerSaveBlockerBackend
         _held.Clear();
         _heldType = effective;
         if (effective is not { } now) return;
-        var reason = PowerSaveBlockers.Reason(ProductName(), OrielApp.CurrentOrNull?.Name);
+        var reason = PowerSaveBlockers.Reason(PowerSaveBlockers.ProductName(), OrielApp.CurrentOrNull?.Name);
         foreach (var type in PowerSaveBlockers.RequestTypes(now, Environment.OSVersion.Version.Build >= 22000))
             if (WindowsSystem.StartPowerRequest(type, reason) is var request and not 0) _held.Add((request, type));
     }
+}
 
-    private static string? ProductName()
+/// <summary>Electron's single wake lock on Linux: Chromium's <c>WakeLock</c> holding one <c>PowerSaveBlocker</c> at the
+/// highest active type, swapped for a new one when the type changes.</summary>
+[System.Runtime.Versioning.SupportedOSPlatform("linux")]
+internal sealed class LinuxPowerSaveBlockerBackend : IPowerSaveBlockerBackend
+{
+    private readonly Lock _gate = new();
+    private readonly Dictionary<int, PowerSaveBlockerType> _blockers = [];
+    private LinuxInhibitor? _held;
+    private PowerSaveBlockerType? _heldType;
+    private int _nextId;
+
+    public int Start(PowerSaveBlockerType type)
     {
-        try { return Environment.ProcessPath is { } path ? System.Diagnostics.FileVersionInfo.GetVersionInfo(path).ProductName : null; }
-        catch (IOException) { return null; }
+        lock (_gate)
+        {
+            var id = _nextId++;
+            _blockers[id] = type;
+            Update();
+            return id;
+        }
+    }
+
+    public bool Stop(int id)
+    {
+        lock (_gate)
+        {
+            var removed = _blockers.Remove(id);
+            Update();
+            return removed;
+        }
+    }
+
+    public bool IsStarted(int id)
+    {
+        lock (_gate) return _blockers.ContainsKey(id);
+    }
+
+    private void Update()
+    {
+        var effective = PowerSaveBlockers.Effective(_blockers.Values);
+        if (effective == _heldType) return;
+        var old = _held;
+        var next = effective is { } type
+            ? new LinuxInhibitor(type == PowerSaveBlockerType.PreventDisplaySleep, ProcessArgs.LinuxProgram() ?? "",
+                PowerSaveBlockers.Reason(PowerSaveBlockers.ProductName(), OrielApp.CurrentOrNull?.Name))
+            : null;
+        (_held, _heldType) = (next, effective);
+        // SwapWakeLock's order: the new blocker's Init starts before the old one's CleanUp, and its Inhibit call goes out
+        // after the old Uninhibit, once NameHasOwner has answered.
+        LinuxInhibitor.Bus.Post(() =>
+        {
+            next?.SuspendScreenSaver();
+            old?.CleanUp();
+            next?.ApplyBlock();
+        });
     }
 }
 

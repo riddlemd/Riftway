@@ -329,6 +329,7 @@ async Task RunAsync(BrowserWindow win, BrowserWindow simple)
     await ShellApisAsync();
     await MacTransparencyAsync();
     await NativeImageAsync();
+    await PowerAndShortcutsAsync();
     await WebContentsLifecycleAsync(win);
     await PageEventsAsync();
     await MessagePortsAsync();
@@ -345,7 +346,6 @@ async Task RunAsync(BrowserWindow win, BrowserWindow simple)
     await StartDragTests.RunAsync(Check);
     if (OperatingSystem.IsWindows()) await SafeStorageAsync();
     if (OperatingSystem.IsWindows()) await NotificationAsync();
-    await PowerAndShortcutsAsync();
     await TrayAsync();
     if (OperatingSystem.IsWindows()) await AppWindowsAsync();
     await DebuggerAsync();
@@ -3555,6 +3555,132 @@ async Task WindowsApisAsync()
     await Task.Delay(300);
 }
 
+async Task PowerAndShortcutsAsync()
+{
+    if (OperatingSystem.IsMacOS())
+    {
+        Check("globalShortcut, powerMonitor and powerSaveBlocker throw on macOS", Throws<PlatformNotSupportedException>(() => GlobalShortcut.IsRegistered("Ctrl+A"))
+            && Throws<PlatformNotSupportedException>(() => PowerMonitor.GetSystemIdleTime()) && Throws<PlatformNotSupportedException>(() => PowerSaveBlocker.Start(PowerSaveBlockerType.PreventAppSuspension)));
+        return;
+    }
+    if (OperatingSystem.IsLinux())
+    {
+        await LinuxPowerTest.RunAsync(Check, step, app.Name);
+        return;
+    }
+    if (!OperatingSystem.IsWindows()) return;
+
+    // Global shortcuts: Windows refuses a combination another app holds, so this test can see Oriel holding it.
+    const uint Mods = 0x1 | 0x2 | 0x4; // MOD_ALT | MOD_CONTROL | MOD_SHIFT
+    const uint F9 = 0x78;
+    var fired = 0;
+    Check("Register takes a free shortcut", GlobalShortcut.Register("Ctrl+Alt+Shift+F9", () => fired++) && GlobalShortcut.IsRegistered("Ctrl+Alt+Shift+F9"));
+    Check("the shortcut is held system-wide", !WindowsShell.HotKeyFree(Mods, F9));
+    Check("the same combination written differently is the same shortcut", GlobalShortcut.IsRegistered("Shift+Control+Alt+F9") && !GlobalShortcut.Register("Alt+Shift+CmdOrCtrl+F9", () => { }));
+    WindowsShell.Chord(0x11 /* VK_CONTROL */, 0x12 /* VK_MENU */, 0x10 /* VK_SHIFT */, (byte)F9);
+    Check("pressing it runs the callback, whatever has focus", Eventually(() => fired == 1, step), fired);
+    // Chromium registers without MOD_NOREPEAT: a held key's repeated key-downs fire the callback each time.
+    fired = 0;
+    WindowsShell.Hold(4, 0x11, 0x12, 0x10, (byte)F9);
+    Check("a held shortcut repeats the callback (no MOD_NOREPEAT)", Eventually(() => fired >= 3, step), fired);
+    GlobalShortcut.Unregister("Ctrl+Alt+Shift+F9");
+    fired = 1;
+    Check("Unregister lets it go", !GlobalShortcut.IsRegistered("Ctrl+Alt+Shift+F9") && WindowsShell.HotKeyFree(Mods, F9));
+    WindowsShell.Chord(0x11, 0x12, 0x10, (byte)F9);
+    await Task.Delay(300);
+    Check("a released shortcut no longer runs the callback", fired == 1, fired);
+    Check("RegisterAll takes each and is true", GlobalShortcut.RegisterAll(["Ctrl+Alt+Shift+F10", "Ctrl+Alt+Shift+F11"], () => { }) && GlobalShortcut.IsRegistered("Ctrl+Alt+Shift+F10") && GlobalShortcut.IsRegistered("Ctrl+Alt+Shift+F11") && !WindowsShell.HotKeyFree(Mods, 0x79));
+    GlobalShortcut.UnregisterAll();
+    Check("UnregisterAll lets them all go", !GlobalShortcut.IsRegistered("Ctrl+Alt+Shift+F10") && WindowsShell.HotKeyFree(Mods, 0x79) && WindowsShell.HotKeyFree(Mods, 0x7A));
+    Check("an invalid accelerator throws", Throws<ArgumentException>(() => GlobalShortcut.Register("Ctrl+Nope", () => { })));
+    // Electron's RegisterAll rollback: only the keys this call registered are let go.
+    GlobalShortcut.Register("Ctrl+Alt+Shift+F11", () => { });
+    Check("RegisterAll is false on a key this app holds, unregisters what it took, and leaves the earlier one",
+        !GlobalShortcut.RegisterAll(["Ctrl+Alt+Shift+F10", "Ctrl+Alt+Shift+F11"], () => { }) && WindowsShell.HotKeyFree(Mods, 0x79) && !WindowsShell.HotKeyFree(Mods, 0x7A)
+        && GlobalShortcut.IsRegistered("Ctrl+Alt+Shift+F11"));
+    // Chromium's SetShortcutHandlingSuspended: UnregisterHotKey for each while suspended, RegisterHotKey again on resume.
+    GlobalShortcut.SetSuspended(true);
+    Check("SetSuspended(true) releases the hotkeys but keeps them registered; Register fails meanwhile", GlobalShortcut.IsSuspended() && WindowsShell.HotKeyFree(Mods, 0x7A)
+        && GlobalShortcut.IsRegistered("Ctrl+Alt+Shift+F11") && !GlobalShortcut.Register("Ctrl+Alt+Shift+F10", () => { }));
+    GlobalShortcut.SetSuspended(false);
+    Check("SetSuspended(false) registers them again", !GlobalShortcut.IsSuspended() && !WindowsShell.HotKeyFree(Mods, 0x7A));
+    GlobalShortcut.UnregisterAll();
+    // AltGr never reaches RegisterHotKey (DRIFT J5): the bare key is taken and its press runs nothing.
+    fired = 0;
+    Check("AltGr+F9 registers the bare F9 (Chromium's modifiers), apart from F9 itself", GlobalShortcut.Register("AltGr+F9", () => fired++) && !WindowsShell.HotKeyFree(0, F9)
+        && WindowsShell.HotKeyFree(0x1, F9) && !GlobalShortcut.IsRegistered("F9") && !GlobalShortcut.Register("F9", () => { }));
+    WindowsShell.Chord((byte)F9);
+    await Task.Delay(300);
+    Check("pressing F9 runs no AltGr callback", fired == 0, fired);
+    GlobalShortcut.UnregisterAll();
+
+    // Idle time and power source, read independently.
+    WindowsShell.Nudge();
+    await Task.Delay(2500);
+    var quiet = PowerMonitor.GetSystemIdleTime();
+    var quietState = PowerMonitor.GetSystemIdleState(2);
+    WindowsShell.Nudge();
+    Check("GetSystemIdleTime counts seconds without input, and input resets it", quiet is 2 or 3 && PowerMonitor.GetSystemIdleTime() <= 1, $"{quiet} -> {PowerMonitor.GetSystemIdleTime()}");
+    Check("GetSystemIdleState: idle at the threshold, active under it; 0 throws, as Electron's TypeError", quietState == SystemIdleState.Idle
+        && PowerMonitor.GetSystemIdleState(60) == SystemIdleState.Active && Throws<ArgumentOutOfRangeException>(() => PowerMonitor.GetSystemIdleState(0)),
+        $"{quietState} {PowerMonitor.GetSystemIdleState(60)}");
+    var psi = new System.Diagnostics.ProcessStartInfo("powershell.exe") { UseShellExecute = false, CreateNoWindow = true, RedirectStandardOutput = true };
+    foreach (var arg in new[] { "-NoProfile", "-Command", "Add-Type -AssemblyName System.Windows.Forms; [Windows.Forms.SystemInformation]::PowerStatus.PowerLineStatus" }) psi.ArgumentList.Add(arg);
+    var line = System.Diagnostics.Process.Start(psi)!.StandardOutput.ReadToEnd().Trim();
+    Check("IsOnBatteryPower agrees with Windows' power line status", PowerMonitor.IsOnBatteryPower() == (line == "Offline") && PowerMonitor.OnBatteryPower == PowerMonitor.IsOnBatteryPower(), $"{line} {PowerMonitor.IsOnBatteryPower()}");
+
+    // Power and session notifications reach the host window; the machine is neither suspended nor locked here.
+    var power = new List<string>();
+    PowerMonitor.Suspended += (_, _) => power.Add("suspend");
+    PowerMonitor.Resumed += (_, _) => power.Add("resume");
+    PowerMonitor.OnAc += (_, _) => power.Add("on-ac");
+    PowerMonitor.OnBattery += (_, _) => power.Add("on-battery");
+    PowerMonitor.ScreenLocked += (_, _) => power.Add("lock");
+    PowerMonitor.ScreenUnlocked += (_, _) => power.Add("unlock");
+    var speed = new List<int>();
+    PowerMonitor.SpeedLimitChanged += (_, e) => speed.Add(e.Limit);
+    var host = WindowsShell.SystemHost();
+    foreach (var pbt in new nint[] { 0x4, 0x7, 0x12, 0xA }) WindowsShell.Send(host, 0x0218 /* WM_POWERBROADCAST */, pbt);
+    foreach (var wts in new nint[] { 0x7, 0x8, 0x5 }) WindowsShell.Send(host, 0x02B1 /* WM_WTSSESSION_CHANGE */, wts);
+    Check("power and session notifications raise Electron's events (a status change without a new source raises none)",
+        host != 0 && power.SequenceEqual(["suspend", "resume", "lock", "unlock"]), string.Join(",", power));
+
+    // The limit is 100 at start and only changes under real throttling, which the test cannot cause.
+    await Task.Delay(2500);
+    Check("SpeedLimitChanged subscribes and reports only limits under 100 (weak: no throttling to read back)", speed.All(l => l is >= 0 and < 100), string.Join(",", speed));
+
+    // powercfg /requests lists each request by type; it needs elevation, so without it only the display request is read back
+    // through the execution state (ES_DISPLAY_REQUIRED 2).
+    var product = System.Diagnostics.FileVersionInfo.GetVersionInfo(Environment.ProcessPath!).ProductName;
+    if (string.IsNullOrWhiteSpace(product)) product = "Oriel.WindowTest";
+    var win11 = Environment.OSVersion.Version.Build >= 22000;
+    bool Held(Dictionary<string, List<string>> requests, string section) => requests.TryGetValue(section, out var entries) && entries.Any(e => e.Trim() == product);
+    string Held3(Dictionary<string, List<string>> r) => $"DISPLAY={Held(r, "DISPLAY")} SYSTEM={Held(r, "SYSTEM")} EXECUTION={Held(r, "EXECUTION")}";
+    var baseline = WindowsShell.ExecutionState();
+    var display = PowerSaveBlocker.Start(PowerSaveBlockerType.PreventDisplaySleep);
+    if (WindowsShell.PowerRequests() is { } r1)
+    {
+        Check("PreventDisplaySleep is a display request, plus a system request below Windows 11, named for the product",
+            PowerSaveBlocker.IsStarted(display) && Held(r1, "DISPLAY") && Held(r1, "SYSTEM") == !win11 && !Held(r1, "EXECUTION"), Held3(r1));
+        var app = PowerSaveBlocker.Start(PowerSaveBlockerType.PreventAppSuspension);
+        var r2 = WindowsShell.PowerRequests()!;
+        Check("with both active one lock holds, at the display type: the app type adds no execution request", app != display && Held(r2, "DISPLAY") && !Held(r2, "EXECUTION"), Held3(r2));
+        Check("stopping the display blocker drops the lock to the app type: an execution request, no display or system",
+            PowerSaveBlocker.Stop(display) && WindowsShell.PowerRequests() is { } r3 && Held(r3, "EXECUTION") && !Held(r3, "DISPLAY") && !Held(r3, "SYSTEM"), Held3(WindowsShell.PowerRequests()!));
+        Check("Stop ends the last blocker and releases every request; a stopped id cannot be stopped again",
+            PowerSaveBlocker.Stop(app) && !PowerSaveBlocker.Stop(app) && !PowerSaveBlocker.IsStarted(app) && WindowsShell.PowerRequests() is { } r4 && !Held(r4, "DISPLAY") && !Held(r4, "SYSTEM") && !Held(r4, "EXECUTION"),
+            Held3(WindowsShell.PowerRequests()!));
+    }
+    else
+    {
+        Check("PreventDisplaySleep keeps the display required (weak: powercfg /requests needs elevation)", PowerSaveBlocker.IsStarted(display) && (WindowsShell.ExecutionState() & 0x2) != 0, $"0x{baseline:X} -> 0x{WindowsShell.ExecutionState():X}");
+        var app = PowerSaveBlocker.Start(PowerSaveBlockerType.PreventAppSuspension);
+        Check("ids count up from the process's first start, and starting never throws", app == display + 1, $"{display} {app}");
+        Check("Stop ends each, and a stopped blocker cannot be stopped again", PowerSaveBlocker.Stop(display) && PowerSaveBlocker.Stop(app) && !PowerSaveBlocker.Stop(app) && !PowerSaveBlocker.IsStarted(display)
+            && WindowsShell.ExecutionState() == baseline, $"0x{baseline:X} -> 0x{WindowsShell.ExecutionState():X}");
+    }
+}
+
 async Task MacTransparencyAsync()
 {
     if (!OperatingSystem.IsMacOS()) return;
@@ -4610,105 +4736,6 @@ async Task WindowPolishAsync(BrowserWindow win)
     backdrop.Destroy();
     win.Focus();
     await Task.Delay(500);
-}
-
-async Task PowerAndShortcutsAsync()
-{
-    if (!OperatingSystem.IsWindows())
-    {
-        Check("globalShortcut, powerMonitor and powerSaveBlocker throw off Windows", Throws<PlatformNotSupportedException>(() => GlobalShortcut.IsRegistered("Ctrl+A"))
-            && Throws<PlatformNotSupportedException>(() => PowerMonitor.GetSystemIdleTime()) && Throws<PlatformNotSupportedException>(() => PowerSaveBlocker.Start(PowerSaveBlockerType.PreventAppSuspension)));
-        return;
-    }
-
-    // Global shortcuts: Windows refuses a combination another app holds, so this test can see Oriel holding it.
-    const uint Mods = 0x1 | 0x2 | 0x4; // MOD_ALT | MOD_CONTROL | MOD_SHIFT
-    const uint F9 = 0x78;
-    var fired = 0;
-    Check("Register takes a free shortcut", GlobalShortcut.Register("Ctrl+Alt+Shift+F9", () => fired++) && GlobalShortcut.IsRegistered("Ctrl+Alt+Shift+F9"));
-    Check("the shortcut is held system-wide", !WindowsShell.HotKeyFree(Mods, F9));
-    Check("the same combination written differently is the same shortcut", GlobalShortcut.IsRegistered("Shift+Control+Alt+F9") && !GlobalShortcut.Register("Alt+Shift+CmdOrCtrl+F9", () => { }));
-    WindowsShell.Chord(0x11 /* VK_CONTROL */, 0x12 /* VK_MENU */, 0x10 /* VK_SHIFT */, (byte)F9);
-    Check("pressing it runs the callback, whatever has focus", Eventually(() => fired == 1, step), fired);
-    // Chromium registers without MOD_NOREPEAT: a held key's repeated key-downs fire the callback each time.
-    fired = 0;
-    WindowsShell.Hold(4, 0x11, 0x12, 0x10, (byte)F9);
-    Check("a held shortcut repeats the callback (no MOD_NOREPEAT)", Eventually(() => fired >= 3, step), fired);
-    GlobalShortcut.Unregister("Ctrl+Alt+Shift+F9");
-    fired = 1;
-    Check("Unregister lets it go", !GlobalShortcut.IsRegistered("Ctrl+Alt+Shift+F9") && WindowsShell.HotKeyFree(Mods, F9));
-    WindowsShell.Chord(0x11, 0x12, 0x10, (byte)F9);
-    await Task.Delay(300);
-    Check("a released shortcut no longer runs the callback", fired == 1, fired);
-    GlobalShortcut.RegisterAll(["Ctrl+Alt+Shift+F10", "Ctrl+Alt+Shift+F11"], () => { });
-    Check("RegisterAll takes each", GlobalShortcut.IsRegistered("Ctrl+Alt+Shift+F10") && GlobalShortcut.IsRegistered("Ctrl+Alt+Shift+F11") && !WindowsShell.HotKeyFree(Mods, 0x79));
-    GlobalShortcut.UnregisterAll();
-    Check("UnregisterAll lets them all go", !GlobalShortcut.IsRegistered("Ctrl+Alt+Shift+F10") && WindowsShell.HotKeyFree(Mods, 0x79) && WindowsShell.HotKeyFree(Mods, 0x7A));
-    Check("an invalid accelerator throws", Throws<ArgumentException>(() => GlobalShortcut.Register("Ctrl+Nope", () => { })));
-
-    // Idle time and power source, read independently.
-    WindowsShell.Nudge();
-    await Task.Delay(2500);
-    var quiet = PowerMonitor.GetSystemIdleTime();
-    WindowsShell.Nudge();
-    Check("GetSystemIdleTime counts seconds without input, and input resets it", quiet is 2 or 3 && PowerMonitor.GetSystemIdleTime() <= 1, $"{quiet} -> {PowerMonitor.GetSystemIdleTime()}");
-    Check("GetSystemIdleState: active under the threshold, idle at zero", PowerMonitor.GetSystemIdleState(60) == SystemIdleState.Active && PowerMonitor.GetSystemIdleState(0) == SystemIdleState.Idle,
-        $"{PowerMonitor.GetSystemIdleState(60)} {PowerMonitor.GetSystemIdleState(0)}");
-    var psi = new System.Diagnostics.ProcessStartInfo("powershell.exe") { UseShellExecute = false, CreateNoWindow = true, RedirectStandardOutput = true };
-    foreach (var arg in new[] { "-NoProfile", "-Command", "Add-Type -AssemblyName System.Windows.Forms; [Windows.Forms.SystemInformation]::PowerStatus.PowerLineStatus" }) psi.ArgumentList.Add(arg);
-    var line = System.Diagnostics.Process.Start(psi)!.StandardOutput.ReadToEnd().Trim();
-    Check("IsOnBatteryPower agrees with Windows' power line status", PowerMonitor.IsOnBatteryPower() == (line == "Offline") && PowerMonitor.OnBatteryPower == PowerMonitor.IsOnBatteryPower(), $"{line} {PowerMonitor.IsOnBatteryPower()}");
-
-    // Power and session notifications reach the host window; the machine is neither suspended nor locked here.
-    var power = new List<string>();
-    PowerMonitor.Suspended += (_, _) => power.Add("suspend");
-    PowerMonitor.Resumed += (_, _) => power.Add("resume");
-    PowerMonitor.OnAc += (_, _) => power.Add("on-ac");
-    PowerMonitor.OnBattery += (_, _) => power.Add("on-battery");
-    PowerMonitor.ScreenLocked += (_, _) => power.Add("lock");
-    PowerMonitor.ScreenUnlocked += (_, _) => power.Add("unlock");
-    var speed = new List<int>();
-    PowerMonitor.SpeedLimitChanged += (_, e) => speed.Add(e.Limit);
-    var host = WindowsShell.SystemHost();
-    foreach (var pbt in new nint[] { 0x4, 0x7, 0x12, 0xA }) WindowsShell.Send(host, 0x0218 /* WM_POWERBROADCAST */, pbt);
-    foreach (var wts in new nint[] { 0x7, 0x8, 0x5 }) WindowsShell.Send(host, 0x02B1 /* WM_WTSSESSION_CHANGE */, wts);
-    Check("power and session notifications raise Electron's events (a status change without a new source raises none)",
-        host != 0 && power.SequenceEqual(["suspend", "resume", "lock", "unlock"]), string.Join(",", power));
-
-    // The limit is 100 at start and only changes under real throttling, which the test cannot cause.
-    await Task.Delay(2500);
-    Check("SpeedLimitChanged subscribes and reports only limits under 100 (weak: no throttling to read back)", speed.All(l => l is >= 0 and < 100), string.Join(",", speed));
-
-    // powercfg /requests lists each request by type; it needs elevation, so without it only the display request is read back
-    // through the execution state (ES_DISPLAY_REQUIRED 2).
-    var product = System.Diagnostics.FileVersionInfo.GetVersionInfo(Environment.ProcessPath!).ProductName;
-    if (string.IsNullOrWhiteSpace(product)) product = "Oriel.WindowTest";
-    var win11 = Environment.OSVersion.Version.Build >= 22000;
-    bool Held(Dictionary<string, List<string>> requests, string section) => requests.TryGetValue(section, out var entries) && entries.Any(e => e.Trim() == product);
-    string Held3(Dictionary<string, List<string>> r) => $"DISPLAY={Held(r, "DISPLAY")} SYSTEM={Held(r, "SYSTEM")} EXECUTION={Held(r, "EXECUTION")}";
-    var baseline = WindowsShell.ExecutionState();
-    var display = PowerSaveBlocker.Start(PowerSaveBlockerType.PreventDisplaySleep);
-    if (WindowsShell.PowerRequests() is { } r1)
-    {
-        Check("PreventDisplaySleep is a display request, plus a system request below Windows 11, named for the product",
-            PowerSaveBlocker.IsStarted(display) && Held(r1, "DISPLAY") && Held(r1, "SYSTEM") == !win11 && !Held(r1, "EXECUTION"), Held3(r1));
-        var app = PowerSaveBlocker.Start(PowerSaveBlockerType.PreventAppSuspension);
-        var r2 = WindowsShell.PowerRequests()!;
-        Check("with both active one lock holds, at the display type: the app type adds no execution request", app != display && Held(r2, "DISPLAY") && !Held(r2, "EXECUTION"), Held3(r2));
-        Check("stopping the display blocker drops the lock to the app type: an execution request, no display or system",
-            PowerSaveBlocker.Stop(display) && WindowsShell.PowerRequests() is { } r3 && Held(r3, "EXECUTION") && !Held(r3, "DISPLAY") && !Held(r3, "SYSTEM"), Held3(WindowsShell.PowerRequests()!));
-        Check("Stop ends the last blocker and releases every request; a stopped id cannot be stopped again",
-            PowerSaveBlocker.Stop(app) && !PowerSaveBlocker.Stop(app) && !PowerSaveBlocker.IsStarted(app) && WindowsShell.PowerRequests() is { } r4 && !Held(r4, "DISPLAY") && !Held(r4, "SYSTEM") && !Held(r4, "EXECUTION"),
-            Held3(WindowsShell.PowerRequests()!));
-    }
-    else
-    {
-        Check("PreventDisplaySleep keeps the display required (weak: powercfg /requests needs elevation)", PowerSaveBlocker.IsStarted(display) && (WindowsShell.ExecutionState() & 0x2) != 0, $"0x{baseline:X} -> 0x{WindowsShell.ExecutionState():X}");
-        var app = PowerSaveBlocker.Start(PowerSaveBlockerType.PreventAppSuspension);
-        Check("ids count up from the process's first start, and starting never throws", app == display + 1, $"{display} {app}");
-        Check("Stop ends each, and a stopped blocker cannot be stopped again", PowerSaveBlocker.Stop(display) && PowerSaveBlocker.Stop(app) && !PowerSaveBlocker.Stop(app) && !PowerSaveBlocker.IsStarted(display)
-            && WindowsShell.ExecutionState() == baseline, $"0x{baseline:X} -> 0x{WindowsShell.ExecutionState():X}");
-    }
 }
 
 async Task TrayAsync()

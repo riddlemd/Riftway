@@ -39,6 +39,11 @@ General items: [todo.md](todo.md).
       `xdg-open`/`xdg-email`/`gio` scripts, a fake portal `OpenDirectory` and a fake `FileManager1`, and the X bell
   - [x] A real `gio trash` landing in `~/.local/share/Trash`: the image has `libglib2.0-bin` (rebuild `oriel-linux-dev`)
   - [ ] Against a real desktop: GNOME's portal and Nautilus, KDE's `kioclient5`/`kioclient`, Dolphin's `FileManager1`
+- [x] `GlobalShortcut`, `PowerMonitor`, `PowerSaveBlocker` (branch `linux-power-shortcuts`): X11 key grabs, logind sleep and
+      shutdown delay locks, the D-Bus inhibit services and screen saver lock state, read back in WindowTest against fake
+      services (`samples/Shared/FakeDBusService.cs`) and a private system bus (`eng/docker/with-system-bus.sh`)
+  - [ ] Check them on a real desktop: GNOME's session manager inhibit, logind's real `PrepareForSleep`/`PrepareForShutdown`,
+        and a real screen locker's `ActiveChanged`
 - [ ] nativeTheme against a real `xdg-desktop-portal` (GNOME, KDE): Docker has none, so the checks use a fake portal
       (`samples/Shared/FakePortal.cs`) that WindowTest starts before CEF
 - [ ] nativeTheme: with no portal preference, pages keep GTK's colours from startup (DRIFT Y2); a CEF patch to clear

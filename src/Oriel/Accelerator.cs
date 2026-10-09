@@ -10,6 +10,15 @@ internal enum AcceleratorModifiers
     Alt = 1 << 2,
     // Command on macOS; the Windows/Super key elsewhere, which CEF accelerators cannot express.
     Command = 1 << 3,
+    // Electron's EF_ALTGR_DOWN: a modifier of its own, not Alt.
+    AltGr = 1 << 4,
+}
+
+internal static class AcceleratorModifiersExtensions
+{
+    /// <summary>The modifiers as Oriel's menus read them, with AltGr counted as Alt.</summary>
+    internal static AcceleratorModifiers ForMenus(this AcceleratorModifiers m)
+        => m.HasFlag(AcceleratorModifiers.AltGr) ? (m & ~AcceleratorModifiers.AltGr) | AcceleratorModifiers.Alt : m;
 }
 
 /// <summary>An Electron accelerator string such as <c>CmdOrCtrl+Shift+Z</c>, parsed for one OS.</summary>
@@ -80,7 +89,8 @@ internal readonly record struct Accelerator(int KeyCode, string MacKeyEquivalent
         "command" or "cmd" or "super" or "meta" => AcceleratorModifiers.Command,
         "control" or "ctrl" => AcceleratorModifiers.Control,
         "commandorcontrol" or "cmdorctrl" => macOS ? AcceleratorModifiers.Command : AcceleratorModifiers.Control,
-        "alt" or "option" or "altgr" => AcceleratorModifiers.Alt,
+        "alt" or "option" => AcceleratorModifiers.Alt,
+        "altgr" => AcceleratorModifiers.AltGr,
         "shift" => AcceleratorModifiers.Shift,
         _ => null,
     };

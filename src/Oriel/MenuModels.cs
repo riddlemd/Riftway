@@ -54,5 +54,5 @@ internal static unsafe class MenuModels
     internal static Accelerator? CefAccelerator(MenuItem item)
         => item.Accelerator is { } text && Accelerator.Parse(text, macOS: false) is var a && !a.Modifiers.HasFlag(AcceleratorModifiers.Command) ? a : null;
 
-    internal static int Has(Accelerator accelerator, AcceleratorModifiers modifier) => accelerator.Modifiers.HasFlag(modifier) ? 1 : 0;
+    internal static int Has(Accelerator accelerator, AcceleratorModifiers modifier) => accelerator.Modifiers.ForMenus().HasFlag(modifier) ? 1 : 0;
 }
