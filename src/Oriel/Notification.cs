@@ -58,7 +58,8 @@ public enum NotificationCloseReason
 /// <summary>A desktop notification; Electron's <c>Notification</c>. Windows shows it as a toast from
 /// <see cref="OrielApp.AppUserModelId"/>. As in Electron, the first notification (or <see cref="IsSupported"/>) of an
 /// unpackaged app writes a Start-menu shortcut named after the executable's product name and registers the toast
-/// activator CLSID under HKCU, so that Windows shows the app's toasts and delivers their buttons.
+/// activator CLSID under HKCU, so that Windows shows the app's toasts and delivers their buttons. Linux sends it to
+/// <c>org.freedesktop.Notifications</c> on the session bus as libnotify does, waiting for the server's answer.
 /// Use it on the UI thread; its events arrive there.</summary>
 /// <remarks>A shown notification stays alive until it is clicked, closed or fails, even with no reference to it.</remarks>
 public sealed class Notification
@@ -80,7 +81,9 @@ public sealed class Notification
 
     internal static INotificationBackend Backend { get; set; } = OperatingSystem.IsWindows()
         ? new ToastNotificationBackend()
-        : new UnsupportedNotificationBackend();
+        : OperatingSystem.IsLinux()
+            ? new LinuxNotificationBackend()
+            : new UnsupportedNotificationBackend();
 
     internal static Func<bool> IsAppReady { get; set; } = () => OrielApp.CurrentOrNull is { IsReady: true };
 
@@ -161,28 +164,32 @@ public sealed class Notification
     /// <summary>Whether the notification is on screen (shown and not yet dismissed, clicked, closed or failed).</summary>
     public bool IsShown => _handle is not null && !_dismissed;
 
-    /// <summary>The notification was shown; Electron's <c>show</c>. Raised on the UI thread after <see cref="Show"/> returns,
-    /// as Electron posts it; not raised if <see cref="Close"/> came first.</summary>
+    /// <summary>The notification was shown; Electron's <c>show</c>. On Windows raised on the UI thread after
+    /// <see cref="Show"/> returns, as Electron posts it, and not if <see cref="Close"/> came first; on Linux raised inside
+    /// <see cref="Show"/>, as Electron's synchronous libnotify call does.</summary>
     public event EventHandler? Shown;
 
-    /// <summary>The user clicked the notification's body; Electron's <c>click</c>.</summary>
+    /// <summary>The user clicked the notification's body; Electron's <c>click</c>. On Linux, the server's "default"
+    /// action, offered only when it lists the "actions" capability.</summary>
     public event EventHandler? Click;
 
-    /// <summary>The user used an action; Electron's <c>action</c>.</summary>
+    /// <summary>The user used an action; Electron's <c>action</c>. Never on Linux, where Electron sends no actions.</summary>
     public event EventHandler<NotificationActionEventArgs>? Action;
 
-    /// <summary>The user sent a reply; the argument is its text. Electron's <c>reply</c>.</summary>
+    /// <summary>The user sent a reply; the argument is its text. Electron's <c>reply</c>. Never on Linux.</summary>
     public event EventHandler<string>? Reply;
 
     /// <summary>The notification was dismissed by the user, timed out, or was hidden by the system; Electron's
-    /// <c>close</c>. <see cref="Close"/> does not raise it, as on Electron for Windows.</summary>
+    /// <c>close</c>. <see cref="Close"/> does not raise it, as on Electron for Windows and Linux. On Linux the
+    /// notification ends with it, as Electron destroys it.</summary>
     public event EventHandler<NotificationCloseReason>? Closed;
 
     /// <summary>The OS could not show it; the argument is Electron's error text. Electron's <c>failed</c>. A refused
-    /// <see cref="Show"/> raises it after returning, as Electron posts it.</summary>
+    /// <see cref="Show"/> raises it after returning on Windows, as Electron posts it, and inside it with "" on Linux.</summary>
     public event EventHandler<string>? Failed;
 
-    /// <summary>Whether desktop notifications work here; Electron's <c>Notification.isSupported()</c>.</summary>
+    /// <summary>Whether desktop notifications work here; Electron's <c>Notification.isSupported()</c>. Always true on
+    /// Linux, which needs no libnotify.</summary>
     public static bool IsSupported()
     {
         if (OrielApp.CurrentOrNull is not null) Backend.Prepare();
@@ -226,18 +233,18 @@ public sealed class Notification
         var sink = new Sink(this);
         try
         {
-            string xml;
-            if (string.IsNullOrEmpty(ToastXml))
-                xml = BuildToastXml(this, IconImage is not null || Icon is { Length: > 0 } ? Backend.SaveIcon(Icon, IconImage) : null);
-            else
-                xml = ToastXml;
-            _handle = Backend.Show(xml, Id, GroupId.Length > 0 ? GroupId : DefaultGroup, Urgency == "critical", sink);
+            _handle = Backend.Show(this, sink);
             _sink = sink;
         }
         catch (Exception e) when (e is not PlatformNotSupportedException)
         {
-            // Electron reports the failure from a task posted to the UI thread, unless the notification moved on.
             var error = e.Message;
+            if (!Backend.PostsShowEvents)
+            {
+                Failed?.Invoke(this, error);
+                return;
+            }
+            // Electron reports the failure from a task posted to the UI thread, unless the notification moved on.
             Backend.Post(() =>
             {
                 if (_showAttempt == attempt) Failed?.Invoke(this, error);
@@ -246,11 +253,26 @@ public sealed class Notification
         }
         _dismissed = false;
         s_live.Add(this);
+        if (!Backend.PostsShowEvents)
+        {
+            Shown?.Invoke(this, EventArgs.Empty);
+            return;
+        }
         // Electron emits show from a posted task, and not at all once close() has run in between.
         Backend.Post(() =>
         {
             if (_sink == sink) Shown?.Invoke(this, EventArgs.Empty);
         });
+    }
+
+    /// <summary>What a toast backend shows for <paramref name="n"/>: the generated XML (with the icon
+    /// <paramref name="saveIcon"/> copies) or <see cref="ToastXml"/>, the tag, the group and the priority.</summary>
+    internal static ToastRequest Toast(Notification n, Func<string?, NativeImage?, string?> saveIcon)
+    {
+        var xml = string.IsNullOrEmpty(n.ToastXml)
+            ? BuildToastXml(n, n.IconImage is not null || n.Icon is { Length: > 0 } ? saveIcon(n.Icon, n.IconImage) : null)
+            : n.ToastXml;
+        return new ToastRequest(xml, n.Id, n.GroupId.Length > 0 ? n.GroupId : DefaultGroup, n.Urgency == "critical");
     }
 
     /// <summary>Hides the notification, or once it has been dismissed into the Action Center removes it from there.
@@ -355,9 +377,11 @@ public sealed class Notification
 
     internal void OnDismissed(NotificationCloseReason reason)
     {
-        if (_handle is null) return;
+        if (_handle is not { } handle) return;
         _dismissed = true;
         Closed?.Invoke(this, reason);
+        // A close handler may have shown it again; that handle is not this one's to drop.
+        if (!Backend.KeepsDismissed && ReferenceEquals(_handle, handle)) Forget();
     }
 
     internal void OnFailed(string error)
@@ -458,24 +482,31 @@ internal interface INotificationSink
     void Failed(string error);
 }
 
+/// <summary>A toast as <see cref="Notification.Toast"/> builds it.</summary>
+internal readonly record struct ToastRequest(string Xml, string Tag, string Group, bool HighPriority);
+
 /// <summary>A platform's notification service behind <see cref="Notification"/>.</summary>
 internal interface INotificationBackend
 {
     bool IsSupported { get; }
 
+    /// <summary>Whether <c>show</c> and <c>failed</c> are posted to the UI thread (Windows) rather than raised inside
+    /// <see cref="Notification.Show"/> (Linux, where libnotify shows synchronously).</summary>
+    bool PostsShowEvents { get; }
+
+    /// <summary>Whether a dismissed notification stays until <see cref="Notification.Close"/> (Windows' Action Center)
+    /// rather than ending with its <c>close</c> event (Linux).</summary>
+    bool KeepsDismissed { get; }
+
     /// <summary>Readies the service once per process: Electron's notification presenter creation.</summary>
     void Prepare();
-
-    /// <summary>A PNG copy of <paramref name="image"/>, else of the image at <paramref name="path"/>, for the generated
-    /// XML; null if it is empty or cannot be read.</summary>
-    string? SaveIcon(string? path, NativeImage? image);
 
     /// <summary>Runs <paramref name="action"/> later on the UI thread.</summary>
     void Post(Action action);
 
-    /// <summary>Shows <paramref name="xml"/> tagged <paramref name="tag"/> in <paramref name="group"/>; returns a handle, or
-    /// throws with Electron's failure text if refused.</summary>
-    object Show(string xml, string tag, string group, bool highPriority, INotificationSink sink);
+    /// <summary>Shows <paramref name="notification"/>; returns a handle, or throws with Electron's failure text if
+    /// refused.</summary>
+    object Show(Notification notification, INotificationSink sink);
 
     /// <summary>Takes a shown notification off the screen.</summary>
     void Hide(object handle);
@@ -495,6 +526,10 @@ internal sealed class ToastNotificationBackend : INotificationBackend
     private static string? s_iconDirectory;
 
     public bool IsSupported => WindowsToast.IsSupported();
+
+    public bool PostsShowEvents => true;
+
+    public bool KeepsDismissed => true;
 
     public void Prepare() => WindowsToastActivator.Register((arguments, inputs) => OnUi(() => Notification.HandleToastActivation(arguments, inputs)));
 
@@ -527,10 +562,11 @@ internal sealed class ToastNotificationBackend : INotificationBackend
 
     public void Post(Action action) => CefThread.PostUi(action);
 
-    public object Show(string xml, string tag, string group, bool highPriority, INotificationSink sink)
+    public object Show(Notification notification, INotificationSink sink)
     {
-        var events = new Events(sink) { AppId = WindowsAppIdentity.AppUserModelId, Tag = tag, Group = group };
-        events.Handle = WindowsToast.Show(events.AppId, xml, tag, group, highPriority, events);
+        var toast = Notification.Toast(notification, SaveIcon);
+        var events = new Events(sink) { AppId = WindowsAppIdentity.AppUserModelId, Tag = toast.Tag, Group = toast.Group };
+        events.Handle = WindowsToast.Show(events.AppId, toast.Xml, toast.Tag, toast.Group, toast.HighPriority, events);
         return events;
     }
 
@@ -586,13 +622,15 @@ internal sealed class UnsupportedNotificationBackend : INotificationBackend
 {
     public bool IsSupported => false;
 
-    public void Prepare() { }
+    public bool PostsShowEvents => true;
 
-    public string? SaveIcon(string? path, NativeImage? image) => null;
+    public bool KeepsDismissed => true;
+
+    public void Prepare() { }
 
     public void Post(Action action) => action();
 
-    public object Show(string xml, string tag, string group, bool highPriority, INotificationSink sink)
+    public object Show(Notification notification, INotificationSink sink)
         => throw new PlatformNotSupportedException("Notification is not implemented on this platform.");
 
     public void Hide(object handle) { }

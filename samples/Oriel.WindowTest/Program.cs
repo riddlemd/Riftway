@@ -350,6 +350,7 @@ async Task RunAsync(BrowserWindow win, BrowserWindow simple)
     await StartDragTests.RunAsync(Check);
     if (OperatingSystem.IsWindows()) await SafeStorageAsync();
     if (OperatingSystem.IsWindows()) await NotificationAsync();
+    if (OperatingSystem.IsLinux()) await LinuxNotificationTest.RunAsync(Check, step, app.Name);
     await TrayAsync();
     if (OperatingSystem.IsWindows()) await AppWindowsAsync();
     await DebuggerAsync();

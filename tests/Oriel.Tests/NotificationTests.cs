@@ -422,6 +422,67 @@ public sealed class NotificationTests : IDisposable
         Assert.Equal(["shown", "failed boom"], _events);
     }
 
+    [Fact]
+    public void SynchronousBackend_RaisesShownInsideShow()
+    {
+        _backend.Deferred = true;
+        _backend.PostsShowEvents = false;
+        var n = Watched();
+        n.Show();
+        Assert.Equal(["shown"], _events);
+        _backend.Drain();
+        Assert.Equal(["shown"], _events);
+    }
+
+    [Fact]
+    public void SynchronousBackend_RaisesFailedInsideShow()
+    {
+        _backend.Deferred = true;
+        _backend.PostsShowEvents = false;
+        _backend.Refuse = true;
+        var n = Watched();
+        n.Show();
+        Assert.Equal(["failed no"], _events);
+        Assert.False(n.IsShown);
+        _backend.Drain();
+        Assert.Equal(["failed no"], _events);
+    }
+
+    [Fact]
+    public void DestroyingBackend_EndsTheNotificationWithClosed()
+    {
+        _backend.KeepsDismissed = false;
+        var n = Watched();
+        n.Show();
+        var sink = _backend.Sink!;
+        sink.Dismissed(NotificationCloseReason.TimedOut);
+        Assert.Equal([1], _backend.Released);
+        sink.Dismissed(NotificationCloseReason.UserCanceled);
+        n.Close();
+        Assert.Empty(_backend.Removed);
+        Assert.Empty(_backend.Hidden);
+        Assert.Equal(["shown", "closed TimedOut"], _events);
+    }
+
+    [Fact]
+    public void DestroyingBackend_KeepsAShowFromTheCloseHandler()
+    {
+        _backend.KeepsDismissed = false;
+        var n = Watched();
+        var again = true;
+        n.Closed += (_, _) =>
+        {
+            if (!again) return;
+            again = false;
+            n.Show();
+        };
+        n.Show();
+        _backend.Sink!.Dismissed(NotificationCloseReason.UserCanceled);
+        Assert.True(n.IsShown);
+        Assert.Equal([1], _backend.Released);
+        Assert.Equal(["shown", "closed UserCanceled", "shown"], _events);
+    }
+
     private sealed class FakeBackend : INotificationBackend
     {
         private int _next;
@@ -448,19 +509,24 @@ public sealed class NotificationTests : IDisposable
 
         public bool IsSupported => true;
 
+        public bool PostsShowEvents { get; set; } = true;
+
+        public bool KeepsDismissed { get; set; } = true;
+
         public void Prepare() { }
 
-        public string? SaveIcon(string? path, NativeImage? image)
+        private string? SaveIcon(string? path, NativeImage? image)
         {
             Icons.Add(path ?? "");
             Image = image;
             return IconPath is null ? null : IconPath + path;
         }
 
-        public object Show(string xml, string tag, string group, bool highPriority, INotificationSink sink)
+        public object Show(Notification notification, INotificationSink sink)
         {
+            var toast = Notification.Toast(notification, SaveIcon);
             if (Refuse) throw new InvalidOperationException("no");
-            (Xml, Tag, Group, HighPriority, Sink) = (xml, tag, group, highPriority, sink);
+            (Xml, Tag, Group, HighPriority, Sink) = (toast.Xml, toast.Tag, toast.Group, toast.HighPriority, sink);
             Sinks.Add(sink);
             return ++_next;
         }

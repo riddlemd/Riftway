@@ -22,6 +22,7 @@
     <Compile Include="..\Shared\FakePortal.cs" Link="FakePortal.cs" />
     <Compile Include="..\Shared\FakeDBusService.cs" Link="FakeDBusService.cs" />
     <Compile Include="..\Shared\FakeStatusNotifierWatcher.cs" Link="FakeStatusNotifierWatcher.cs" />
+    <Compile Include="..\Shared\FakeNotificationServer.cs" Link="FakeNotificationServer.cs" />
   </ItemGroup>
 
 </Project>

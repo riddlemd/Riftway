@@ -55,6 +55,14 @@ General items: [todo.md](todo.md).
       (`samples/Shared/FakeStatusNotifierWatcher.cs`) and through GTK
   - [ ] Check against real hosts: Plasma's system tray, GNOME Shell with the AppIndicator extension (icon files),
         an XEmbed tray for the GTK fallback (Docker has none of them)
+- [ ] `Notification` (branch `linux-notification`): Electron's `LibnotifyNotification` over D-Bus without libnotify
+      (DRIFT Q5-Q11); unit tests pass on the host
+  - [ ] Run WindowTest's `LinuxNotificationTest` (fake `org.freedesktop.Notifications`,
+        `samples/Shared/FakeNotificationServer.cs`): Notify's arguments and hints, `show` inside `Show()`, the default
+        action as `click`, no `action` or `reply`, `NotificationClosed` as `close`, `CloseNotification` from `Close()`,
+        a refused Notify as `failed`, `IsSupported`. Written, not yet run
+  - [ ] Check against real servers: GNOME Shell, Plasma, dunst/mako (the default action, `image-data`, `append`)
+  - [ ] The click's activation token on the patched libcef (DRIFT Q10), with the tray's
 - [ ] Screen capture: Chromium's X11 desktop capturer dies with SIGILL under the Docker Xvfb (arm64) when getDisplayMedia starts; SessionTest skips the capture checks there (ORIEL_XVFB). Verify on a real X server; if it crashes there too, find the CHECK with CEF's symbols
 - [x] `Shell` (branch `linux-shell`): Electron's `platform_util_linux.cc`, checked by `samples/Oriel.ShellTest` against fake
       `xdg-open`/`xdg-email`/`gio` scripts, a fake portal `OpenDirectory` and a fake `FileManager1`, and the X bell
