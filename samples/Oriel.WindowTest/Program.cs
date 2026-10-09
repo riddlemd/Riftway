@@ -3792,8 +3792,7 @@ async Task PowerAndShortcutsAsync()
 {
     if (OperatingSystem.IsMacOS())
     {
-        Check("globalShortcut, powerMonitor and powerSaveBlocker throw on macOS", Throws<PlatformNotSupportedException>(() => GlobalShortcut.IsRegistered("Ctrl+A"))
-            && Throws<PlatformNotSupportedException>(() => PowerMonitor.GetSystemIdleTime()) && Throws<PlatformNotSupportedException>(() => PowerSaveBlocker.Start(PowerSaveBlockerType.PreventAppSuspension)));
+        await MacPowerTest.RunAsync(Check, step, app.Name);
         return;
     }
     if (OperatingSystem.IsLinux())
@@ -5177,11 +5176,12 @@ async Task TrayAsync()
         await LinuxTrayTest.RunAsync(Check, step);
         return;
     }
-    if (!OperatingSystem.IsWindows())
+    if (OperatingSystem.IsMacOS())
     {
-        Check("Tray throws PlatformNotSupportedException on macOS", Throws<PlatformNotSupportedException>(() => _ = new Tray(Square(0, 0, 255))));
+        await MacTrayTest.RunAsync(Check, step);
         return;
     }
+    if (!OperatingSystem.IsWindows()) return;
 
     // The process's first tray icon: Electron numbers icons from 2.
     const uint Id = 2;

@@ -11,3 +11,9 @@ General items: [todo.md](todo.md).
       `refreshMenuTree` through `menuNeedsUpdate:` and `menuDidClose:`)
 - [ ] Run the `SetParentWindow` checks (WindowTest, after "child moves with its parent"; the modal throw check), and
       check whether hide and show re-attach a window created with `Parent` to that parent after `SetParentWindow` (DRIFT W8)
+- [ ] Run the powerMonitor/powerSaveBlocker checks (WindowTest `PowerAndShortcutsAsync` → `MacPowerTest`: `pmset -g assertions`
+      read-back, idle time after a posted CGEvent, lock and session notifications, the held shutdown) and the Tray checks
+      (WindowTest `TrayAsync` → `MacTrayTest`: NSStatusItem, title runs and font, NSEvent-driven events, drops, menus). The
+      CGEvent post and the System Events read-back need Accessibility for the test process
+- [ ] Check on a MacBook that unplugging raises `OnBattery` and `IsOnBatteryPower()` flips (IOPMPowerSource interest
+      notifications); and a real sleep and wake raises `Suspended`/`Resumed` once each

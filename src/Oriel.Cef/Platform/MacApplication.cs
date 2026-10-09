@@ -22,6 +22,15 @@ public static unsafe class MacApplication
 
     private static nint s_nsApplication;
     private static bool s_handlingSendEvent;
+    private static bool s_userStoppedShutdown;
+
+    /// <summary>Electron's <c>shouldShutdown_</c>: asked on <c>NSWorkspaceWillPowerOffNotification</c> whether the
+    /// shutdown may go on. Set by <c>powerMonitor</c> once it has a listener.</summary>
+    public static Func<bool>? ShutdownHandler { get; set; }
+
+    /// <summary>What <c>terminate:</c> runs instead of AppKit's, as Electron's <c>Browser::Quit</c>; AppKit's
+    /// own when null.</summary>
+    public static Action? Quit { get; set; }
 
     /// <summary>Registers the subclass and creates the shared application from it; idempotent.</summary>
     /// <exception cref="InvalidOperationException">NSApp already exists as another class.</exception>
@@ -36,6 +45,8 @@ public static unsafe class MacApplication
         class_addMethod(cls, Selector("isHandlingSendEvent"), (delegate* unmanaged<nint, nint, byte>)&IsHandlingSendEvent, Utf8("B@:"));
         class_addMethod(cls, Selector("setHandlingSendEvent:"), (delegate* unmanaged<nint, nint, byte, void>)&SetHandlingSendEvent, Utf8("v@:B"));
         class_addMethod(cls, Selector("sendEvent:"), (delegate* unmanaged<nint, nint, nint, void>)&SendEvent, Utf8("v@:@"));
+        class_addMethod(cls, Selector("terminate:"), (delegate* unmanaged<nint, nint, nint, void>)&Terminate, Utf8("v@:@"));
+        class_addMethod(cls, Selector("orielWillPowerOff:"), (delegate* unmanaged<nint, nint, nint, void>)&WillPowerOff, Utf8("v@:@"));
 
         // Chromium checks conformance in some builds; the protocols exist once the CEF framework is loaded.
         foreach (var name in new[] { "CrAppProtocol", "CrAppControlProtocol", "CefAppProtocol" })
@@ -49,6 +60,33 @@ public static unsafe class MacApplication
         var app = MsgSend(cls, Selector("sharedApplication"));
         if (MsgSend(app, Selector("class")) != cls)
             throw new InvalidOperationException("NSApp was created before Oriel could install its NSApplication subclass.");
+
+        // Electron's delegate observes it from applicationWillFinishLaunching:, which has not run yet.
+        var workspace = MsgSend(MsgSend(objc_getClass(Utf8("NSWorkspace")), Selector("sharedWorkspace")), Selector("notificationCenter"));
+        var powerOff = MsgSend(objc_getClass(Utf8("NSString")), Selector("stringWithUTF8String:"), (nint)Utf8("NSWorkspaceWillPowerOffNotification"));
+        AddObserver(workspace, Selector("addObserver:selector:name:object:"), app, Selector("orielWillPowerOff:"), powerOff, 0);
+    }
+
+    // Electron's willPowerOff: the flag is never reset, so after a held shutdown terminate: stays ignored.
+    [UnmanagedCallersOnly]
+    private static void WillPowerOff(nint self, nint cmd, nint notification)
+    {
+        try { s_userStoppedShutdown = ShutdownHandler is { } handler && !handler(); }
+        catch (Exception e) { Console.Error.WriteLine($"[Oriel] Unhandled exception in a shutdown handler: {e}"); }
+    }
+
+    [UnmanagedCallersOnly]
+    private static void Terminate(nint self, nint cmd, nint sender)
+    {
+        if (s_userStoppedShutdown) return;
+        if (Quit is { } quit)
+        {
+            try { quit(); }
+            catch (Exception e) { Console.Error.WriteLine($"[Oriel] Unhandled exception in terminate: {e}"); }
+            return;
+        }
+        var super = new ObjcSuper { Receiver = self, SuperClass = s_nsApplication };
+        MsgSendSuper(&super, cmd, sender);
     }
 
     [UnmanagedCallersOnly]
@@ -86,5 +124,7 @@ public static unsafe class MacApplication
     [DllImport(ObjC)] private static extern byte class_addProtocol(nint cls, nint protocol);
     [DllImport(ObjC)] private static extern nint sel_registerName(byte* name);
     [DllImport(ObjC, EntryPoint = "objc_msgSend")] private static extern nint MsgSend(nint receiver, nint selector);
+    [DllImport(ObjC, EntryPoint = "objc_msgSend")] private static extern nint MsgSend(nint receiver, nint selector, nint arg);
+    [DllImport(ObjC, EntryPoint = "objc_msgSend")] private static extern void AddObserver(nint receiver, nint selector, nint observer, nint action, nint name, nint obj);
     [DllImport(ObjC, EntryPoint = "objc_msgSendSuper")] private static extern void MsgSendSuper(ObjcSuper* super, nint selector, nint arg);
 }

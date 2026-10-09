@@ -25,8 +25,39 @@ public sealed class TrayEventArgs(Rectangle bounds, Point position, bool shift, 
     /// <summary>Electron's <c>event.altKey</c>.</summary>
     public bool AltKey { get; } = alt;
 
-    /// <summary>Electron's <c>event.metaKey</c>: the Windows key.</summary>
+    /// <summary>Electron's <c>event.metaKey</c>: the Windows key, or Command on macOS.</summary>
     public bool MetaKey { get; } = meta;
+}
+
+/// <summary>Files dropped on the tray icon. Electron's <c>'drop-files'</c> data.</summary>
+public sealed class TrayFilesDroppedEventArgs(IReadOnlyList<string> files) : EventArgs
+{
+    /// <summary>The dropped paths. Electron's <c>files</c>.</summary>
+    public IReadOnlyList<string> Files { get; } = files;
+}
+
+/// <summary>Text dropped on the tray icon. Electron's <c>'drop-text'</c> data.</summary>
+public sealed class TrayTextDroppedEventArgs(string text) : EventArgs
+{
+    /// <summary>The dropped text. Electron's <c>text</c>.</summary>
+    public string Text { get; } = text;
+}
+
+/// <summary>The font of a macOS tray title. Electron's <c>fontType</c>.</summary>
+public enum TrayTitleFontType
+{
+    /// <summary>Every character the same width. Electron's <c>monospaced</c>.</summary>
+    Monospaced,
+
+    /// <summary>Only the digits the same width. Electron's <c>monospacedDigit</c>.</summary>
+    MonospacedDigit,
+}
+
+/// <summary>Electron's <c>options</c> for <c>tray.setTitle()</c>.</summary>
+public sealed record TrayTitleOptions
+{
+    /// <summary>The font; the status bar's own when null. Electron's <c>fontType</c>.</summary>
+    public TrayTitleFontType? FontType { get; init; }
 }
 
 /// <summary>The icon a balloon shows. Electron's <c>iconType</c>.</summary>
@@ -74,25 +105,27 @@ public sealed record DisplayBalloonOptions
 }
 
 /// <summary>An icon in the notification area (Windows), menu bar (macOS) or system tray (Linux). Electron's <c>Tray</c>.</summary>
-/// <remarks>Windows and Linux (a StatusNotifierItem with a DBusMenu, or a <c>GtkStatusIcon</c> when no host answers, as
-/// Electron); macOS throws <see cref="PlatformNotSupportedException"/>. Create it once the app is ready; its events are
-/// raised on the UI thread.</remarks>
+/// <remarks>Windows, Linux (a StatusNotifierItem with a DBusMenu, or a <c>GtkStatusIcon</c> when no host answers, as
+/// Electron) and macOS (an <c>NSStatusItem</c> with Electron's <c>StatusItemView</c>, its menu an NSMenu). Create it once
+/// the app is ready; its events are raised on the UI thread.</remarks>
 public sealed class Tray
 {
     private readonly ITrayBackend _backend;
     private readonly TrayMenu _menu = new();
     private Menu? _contextMenu;
-    private string _title = "";
-    private bool _ignoreDoubleClick;
+    private readonly Guid? _guid;
     private bool _destroyed;
 
     /// <summary>Puts <paramref name="image"/> in the tray; <paramref name="guid"/> gives it an identity that lasts across
-    /// runs (Windows ties it to the executable's path). Electron's <c>new Tray(image, guid)</c>.</summary>
+    /// runs (Windows ties it to the executable's path; macOS keeps its place in the menu bar under that autosave name).
+    /// Electron's <c>new Tray(image, guid)</c>.</summary>
     public Tray(NativeImage image, Guid? guid = null)
     {
         ArgumentNullException.ThrowIfNull(image);
+        _guid = guid;
         _backend = OperatingSystem.IsWindows() ? new WindowsTrayBackend(this)
             : OperatingSystem.IsLinux() ? new LinuxTrayBackend(this)
+            : OperatingSystem.IsMacOS() ? new MacTrayBackend(this)
             : new UnsupportedTrayBackend();
         CefThread.InvokeOnUi(() =>
         {
@@ -105,10 +138,12 @@ public sealed class Tray
     public Tray(string imagePath, Guid? guid = null) : this(NativeImage.CreateFromBuffer(File.ReadAllBytes(imagePath)), guid) { }
 
     /// <summary>A left click; on Linux the host's activation (<c>Activate</c> or <c>SecondaryActivate</c>), with no bounds,
-    /// position or keys. Electron's <c>'click'</c>.</summary>
+    /// position or keys. On macOS the position is the event's location in the status item's window, flipped against the
+    /// primary display as Electron reports it. Electron's <c>'click'</c>.</summary>
     public event EventHandler<TrayEventArgs>? Clicked;
 
-    /// <summary>A right click when there is no context menu. Electron's <c>'right-click'</c>.</summary>
+    /// <summary>A right click when there is no context menu; on macOS every right button release. Electron's
+    /// <c>'right-click'</c>.</summary>
     public event EventHandler<TrayEventArgs>? RightClicked;
 
     /// <summary>A double click. Electron's <c>'double-click'</c>.</summary>
@@ -125,6 +160,31 @@ public sealed class Tray
 
     /// <summary>The pointer left the icon; noticed within a quarter of a second. Electron's <c>'mouse-leave'</c>.</summary>
     public event EventHandler<TrayEventArgs>? MouseLeft;
+
+    /// <summary>macOS: the left button went down on the icon. Electron's <c>'mouse-down'</c>.</summary>
+    public event EventHandler<TrayEventArgs>? MousePressed;
+
+    /// <summary>macOS: the left button came up on the icon; not raised when the press opened the menu. Electron's
+    /// <c>'mouse-up'</c>.</summary>
+    public event EventHandler<TrayEventArgs>? MouseReleased;
+
+    /// <summary>macOS: a drag entered the icon. Electron's <c>'drag-enter'</c>.</summary>
+    public event EventHandler? DragEntered;
+
+    /// <summary>macOS: a drag left the icon. Electron's <c>'drag-leave'</c>.</summary>
+    public event EventHandler? DragLeft;
+
+    /// <summary>macOS: a drag that entered the icon ended, dropped or not. Electron's <c>'drag-end'</c>.</summary>
+    public event EventHandler? DragEnded;
+
+    /// <summary>macOS: something was dropped on the icon. Electron's <c>'drop'</c>.</summary>
+    public event EventHandler? Dropped;
+
+    /// <summary>macOS: files were dropped on the icon. Electron's <c>'drop-files'</c>.</summary>
+    public event EventHandler<TrayFilesDroppedEventArgs>? FilesDropped;
+
+    /// <summary>macOS: text was dropped on the icon. Electron's <c>'drop-text'</c>.</summary>
+    public event EventHandler<TrayTextDroppedEventArgs>? TextDropped;
 
     /// <summary>A balloon appeared. Electron's <c>'balloon-show'</c>.</summary>
     public event EventHandler? BalloonShown;
@@ -145,6 +205,9 @@ public sealed class Tray
         _backend.Destroy();
     });
 
+    /// <summary>The guid the tray was created with, or null. Electron's <c>tray.getGUID()</c>.</summary>
+    public Guid? GetGuid() => _guid;
+
     /// <summary>Whether <see cref="Destroy"/> was called. Electron's <c>tray.isDestroyed()</c>.</summary>
     public bool IsDestroyed() => CefThread.InvokeOnUi(() => _destroyed);
 
@@ -155,8 +218,13 @@ public sealed class Tray
         Live(() => _backend.SetImage(image));
     }
 
-    /// <summary>macOS: the image shown while the icon is pressed. Stored only elsewhere. Electron's <c>tray.setPressedImage()</c>.</summary>
-    public void SetPressedImage(NativeImage image) => ArgumentNullException.ThrowIfNull(image);
+    /// <summary>macOS: the image shown while the icon is pressed; ignored elsewhere, as in Electron. Electron's
+    /// <c>tray.setPressedImage()</c>.</summary>
+    public void SetPressedImage(NativeImage image)
+    {
+        ArgumentNullException.ThrowIfNull(image);
+        Live(() => (_backend as IMacTrayFeatures)?.SetPressedImage(image));
+    }
 
     /// <summary>Sets the text shown on hover; Windows shows at most 127 characters. Electron's <c>tray.setToolTip()</c>.</summary>
     public void SetToolTip(string toolTip)
@@ -165,19 +233,22 @@ public sealed class Tray
         Live(() => _backend.SetToolTip(toolTip));
     }
 
-    /// <summary>macOS: text beside the icon; ignored elsewhere, as in Electron. Electron's <c>tray.setTitle()</c>.</summary>
-    public void SetTitle(string title) => Live(() => { if (OperatingSystem.IsMacOS()) _title = title ?? ""; });
+    /// <summary>macOS: text beside the icon, with ANSI colour codes (<c>ESC[31m</c>) as Electron reads them; ignored
+    /// elsewhere, as in Electron. Electron's <c>tray.setTitle()</c>.</summary>
+    public void SetTitle(string title, TrayTitleOptions? options = null)
+        => Live(() => (_backend as IMacTrayFeatures)?.SetTitle(title ?? "", options?.FontType));
 
-    /// <summary>The title as set; always empty off macOS. Electron's <c>tray.getTitle()</c>.</summary>
-    public string GetTitle() => CefThread.InvokeOnUi(() => _title);
+    /// <summary>macOS: the title's text, colour codes removed; always empty elsewhere. Electron's
+    /// <c>tray.getTitle()</c>.</summary>
+    public string GetTitle() => CefThread.InvokeOnUi(() => !_destroyed && _backend is IMacTrayFeatures mac ? mac.GetTitle() : "");
 
     /// <summary>macOS: report two clicks rather than a double click; ignored elsewhere, as in Electron.
     /// Electron's <c>tray.setIgnoreDoubleClickEvents()</c>.</summary>
-    public void SetIgnoreDoubleClickEvents(bool ignore) => Live(() => { if (OperatingSystem.IsMacOS()) _ignoreDoubleClick = ignore; });
+    public void SetIgnoreDoubleClickEvents(bool ignore) => Live(() => { if (_backend is IMacTrayFeatures mac) mac.IgnoreDoubleClickEvents = ignore; });
 
     /// <summary>The value set by <see cref="SetIgnoreDoubleClickEvents"/>; always false off macOS.
     /// Electron's <c>tray.getIgnoreDoubleClickEvents()</c>.</summary>
-    public bool GetIgnoreDoubleClickEvents() => CefThread.InvokeOnUi(() => _ignoreDoubleClick);
+    public bool GetIgnoreDoubleClickEvents() => CefThread.InvokeOnUi(() => !_destroyed && _backend is IMacTrayFeatures mac && mac.IgnoreDoubleClickEvents);
 
     /// <summary>Shows a balloon notification (a toast on Windows 10 and 11). Electron's <c>tray.displayBalloon()</c>.</summary>
     public void DisplayBalloon(DisplayBalloonOptions options)
@@ -189,7 +260,7 @@ public sealed class Tray
     /// <summary>Takes the balloon away. Electron's <c>tray.removeBalloon()</c>.</summary>
     public void RemoveBalloon() => Live(_backend.RemoveBalloon);
 
-    /// <summary>Gives the icon keyboard focus. Electron's <c>tray.focus()</c>.</summary>
+    /// <summary>Gives the icon keyboard focus; does nothing on macOS, as in Electron. Electron's <c>tray.focus()</c>.</summary>
     public void Focus() => Live(_backend.Focus);
 
     /// <summary>Sets the menu a right click opens, or none. On Linux the host gets the menu as it is now: set it again
@@ -202,16 +273,24 @@ public sealed class Tray
 
     /// <summary>Opens <paramref name="menu"/>, or the context menu, at <paramref name="position"/> (screen DIPs) or, when
     /// it is null or (0, 0), the pointer. Returns at once; the menu stays open until chosen from or dismissed. Does
-    /// nothing on Linux, as in Electron. Electron's <c>tray.popUpContextMenu()</c>.</summary>
-    public void PopUpContextMenu(Menu? menu = null, Point? position = null)
-        => Live(() => { if (_backend.PopsUpMenus && (menu ?? _contextMenu) is { } m) PopUp(m, position); });
+    /// nothing on Linux, as in Electron. On macOS, as Electron, the menu drops from the status item whatever the position,
+    /// and the context menu does not open again while it is open. Electron's <c>tray.popUpContextMenu()</c>.</summary>
+    public void PopUpContextMenu(Menu? menu = null, Point? position = null) => Live(() =>
+    {
+        if (_backend is IMacTrayFeatures mac) mac.PopUpContextMenu(menu);
+        else if (_backend.PopsUpMenus && (menu ?? _contextMenu) is { } m) PopUp(m, position);
+    });
 
-    /// <summary>Closes the menu the icon opened, if any; does nothing on Linux, as in Electron.
-    /// Electron's <c>tray.closeContextMenu()</c>.</summary>
-    public void CloseContextMenu() => Live(() => { if (_backend.PopsUpMenus) _menu.Close(); });
+    /// <summary>Closes the context menu the icon opened, if any; does nothing on Linux, as in Electron. On macOS only the
+    /// menu set by <see cref="SetContextMenu"/> closes, as Electron. Electron's <c>tray.closeContextMenu()</c>.</summary>
+    public void CloseContextMenu() => Live(() =>
+    {
+        if (_backend is IMacTrayFeatures mac) mac.CloseContextMenu();
+        else if (_backend.PopsUpMenus) _menu.Close();
+    });
 
     /// <summary>The icon's bounds on screen in DIPs; empty when the shell cannot place it (on Windows 11, while it sits in
-    /// the overflow) and always on Linux. Electron's <c>tray.getBounds()</c>.</summary>
+    /// the overflow) and always on Linux. On macOS the status item's window frame. Electron's <c>tray.getBounds()</c>.</summary>
     public Rectangle GetBounds() => CefThread.InvokeOnUi(() => _destroyed ? default : _backend.GetBounds());
 
     // Electron's NotifyIcon::PopUpContextMenu: no menu without the foreground, and (0, 0) means the pointer.
@@ -246,6 +325,45 @@ public sealed class Tray
             _ => null,
         };
         handler?.Invoke(this, new TrayEventArgs(bounds, position, keys.Shift, keys.Ctrl, keys.Alt, keys.Meta));
+    }
+
+    /// <summary>macOS: a <c>StatusItemView</c> event with the bounds and position Electron passes, raised at once as
+    /// Electron emits from the AppKit callback. UI thread.</summary>
+    internal void RaiseMac(TrayEvent e, Rectangle bounds, Point position, (bool Shift, bool Ctrl, bool Alt, bool Meta) keys)
+    {
+        if (_destroyed) return;
+        switch (e)
+        {
+            case TrayEvent.DragEnter: DragEntered?.Invoke(this, EventArgs.Empty); return;
+            case TrayEvent.DragLeave: DragLeft?.Invoke(this, EventArgs.Empty); return;
+            case TrayEvent.DragEnd: DragEnded?.Invoke(this, EventArgs.Empty); return;
+            case TrayEvent.Drop: Dropped?.Invoke(this, EventArgs.Empty); return;
+        }
+        var handler = e switch
+        {
+            TrayEvent.Click => Clicked,
+            TrayEvent.DoubleClick => DoubleClicked,
+            TrayEvent.RightClick => RightClicked,
+            TrayEvent.MouseDown => MousePressed,
+            TrayEvent.MouseUp => MouseReleased,
+            TrayEvent.MouseMove => MouseMoved,
+            TrayEvent.MouseEnter => MouseEntered,
+            TrayEvent.MouseLeave => MouseLeft,
+            _ => null,
+        };
+        handler?.Invoke(this, new TrayEventArgs(bounds, position, keys.Shift, keys.Ctrl, keys.Alt, keys.Meta));
+    }
+
+    /// <summary>macOS: files dropped on the icon. UI thread.</summary>
+    internal void RaiseFilesDropped(string[] files)
+    {
+        if (!_destroyed) FilesDropped?.Invoke(this, new TrayFilesDroppedEventArgs(files));
+    }
+
+    /// <summary>macOS: text dropped on the icon. UI thread.</summary>
+    internal void RaiseTextDropped(string text)
+    {
+        if (!_destroyed) TextDropped?.Invoke(this, new TrayTextDroppedEventArgs(text));
     }
 
     /// <summary>Linux: the host activated the icon. <c>TrayIconLinux::OnClick</c> notifies a click with no bounds,
@@ -297,6 +415,12 @@ internal enum TrayEvent
     BalloonShow,
     BalloonClick,
     BalloonClosed,
+    MouseDown,
+    MouseUp,
+    DragEnter,
+    DragLeave,
+    DragEnd,
+    Drop,
 }
 
 internal static class TrayRules
