@@ -52,17 +52,21 @@ public unsafe delegate void RegisterPreferencesCallback(cef_preferences_type_t t
 public sealed unsafe class AppHandler
 {
     private readonly BrowserProcessHandler? _browserProcess;
+    private readonly RenderProcessHandler? _renderProcess;
 
     public AppHandler(
         BrowserProcessHandler? browserProcess = null,
         CommandLineCallback? beforeCommandLineProcessing = null,
-        IReadOnlyList<CustomScheme>? customSchemes = null)
+        IReadOnlyList<CustomScheme>? customSchemes = null,
+        RenderProcessHandler? renderProcess = null)
     {
         CustomSchemes = customSchemes ?? [];
         _browserProcess = browserProcess;
+        _renderProcess = renderProcess;
         BeforeCommandLineProcessing = beforeCommandLineProcessing;
         Native = NativeObject.Create<cef_app_t>(this);
         if (browserProcess is not null) Native->get_browser_process_handler = &GetBrowserProcessHandler;
+        if (renderProcess is not null) Native->get_render_process_handler = &GetRenderProcessHandler;
         if (beforeCommandLineProcessing is not null) Native->on_before_command_line_processing = &OnBeforeCommandLineProcessing;
         if (CustomSchemes.Count > 0) Native->on_register_custom_schemes = &OnRegisterCustomSchemes;
     }
@@ -97,6 +101,37 @@ public sealed unsafe class AppHandler
         var handler = NativeObject.Owner<AppHandler>(self)._browserProcess!.Native;
         NativeObject.AddRef(handler);
         return handler;
+    }
+
+    [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])]
+    private static cef_render_process_handler_t* GetRenderProcessHandler(cef_app_t* self)
+    {
+        var handler = NativeObject.Owner<AppHandler>(self)._renderProcess!.Native;
+        NativeObject.AddRef(handler);
+        return handler;
+    }
+}
+
+/// <summary><c>cef_render_process_handler_t</c>: renderer-process lifecycle.</summary>
+public sealed unsafe class RenderProcessHandler
+{
+    private readonly Action _webKitInitialized;
+
+    /// <param name="webKitInitialized">Runs once the renderer's Blink is up, after CEF has initialised the process.</param>
+    public RenderProcessHandler(Action webKitInitialized)
+    {
+        _webKitInitialized = webKitInitialized;
+        Native = NativeObject.Create<cef_render_process_handler_t>(this);
+        Native->on_web_kit_initialized = &OnWebKitInitialized;
+    }
+
+    public cef_render_process_handler_t* Native { get; }
+
+    [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])]
+    private static void OnWebKitInitialized(cef_render_process_handler_t* self)
+    {
+        var owner = NativeObject.Owner<RenderProcessHandler>(self);
+        Guard.Run(owner._webKitInitialized);
     }
 }
 

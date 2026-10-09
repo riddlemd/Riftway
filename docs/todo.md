@@ -92,6 +92,9 @@ Cross-platform work. Platform-specific items: [linux-todo.md](linux-todo.md), [w
 - [ ] `session.serviceWorkers` / `ServiceWorkerMain` (branch `service-workers`): done over DevTools (DRIFT SW1-SW8); run
       SessionTest's `ServiceWorkerChecks` (written, never run); `send`, `ipc` and `ipcMainServiceWorker` wait on the
       service worker patch described after DRIFT SW8
+- [ ] `CrashReporter` on macOS and Linux (branch `crash-reporter-mac-linux`): CrashTest passes on macOS (48 checks);
+      the Linux run is pending ([linux-todo.md](linux-todo.md)). Open: CR11 (keys in GPU/utility children), CR16 (.NET
+      breakpoint hook on macOS threads other than the UI thread)
 - [ ] M3 Blazor Hybrid · M4 ship it · M5 desktop integration · M6 session/network/processes · M7 own CEF builds
       (see [PLAN.md](PLAN.md#milestones))
 - [ ] M7: CEF patches in [eng/cef](../eng/cef/README.md): 0001 `CefWindowDelegate::IsTranslucent` (W24), 0002

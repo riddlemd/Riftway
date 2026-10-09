@@ -42,9 +42,11 @@ internal static class Child
             Extra = new Dictionary<string, string> { ["extra_key"] = "extra-value" },
             GlobalExtra = new Dictionary<string, string> { ["global_key"] = "global-value", ["scenario"] = mode },
         });
-        var cfg = File.ReadAllText(Path.Combine(AppContext.BaseDirectory, "crash_reporter.cfg"));
+        Report("crashDumps", app.GetPath("crashDumps"));
+        Report("userData", app.GetPath("userData"));
+        var cfg = File.ReadAllText(CfgPath);
         CrashReporter.Start(new CrashReporterStartOptions { SubmitURL = url, ProductName = "Ignored" });
-        Report("secondStartIgnored", File.ReadAllText(Path.Combine(AppContext.BaseDirectory, "crash_reporter.cfg")) == cfg);
+        Report("secondStartIgnored", File.ReadAllText(CfgPath) == cfg);
         CrashReporter.AddExtraParameter("added_key", "added");
         CrashReporter.AddExtraParameter(new string('k', 40), "too long");
         CrashReporter.RemoveExtraParameter("removed_key");
@@ -97,11 +99,13 @@ internal static class Child
         var crashes = mode == "renderer" ? 2 : 1;
         for (var i = 1; i <= crashes; i++)
         {
-            // A crashed page does not take a second debug URL, so each crash gets a fresh window.
+            // A crashed page does not take a second debug URL, so each crash gets a fresh window, opened before the
+            // old one goes: closing the last window quits the app.
             if (i > 1)
             {
-                window.Destroy();
+                var crashed = window;
                 window = new BrowserWindow(new BrowserWindowOptions { Show = false });
+                crashed.Destroy();
             }
             _ = window.WebContents.LoadUrl("chrome://crash");
             var deadline = DateTime.UtcNow.AddSeconds(40);
@@ -139,24 +143,31 @@ internal static class Child
     private static void Report(string key, object value)
         => Console.WriteLine($"R {key}={(value is bool b ? (b ? "true" : "false") : value)}");
 
-    // The handler is the subprocess exe (ExternalHandler) started for this app's database; in the bootstrap layout,
-    // which has no subprocess exe, CEF starts it from the app's own exe.
+    // CEF's GetCrashConfigPath: beside the exe, or on macOS in the outermost app bundle's Resources.
+    internal static string CfgPath => Path.Combine(AppRoot is { } bundle && OperatingSystem.IsMacOS()
+        ? Path.Combine(bundle, "Contents", "Resources") : AppContext.BaseDirectory, "crash_reporter.cfg");
+
+    // The .app on macOS; elsewhere the exe's directory. Every process this app starts runs from under it.
+    internal static string? AppRoot
+    {
+        get
+        {
+            if (!OperatingSystem.IsMacOS()) return AppContext.BaseDirectory;
+            var path = AppContext.BaseDirectory;
+            var app = path.IndexOf(".app/", StringComparison.Ordinal);
+            return app < 0 ? null : path[..(app + 4)];
+        }
+    }
+
+    // Windows: the subprocess exe (ExternalHandler), or in the bootstrap layout, which has no subprocess exe, the
+    // app's own exe. macOS: CHILD_PROCESS_EXE, the "<app> Helper" app. Linux: CHILD_PROCESS_EXE, Oriel.Subprocess.
     internal static string HandlerName()
-        => OperatingSystem.IsWindows() && Oriel.Cef.Platform.BootstrapHost.IsHosted ? Path.GetFileNameWithoutExtension(Environment.ProcessPath)! : "Oriel.Subprocess";
+        => OperatingSystem.IsWindows() && Oriel.Cef.Platform.BootstrapHost.IsHosted ? Path.GetFileNameWithoutExtension(Environment.ProcessPath)!
+            : OperatingSystem.IsMacOS() ? Path.GetFileName(Environment.ProcessPath) + " Helper" : "Oriel.Subprocess";
 
     private static string? HandlerCommandLine(string appName)
-    {
-        foreach (var process in Process.GetProcessesByName(HandlerName()))
-        {
-            using (process)
-            {
-                var line = Native.CommandLine(process);
-                if (line is not null && line.Contains("--type=crashpad-handler", StringComparison.Ordinal)
-                    && line.Contains(appName, StringComparison.Ordinal)) return line;
-            }
-        }
-        return null;
-    }
+        => Native.CommandLines().Select(p => p.Line).FirstOrDefault(line => line.Contains("--type=crashpad-handler", StringComparison.Ordinal)
+            && line.Contains(appName, StringComparison.Ordinal));
 }
 
 /// <summary>Runs the scenarios against a local crash server and checks what arrived.</summary>
@@ -175,7 +186,7 @@ internal static class Driver
     public static int Run()
     {
         using var server = new UploadServer();
-        var cfgPath = Path.Combine(AppContext.BaseDirectory, "crash_reporter.cfg");
+        var cfgPath = Child.CfgPath;
         try
         {
             Scenario("renderer", () => Renderer(server, cfgPath));
@@ -212,8 +223,8 @@ internal static class Driver
         Check("getUploadToServer is true after start", Fact(facts, "uploadToServer") == "true");
         var handler = Fact(facts, "handler") ?? "";
         Check("the handler is the subprocess exe with this app's database",
-            handler.Contains(Child.HandlerName() + ".exe", StringComparison.Ordinal)
-            && handler.Contains($@"\{appName}\User Data\Crashpad", StringComparison.Ordinal), handler);
+            handler.Contains(HandlerExe, StringComparison.Ordinal) && handler.Contains(DatabaseArgument(appName, facts), StringComparison.Ordinal),
+            $"{handler} (want {HandlerExe}, {DatabaseArgument(appName, facts)})");
         Check("rateLimit false: the handler does not rate limit", handler.Contains("--no-rate-limit", StringComparison.Ordinal), handler);
         Check("database pruning is Crashpad's default (128 MB, 365 days)",
             handler.Contains("--max-db-size=128", StringComparison.Ordinal) && handler.Contains("--max-db-age=365", StringComparison.Ordinal));
@@ -230,7 +241,7 @@ internal static class Driver
         Check("globalExtra reaches renderer reports", Field(upload, "global_key") == "global-value", Field(upload, "global_key"));
         Check("extra is not inherited by the renderer", upload is not null && Field(upload, "extra_key") is null, Field(upload, "extra_key"));
         Check("process_type is renderer", Field(upload, "process_type") == "renderer", Field(upload, "process_type"));
-        Check("platform is win32", Field(upload, "platform") == "win32", Field(upload, "platform"));
+        Check($"platform is {Platform}", Field(upload, "platform") == Platform, Field(upload, "platform"));
         Check("CEF's product annotation is productName", Field(upload, "product") == "OrielCrashTest", Field(upload, "product"));
         Check("guid is sent", Field(upload, "guid") is { Length: > 0 }, Field(upload, "guid"));
         if (upload is not null) Console.WriteLine("      fields: " + string.Join(", ", upload.Fields.Select(f => $"{f.Key}={Shorten(f.Value)}")));
@@ -301,6 +312,16 @@ internal static class Driver
         Check("a later launch lists the browser crash", upload is not null && reports.Any(r => r.Id == upload.ResponseId), Fact(list, "reports"));
     }
 
+    // Electron's platform crash key (shell/common/crash_keys.cc SetPlatformCrashKey).
+    private static string Platform => OperatingSystem.IsWindows() ? "win32" : OperatingSystem.IsMacOS() ? "darwin" : "linux";
+
+    private static string HandlerExe => OperatingSystem.IsWindows() ? Child.HandlerName() + ".exe"
+        : OperatingSystem.IsMacOS() ? $"/{Child.HandlerName()}.app/Contents/MacOS/{Child.HandlerName()} " : "/Oriel.Subprocess ";
+
+    // Windows: CEF's AppName folder (CR3). macOS and Linux: Electron's app.getPath('crashDumps').
+    private static string DatabaseArgument(string appName, Dictionary<string, string> facts)
+        => OperatingSystem.IsWindows() ? $@"\{appName}\User Data\Crashpad" : "--database=" + Fact(facts, "crashDumps");
+
     // Electron starts Crashpad in crashReporter.start; in the bootstrap layout CEF's bootstrap.exe starts it from the cfg
     // beside the exe before .NET runs, so a scenario's settings reach its own process only from the next launch (CR15).
     private static bool StartAppliesNextLaunch => OperatingSystem.IsWindows() && Oriel.Cef.Platform.BootstrapHost.IsHosted;
@@ -315,8 +336,18 @@ internal static class Driver
             var primeHandler = Fact(primed, "handler") ?? "";
             Check($"{mode}: bootstrap layout: the launch that calls start runs no handler for its own database (CR15)",
                 primeExit == 0 && !primeHandler.Contains($@"\{appName}\User Data\Crashpad", StringComparison.Ordinal), $"exit={primeExit} {primeHandler}");
+            Remember(primed);
         }
-        return Launch(mode, port, appName);
+        var launched = Launch(mode, port, appName);
+        Remember(launched.Facts);
+        return launched;
+    }
+
+    private static readonly HashSet<string> s_userData = [];
+
+    private static void Remember(Dictionary<string, string> facts)
+    {
+        if (Fact(facts, "userData") is { Length: > 0 } userData) s_userData.Add(userData);
     }
 
     private static (int Exit, Dictionary<string, string> Facts) Launch(string mode, int port, string appName)
@@ -372,14 +403,14 @@ internal static class Driver
         while (DateTime.UtcNow < deadline && OurSubprocesses().Count > 0) Thread.Sleep(500);
         foreach (var process in OurSubprocesses())
         {
-            using (process) { try { process.Kill(); process.WaitForExit(5000); } catch (InvalidOperationException) { } }
+            using (process) { try { process.Kill(); process.WaitForExit(5000); } catch (Exception e) when (e is InvalidOperationException or System.ComponentModel.Win32Exception) { } }
         }
         var leftovers = new List<string>();
-        foreach (var name in s_appNames)
+        var directories = s_appNames.SelectMany(name => new[] { Environment.SpecialFolder.LocalApplicationData, Environment.SpecialFolder.ApplicationData }
+            .Select(root => Path.Combine(Environment.GetFolderPath(root), name))).Concat(s_userData).Distinct();
         {
-            foreach (var root in new[] { Environment.SpecialFolder.LocalApplicationData, Environment.SpecialFolder.ApplicationData })
+            foreach (var directory in directories)
             {
-                var directory = Path.Combine(Environment.GetFolderPath(root), name);
                 for (var attempt = 0; attempt < 10 && Directory.Exists(directory); attempt++)
                 {
                     try { Directory.Delete(directory, recursive: true); }
@@ -395,7 +426,10 @@ internal static class Driver
     }
 
     private static List<Process> OurSubprocesses()
-        => Process.GetProcessesByName(Child.HandlerName())
+        => !OperatingSystem.IsWindows()
+            ? Native.CommandLines().Where(p => p.Pid != Environment.ProcessId && Child.AppRoot is { } root && p.Line.StartsWith(root, StringComparison.Ordinal))
+                .Select(p => { try { return Process.GetProcessById(p.Pid); } catch (ArgumentException) { return null; } }).OfType<Process>().ToList()
+            : Process.GetProcessesByName(Child.HandlerName())
             .Where(p => p.Id != Environment.ProcessId && (Child.HandlerName() == "Oriel.Subprocess" || Native.CommandLine(p)?.Contains("--type=crashpad-handler", StringComparison.Ordinal) == true))
             .Where(p => { try { return p.MainModule?.FileName?.StartsWith(AppContext.BaseDirectory, StringComparison.OrdinalIgnoreCase) == true; } catch (System.ComponentModel.Win32Exception) { return false; } })
             .ToList();
@@ -566,9 +600,40 @@ internal sealed class UploadServer : IDisposable
     }
 }
 
-/// <summary>Reads another process's command line (ProcessCommandLineInformation).</summary>
+/// <summary>Reads other processes' command lines: ProcessCommandLineInformation on Windows, /proc on Linux, ps on macOS.</summary>
 internal static partial class Native
 {
+    public static List<(int Pid, string Line)> CommandLines()
+    {
+        var lines = new List<(int, string)>();
+        if (OperatingSystem.IsWindows())
+        {
+            foreach (var process in Process.GetProcesses())
+                using (process) if (CommandLine(process) is { } line) lines.Add((process.Id, line));
+        }
+        else if (OperatingSystem.IsLinux())
+        {
+            foreach (var directory in Directory.EnumerateDirectories("/proc"))
+            {
+                if (!int.TryParse(Path.GetFileName(directory), out var pid)) continue;
+                try { lines.Add((pid, File.ReadAllText(Path.Combine(directory, "cmdline")).TrimEnd('\0').Replace('\0', ' '))); }
+                catch (Exception e) when (e is IOException or UnauthorizedAccessException) { }
+            }
+        }
+        else
+        {
+            using var ps = Process.Start(new ProcessStartInfo("/bin/ps", ["-axww", "-o", "pid=,command="]) { RedirectStandardOutput = true })!;
+            foreach (var raw in ps.StandardOutput.ReadToEnd().Split('\n'))
+            {
+                var text = raw.TrimStart();
+                var space = text.IndexOf(' ', StringComparison.Ordinal);
+                if (space > 0 && int.TryParse(text[..space], out var pid)) lines.Add((pid, text[(space + 1)..]));
+            }
+            ps.WaitForExit();
+        }
+        return lines;
+    }
+
     [LibraryImport("ntdll.dll")]
     private static partial int NtQueryInformationProcess(nint process, int infoClass, [Out] byte[] buffer, int length, out int returned);
 

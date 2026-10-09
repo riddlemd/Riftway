@@ -2,6 +2,10 @@
 
 General items: [todo.md](todo.md).
 
+- [x] `CrashReporter` (branch `crash-reporter-mac-linux`): CrashTest passes (renderer and browser crashes, uploads,
+      local-only, `setUploadToServer(false)`, rate limit, `getUploadedReports` from the database's xattrs)
+- [ ] Browser crashes on threads other than the UI thread hang under .NET's breakpoint hook (DRIFT CR16): decide on
+      `PAL_MachExceptionMode=2` in the bundle's `LSEnvironment`, or ask .NET to forward foreign breakpoints
 - [ ] **Teardown watchdog**: CEF 154 apps often exit with code 2 after "Teardown watchdog expired" (~10 s);
       stock cefclient does the same. Cause unknown (the network-helper hypothesis was refuted).
 - [ ] osx-x64: the `objc_msgSend_stret` path in `MacWindow` is untested

@@ -16,6 +16,7 @@
 #endif
 
 #include "include/capi/cef_app_capi.h"
+#include "include/capi/cef_command_line_capi.h"
 #include "include/capi/cef_crash_util_capi.h"
 #include "include/cef_api_hash.h"
 
@@ -137,22 +138,65 @@ static void CEF_CALLBACK register_schemes(cef_app_t* self, cef_scheme_registrar_
   }
 }
 
+#ifndef _WIN32
+// Without chrome_elf, crash keys only stick once cef_execute_process has started crash reporting (after the
+// zygote fork on Linux), and a renderer is the only child CEF calls back after that. The switch is read from
+// the process's own command line, which a zygote-forked renderer has just been given.
+static void CEF_CALLBACK on_web_kit_initialized(cef_render_process_handler_t* self) {
+  (void)self;
+  cef_command_line_t* line = cef_command_line_get_global();
+  if (!line) return;
+  cef_string_t name = {0};
+  cef_string_utf8_to_utf16("oriel-crash-keys", strlen("oriel-crash-keys"), &name);
+  cef_string_userfree_t value = line->get_switch_value(line, &name);
+  cef_string_clear(&name);
+  if (value) {
+    cef_string_utf8_t hex = {0};
+    cef_string_utf16_to_utf8(value->str, value->length, &hex);
+    set_crash_keys(hex.str);
+    cef_string_utf8_clear(&hex);
+    cef_string_userfree_free(value);
+  }
+  line->base.release(&line->base);
+}
+
+static cef_render_process_handler_t* CEF_CALLBACK get_render_process_handler(cef_app_t* self) {
+  (void)self;
+  static cef_render_process_handler_t handler;
+  handler.base.size = sizeof(cef_render_process_handler_t);
+  handler.base.add_ref = app_add_ref;
+  handler.base.release = app_release;
+  handler.base.has_one_ref = app_has_ref;
+  handler.base.has_at_least_one_ref = app_has_ref;
+  handler.on_web_kit_initialized = on_web_kit_initialized;
+  return &handler;
+}
+#endif
+
 static cef_app_t* app_for(const char* schemes) {
   static cef_app_t app;
-  if (!schemes || !*schemes) return NULL;
+  int has_schemes = schemes && *schemes;
+#ifdef _WIN32
+  if (!has_schemes) return NULL;
+#endif
 
-  // A copy: Chromium overwrites argv to set process titles before CEF asks for the schemes.
-  size_t size = strlen(schemes) + 1;
-  char* copy = (char*)malloc(size);
-  if (!copy) return NULL;
-  memcpy(copy, schemes, size);
-  g_schemes = copy;
+  if (has_schemes) {
+    // A copy: Chromium overwrites argv to set process titles before CEF asks for the schemes.
+    size_t size = strlen(schemes) + 1;
+    char* copy = (char*)malloc(size);
+    if (!copy) return NULL;
+    memcpy(copy, schemes, size);
+    g_schemes = copy;
+    app.on_register_custom_schemes = register_schemes;
+  }
   app.base.size = sizeof(cef_app_t);
   app.base.add_ref = app_add_ref;
   app.base.release = app_release;
   app.base.has_one_ref = app_has_ref;
   app.base.has_at_least_one_ref = app_has_ref;
-  app.on_register_custom_schemes = register_schemes;
+#ifndef _WIN32
+  app.get_render_process_handler = get_render_process_handler;
+#endif
   return &app;
 }
 
@@ -192,8 +236,6 @@ int main(int argc, char* argv[]) {
   for (int i = 1; i < argc; i++) {
     if (strncmp(argv[i], SCHEME_SWITCH, strlen(SCHEME_SWITCH)) == 0)
       schemes = argv[i] + strlen(SCHEME_SWITCH);
-    else if (strncmp(argv[i], CRASH_KEYS_SWITCH, strlen(CRASH_KEYS_SWITCH)) == 0)
-      set_crash_keys(argv[i] + strlen(CRASH_KEYS_SWITCH));
   }
 
   cef_main_args_t args = {argc, argv};
