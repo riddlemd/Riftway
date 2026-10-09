@@ -8,7 +8,7 @@ namespace Oriel;
 public readonly record struct Point(int X, int Y);
 
 /// <summary>A display attached to the computer; Electron's <c>Display</c>.</summary>
-public sealed record Display
+public sealed partial record Display
 {
     /// <summary>Identifies the display while it stays attached.</summary>
     public long Id { get; init; }
@@ -123,7 +123,7 @@ public sealed record DisplayMetricsChangedEventArgs(Display Display, DisplayMetr
 
 /// <summary>Displays, their sizes and the pointer position; Electron's <c>screen</c>.</summary>
 /// <remarks>Use after <see cref="OrielApp.Ready"/>, from any thread. Events are raised on the UI thread.</remarks>
-public static unsafe class Screen
+public static unsafe partial class Screen
 {
     /// <summary>The display with the menu bar (macOS) or taskbar. Electron's <c>screen.getPrimaryDisplay()</c>.</summary>
     /// <exception cref="InvalidOperationException">Before <see cref="OrielApp.Ready"/>.</exception>
@@ -238,6 +238,7 @@ public static unsafe class Screen
             ScaleFactor = Math.Round(display->get_device_scale_factor(display), 4),
             Rotation = display->get_rotation(display),
         };
+        value = WithNativeDetails(value, display);
         NativeObject.Release(display);
         return OperatingSystem.IsMacOS() ? WithMacDetails(value) : value;
     }
@@ -272,8 +273,8 @@ public static unsafe class Screen
         return CefThread.InvokeOnUi(func);
     }
 
-    // CEF reports no display changes. On macOS they follow the notifications Chromium's ScreenMac observes; elsewhere
-    // displays are polled while anyone listens. UI thread only past the gate.
+    // CEF reports no display changes. On macOS they follow the notifications Chromium's ScreenMac observes, on Windows the
+    // window messages ScreenWin hears; Linux polls while anyone listens. UI thread only past the gate.
     private static readonly TimeSpan s_pollInterval = TimeSpan.FromSeconds(1);
     // ScreenMac's kMinimumHdrHeadroomUpdateInterval.
     private static readonly TimeSpan s_headroomInterval = TimeSpan.FromSeconds(
@@ -290,8 +291,9 @@ public static unsafe class Screen
     internal static int ChecksRun { get; private set; }
 
     /// <summary>A display was attached. Electron's <c>display-added</c>.</summary>
-    /// <remarks>On macOS this follows <c>NSApplicationDidChangeScreenParametersNotification</c>, as in Electron. Elsewhere
-    /// displays are compared once a second while a handler is attached, so events come up to a second late.</remarks>
+    /// <remarks>On macOS this follows <c>NSApplicationDidChangeScreenParametersNotification</c>, as in Electron; Windows
+    /// reports changes as Chromium hears them, from display and work-area messages. On Linux displays are compared once a
+    /// second while a handler is attached, so events come up to a second late.</remarks>
     public static event EventHandler<DisplayEventArgs>? DisplayAdded
     {
         add { lock (s_gate) s_added += value; StartWatching(); }
@@ -339,7 +341,7 @@ public static unsafe class Screen
             if (OperatingSystem.IsMacOS())
                 // Posted: Chromium's own observer of the same notification must refresh CEF's displays first.
                 MacScreen.ObserveChanges(() => CefThread.PostUi(() => Check(headroomDue: false)));
-            else
+            else if (!ObservesNatively())
                 CefThread.PostUiDelayed(Poll, s_pollInterval);
         });
     }
@@ -376,19 +378,7 @@ public static unsafe class Screen
             return;
         }
         s_lastDisplays = now;
-        var changes = Compare(before, now, compareRefreshRate: OperatingSystem.IsMacOS());
-        EventHandler<DisplayEventArgs>? onAdded, onRemoved;
-        EventHandler<DisplayMetricsChangedEventArgs>? onChanged;
-        lock (s_gate) (onAdded, onRemoved, onChanged) = (s_added, s_removed, s_metricsChanged);
-        foreach (var (change, display, metrics) in changes)
-        {
-            switch (change)
-            {
-                case DisplayChange.Removed: onRemoved?.Invoke(null, new DisplayEventArgs(display)); break;
-                case DisplayChange.Added: onAdded?.Invoke(null, new DisplayEventArgs(display)); break;
-                default: onChanged?.Invoke(null, new DisplayMetricsChangedEventArgs(display, metrics)); break;
-            }
-        }
+        foreach (var change in DisplayChanges.Between(before, now, compareRefreshRate: OperatingSystem.IsMacOS())) Raise(change);
     }
 
     /// <summary>Replaces the snapshot the next check compares against; lets tests stage a change. UI thread.</summary>
@@ -407,34 +397,4 @@ public static unsafe class Screen
         return differs;
     }
 
-    internal enum DisplayChange { Removed, Added, MetricsChanged }
-
-    /// <summary>The events Chromium's DisplayChangeNotifier raises between two snapshots, in its order: every removal,
-    /// then each current display as added or changed. Displays match by id.</summary>
-    internal static List<(DisplayChange Change, Display Display, DisplayMetrics Metrics)> Compare(
-        IReadOnlyList<Display> before, IReadOnlyList<Display> after, bool compareRefreshRate)
-    {
-        var events = new List<(DisplayChange, Display, DisplayMetrics)>();
-        foreach (var old in before)
-            if (!after.Any(d => d.Id == old.Id)) events.Add((DisplayChange.Removed, old, DisplayMetrics.None));
-        foreach (var display in after)
-        {
-            if (before.FirstOrDefault(d => d.Id == display.Id) is not { } old)
-            {
-                events.Add((DisplayChange.Added, display, DisplayMetrics.None));
-                continue;
-            }
-            var metrics = (old.Bounds != display.Bounds ? DisplayMetrics.Bounds : 0)
-                | (old.WorkArea != display.WorkArea ? DisplayMetrics.WorkArea : 0)
-                | (old.ScaleFactor != display.ScaleFactor ? DisplayMetrics.ScaleFactor : 0)
-                | (old.Rotation != display.Rotation ? DisplayMetrics.Rotation : 0);
-            // Electron's changedMetrics names only the four above, but still emits for these.
-            var colorSpace = old.ColorSpace != display.ColorSpace || old.ColorSpacesKey != display.ColorSpacesKey
-                || old.HdrMaxLuminanceRelative != display.HdrMaxLuminanceRelative;
-            // base::IsApproximatelyEqual on Chromium's floats, within Display::kRefreshRateEpsilon.
-            var refreshRate = compareRefreshRate && MathF.Abs((float)display.DisplayFrequency - (float)old.DisplayFrequency) > 0.01f;
-            if (metrics != DisplayMetrics.None || colorSpace || refreshRate) events.Add((DisplayChange.MetricsChanged, display, metrics));
-        }
-        return events;
-    }
 }

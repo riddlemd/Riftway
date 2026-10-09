@@ -17,7 +17,7 @@ public sealed class AlwaysOnTopChangedEventArgs(bool isAlwaysOnTop) : EventArgs
 }
 
 /// <summary>Options for a new <see cref="BrowserWindow"/>; Electron's <c>BrowserWindowConstructorOptions</c>.</summary>
-public sealed record BrowserWindowOptions
+public sealed partial record BrowserWindowOptions
 {
     /// <summary>Width in device-independent pixels.</summary>
     public int Width { get; init; } = 800;
@@ -95,11 +95,46 @@ public sealed record BrowserWindowOptions
     /// Electron's <c>skipTaskbar</c>.</summary>
     public bool SkipTaskbar { get; init; }
 
+    /// <summary>The window's opacity, 0 to 1. Windows only for now: stored but not shown on macOS and Linux.
+    /// Electron's <c>opacity</c>.</summary>
+    public double Opacity { get; init; } = 1.0;
+
+    /// <summary>Whether the window has a shadow. Stored only: on Windows, as in Electron, it changes nothing, and macOS and
+    /// Linux are not done yet. Electron's <c>hasShadow</c>.</summary>
+    public bool HasShadow { get; init; } = true;
+
+    /// <summary>Opens the window in kiosk mode: full screen. Electron's <c>kiosk</c>.</summary>
+    public bool Kiosk { get; init; }
+
+    /// <summary>How the title bar looks; anything but <see cref="Oriel.TitleBarStyle.Default"/> hides it on Windows and
+    /// Linux. Electron's <c>titleBarStyle</c>.</summary>
+    public TitleBarStyle TitleBarStyle { get; init; }
+
+    /// <summary>With a hidden title bar, draws the window's minimize, maximize and close buttons over the page's top right.
+    /// Windows only for now. Electron's <c>titleBarOverlay</c>.</summary>
+    public TitleBarOverlayOptions? TitleBarOverlay { get; init; }
+
     /// <summary>What Windows 11 22H2 and later draws behind the window; null leaves the system default. Unless
     /// <see cref="BackgroundColor"/> is set, any value but <see cref="Oriel.BackgroundMaterial.None"/> makes the page
     /// background transparent so the material shows. Windows only: ignored on macOS and Linux. Electron's
     /// <c>backgroundMaterial</c>.</summary>
     public BackgroundMaterial? BackgroundMaterial { get; init; }
+
+    /// <summary>Windows: whether a frameless window keeps <c>WS_THICKFRAME</c> and <c>WS_CAPTION</c>, which give it a
+    /// shadow, the minimize and maximize animations and resizing from its edges; false also squares its corners. On a
+    /// framed window false removes only <c>WS_THICKFRAME</c>, and the window can no longer be resized. Ignored on macOS
+    /// and Linux. Electron's <c>thickFrame</c>.</summary>
+    public bool ThickFrame { get; init; } = true;
+
+    /// <summary>Whether a frameless window has rounded corners: Windows 11 only, through DWM, and only with
+    /// <see cref="ThickFrame"/>. Not yet applied on macOS and Linux. Electron's <c>roundedCorners</c>.</summary>
+    public bool RoundedCorners { get; init; } = true;
+
+    /// <summary>The window's border (and, when framed, caption) colour on Windows 11; null follows the system
+    /// setting, which shows the system accent colour only on the active window when "Show accent colour on title bars"
+    /// is on. A colour string Electron cannot parse is ignored. Ignored on macOS and Linux. Electron's
+    /// <c>accentColor</c>.</summary>
+    public AccentColor? AccentColor { get; init; }
 
     /// <summary>Whether the window stays above other windows.</summary>
     public bool AlwaysOnTop { get; init; }
@@ -121,8 +156,8 @@ public sealed record BrowserWindowOptions
     public BrowserWindow? Parent { get; init; }
 
     /// <summary>Disables <see cref="Parent"/> while this window is shown; requires a parent. Electron's <c>modal</c>.</summary>
-    /// <remarks>On Linux the parent stays usable under window managers that ignore modal hints (openbox does);
-    /// Electron disables the parent's input itself there, which Oriel does not yet.</remarks>
+    /// <remarks>On Linux Oriel disables the parent's input itself, as Electron does, whatever the window manager makes
+    /// of the modal hint; the pointer crossing into or out of the parent still reaches its page (drift W5).</remarks>
     public bool Modal { get; init; }
 
     /// <summary>Hides the menu bar until Alt is pressed (Windows, Linux). Electron's <c>autoHideMenuBar</c>.</summary>
@@ -276,10 +311,29 @@ public sealed unsafe partial class BrowserWindow
 
     private bool _closable;
     private bool _skipTaskbar;
+    private double _opacity;
+    private bool _hasShadow;
+    // macOS: Electron's is_kiosk_; elsewhere kiosk is full screen itself.
+    private bool _kiosk;
+    // Electron's layered_: once given an opacity, the window stays layered when click-through ends.
+    private bool _layered;
+    private Rectangle _normalBounds;
+    private TitleBarOverlayView? _titleBarOverlay;
+    private IReadOnlyList<DraggableRegion> _pageRegions = [];
+    // Whether the app means the window to be shown; CEF activates windows that are not.
+    private bool _meantVisible;
     private readonly NativeImage? _icon;
     private bool _thumbarAdded;
     private readonly nint[] _thumbarIcons = new nint[Thumbar.MaxButtons];
-    private readonly Action?[] _thumbarClicks = new Action?[Thumbar.MaxButtons];
+    // Electron's callback_map_, by button id; UI thread only.
+    private readonly Dictionary<int, Action?> _thumbarClicks = [];
+    private IReadOnlyList<ThumbarButton> _lastThumbarButtons = [];
+    // Electron's messages_callback_map_: read inside the window procedure, changed from any thread.
+    private readonly System.Collections.Concurrent.ConcurrentDictionary<uint, Action<nint, nint>> _messageHooks = new();
+    // Electron's accent_color_: null follows the system; UI thread only.
+    private WindowsFrame.Accent? _accent;
+    // Electron's rounded_corner_: true unless a frameless window turned it off.
+    private bool _roundedCorners = true;
     // macOS: the Dock bounce FlashFrame started, to cancel.
     private nint _attentionRequest;
     // Set by Close()/Destroy(): a close from code goes through even when the user may not close.
@@ -296,8 +350,13 @@ public sealed unsafe partial class BrowserWindow
     private Rectangle? _restoreBounds;
     // macOS: the NSWindow whose full-screen toggle routes to simple full screen, or 0.
     private nint _routedNSWindow;
+    // Whether the window takes input (every OS), and Linux's X11 cover that blocks it while it does not; UI thread only.
+    private readonly WindowEnabledState _enabled = new();
+    private nint _inputCover;
     // Touched only on the UI thread.
     private readonly List<BrowserWindow> _children = [];
+    // The option until SetParentWindow changes it.
+    private BrowserWindow? _parent;
     // Popups allowed by on_before_popup whose view CEF has not created yet, by the client CEF will use; UI thread only.
     private static readonly Dictionary<nint, PendingPopup> s_pendingPopups = [];
     private WebContents? _opener;
@@ -327,9 +386,15 @@ public sealed unsafe partial class BrowserWindow
         if (_options.Modal && _options.Parent is null) throw new ArgumentException("A modal window needs a Parent.", nameof(options));
         _options.WebPreferences.Validate(nameof(options));
 
+        ClaimName();
         Id = Interlocked.Increment(ref s_nextId);
+        _parent = _options.Parent;
         _closable = _options.Closable;
         _skipTaskbar = _options.SkipTaskbar;
+        _opacity = WindowPolish.ClampOpacity(_options.Opacity);
+        _hasShadow = _options.HasShadow;
+        _kiosk = _options.Kiosk && !_restoreDisplayMode;
+        _accent = WindowsFrame.FromOption(_options.AccentColor);
         _icon = _options.IconImage ?? (_options.Icon is { } iconPath ? NativeImage.CreateFromBuffer(File.ReadAllBytes(iconPath)) : null);
         _transparent = _options.Transparent && OperatingSystem.IsWindows();
         _macTransparent = _options.Transparent && OperatingSystem.IsMacOS();
@@ -362,8 +427,9 @@ public sealed unsafe partial class BrowserWindow
             ReadyToShow?.Invoke(this, EventArgs.Empty);
         };
         _client = new ClientHandler(WebContents.Display, WebContents.Load, WebContents.JsDialog, WebContents.Request, WebContents.Command,
-            WebContents.ContextMenuRequests, new KeyboardHandler(keyEvent => WebContents.OnPreKeyEvent(keyEvent) || (!WebContents.IgnoresMenuShortcuts && (_menuBar?.OnKeyEvent(keyEvent) ?? false))),
-            new LifeSpanHandler { BeforePopup = (request, features, settings) => OpenPopup(WebContents, request, features, settings), PopupAborted = OnPopupAborted })
+            WebContents.ContextMenuRequests, new KeyboardHandler(keyEvent => BlocksInput || WebContents.OnPreKeyEvent(keyEvent) || (!WebContents.IgnoresMenuShortcuts && (_menuBar?.OnKeyEvent(keyEvent) ?? false))),
+            new LifeSpanHandler { BeforePopup = (request, features, settings) => OpenPopup(WebContents, request, features, settings), PopupAborted = OnPopupAborted },
+            new DragHandler(regions => Command(w => SetDraggableRegionsOn(w, regions))))
         {
             Permission = WebContents.Permissions,
             Download = WebContents.Downloads,
@@ -396,17 +462,17 @@ public sealed unsafe partial class BrowserWindow
             BoundsChanged = OnBoundsChanged,
             FullscreenTransition = OnFullscreenTransition,
             // Otherwise Chromium offers resize edges and a maximize box, which Electron's transparent windows lack.
-            Resizable = _options.Resizable && !_transparent,
+            Resizable = CanResize(_options.Resizable) && !_transparent,
             Minimizable = _options.Minimizable,
             Maximizable = _options.Maximizable && !_transparent,
             ThemeChanged = () => Command(ApplyBackgroundColor),
-            Frameless = !_options.Frame,
+            Frameless = IsFrameless,
             MinimumSize = new cef_size_t { width = _options.MinWidth, height = _options.MinHeight },
             MaximumSize = new cef_size_t { width = _options.MaxWidth, height = _options.MaxHeight },
-            Parent = _options.Parent is { } parent ? () => (nint)parent._window : null,
+            Parent = _parent is { } parent ? () => (nint)parent._window : null,
             Modal = _options.Modal,
-            Accelerator = commandId => !WebContents.IgnoresMenuShortcuts && (_menuBar?.OnAccelerator(commandId) ?? false),
-            KeyEvent = keyEvent => _menuBar?.OnKeyEvent(keyEvent) ?? false,
+            Accelerator = commandId => BlocksInput || (!WebContents.IgnoresMenuShortcuts && (_menuBar?.OnAccelerator(commandId) ?? false)),
+            KeyEvent = keyEvent => BlocksInput || (_menuBar?.OnKeyEvent(keyEvent) ?? false),
         };
 
         OrielApp.CurrentOrNull?.RaiseBrowserWindowCreated(this);
@@ -421,7 +487,11 @@ public sealed unsafe partial class BrowserWindow
         profile.WaitUntilInitialized();
         CefThread.InvokeOnUi(() =>
         {
-            if (_options.Parent is { _window: null }) throw new InvalidOperationException("The parent window is closed.");
+            if (_options.Parent is { _window: null })
+            {
+                ReleaseName();
+                throw new InvalidOperationException("The parent window is closed.");
+            }
             if (profile.Initialized.IsCompleted) CreateNative();
             else profile.Initialized.ContinueWith(_ => CefThread.RunOnUi(CreateNative), TaskScheduler.Default);
             return true;
@@ -456,7 +526,7 @@ public sealed unsafe partial class BrowserWindow
     {
         lock (s_openGate) s_open.Add(this);
         Menu.ApplicationMenuChanged += _applicationMenuChanged;
-        _options.Parent?._children.Add(this);
+        _parent?._children.Add(this);
         NativeObject.AddRef(_windowDelegate.Native);
         _window = CefNative.cef_window_create_top_level(_windowDelegate.Native);
     }
@@ -536,6 +606,7 @@ public sealed unsafe partial class BrowserWindow
         {
             if (pending.PopupId != popupId) continue;
             s_pendingPopups.Remove(client);
+            pending.Window?.ReleaseName();
             pending.Page.DiscardUnborn();
         }
     }
@@ -662,13 +733,90 @@ public sealed unsafe partial class BrowserWindow
     public static BrowserWindow? FromId(int id) => GetAllWindows().FirstOrDefault(w => w.Id == id);
 
     /// <summary>The window this one belongs to, or null. Electron's <c>win.getParentWindow()</c>.</summary>
-    public BrowserWindow? GetParentWindow() => _options.Parent;
+    public BrowserWindow? GetParentWindow() => CefThread.InvokeOnUi(() => _parent);
+
+    /// <summary>Makes <paramref name="parent"/> this window's parent, or makes it a top-level window again: it stays above
+    /// the parent and closes with it. A visible window is re-shown in its state and brought to the top. As in Electron,
+    /// nothing stops a cycle. Windows only. Electron's <c>win.setParentWindow()</c>.</summary>
+    /// <exception cref="PlatformNotSupportedException">macOS or Linux: CEF sets the parent only when it creates the window.</exception>
+    /// <exception cref="InvalidOperationException">The window is modal, whose parent is fixed, or the parent is closed.</exception>
+    public void SetParentWindow(BrowserWindow? parent)
+    {
+        if (!OperatingSystem.IsWindows())
+            throw new PlatformNotSupportedException("SetParentWindow is Windows only: CEF sets a window's parent when it creates it.");
+        if (_options.Modal) throw new InvalidOperationException("Can not be called for modal window");
+        CefThread.InvokeOnUi(() =>
+        {
+            if (parent is { _window: null }) throw new InvalidOperationException("The parent window is closed.");
+            _parent?._children.Remove(this);
+            _parent = parent;
+            parent?._children.Add(this);
+            if (OperatingSystem.IsWindows() && _window is not null) WindowsWindowStyle.SetOwner(Hwnd(_window), parent is null ? 0 : Hwnd(parent._window));
+            return true;
+        });
+    }
 
     /// <summary>The open windows that belong to this one. Electron's <c>win.getChildWindows()</c>.</summary>
     public IReadOnlyList<BrowserWindow> GetChildWindows() => CefThread.InvokeOnUi(() => (IReadOnlyList<BrowserWindow>)[.. _children]);
 
     /// <summary>Whether this window disables its parent while shown. Electron's <c>win.isModal()</c>.</summary>
     public bool IsModal => _options.Modal;
+
+    /// <summary>Lets the window take mouse, keyboard and touch input, or stops it; it stays disabled while a modal
+    /// child is shown. Windows: <c>EnableWindow</c>. Linux: an X11 cover over the window, and its keys dropped. Stored
+    /// only on macOS for now. Electron's <c>win.setEnabled()</c>.</summary>
+    /// <remarks>The window manager can still activate a disabled window, as in Electron. On Linux the pointer crossing
+    /// into or out of a disabled window still reaches its page (drift W5).</remarks>
+    public void SetEnabled(bool enable) => CefThread.RunOnUi(() => SetEnabledOnUi(enable));
+
+    // UI thread.
+    internal void SetEnabledOnUi(bool enable)
+    {
+        if (OperatingSystem.IsWindows())
+        {
+            // Windows ignores the call while the window does not exist.
+            if (_window is null || enable == _enabled.Requested) return;
+            _enabled.SetEnabled(enable);
+            ApplyWindowsEnabled(_window);
+            return;
+        }
+        if (_enabled.SetEnabled(enable)) ApplyLinuxEnabled();
+    }
+
+    /// <summary>Whether the window takes input: false after <see cref="SetEnabled"/>(false) or while a modal child is
+    /// shown. Windows: <c>IsWindowEnabled</c>. Always true on macOS for now. Electron's <c>win.isEnabled()</c>.</summary>
+    public bool IsEnabled => OperatingSystem.IsWindows()
+        ? IsWindowsEnabled
+        : !OperatingSystem.IsLinux() || CefThread.InvokeOnUi(() => _enabled.Enabled);
+
+    // Linux only: Chromium disables a modal's parent itself on Windows, which ApplyWindowsEnabled reads back.
+    private void ChangeChildModals(bool increment)
+    {
+        if (!OperatingSystem.IsLinux()) return;
+        if (increment ? _enabled.IncrementChildModals() : _enabled.DecrementChildModals()) ApplyLinuxEnabled();
+    }
+
+    // Keys go to the X focus window, past the input cover, so the keyboard handlers drop them while disabled.
+    private bool BlocksInput => OperatingSystem.IsLinux() && !_enabled.Enabled;
+
+    // UI thread. A view's page has a keyboard handler of its own, so it asks the window its view tree hangs from.
+    internal static bool BlocksInputAround(View view)
+    {
+        var root = view;
+        while (root.Parent is { } parent) root = parent;
+        return GetAllWindows().FirstOrDefault(w => w.ContentView == root) is { BlocksInput: true };
+    }
+
+    private void ApplyLinuxEnabled()
+    {
+        if (!OperatingSystem.IsLinux() || _window is null) return;
+        if (!_enabled.Enabled && _inputCover == 0) _inputCover = X11Window.BlockInput(Hwnd(_window));
+        else if (_enabled.Enabled && _inputCover != 0)
+        {
+            X11Window.UnblockInput(_inputCover);
+            _inputCover = 0;
+        }
+    }
 
     /// <summary>Sets the window's menu bar, replacing the application menu for this window; null removes it
     /// (Windows, Linux). Electron's <c>win.setMenu()</c>.</summary>
@@ -772,6 +920,16 @@ public sealed unsafe partial class BrowserWindow
     /// <summary>The window changed size. Electron's <c>resize</c>.</summary>
     public event EventHandler? Resized;
 
+    /// <summary>Raised while the user drags an edge of the window, before it resizes; cancel to keep the size.
+    /// Windows only for now. Electron's <c>'will-resize'</c>.</summary>
+    /// <remarks>Raised on the UI thread from inside the drag: handlers must return quickly.</remarks>
+    public event EventHandler<WillResizeEventArgs>? WillResize;
+
+    /// <summary>Raised while the user drags the window, before it moves; cancel to keep it in place.
+    /// Windows only for now. Electron's <c>'will-move'</c>.</summary>
+    /// <remarks>Raised on the UI thread from inside the drag: handlers must return quickly.</remarks>
+    public event EventHandler<WillMoveEventArgs>? WillMove;
+
     /// <summary>The window was maximized. Electron's <c>maximize</c>.</summary>
     public event EventHandler? Maximized;
 
@@ -812,7 +970,10 @@ public sealed unsafe partial class BrowserWindow
     public void Show() => Command(w =>
     {
         var wasVisible = w->@base.@base.is_visible(&w->@base.@base) != 0;
-        w->show(w);
+        _meantVisible = true;
+        if (!wasVisible && _options.Modal) _options.Parent?.ChangeChildModals(increment: true);
+        FlushPendingDisplayMode(w);
+        ShowThroughCef(w, activate: _focusable ?? _options.Focusable);
         ApplySkipTaskbar(w);
         if (!wasVisible) Shown?.Invoke(this, EventArgs.Empty);
     });
@@ -821,6 +982,9 @@ public sealed unsafe partial class BrowserWindow
     public void Hide() => Command(w =>
     {
         var wasVisible = w->@base.@base.is_visible(&w->@base.@base) != 0;
+        _meantVisible = false;
+        // Electron re-enables the parent on every hide of a modal, shown or not.
+        if (_options.Modal) _options.Parent?.ChangeChildModals(increment: false);
         w->hide(w);
         if (wasVisible) Hidden?.Invoke(this, EventArgs.Empty);
     });
@@ -848,7 +1012,9 @@ public sealed unsafe partial class BrowserWindow
     /// <summary>Maximizes the window. Electron's <c>win.maximize()</c>.</summary>
     /// <remarks>A <see cref="BrowserWindowOptions.Transparent"/> window fills its display's work area instead, as in
     /// Electron.</remarks>
-    public void Maximize() => Command(w =>
+    public void Maximize() => Command(MaximizeOn);
+
+    private void MaximizeOn(cef_window_t* w)
     {
         if (!_transparent)
         {
@@ -858,12 +1024,14 @@ public sealed unsafe partial class BrowserWindow
         if (IsMaximizedOn(w)) return;
         _restoreBounds = ToRectangle(w->@base.@base.get_bounds_in_screen(&w->@base.@base));
         ApplyOuterBounds(w, WorkAreaOf(w), animate: false);
-    });
+        // Electron's emulated maximize notifies itself; WM_SIZE only says the window was resized.
+        RaiseEmulated(Maximized);
+    }
 
     /// <summary>Leaves the maximized state. Electron's <c>win.unmaximize()</c>.</summary>
     public void Unmaximize() => Command(w =>
     {
-        if (IsMaximizedOn(w)) RestoreOn(w);
+        if (IsMaximizedOn(w) && RestoreOn(w)) RaiseEmulated(Unmaximized);
     });
 
     /// <summary>Whether the window is maximized. Electron's <c>win.isMaximized()</c>.</summary>
@@ -873,11 +1041,22 @@ public sealed unsafe partial class BrowserWindow
         => w->is_maximized(w) != 0 || (_transparent && WindowTransparency.FillsWorkArea(
             ToRectangle(w->@base.@base.get_bounds_in_screen(&w->@base.@base)), WorkAreaOf(w), w->is_minimized(w) != 0));
 
-    // A transparent window leaves its emulated maximize by going back to the bounds it had.
-    private void RestoreOn(cef_window_t* w)
+    // A transparent window leaves its emulated maximize by going back to the bounds it had; true when it did.
+    private bool RestoreOn(cef_window_t* w)
     {
-        if (_transparent && _restoreBounds is { } bounds && w->is_maximized(w) == 0 && IsMaximizedOn(w)) ApplyOuterBounds(w, bounds, animate: false);
-        else w->restore(w);
+        if (_transparent && _restoreBounds is { } bounds && w->is_maximized(w) == 0 && IsMaximizedOn(w))
+        {
+            ApplyOuterBounds(w, bounds, animate: false);
+            return true;
+        }
+        w->restore(w);
+        return false;
+    }
+
+    // Where the poll raises the state events (no WM_SIZE route), it sees the emulated change itself.
+    private void RaiseEmulated(EventHandler? handler)
+    {
+        if (_sizeState is not null) handler?.Invoke(this, EventArgs.Empty);
     }
 
     private static Rectangle WorkAreaOf(cef_window_t* w)
@@ -894,7 +1073,10 @@ public sealed unsafe partial class BrowserWindow
     public void Minimize() => Command(w => w->minimize(w));
 
     /// <summary>Restores the window from minimized. Electron's <c>win.restore()</c>.</summary>
-    public void Restore() => Command(RestoreOn);
+    public void Restore() => Command(w =>
+    {
+        if (RestoreOn(w)) RaiseEmulated(Restored);
+    });
 
     /// <summary>Whether the window is minimized. Electron's <c>win.isMinimized()</c>.</summary>
     public bool IsMinimized => Query(w => w->is_minimized(w) != 0, false);
@@ -907,7 +1089,11 @@ public sealed unsafe partial class BrowserWindow
     public void SetFullScreen(bool flag)
     {
         if (UsesSimpleFullScreen) SetSimpleFullScreen(flag);
-        else Command(w => w->set_fullscreen(w, flag ? 1 : 0));
+        else Command(w =>
+        {
+            _sizeState?.SetFullScreen(flag);
+            w->set_fullscreen(w, flag ? 1 : 0);
+        });
     }
 
     /// <summary>Whether the window is in native full screen; false in simple full screen, as Electron (which reads the
@@ -926,7 +1112,11 @@ public sealed unsafe partial class BrowserWindow
     {
         if (!OperatingSystem.IsMacOS())
         {
-            Command(w => w->set_fullscreen(w, flag ? 1 : 0));
+            Command(w =>
+            {
+                _sizeState?.SetFullScreen(flag);
+                w->set_fullscreen(w, flag ? 1 : 0);
+            });
             return;
         }
 
@@ -955,11 +1145,14 @@ public sealed unsafe partial class BrowserWindow
     /// <summary>Keeps the window above others, or stops. Electron's <c>win.setAlwaysOnTop()</c>.</summary>
     /// <remarks>On macOS, <paramref name="level"/> (<c>normal</c>, <c>floating</c>, <c>torn-off-menu</c>, <c>modal-panel</c>,
     /// <c>main-menu</c>, <c>status</c>, <c>pop-up-menu</c>, <c>screen-saver</c>) plus <paramref name="relativeLevel"/> sets the
-    /// window's level, as Electron; elsewhere they are ignored (DRIFT W29).</remarks>
-    /// <exception cref="ArgumentException">An unknown level.</exception>
+    /// window's level, as Electron. On Windows any level keeps the window on top, and the levels below <c>pop-up-menu</c>
+    /// keep it under the taskbar; Linux ignores them. An unknown level throws nowhere, as Electron: macOS takes it as
+    /// <c>normal</c>, so the window leaves the top unless <paramref name="relativeLevel"/> moves it; Windows keeps the
+    /// window on top and above the taskbar. A null level is <c>floating</c>, as Electron's for a non-string one.</remarks>
     public void SetAlwaysOnTop(bool flag, string level = "floating", int relativeLevel = 0)
     {
-        var macLevel = MacWindowLevel(level) ?? throw new ArgumentException($"Unknown level '{level}'.", nameof(level));
+        level ??= "floating";
+        var macLevel = MacWindowLevel(level);
         Command(w =>
         {
             var onTop = StaysOnTop(flag, macLevel + relativeLevel, OperatingSystem.IsMacOS());
@@ -968,6 +1161,7 @@ public sealed unsafe partial class BrowserWindow
             w->set_always_on_top(w, onTop ? 1 : 0);
             if (onTop && OperatingSystem.IsWindows()) WindowsWindow.EnsureTopmost((nint)w->get_window_handle(w));
             if (OperatingSystem.IsMacOS()) MacWindow.SetLevel((nint)w->get_window_handle(w), onTop ? macLevel + relativeLevel : 0);
+            ApplyAlwaysOnTopLevel(w, onTop, level);
             if (wasOnTop != onTop) AlwaysOnTopChanged?.Invoke(this, new AlwaysOnTopChangedEventArgs(onTop));
         });
     }
@@ -976,8 +1170,8 @@ public sealed unsafe partial class BrowserWindow
     /// not the normal one, so <c>normal</c> with no <c>relativeLevel</c> is off; elsewhere <paramref name="flag"/> alone, as Electron.</summary>
     internal static bool StaysOnTop(bool flag, long macLevel, bool mac) => flag && (!mac || macLevel != 0);
 
-    /// <summary>Electron's level names as AppKit window levels (NSWindowLevel).</summary>
-    internal static long? MacWindowLevel(string level) => level switch
+    /// <summary>Electron's level names as AppKit window levels (NSWindowLevel); any other name is NSNormalWindowLevel.</summary>
+    internal static long MacWindowLevel(string level) => level switch
     {
         "normal" => 0,
         "floating" or "torn-off-menu" => 3,
@@ -986,11 +1180,259 @@ public sealed unsafe partial class BrowserWindow
         "status" => 25,
         "pop-up-menu" => 101,
         "screen-saver" => 1000,
-        _ => null,
+        _ => 0,
     };
 
     /// <summary>Whether the window stays above others. Electron's <c>win.isAlwaysOnTop()</c>.</summary>
     public bool IsAlwaysOnTop => Query(w => w->is_always_on_top(w) != 0, false);
+
+    /// <summary>Changes the colours or height of the buttons drawn over a hidden title bar; null fields keep their value.
+    /// Electron's <c>win.setTitleBarOverlay()</c>.</summary>
+    /// <exception cref="InvalidOperationException">The window was not created with a hidden title bar and an overlay.</exception>
+    /// <exception cref="ArgumentException">A colour Chromium's CSS colour parser rejects; Electron's <c>TypeError</c>,
+    /// with its message. As in Electron, a valid colour given with an invalid symbol colour is still kept.</exception>
+    public void SetTitleBarOverlay(TitleBarOverlayOptions options)
+    {
+        ArgumentNullException.ThrowIfNull(options);
+        if (!TitleBar.HasOverlay(_options.TitleBarStyle, _options.TitleBarOverlay, OperatingSystem.IsMacOS()))
+            throw new InvalidOperationException("The title bar overlay is not enabled: create the window with a hidden TitleBarStyle and TitleBarOverlay.");
+        uint? color = null, symbol = null;
+        if (options.Color is { } c)
+            color = CssColor.TryParse(c, out var argb) ? argb : throw new ArgumentException("Could not parse color as CSS color");
+        if (options.SymbolColor is { } s)
+        {
+            if (!CssColor.TryParse(s, out var argb))
+            {
+                // Electron stores the colour before it rejects the symbol colour, and repaints nothing.
+                if (color is { } kept) Command(_ => _titleBarColors.Color = kept);
+                throw new ArgumentException("Could not parse symbol color as CSS color");
+            }
+            symbol = argb;
+        }
+        Command(_ =>
+        {
+            if (_titleBarOverlay is not { } overlay) return;
+            var (oldColor, oldSymbol) = _titleBarColors;
+            _titleBarColors = (color ?? oldColor, symbol ?? oldSymbol);
+            overlay.Update(_titleBarColors.Color, _titleBarColors.Symbol, options.Height ?? overlay.Height);
+            ApplyDraggableRegions(_window);
+        });
+    }
+
+    // Not in Electron, whose page reads this through the Window Controls Overlay API (DRIFT W34); kept for tests.
+    internal Rectangle GetTitleBarOverlayBounds() => Query(w =>
+    {
+        if (_titleBarOverlay is not { } overlay) return default;
+        var bounds = ToRectangle(w->@base.@base.get_bounds_in_screen(&w->@base.@base));
+        return new Rectangle(bounds.Width - overlay.Width, 0, overlay.Width, overlay.Height);
+    }, default);
+
+    private bool IsFrameless => TitleBar.IsFrameless(_options.Frame, _options.TitleBarStyle, OperatingSystem.IsMacOS());
+
+    private (uint Color, uint Symbol) _titleBarColors;
+
+    private static uint CaptionForeground() => TitleBar.CaptionForeground(TitleBar.DefaultFrame(OperatingSystem.IsWindows() && WindowsWindowStyle.AppsUseDarkTheme()));
+
+    private void AttachTitleBarOverlay(cef_window_t* w, TitleBarOverlayOptions options)
+    {
+        var (face, text) = OperatingSystem.IsWindows() ? WindowsWindowStyle.ButtonColors() : (0xFFF0F0F0u, 0xFF000000u);
+        // Electron ignores a colour it cannot parse here and keeps the default.
+        _titleBarColors = (CssColor.TryParse(options.Color, out var color) ? color : face, CssColor.TryParse(options.SymbolColor, out var symbol) ? symbol : text);
+        var height = options.Height ?? (OperatingSystem.IsWindows() ? WindowsWindowStyle.CaptionHeight(Hwnd(w)) : TitleBar.FallbackHeight);
+        _titleBarOverlay = new TitleBarOverlayView(this, CaptionForeground);
+        _titleBarOverlay.Attach(w, _titleBarColors.Color, _titleBarColors.Symbol, height);
+        _titleBarOverlay.SetMaximized(w->is_maximized(w) != 0);
+        UpdateCaptionButtons();
+        if (OperatingSystem.IsWindows())
+        {
+            var overlay = _titleBarOverlay;
+            WindowsSubclass.RouteMaximizeButton(Hwnd(w), overlay.IsOverMaximize, overlay.OnMaximizeEvent);
+            PassMaximizeHitTests(w);
+        }
+    }
+
+    private void SetDraggableRegionsOn(cef_window_t* w, IReadOnlyList<DraggableRegion> regions)
+    {
+        _pageRegions = regions;
+        ApplyDraggableRegions(w);
+    }
+
+    // CEF hit-tests the regions in window coordinates; the page starts below a menu bar. CEF ignores them in a framed
+    // window, as Electron does. The overlay's buttons are cut out, or a drag strip under them would take their clicks.
+    private void ApplyDraggableRegions(cef_window_t* w)
+    {
+        if (w is null || (_pageRegions.Count == 0 && _titleBarOverlay is null)) return;
+        var window = ToRectangle(w->@base.@base.get_bounds_in_screen(&w->@base.@base));
+        var page = ContentBoundsOn(w);
+        var moved = TitleBar.ToWindow(_pageRegions, page.X - window.X, page.Y - window.Y);
+        if (_titleBarOverlay is { } overlay)
+            moved = [.. moved, new DraggableRegion(window.Width - overlay.Width, 0, overlay.Width, overlay.Height, Draggable: false)];
+        var native = new cef_draggable_region_t[moved.Length];
+        for (var i = 0; i < moved.Length; i++)
+            native[i] = new cef_draggable_region_t
+            {
+                bounds = new cef_rect_t { x = moved[i].X, y = moved[i].Y, width = moved[i].Width, height = moved[i].Height },
+                draggable = moved[i].Draggable ? 1 : 0,
+            };
+        fixed (cef_draggable_region_t* first = native) w->set_draggable_regions(w, (nuint)native.Length, first);
+    }
+
+    /// <summary>Shows the window without focusing it. Windows only for now: macOS and Linux show and focus it.
+    /// Electron's <c>win.showInactive()</c>.</summary>
+    public void ShowInactive() => Command(w =>
+    {
+        var wasVisible = w->@base.@base.is_visible(&w->@base.@base) != 0;
+        _meantVisible = true;
+        FlushPendingDisplayMode(w);
+        ShowThroughCef(w, activate: false);
+        ApplySkipTaskbar(w);
+        if (!wasVisible) Shown?.Invoke(this, EventArgs.Empty);
+    });
+
+    // Through CEF, so Views knows the window is shown; without activation the position changes it makes are kept from
+    // activating it (Electron's ShowInactive, and every show of a window that cannot activate).
+    private void ShowThroughCef(cef_window_t* w, bool activate)
+    {
+        if (activate || !OperatingSystem.IsWindows() || !WindowsSubclass.WithoutActivation(Hwnd(w), () => w->show(w))) w->show(w);
+        // Handing the foreground back raised the previous window; an inactive show still comes out in front.
+        else WindowsWindowStyle.BringToTopInactive(Hwnd(w));
+    }
+
+    /// <summary>Sets the window's opacity, clamped to 0–1. Windows only for now: stored but not shown on macOS and
+    /// Linux. Electron's <c>win.setOpacity()</c>.</summary>
+    /// <exception cref="ArgumentOutOfRangeException">The opacity is NaN.</exception>
+    public void SetOpacity(double opacity)
+    {
+        var clamped = WindowPolish.ClampOpacity(opacity);
+        Command(w =>
+        {
+            _opacity = clamped;
+            if (OperatingSystem.IsWindows()) ApplyOpacity(w);
+        });
+    }
+
+    /// <summary>The window's opacity, as set. Electron's <c>win.getOpacity()</c>.</summary>
+    public double GetOpacity() => Query(_ => _opacity, 1.0);
+
+    /// <summary>Gives the window a shadow or takes it away. Stored only: on Windows, as in Electron, it changes nothing,
+    /// and macOS and Linux are not done yet. Electron's <c>win.setHasShadow()</c>.</summary>
+    public void SetHasShadow(bool hasShadow) => Command(_ => _hasShadow = hasShadow);
+
+    /// <summary>Whether the window has a shadow, as set. Electron's <c>win.hasShadow()</c>.</summary>
+    public bool GetHasShadow() => Query(_ => _hasShadow, true);
+
+    /// <summary>Lets mouse input pass through the window to whatever is below it, or stops that; with
+    /// <see cref="IgnoreMouseEventsOptions.Forward"/> the page still gets mouse moves. Windows only for now.
+    /// Electron's <c>win.setIgnoreMouseEvents()</c>.</summary>
+    public void SetIgnoreMouseEvents(bool ignore, IgnoreMouseEventsOptions? options = null) => Command(w =>
+    {
+        if (!OperatingSystem.IsWindows()) return;
+        var hwnd = Hwnd(w);
+        WindowsWindowStyle.SetClickThrough(hwnd, ignore, keepLayered: _layered);
+        // Forwarding only applies while ignoring; taking the mouse back always ends it.
+        if (!WindowsSubclass.ForwardMouseMoves(hwnd, ignore && options?.Forward == true))
+            Console.Error.WriteLine("[Oriel] Mouse moves cannot be forwarded to the page.");
+    });
+
+    /// <summary>Keeps the window out of screenshots and screen recordings, or lets it back in. Windows only for now.
+    /// Electron's <c>win.setContentProtection()</c>.</summary>
+    public void SetContentProtection(bool enable) => Command(w =>
+    {
+        if (OperatingSystem.IsWindows() && !WindowsWindowStyle.SetExcludedFromCapture(Hwnd(w), enable))
+            Console.Error.WriteLine("[Oriel] Windows did not take the content protection.");
+    });
+
+    /// <summary>Whether the window is kept out of captures, read back from Windows; false elsewhere.
+    /// Electron's <c>win.isContentProtected()</c>.</summary>
+    public bool IsContentProtected() => Query(w => OperatingSystem.IsWindows() && WindowsWindowStyle.IsExcludedFromCapture(Hwnd(w)), false);
+
+    /// <summary>Enters or leaves kiosk mode: full screen. Electron's <c>win.setKiosk()</c>.</summary>
+    public void SetKiosk(bool flag)
+    {
+        Command(_ => _kiosk = flag);
+        SetFullScreen(flag);
+    }
+
+    /// <summary>Whether the window is in kiosk mode: on Windows and Linux, whether it is full screen, however it got
+    /// there, as Electron answers. Electron's <c>win.isKiosk()</c>.</summary>
+    public bool IsKiosk() => OperatingSystem.IsMacOS() ? Query(_ => _kiosk, false) : IsFullScreen;
+
+    /// <summary>The bounds the window has, or returns to, when it is neither maximized, minimized nor full screen.
+    /// Electron's <c>win.getNormalBounds()</c>.</summary>
+    public Rectangle GetNormalBounds() => Query(w =>
+    {
+        if (OperatingSystem.IsWindows() && WindowsWindowStyle.GetNormalBounds(Hwnd(w)) is var (x, y, width, height))
+            return Screen.ScreenToDipRect(this, new Rectangle(x, y, width, height));
+        return IsNormal(w) ? ToRectangle(w->@base.@base.get_bounds_in_screen(&w->@base.@base)) : _normalBounds;
+    }, default);
+
+    private static bool IsNormal(cef_window_t* w) => w->is_maximized(w) == 0 && w->is_minimized(w) == 0 && w->is_fullscreen(w) == 0;
+
+    [System.Runtime.Versioning.SupportedOSPlatform("windows")]
+    private void ApplyWindowsStyles(cef_window_t* w)
+    {
+        if (_opacity < 1) ApplyOpacity(w);
+        var hwnd = Hwnd(w);
+        WindowsSubclass.RouteSizing(hwnd, (wmsz, r) => Cancelled(WillResize, new WillResizeEventArgs(PixelsToDips(r), WindowPolish.EdgeFromWmsz(wmsz))));
+        WindowsSubclass.RouteMoving(hwnd, r => Cancelled(WillMove, new WillMoveEventArgs(PixelsToDips(r))));
+        WindowsSubclass.RouteMessages(hwnd, OnWindowMessage);
+        WindowsSubclass.RouteThumbButtonClicks(hwnd, OnThumbarClick);
+        WindowsSubclass.RouteTaskbarCreated(hwnd, () =>
+        {
+            if (_window is not null) RestoreThumbarButtons(_window);
+        });
+    }
+
+    // Electron's frameless block in the NativeWindowViews constructor, and FlipWindowStyle for a framed window.
+    [System.Runtime.Versioning.SupportedOSPlatform("windows")]
+    private void ApplyFrameStyles(cef_window_t* w)
+    {
+        var hwnd = Hwnd(w);
+        if (IsFrameless)
+        {
+            WindowsWindowStyle.SetStyle(hwnd, WindowsFrame.FramelessStyle(_resizable, _options.Minimizable, _options.Maximizable, _options.ThickFrame));
+            _roundedCorners = WindowsFrame.RoundedCorners(_options.ThickFrame, _options.RoundedCorners);
+            if (WindowsWindow.IsWindows11) WindowsWindow.SetRoundedCorners(hwnd, _roundedCorners);
+        }
+        else if (!_options.ThickFrame) WindowsWindowStyle.FlipStyle(hwnd, false, WindowsFrame.WsThickFrame);
+    }
+
+    // Electron's OnWindowMessage after PreHandleMSG's NotifyWindowMessage; the colour messages stand in for
+    // AccentColorObserver's registry watch.
+    private void OnWindowMessage(uint message, nint wParam, nint lParam)
+    {
+        if (message is 0x0320 /* WM_DWMCOLORIZATIONCOLORCHANGED */ or 0x001A /* WM_SETTINGCHANGE */)
+            Command(w => UpdateAccentColor(w, w->is_active(w) != 0));
+        if (_messageHooks.TryGetValue(message, out var callback)) callback(wParam, lParam);
+    }
+
+    // Electron's UpdateWindowAccentColor.
+    private void UpdateAccentColor(cef_window_t* w, bool active)
+    {
+        if (!OperatingSystem.IsWindows() || !WindowsWindow.IsWindows11) return;
+        var system = _accent is { Argb: not null } ? null : WindowsWindow.SystemAccentColor();
+        var color = WindowsFrame.BorderColor(_accent, active, _accent is null && WindowsWindow.AccentColorOnTitleBars(), system);
+        if (!WindowsWindow.SetBorderAndCaptionColor(Hwnd(w), color, caption: !IsFrameless))
+            Console.Error.WriteLine("[Oriel] DWM did not take the accent colour.");
+    }
+
+    private bool Cancelled<T>(EventHandler<T>? handler, T args) where T : CancelEventArgs
+    {
+        if (handler is null) return false;
+        handler(this, args);
+        return args.Cancel;
+    }
+
+    private Rectangle PixelsToDips((int Left, int Top, int Right, int Bottom) r)
+        => Screen.ScreenToDipRect(this, new Rectangle(r.Left, r.Top, r.Right - r.Left, r.Bottom - r.Top));
+
+    [System.Runtime.Versioning.SupportedOSPlatform("windows")]
+    private void ApplyOpacity(cef_window_t* w)
+    {
+        _layered = true;
+        if (!WindowsWindowStyle.SetAlpha(Hwnd(w), WindowPolish.ToAlpha(_opacity)))
+            Console.Error.WriteLine("[Oriel] Windows did not take the opacity.");
+    }
 
     /// <summary>Sets the title bar text. Electron's <c>win.setTitle()</c>.</summary>
     public void SetTitle(string title)
@@ -1087,26 +1529,44 @@ public sealed unsafe partial class BrowserWindow
     public void SetResizable(bool flag) => Command(_ =>
     {
         _resizable = flag;
-        _windowDelegate.Resizable = flag && !_transparent;
+        _windowDelegate.Resizable = CanResize(flag) && !_transparent;
     });
 
+    // Electron's CanResize: on Windows a framed window without a thick frame cannot be resized.
+    private bool CanResize(bool resizable) => OperatingSystem.IsWindows() ? WindowsFrame.CanResize(!IsFrameless, resizable, _options.ThickFrame) : resizable;
+
     /// <summary>Whether the user can resize the window. Electron's <c>win.isResizable()</c>.</summary>
-    public bool IsResizable => Query(_ => WindowTransparency.ReportsResizable(_options.Frame, _transparent, _resizable), false);
+    public bool IsResizable => Query(_ => WindowTransparency.ReportsResizable(_options.Frame, _transparent, CanResize(_resizable)), false);
 
     /// <summary>Lets the window be minimized, or stops. Electron's <c>win.setMinimizable()</c>.</summary>
-    public void SetMinimizable(bool flag) => Command(_ => _windowDelegate.Minimizable = flag);
+    public void SetMinimizable(bool flag) => Command(_ =>
+    {
+        _windowDelegate.Minimizable = flag;
+        UpdateCaptionButtons();
+    });
 
     /// <summary>Whether the window can be minimized. Electron's <c>win.isMinimizable()</c>.</summary>
     public bool IsMinimizable => Query(_ => _windowDelegate.Minimizable, false);
 
     /// <summary>Lets the window be maximized, or stops. Electron's <c>win.setMaximizable()</c>.</summary>
-    public void SetMaximizable(bool flag) => Command(_ => _windowDelegate.Maximizable = flag && !_transparent);
+    public void SetMaximizable(bool flag) => Command(_ =>
+    {
+        _windowDelegate.Maximizable = flag && !_transparent;
+        UpdateCaptionButtons();
+    });
 
     /// <summary>Whether the window can be maximized. Electron's <c>win.isMaximizable()</c>.</summary>
     public bool IsMaximizable => Query(_ => _windowDelegate.Maximizable, false);
 
     /// <summary>Lets the user close the window, or stops; code can still close it. Electron's <c>win.setClosable()</c>.</summary>
-    public void SetClosable(bool flag) => Command(_ => _closable = flag);
+    public void SetClosable(bool flag) => Command(_ =>
+    {
+        _closable = flag;
+        UpdateCaptionButtons();
+    });
+
+    // Electron's overlay disables the buttons the window does not allow.
+    private void UpdateCaptionButtons() => _titleBarOverlay?.SetEnabled(_windowDelegate.Minimizable, _windowDelegate.Maximizable, _closable);
 
     /// <summary>Whether the user can close the window. Electron's <c>win.isClosable()</c>.</summary>
     public bool IsClosable => Query(_ => _closable, false);
@@ -1281,7 +1741,7 @@ public sealed unsafe partial class BrowserWindow
         {
             if (!OperatingSystem.IsWindows()) return;
             var hwnd = Hwnd(w);
-            var done = overlay is null ? WindowsTaskbar.ClearOverlayIcon(hwnd) : SetOverlayIconOn(hwnd, overlay, description);
+            var done = overlay is null ? WindowsTaskbar.ClearOverlayIcon(hwnd, description) : SetOverlayIconOn(hwnd, overlay, description);
             if (!done) Console.Error.WriteLine("[Oriel] The taskbar did not take the overlay icon.");
         });
     }
@@ -1289,12 +1749,57 @@ public sealed unsafe partial class BrowserWindow
     /// <summary>Sets the buttons in the window's taskbar thumbnail, at most seven; an empty list removes them. False if
     /// there are more than seven, the shell refused, or not on Windows. Electron's <c>win.setThumbarButtons()</c>.</summary>
     /// <remarks>Call it once the window is shown: the shell adds the toolbar to an existing taskbar button.</remarks>
+    /// <exception cref="ArgumentException">A button or its icon is null.</exception>
     public bool SetThumbarButtons(IReadOnlyList<ThumbarButton> buttons)
     {
         ArgumentNullException.ThrowIfNull(buttons);
-        var plan = Thumbar.Plan(buttons);
-        return plan is not null && Query(w => OperatingSystem.IsWindows() && SetThumbarButtonsOn(w, plan), false);
+        if (buttons.Any(b => b?.Icon is null)) throw new ArgumentException("Every thumbar button needs an icon.", nameof(buttons));
+        var copy = buttons.ToArray();
+        return Query(w => OperatingSystem.IsWindows() && SetThumbarButtonsOn(w, copy), false);
     }
+
+    /// <summary>Calls <paramref name="callback"/> with the raw <c>wParam</c> and <c>lParam</c> whenever the window
+    /// receives <paramref name="message"/>, synchronously on the UI thread inside the window procedure, before Chromium
+    /// handles the message, which then goes on as usual. One callback per message: hooking it again replaces the
+    /// callback. Always true. Windows only: the callback never runs on macOS and Linux.
+    /// Electron's <c>win.hookWindowMessage()</c>.</summary>
+    /// <remarks>An exception from the callback is written to standard error and does not stop the message.</remarks>
+    public bool HookWindowMessage(uint message, Action<nint, nint> callback)
+    {
+        ArgumentNullException.ThrowIfNull(callback);
+        _messageHooks[message] = callback;
+        return true;
+    }
+
+    /// <summary>Whether <paramref name="message"/> is hooked. Electron's <c>win.isWindowMessageHooked()</c>.</summary>
+    public bool IsWindowMessageHooked(uint message) => _messageHooks.ContainsKey(message);
+
+    /// <summary>Removes the callback for <paramref name="message"/>, if any. Electron's <c>win.unhookWindowMessage()</c>.</summary>
+    public void UnhookWindowMessage(uint message) => _messageHooks.TryRemove(message, out _);
+
+    /// <summary>Removes every message callback. Electron's <c>win.unhookAllWindowMessages()</c>.</summary>
+    public void UnhookAllWindowMessages() => _messageHooks.Clear();
+
+    /// <summary>Sets the window's accent colour (border, and caption when framed) on Windows 11: a colour, the system
+    /// accent colour (<see langword="true"/>), none (<see langword="false"/>), or null to follow the system setting
+    /// again. A colour string Electron cannot parse changes nothing. Ignored on macOS and Linux.
+    /// Electron's <c>win.setAccentColor()</c>.</summary>
+    public void SetAccentColor(AccentColor? accentColor) => Command(w =>
+    {
+        if (accentColor is { Color: { } color } && !CssColor.TryParseElectron(color, out _)) return;
+        _accent = WindowsFrame.FromOption(accentColor);
+        UpdateAccentColor(w, w->is_active(w) != 0);
+    });
+
+    /// <summary>The window's accent colour as <c>#RRGGBB</c>: the colour set, else the system accent colour; or
+    /// <see cref="AccentColor.None"/> when turned off or the system has none. Windows only: <see cref="AccentColor.None"/>
+    /// on macOS and Linux. Electron's <c>win.getAccentColor()</c>, whose <c>false</c> is <see cref="AccentColor.None"/>.</summary>
+    public AccentColor GetAccentColor() => Query(_ =>
+    {
+        if (!OperatingSystem.IsWindows()) return AccentColor.None;
+        var hex = WindowsFrame.Report(_accent, _accent is { Argb: not null } ? null : WindowsWindow.SystemAccentColor());
+        return hex is null ? AccentColor.None : AccentColor.FromColor(hex);
+    }, AccentColor.None);
 
     /// <summary>Sets the window's App User Model ID and relaunch details, which decide how the taskbar groups and pins
     /// it; empty options are left as they are. Windows only: does nothing on macOS and Linux.
@@ -1317,7 +1822,7 @@ public sealed unsafe partial class BrowserWindow
     {
         if (!OperatingSystem.IsWindows()) return;
         var hwnd = Hwnd(w);
-        WindowsTaskbar.SetThumbnailClip(hwnd, AppDetails.ClipToPixels(region, WindowsWindow.ScaleFactor(hwnd)), done =>
+        WindowsTaskbar.SetThumbnailClip(hwnd, ClipToPixels(w, region), done =>
         {
             if (!done) Console.Error.WriteLine("[Oriel] The taskbar did not take the thumbnail clip.");
         });
@@ -1358,26 +1863,57 @@ public sealed unsafe partial class BrowserWindow
         WindowsTranslucency.ActivateBackdrop(hwnd, _options.Frame);
     }
 
+    // Electron's TaskbarHost::SetThumbarButtons, including its order: the callbacks are replaced before a bad flag
+    // stops the call, and the toolbar counts as added whatever the shell answers.
     [System.Runtime.Versioning.SupportedOSPlatform("windows")]
-    private bool SetThumbarButtonsOn(cef_window_t* w, (int Slot, ThumbarButton? Button, uint Flags)[] plan)
+    private bool SetThumbarButtonsOn(cef_window_t* w, IReadOnlyList<ThumbarButton> buttons)
     {
-        var hwnd = Hwnd(w);
-        if (!WindowsSubclass.RouteThumbButtonClicks(hwnd, slot => _thumbarClicks[slot]?.Invoke())) return false;
-        var icons = plan.Select(s => s.Button is { } b ? StraightIcon(b.Icon) : 0).ToArray();
-        var native = plan.Select(s => new ThumbButton((uint)s.Slot, icons[s.Slot], s.Button?.Tooltip, s.Flags)).ToArray();
-        if (!WindowsTaskbar.SetThumbButtons(hwnd, native, add: !_thumbarAdded))
-        {
-            foreach (var icon in icons) WindowsTaskbar.DestroyIconHandle(icon);
-            return false;
-        }
+        if (Thumbar.Plan(buttons) is not { } plan || !WindowsTaskbar.IsAvailable) return false;
+        _thumbarClicks.Clear();
+        for (var i = 0; i < (plan.InvalidAt ?? buttons.Count); i++) _thumbarClicks[(int)plan.Slots[i].Id] = buttons[i].Click;
+        if (plan.InvalidAt is not null) return false;
+        var icons = plan.Slots.Select(s => (s.Mask & Thumbar.MaskIcon) != 0 ? StraightIcon(s.Button!.Icon) : 0).ToArray();
+        var native = plan.Slots.Select((s, i) => new ThumbButton(s.Id, icons[i], s.Button?.Tooltip, s.Flags, s.Mask)).ToArray();
+        var ok = WindowsTaskbar.SetThumbButtons(Hwnd(w), native, add: !_thumbarAdded);
         _thumbarAdded = true;
+        _lastThumbarButtons = buttons;
+        // A slot sent without an icon keeps the shell's previous one, so its handle stays alive.
         for (var i = 0; i < Thumbar.MaxButtons; i++)
         {
+            if (icons[i] == 0) continue;
             WindowsTaskbar.DestroyIconHandle(_thumbarIcons[i]);
             _thumbarIcons[i] = icons[i];
-            _thumbarClicks[i] = plan[i].Button?.Click;
         }
+        return ok;
+    }
+
+    // Electron's HandleThumbarButtonEvent: a known id is handled even without a callback.
+    private bool OnThumbarClick(int id)
+    {
+        if (!_thumbarClicks.TryGetValue(id, out var click)) return false;
+        click?.Invoke();
         return true;
+    }
+
+    // Electron's RestoreThumbarButtons: Explorer restarted, so the toolbar is added again.
+    [System.Runtime.Versioning.SupportedOSPlatform("windows")]
+    private void RestoreThumbarButtons(cef_window_t* w)
+    {
+        if (!_thumbarAdded) return;
+        _thumbarAdded = false;
+        SetThumbarButtonsOn(w, _lastThumbarButtons);
+    }
+
+    // DIPToScreenRect(hwnd, region) as Electron calls it: the origin goes through the window's display as a screen point.
+    private static (int Left, int Top, int Right, int Bottom)? ClipToPixels(cef_window_t* w, Rectangle region)
+    {
+        var bounds = w->@base.@base.get_bounds_in_screen(&w->@base.@base);
+        var display = CefNative.cef_display_get_matching_bounds(&bounds, 0);
+        var origin = new cef_point_t { x = region.X, y = region.Y };
+        display->convert_point_to_pixels(display, &origin);
+        var scale = display->get_device_scale_factor(display);
+        NativeObject.Release(display);
+        return AppDetails.ClipToPixels(region, scale, (origin.x, origin.y));
     }
 
     // Electron takes the 1x representation; icon DIBs take straight alpha.
@@ -1464,6 +2000,10 @@ public sealed unsafe partial class BrowserWindow
 
     private void OnWindowCreated(cef_window_t* window)
     {
+        _meantVisible = _options.Show;
+        // Electron's widget for a focusable: false window cannot activate either; CEF activates it on creation.
+        if (OperatingSystem.IsWindows()) WindowsSubclass.RefuseActivationWhileHidden(Hwnd(window), () => !_meantVisible || !(_focusable ?? _options.Focusable));
+        RouteSizeEvents(window);
         if (_menuBar is not null)
         {
             _menuBar.Attach(window, ContentView.NativeView);
@@ -1526,20 +2066,38 @@ public sealed unsafe partial class BrowserWindow
         if (UsesSimpleFullScreen && OperatingSystem.IsMacOS())
             _routedNSWindow = MacWindow.RouteFullScreenToggle((nint)window->get_window_handle(window), () => SetSimpleFullScreen(!IsSimpleFullScreen));
         if (_options.AlwaysOnTop) window->set_always_on_top(window, 1);
+        if (OperatingSystem.IsWindows()) ApplyWindowsStyles(window);
+        // Late, still before the first show: CEF recomputes the styles while the window is set up.
+        if (OperatingSystem.IsWindows()) ApplyFrameStyles(window);
+        if (TitleBar.HasOverlay(_options.TitleBarStyle, _options.TitleBarOverlay, OperatingSystem.IsMacOS())) AttachTitleBarOverlay(window, _options.TitleBarOverlay!);
+        AttachWindowsState(window);
+        // After the size and position options, before full screen and the show, as Electron's InitFromOptions.
+        RestoreWindowState(window);
+        // OnBoundsChanged ignores bounds set before _window exists, and a window maximized on its first show is never normal.
+        _normalBounds = OuterBoundsOn(window);
+        SaveWindowState(window);
+        ApplyLinuxEnabled();
         if (_options.Show)
         {
-            window->show(window);
+            if (_options.Modal) _options.Parent?.ChangeChildModals(increment: true);
+            FlushPendingDisplayMode(window);
+            ShowThroughCef(window, activate: _options.Focusable);
             ApplySkipTaskbar(window);
         }
         if (_options.HiddenInMissionControl && OperatingSystem.IsMacOS())
             MacWindow.SetCollectionBehavior((nint)window->get_window_handle(window), MacWindow.Transient, true);
-        if (_options.FullScreen)
+        if ((_options.FullScreen && !_restoreDisplayMode) || _kiosk)
         {
             if (UsesSimpleFullScreen && OperatingSystem.IsMacOS()) MacWindow.SetSimpleFullScreen((nint)window->get_window_handle(window), true);
             else window->set_fullscreen(window, 1);
         }
 
+        // The show above activates the window before _window is set, so OnActivationChanged could not apply it.
+        if (OperatingSystem.IsWindows() && window->is_active(window) != 0) UpdateAccentColor(window, true);
+
         _lastBounds = ToRectangle(window->@base.@base.get_bounds_in_screen(&window->@base.@base));
+        // Also where WM_SIZE raises the state events: the poll re-subclasses Chromium's page windows for the overlay's
+        // HTMAXBUTTON, and they come and go.
         CefThread.PostUiDelayed(PollState, s_statePoll);
     }
 
@@ -1562,7 +2120,11 @@ public sealed unsafe partial class BrowserWindow
     {
         var browser = WebContents.Browser;
         // CEF asks again once the browser is gone; by then the close was already approved.
-        if (browser is null) return true;
+        if (browser is null)
+        {
+            FlushWindowState(window);
+            return true;
+        }
 
         var fromCode = _closeFromCode;
         _closeFromCode = false;
@@ -1584,6 +2146,8 @@ public sealed unsafe partial class BrowserWindow
         var host = browser->get_host(browser);
         var canClose = host->try_close_browser(host) != 0;
         NativeObject.Release(host);
+        // Electron saves from OnWindowClosed; by on_window_destroyed CEF reports empty bounds.
+        if (canClose) FlushWindowState(window);
         return canClose;
     }
 
@@ -1597,6 +2161,7 @@ public sealed unsafe partial class BrowserWindow
 
     private void OnActivationChanged(bool active)
     {
+        if (OperatingSystem.IsWindows() && _window is not null) UpdateAccentColor(_window, active);
         if (!active) _menuBar?.OnWindowBlurred();
         // The page's view loses focus with its window, as a Chromium view does when its window resigns.
         if (!active) WebContents.OnViewBlurred();
@@ -1608,9 +2173,19 @@ public sealed unsafe partial class BrowserWindow
     // state is also polled while the window is open.
     private static readonly TimeSpan s_statePoll = TimeSpan.FromMilliseconds(250);
 
+    // Chromium's page window covers the overlay and takes the hit test first; it can be recreated, so this repeats.
+    [System.Runtime.Versioning.SupportedOSPlatform("windows")]
+    private void PassMaximizeHitTests(cef_window_t* w)
+    {
+        if (_titleBarOverlay is not { } overlay) return;
+        foreach (var page in WindowsWindowStyle.ChildrenOfClass(Hwnd(w), "Chrome_RenderWidgetHostHWND"))
+            WindowsSubclass.PassHitTestToParent(page, overlay.IsOverMaximize);
+    }
+
     private void PollState()
     {
         if (_window is null) return;
+        if (OperatingSystem.IsWindows()) PassMaximizeHitTests(_window);
         RaiseStateChanges();
         CefThread.PostUiDelayed(PollState, s_statePoll);
     }
@@ -1620,26 +2195,44 @@ public sealed unsafe partial class BrowserWindow
         var bounds = ToRectangle(rect);
         var previous = _lastBounds;
         _lastBounds = bounds;
+        if (_window is not null && IsNormal(_window)) _normalBounds = bounds;
         if (bounds.X != previous.X || bounds.Y != previous.Y) Moved?.Invoke(this, EventArgs.Empty);
-        if (bounds.Width != previous.Width || bounds.Height != previous.Height) Resized?.Invoke(this, EventArgs.Empty);
+        if (bounds.Width != previous.Width || bounds.Height != previous.Height)
+        {
+            if (_titleBarOverlay is not null && _window is not null) ApplyDraggableRegions(_window);
+            Resized?.Invoke(this, EventArgs.Empty);
+        }
         RaiseStateChanges();
     }
 
     private void RaiseStateChanges()
     {
         if (_window is null) return;
+        // The overlay's maximize/restore button follows the state even where WM_SIZE raises the events.
+        if (_sizeState is not null)
+        {
+            _titleBarOverlay?.SetMaximized(IsMaximizedOn(_window));
+            return;
+        }
         var maximized = IsMaximizedOn(_window);
         var minimized = _window->is_minimized(_window) != 0;
         if (maximized != _wasMaximized) (maximized ? Maximized : Unmaximized)?.Invoke(this, EventArgs.Empty);
         if (minimized != _wasMinimized) (minimized ? Minimized : Restored)?.Invoke(this, EventArgs.Empty);
         _wasMaximized = maximized;
+        _titleBarOverlay?.SetMaximized(maximized);
         _wasMinimized = minimized;
     }
 
     private void OnFullscreenTransition(bool completed)
     {
+        _fullscreenTransitioning = !completed;
         if (!completed || _window is null) return;
-        (_window->is_fullscreen(_window) != 0 ? EnteredFullScreen : LeftFullScreen)?.Invoke(this, EventArgs.Empty);
+        var fullscreen = _window->is_fullscreen(_window) != 0;
+        if (fullscreen) _sizeState?.SetFullScreen(true);
+        // Electron's SetFullScreen: corners that round square up in full screen, framed windows included.
+        if (OperatingSystem.IsWindows() && _roundedCorners && WindowsWindow.IsWindows11) WindowsWindow.SetRoundedCorners(Hwnd(_window), !fullscreen);
+        _titleBarOverlay?.SetVisible(!fullscreen);
+        (fullscreen ? EnteredFullScreen : LeftFullScreen)?.Invoke(this, EventArgs.Empty);
     }
 
     // The window's page goes first; the window's teardown follows at once, without asking can_close again.
@@ -1654,6 +2247,7 @@ public sealed unsafe partial class BrowserWindow
         if (_routedNSWindow != 0 && OperatingSystem.IsMacOS()) MacWindow.UnrouteFullScreenToggle(_routedNSWindow);
         Menu.ApplicationMenuChanged -= _applicationMenuChanged;
         _menuBar?.Detach();
+        _titleBarOverlay?.Detach();
         if (OperatingSystem.IsWindows())
             foreach (var icon in _thumbarIcons) WindowsTaskbar.DestroyIconHandle(icon);
         NativeObject.Release(_browserView);
@@ -1662,7 +2256,16 @@ public sealed unsafe partial class BrowserWindow
         _window = null;
 
         lock (s_openGate) s_open.Remove(this);
-        _options.Parent?._children.Remove(this);
+        ReleaseName();
+        _parent?._children.Remove(this);
+        // The cover went with the X window.
+        _inputCover = 0;
+        if (_options is { Modal: true, Parent: { } parent } && OperatingSystem.IsLinux())
+        {
+            parent.ChangeChildModals(increment: false);
+            // Electron focuses the parent once its modal closes (NativeWindowViews::OnWidgetDestroying).
+            if (parent._window is not null) parent._window->activate(parent._window);
+        }
         // macOS closes child windows with their parent; Linux does not. Destroy, as Windows does with owned
         // windows: a child that vetoed would outlive its parent.
         foreach (var child in _children.ToArray()) child.Destroy();

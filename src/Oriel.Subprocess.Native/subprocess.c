@@ -16,6 +16,7 @@
 #endif
 
 #include "include/capi/cef_app_capi.h"
+#include "include/capi/cef_crash_util_capi.h"
 #include "include/cef_api_hash.h"
 
 #if defined(__linux__) && defined(__aarch64__)
@@ -40,6 +41,60 @@ unsigned long getauxval(unsigned long type) {
 #define SCHEME_SWITCH "--oriel-custom-schemes="
 
 static const char* g_schemes;
+
+// CrashReporter's global annotations, which Electron sends from every process, arrive as the hex of
+// UTF-8 "key\0value\0..." (CrashReporterConfig.EncodePairs); CEF only records keys its cfg declared.
+#define CRASH_KEYS_SWITCH "--oriel-crash-keys="
+
+static int hex_digit(char c) {
+  if (c >= '0' && c <= '9') return c - '0';
+  if (c >= 'a' && c <= 'f') return c - 'a' + 10;
+  return c - 'A' + 10;
+}
+
+static void set_crash_key(const char* key, size_t key_length, const char* value, size_t value_length) {
+#ifdef _WIN32
+  // cef_set_crash_key_value does nothing before cef_execute_process initialises CEF, and that call does
+  // not return in a subprocess; chrome_elf, which loads with the exe, already holds the keys.
+  typedef int(__cdecl * set_crash_key_value_t)(const char*, size_t, const char*, size_t);
+  HMODULE elf = GetModuleHandleW(L"chrome_elf.dll");
+  set_crash_key_value_t set = elf ? (set_crash_key_value_t)(void*)GetProcAddress(elf, "SetCrashKeyValueImpl") : NULL;
+  if (set) {
+    set(key, key_length, value, value_length);
+    return;
+  }
+#endif
+  cef_string_t name = {0};
+  cef_string_t text = {0};
+  cef_string_utf8_to_utf16(key, key_length, &name);
+  cef_string_utf8_to_utf16(value, value_length, &text);
+  cef_set_crash_key_value(&name, &text);
+  cef_string_clear(&name);
+  cef_string_clear(&text);
+}
+
+static void set_crash_keys(const char* hex) {
+  if (!hex) return;
+  size_t length = strspn(hex, "0123456789abcdefABCDEF") / 2;
+  char* bytes = (char*)malloc(length + 1);
+  if (!bytes) return;
+  for (size_t i = 0; i < length; i++)
+    bytes[i] = (char)((hex_digit(hex[2 * i]) << 4) | hex_digit(hex[2 * i + 1]));
+  bytes[length] = '\0';
+
+  size_t pos = 0;
+  while (pos < length) {
+    const char* key = bytes + pos;
+    size_t key_length = strlen(key);
+    size_t value_pos = pos + key_length + 1;
+    if (value_pos >= length) break;
+    const char* value = bytes + value_pos;
+    size_t value_length = strlen(value);
+    set_crash_key(key, key_length, value, value_length);
+    pos = value_pos + value_length + 1;
+  }
+  free(bytes);
+}
 
 static int check_api_hash(void) {
   // The first cef_api_hash call fixes the API version for the process.
@@ -102,27 +157,32 @@ static cef_app_t* app_for(const char* schemes) {
 }
 
 #ifdef _WIN32
-// The switch value from the process's own command line, as UTF-8; NULL when absent.
-static const char* windows_scheme_switch(void) {
+// The value of switch |prefix| from the process's own command line, as UTF-8; NULL when absent.
+static const char* windows_switch(const char* prefix) {
   const wchar_t* line = GetCommandLineW();
   int size = WideCharToMultiByte(CP_UTF8, 0, line, -1, NULL, 0, NULL, NULL);
   char* utf8 = size > 0 ? (char*)malloc((size_t)size) : NULL;
   if (!utf8) return NULL;
   WideCharToMultiByte(CP_UTF8, 0, line, -1, utf8, size, NULL, NULL);
 
-  char* value = strstr(utf8, SCHEME_SWITCH);
+  char* value = strstr(utf8, prefix);
   if (!value) return NULL;
-  value += strlen(SCHEME_SWITCH);
+  value += strlen(prefix);
   value[strcspn(value, " \"")] = '\0';
   return value;
 }
+#endif
 
+// Oriel.Host.Native includes this file for its child-process path and brings its own entry point.
+#ifndef ORIEL_SUBPROCESS_NO_MAIN
+#ifdef _WIN32
 // A GUI-subsystem entry: a console exe launched by a GUI app opens a console window per process.
 int WINAPI wWinMain(HINSTANCE instance, HINSTANCE prev, PWSTR command_line, int show) {
   (void)prev; (void)command_line; (void)show;
   if (!check_api_hash()) return 1;
+  set_crash_keys(windows_switch(CRASH_KEYS_SWITCH));
   cef_main_args_t args = {instance};
-  return cef_execute_process(&args, app_for(windows_scheme_switch()), NULL);
+  return cef_execute_process(&args, app_for(windows_switch(SCHEME_SWITCH)), NULL);
 }
 #else
 int main(int argc, char* argv[]) {
@@ -130,13 +190,14 @@ int main(int argc, char* argv[]) {
 
   const char* schemes = NULL;
   for (int i = 1; i < argc; i++) {
-    if (strncmp(argv[i], SCHEME_SWITCH, strlen(SCHEME_SWITCH)) == 0) {
+    if (strncmp(argv[i], SCHEME_SWITCH, strlen(SCHEME_SWITCH)) == 0)
       schemes = argv[i] + strlen(SCHEME_SWITCH);
-      break;
-    }
+    else if (strncmp(argv[i], CRASH_KEYS_SWITCH, strlen(CRASH_KEYS_SWITCH)) == 0)
+      set_crash_keys(argv[i] + strlen(CRASH_KEYS_SWITCH));
   }
 
   cef_main_args_t args = {argc, argv};
   return cef_execute_process(&args, app_for(schemes), NULL);
 }
 #endif
+#endif  // ORIEL_SUBPROCESS_NO_MAIN

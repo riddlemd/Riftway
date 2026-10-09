@@ -173,9 +173,9 @@ public sealed partial class OrielApp
         BrowserWindow.GetAllWindows().FirstOrDefault(w => w.IsVisible)?.Focus();
     }
 
-    /// <summary>Shows <paramref name="count"/> on the app's badge: the Dock tile on macOS, "99+" past 99 and a dot when
-    /// null; 0 removes it. Returns whether it is shown, false where the OS has no badge. Electron's
-    /// <c>app.setBadgeCount()</c>.</summary>
+    /// <summary>Shows <paramref name="count"/> on the app's badge: the Dock tile on macOS, an overlay drawn on the taskbar
+    /// button of every open window on Windows; "99+" past 99 and a dot when null; 0 removes it. Returns whether it is
+    /// shown, false where the OS has no badge. Electron's <c>app.setBadgeCount()</c>.</summary>
     /// <remarks>Linux: a Unity launcher entry signal on the session bus, matched to the app by
     /// <see cref="SetDesktopName"/>, which only some desktops show; false for null or without a desktop name.</remarks>
     public bool SetBadgeCount(int? count = null)
@@ -186,8 +186,9 @@ public sealed partial class OrielApp
             _badgeCount = count.Value;
             return true;
         }
-        if (!OperatingSystem.IsMacOS()) return false;
-        Dock.SetBadge(count == 0 ? "" : BadgeText(count));
+        if (OperatingSystem.IsWindows()) SetWindowsBadge(count);
+        else if (OperatingSystem.IsMacOS()) Dock.SetBadge(count == 0 ? "" : BadgeText(count));
+        else return false;
         _badgeCount = count ?? 0;
         return true;
     }
@@ -216,6 +217,6 @@ public sealed partial class OrielApp
     {
         null => "\u2022",
         > 99 => "99+",
-        _ => count.Value.ToString(System.Globalization.CultureInfo.InvariantCulture),
+        _ => FormatBadgeNumber(count.Value),
     };
 }

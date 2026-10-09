@@ -6,7 +6,8 @@ using Oriel;
 // and waits for both the event and the state. Exit code = failures (-1 when the run never finishes).
 // The process checks crash or hang a process of their own, started with ProcessChild.
 const string ProcessChild = "--oriel-process-child";
-if (args.Length >= 2 && args[0] == ProcessChild) return ProcessChildMain(args[1], args.Length > 2 ? args[2] : "");
+if (args.Length >= 2 && args[0] == ProcessChild)
+    return args[1] == WindowStatePersistenceChecks.Mode ? WindowStatePersistenceChecks.ChildMain(args[2..]) : ProcessChildMain(args[1], args.Length > 2 ? args[2] : "");
 // Before the app, so Chromium's own portal reads find it as Oriel's do.
 using var portal = OperatingSystem.IsLinux() ? Oriel.Samples.FakePortal.Start(("color-scheme", 2u), ("contrast", 0u), ("accent-color", (0.2, 0.4, 0.6))) : null;
 var app = OrielApp.Create("Oriel.WindowTest");
@@ -231,6 +232,7 @@ async Task RunAsync(BrowserWindow win, BrowserWindow simple)
     Check("IsMinimized", Eventually(() => win.IsMinimized, step), win.IsMinimized);
     Check("Restore raises Restored", Fires(h => win.Restored += h, h => win.Restored -= h, win.Restore, step));
     Check("not minimized", Eventually(() => !win.IsMinimized, step), win.IsMinimized);
+    if (OperatingSystem.IsWindows()) await WindowStateEventsAsync(win);
 
     Check("Hide raises Hidden", Fires(h => win.Hidden += h, h => win.Hidden -= h, win.Hide, step));
     Check("hidden", Eventually(() => !win.IsVisible, step), win.IsVisible);
@@ -317,10 +319,14 @@ async Task RunAsync(BrowserWindow win, BrowserWindow simple)
     await DownloadFolderAsync();
     await CommandLineAsync();
     await ProcessChildrenAsync();
+    await WindowStatePersistenceChecks.RunAsync(Check, step);
+    await BadgeAsync(win);
     await ThemeAsync(win);
     await ViewsAsync();
     await WindowsApisAsync();
     await TransparencyAsync();
+    await WindowsStateChecks.RunAsync(Check, step);
+    await ShellApisAsync();
     await MacTransparencyAsync();
     await NativeImageAsync();
     await WebContentsLifecycleAsync(win);
@@ -333,6 +339,15 @@ async Task RunAsync(BrowserWindow win, BrowserWindow simple)
     await MessageBoxTest.RunAsync(win, Check, step);
     await ShellAsync();
     await ClipboardAsync();
+    await WindowPolishAsync(win);
+    await TitleBarAsync(win);
+    await SystemPreferencesChecks.RunAsync(Check, step);
+    await StartDragTests.RunAsync(Check);
+    if (OperatingSystem.IsWindows()) await SafeStorageAsync();
+    if (OperatingSystem.IsWindows()) await NotificationAsync();
+    await PowerAndShortcutsAsync();
+    await TrayAsync();
+    if (OperatingSystem.IsWindows()) await AppWindowsAsync();
     await DebuggerAsync();
 
     // Closing cancelled once: the window must survive the first close.
@@ -572,6 +587,117 @@ async Task ParentAndModalAsync(BrowserWindow win)
     Check("closed child leaves GetChildWindows", win.GetChildWindows() is [var left] && left == child, win.GetChildWindows().Count);
     await Task.Delay(200);
     childAlive = child;
+    if (OperatingSystem.IsLinux() && File.Exists("/usr/bin/xdotool")) await LinuxDisabledInputAsync(child);
+}
+
+// Electron disables a modal's parent itself on Linux (Chromium's DisableEventListening): the modal hint reaches no
+// window manager, so nothing else keeps input from the parent. Real X input, through xdotool.
+async Task LinuxDisabledInputAsync(BrowserWindow focusAfter)
+{
+    static void Xdo(string args) => System.Diagnostics.Process.Start("/usr/bin/timeout", "10 /usr/bin/xdotool " + args)!.WaitForExit();
+    const string counting = "data:text/html,<body style='margin:0;height:300vh'><script>window.c={mousedown:0,mousemove:0,wheel:0,keydown:0};"
+        + "for(const k in c)addEventListener(k,()=>c[k]++,{capture:true,passive:true})</script>";
+    var parent = new BrowserWindow(new BrowserWindowOptions { Title = "Oriel window test: modal parent", Width = 640, Height = 480, X = 100, Y = 100 });
+    await parent.LoadUrl(counting);
+    await Task.Delay(500);
+    var content = parent.GetContentBounds();
+    var (px, py) = (content.X + content.Width - 60, content.Y + content.Height - 60);
+    // Off every window: keys then go to the X focus window itself, not to a cover under the pointer.
+    const string offWindows = "mousemove 1550 980";
+    async Task<string> Counts(string? key = null) => (await Js(parent, key is null ? "JSON.stringify(c)" : $"c.{key}"))?.ToString() ?? "null";
+    // Each act runs alone, so a count that moved names the event that got through.
+    async Task<bool> Reaches(string key, string act)
+    {
+        var before = await Counts(key);
+        Xdo(act);
+        await Task.Delay(400);
+        return await Counts(key) != before;
+    }
+    string Click() => $"mousemove {px} {py} click 1";
+    string Move() => $"mousemove {px - 30} {py - 30} mousemove {px} {py}";
+    string Wheel() => $"mousemove {px} {py} click 5";
+
+    Check("Linux: a window starts enabled", parent.IsEnabled);
+    Check("Linux: a click on a window reaches its page", await Reaches("mousedown", Click()) && parent.IsFocused, await Counts());
+
+    var modal = new BrowserWindow(new BrowserWindowOptions { Title = "Oriel window test: modal on Linux", Width = 200, Height = 150, Parent = parent, Modal = true, X = 900, Y = 650 });
+    Check("Linux: a shown modal disables its parent", Eventually(() => !parent.IsEnabled, step) && modal.IsEnabled);
+    await Task.Delay(800);
+    Check("Linux: a click on a disabled parent reaches no page handler", !await Reaches("mousedown", Click()), await Counts());
+    Check("Linux: the window manager still activates a disabled parent, as Electron leaves it", Eventually(() => parent.IsFocused, step), $"parent={parent.IsFocused} modal={modal.IsFocused}");
+    Check("Linux: pointer moves over a disabled parent reach no page handler", !await Reaches("mousemove", Move()), await Counts());
+    Check("Linux: the wheel over a disabled parent reaches no page handler", !await Reaches("wheel", Wheel()), await Counts());
+    Check("Linux: a key with the pointer over a disabled parent reaches no page handler", !await Reaches("keydown", $"mousemove {px} {py} key a"), await Counts());
+    Check("Linux: a key with the pointer elsewhere reaches no page handler of a focused, disabled parent",
+        parent.IsFocused && !await Reaches("keydown", $"{offWindows} key b"), $"focused={parent.IsFocused} {await Counts()}");
+    modal.Focus();
+    Eventually(() => modal.IsFocused, step);
+    parent.Focus();
+    Check("Linux: Focus activates the disabled parent itself, as Electron", Eventually(() => parent.IsFocused, step) && !modal.IsFocused, $"parent={parent.IsFocused} modal={modal.IsFocused}");
+
+    // Electron enables the parent on any hide of a modal and disables it again on show.
+    modal.Hide();
+    Check("Linux: hiding the modal enables its parent", Eventually(() => parent.IsEnabled, step));
+    modal.Show();
+    Check("Linux: showing it again disables the parent", Eventually(() => !parent.IsEnabled, step));
+    using (var closed = new ManualResetEventSlim())
+    {
+        modal.Closed += (_, _) => closed.Set();
+        // Another window holds focus, so only the parent's own activation, not openbox's, can bring it back.
+        focusAfter.Focus();
+        Eventually(() => focusAfter.IsFocused, step);
+        modal.Close();
+        closed.Wait(step);
+    }
+    Check("Linux: closing the modal enables its parent", Eventually(() => parent.IsEnabled, step));
+    Check("Linux: closing the modal focuses its parent, as Electron", Eventually(() => parent.IsFocused, step), $"parent={parent.IsFocused} other={focusAfter.IsFocused}");
+    await Task.Delay(300);
+    Check("Linux: after the modal closes a click reaches the page", await Reaches("mousedown", Click()), await Counts());
+    Check("Linux: after the modal closes pointer moves reach the page", await Reaches("mousemove", Move()), await Counts());
+    Check("Linux: after the modal closes the wheel reaches the page", await Reaches("wheel", Wheel()), await Counts());
+    Check("Linux: after the modal closes a key reaches the page", await Reaches("keydown", $"{offWindows} key c"), await Counts());
+
+    // The same path serves SetEnabled on any window.
+    parent.SetEnabled(false);
+    Check("Linux: SetEnabled(false) disables a window", Eventually(() => !parent.IsEnabled, step));
+    Check("Linux: SetEnabled(false) keeps clicks and keys from the page",
+        !await Reaches("mousedown", Click()) && !await Reaches("keydown", $"{offWindows} key d"), await Counts());
+    parent.SetEnabled(true);
+    Check("Linux: SetEnabled(true) enables it again", Eventually(() => parent.IsEnabled, step));
+    Check("Linux: after SetEnabled(true) clicks and keys reach the page",
+        await Reaches("mousedown", Click()) && await Reaches("keydown", $"{offWindows} key e"), await Counts());
+
+    // A view's page takes keys through its own handler; a disabled window must keep them from it as well.
+    var view = new WebContentsView();
+    parent.ContentView.AddChildView(view);
+    view.SetBounds(new Rectangle(0, 0, 300, 200));
+    await view.WebContents.LoadUrl(counting);
+    async Task<string> ViewKeys() => (await view.WebContents.ExecuteJavaScriptAsync("c.keydown"))?.ToJsonString() ?? "null";
+    async Task<bool> ReachesView(string act)
+    {
+        var before = await ViewKeys();
+        Xdo(act);
+        await Task.Delay(400);
+        return await ViewKeys() != before;
+    }
+    view.WebContents.Focus();
+    await Task.Delay(300);
+    Check("Linux: a key reaches a focused view's page in an enabled window", await ReachesView($"{offWindows} key f"), await ViewKeys());
+    parent.SetEnabled(false);
+    Eventually(() => !parent.IsEnabled, step);
+    Check("Linux: a disabled window keeps keys from its focused view's page", !await ReachesView($"{offWindows} key g"), await ViewKeys());
+    parent.SetEnabled(true);
+    Eventually(() => parent.IsEnabled, step);
+    parent.ContentView.RemoveChildView(view);
+    view.WebContents.Close();
+    using (var closed = new ManualResetEventSlim())
+    {
+        parent.Closed += (_, _) => closed.Set();
+        parent.Destroy();
+        closed.Wait(step);
+    }
+    focusAfter.Focus();
+    Eventually(() => focusAfter.IsFocused, step);
 }
 
 async Task ScreenAsync(BrowserWindow win)
@@ -652,6 +778,7 @@ async Task ScreenAsync(BrowserWindow win)
         await MacDisplayFieldsAsync(primary);
         MacDisplayEvents(primary);
     }
+    if (OperatingSystem.IsWindows()) await WindowsDisplayAsync(win);
 }
 
 // The Display fields Chromium's BuildDisplayForScreen fills, against system_profiler, AppKit and Chromium's own chrome://gpu.
@@ -747,6 +874,167 @@ void MacDisplayEvents(Display primary)
     }
 }
 
+// Electron raises these from WM_SIZE (native_window_views_win.cc HandleSizeEvent). Each step waits 600 ms, past the
+// 250 ms poll, so a late or duplicate event would show; latency runs from the call to the last event.
+async Task WindowStateEventsAsync(BrowserWindow win)
+{
+    var log = new List<(string Name, long Ms)>();
+    var clock = System.Diagnostics.Stopwatch.StartNew();
+    EventHandler Record(string name) => (_, _) => { lock (log) log.Add((name, clock.ElapsedMilliseconds)); };
+    EventHandler onMaximize = Record("maximize"), onUnmaximize = Record("unmaximize"), onMinimize = Record("minimize"), onRestore = Record("restore");
+    win.Maximized += onMaximize; win.Unmaximized += onUnmaximize; win.Minimized += onMinimize; win.Restored += onRestore;
+    var latencies = new List<long>();
+    async Task<string> Step(Action act, Func<bool> settled)
+    {
+        lock (log) log.Clear();
+        var start = clock.ElapsedMilliseconds;
+        act();
+        Eventually(settled, step);
+        await Task.Delay(600);
+        lock (log)
+        {
+            if (log.Count > 0) latencies.Add(log.Max(e => e.Ms) - start);
+            return string.Join(",", log.Select(e => e.Name));
+        }
+    }
+    try
+    {
+        var maximize = await Step(win.Maximize, () => win.IsMaximized);
+        var unmaximize = await Step(win.Unmaximize, () => !win.IsMaximized);
+        var minimize = await Step(win.Minimize, () => win.IsMinimized);
+        var restore = await Step(win.Restore, () => !win.IsMinimized);
+        Check("Windows: maximize, unmaximize, minimize, restore each raise their event exactly once",
+            (maximize, unmaximize, minimize, restore) == ("maximize", "unmaximize", "minimize", "restore"), $"{maximize} | {unmaximize} | {minimize} | {restore}");
+
+        var maximizedAgain = await Step(win.Maximize, () => win.IsMaximized);
+        var minimizedFromMaximized = await Step(win.Minimize, () => win.IsMinimized);
+        var restoredToMaximized = await Step(win.Restore, () => win.IsMaximized);
+        Check("Windows: restoring a minimized maximized window raises restore then maximize, as Electron",
+            (maximizedAgain, minimizedFromMaximized, restoredToMaximized) == ("maximize", "minimize", "restore,maximize"), $"{maximizedAgain} | {minimizedFromMaximized} | {restoredToMaximized}");
+        var leftMaximized = await Step(win.Unmaximize, () => !win.IsMaximized);
+
+        var minimizedFromNormal = await Step(win.Minimize, () => win.IsMinimized);
+        var maximizedFromMinimized = await Step(win.Maximize, () => win.IsMaximized);
+        var unmaximizedAfter = await Step(win.Unmaximize, () => !win.IsMaximized);
+        Check("Windows: maximize() on a minimized window raises restore then maximize; unmaximize follows once",
+            (leftMaximized, minimizedFromNormal, maximizedFromMinimized, unmaximizedAfter) == ("unmaximize", "minimize", "restore,maximize", "unmaximize"),
+            $"{leftMaximized} | {minimizedFromNormal} | {maximizedFromMinimized} | {unmaximizedAfter}");
+        Check("Windows: state events arrive within 100 ms of the call (the poll could take 250 ms)",
+            latencies.Count == 11 && latencies.Max() < 100, $"max {(latencies.Count > 0 ? latencies.Max() : -1)} ms, mean {(latencies.Count > 0 ? latencies.Average() : -1):F0} ms over {latencies.Count}");
+
+        // The window stays zoomed through full screen, so both ways send SIZE_MAXIMIZED; Electron sets its state from
+        // SetFullScreen before that, so each raises maximize again (native_window_views.cc SetFullScreen).
+        var maximizedBeforeFull = await Step(win.Maximize, () => win.IsMaximized);
+        var intoFull = await Step(() => win.SetFullScreen(true), () => win.IsFullScreen);
+        var outOfFull = await Step(() => win.SetFullScreen(false), () => !win.IsFullScreen && win.IsMaximized);
+        var unmaximizedAfterFull = await Step(win.Unmaximize, () => !win.IsMaximized);
+        Check("Windows: entering and leaving full screen from maximized each raise maximize, as Electron (no unmaximize)",
+            (maximizedBeforeFull, intoFull, outOfFull, unmaximizedAfterFull) == ("maximize", "maximize", "maximize", "unmaximize"),
+            $"{maximizedBeforeFull} | {intoFull} | {outOfFull} | {unmaximizedAfterFull}");
+    }
+    finally
+    {
+        win.Maximized -= onMaximize; win.Unmaximized -= onUnmaximize; win.Minimized -= onMinimize; win.Restored -= onRestore;
+    }
+}
+
+// Display fields against Windows read on the test's side (GDI, DisplayConfig, WMI) and against Chromium's own view in the
+// page; display events through Oriel's observer window, synthesized and from a real work-area change.
+async Task WindowsDisplayAsync(BrowserWindow win)
+{
+    var displays = Screen.GetAllDisplays();
+    var probes = displays.Select(d =>
+    {
+        var centre = Screen.DipToScreenPoint(new Point(d.Bounds.X + d.Bounds.Width / 2, d.Bounds.Y + d.Bounds.Height / 2));
+        return (Display: d, Monitor: WindowsDisplayProbe.At(centre.X, centre.Y));
+    }).ToList();
+    static bool InternalTech(uint? t) => t is 0x80000000 or 11 or 13;
+    var firstInternal = probes.FirstOrDefault(p => InternalTech(p.Monitor.OutputTechnology)).Display;
+    string Describe(Func<(Display Display, WindowsDisplayProbe.Monitor Monitor), object?> pick) => string.Join("; ", probes.Select(p => $"{p.Monitor.Device}: {pick(p)}"));
+
+    Check("Windows: Display.Label is DisplayConfig's EDID friendly name (empty without one)", probes.All(p => p.Display.Label == (p.Monitor.EdidName ?? "")),
+        Describe(p => $"'{p.Display.Label}' vs '{p.Monitor.EdidName}'"));
+    var wmiNames = WindowsDisplayProbe.Wmi("Get-CimInstance -Namespace root/wmi -ClassName WmiMonitorID | ForEach-Object { -join ($_.UserFriendlyName | Where-Object { $_ -ne 0 } | ForEach-Object { [char]$_ }) }");
+    Check("Windows: every non-empty label is a WMI WmiMonitorID friendly name", probes.All(p => p.Display.Label.Length == 0 || wmiNames.Contains(p.Display.Label)),
+        $"{Describe(p => p.Display.Label)} vs WMI [{string.Join(", ", wmiNames)}]");
+    Check("Windows: Display.DisplayFrequency is EnumDisplaySettings' dmDisplayFrequency", probes.All(p => p.Display.DisplayFrequency == p.Monitor.Frequency && p.Monitor.Frequency > 0),
+        Describe(p => $"{p.Display.DisplayFrequency} vs {p.Monitor.Frequency}"));
+    var wmiRates = WindowsDisplayProbe.Wmi("Get-CimInstance Win32_VideoController | ForEach-Object { $_.CurrentRefreshRate }");
+    Check("Windows: the refresh rates agree with WMI's Win32_VideoController.CurrentRefreshRate", probes.All(p => wmiRates.Contains(p.Display.DisplayFrequency.ToString(System.Globalization.CultureInfo.InvariantCulture))),
+        $"{Describe(p => p.Display.DisplayFrequency)} vs WMI [{string.Join(", ", wmiRates)}]");
+    Check("Windows: Display.Internal marks the first internal or embedded output (DisplayConfig output technology)",
+        probes.All(p => p.Display.Internal == (firstInternal is not null && p.Display.Id == firstInternal.Id)), Describe(p => $"{p.Display.Internal} tech 0x{p.Monitor.OutputTechnology:X}"));
+    var wmiTech = WindowsDisplayProbe.Wmi("Get-CimInstance -Namespace root/wmi -ClassName WmiMonitorConnectionParams | ForEach-Object { [uint32]$_.VideoOutputTechnology }");
+    Check("Windows: an internal display exactly when WMI reports an internal or embedded connection",
+        displays.Any(d => d.Internal) == wmiTech.Any(t => uint.TryParse(t, out var v) && InternalTech(v)), $"[{string.Join(", ", wmiTech)}]");
+    Check("Windows: Display.NativeOrigin is the monitor's pixel origin over its scale, floored",
+        probes.All(p => p.Display.NativeOrigin == new Point((int)Math.Floor(p.Monitor.Left / p.Display.ScaleFactor), (int)Math.Floor(p.Monitor.Top / p.Display.ScaleFactor))),
+        Describe(p => $"{p.Display.NativeOrigin} from ({p.Monitor.Left},{p.Monitor.Top}) at {p.Display.ScaleFactor}"));
+
+    // Chromium's own numbers reach the page: screen.colorDepth, the (color) and (monochrome) media features.
+    var mine = Screen.GetDisplayMatching(win.GetBounds());
+    var pageDepth = await Js(win, "screen.colorDepth + ',' + screen.pixelDepth");
+    var perComponent = await Js(win, $"matchMedia('(color: {mine.DepthPerComponent})').matches && matchMedia('(monochrome: 0)').matches");
+    Check("Windows: ColorDepth and DepthPerComponent are what Chromium gives the page (screen.colorDepth, (color: n))",
+        pageDepth?.ToString() == $"\"{mine.ColorDepth},{mine.ColorDepth}\"" && perComponent?.ToString() == "true", $"{mine.ColorDepth}/{mine.DepthPerComponent} vs page {pageDepth} {perComponent}");
+    var icc = probes.First(p => p.Display.Id == mine.Id).Monitor.IccPath;
+    // The profile is found and read here, on the test's side; the primaries arithmetic is unit-tested.
+    var expectedSpace = mine.ColorDepth == 30 ? "{primaries:P3, transfer:SRGB, matrix:RGB, range:FULL}"
+        : icc is null ? "{primaries:BT709, transfer:SRGB, matrix:RGB, range:FULL}" : DisplayMapping.SdrColorSpace(File.ReadAllBytes(icc));
+    Check("Windows: ColorSpace is sRGB without an ICC profile, else the primaries of the profile GetICMProfile names",
+        mine.ColorSpace == expectedSpace, $"{mine.ColorSpace} (profile {icc ?? "none"})");
+    Check("Windows: the fields Chromium leaves at their defaults on Windows",
+        displays.All(d => !d.Monochrome && d.TouchSupport == DisplayFeatureSupport.Unknown && d.AccelerometerSupport == DisplayFeatureSupport.Unknown && d.Detected && d.MaximumCursorSize == (0, 0)));
+
+    var observer = WindowsDisplayProbe.ObserverWindow();
+    Check("Windows: display changes are heard by a hidden top-level window of this process (broadcasts skip message-only windows)",
+        observer != 0 && WindowsDisplayProbe.IsTopLevel(observer) && !WindowsDisplayProbe.IsVisible(observer), observer);
+    var events = new List<(string Name, Display Display, long Ms)>();
+    var clock = System.Diagnostics.Stopwatch.StartNew();
+    EventHandler<DisplayEventArgs> onAdded = (_, e) => { lock (events) events.Add(("added", e.Display, clock.ElapsedMilliseconds)); };
+    EventHandler<DisplayEventArgs> onRemoved = (_, e) => { lock (events) events.Add(("removed", e.Display, clock.ElapsedMilliseconds)); };
+    EventHandler<DisplayMetricsChangedEventArgs> onChanged = (_, e) => { lock (events) events.Add(($"metrics:{e.ChangedMetrics}", e.Display, clock.ElapsedMilliseconds)); };
+    string Names() { lock (events) return string.Join(",", events.Select(e => e.Name)); }
+    Screen.DisplayAdded += onAdded; Screen.DisplayRemoved += onRemoved; Screen.DisplayMetricsChanged += onChanged;
+    var original = WindowsDisplayProbe.WorkArea();
+    try
+    {
+        var dpiRect = System.Runtime.InteropServices.Marshal.AllocHGlobal(16);
+        System.Runtime.InteropServices.Marshal.Copy(new int[4], 0, dpiRect, 4);
+        WindowsDisplayProbe.Send(observer, 0x007E /* WM_DISPLAYCHANGE */, 32, (nint)((1080 << 16) | 1920));
+        WindowsDisplayProbe.Send(observer, 0x001A /* WM_SETTINGCHANGE */, 0x002F /* SPI_SETWORKAREA */, 0);
+        WindowsDisplayProbe.Send(observer, 0x02E0 /* WM_DPICHANGED */, 0x00600060, dpiRect);
+        WindowsDisplayProbe.Send(observer, 0x001C /* WM_ACTIVATEAPP */, 1, 0);
+        await Task.Delay(600);
+        System.Runtime.InteropServices.Marshal.FreeHGlobal(dpiRect);
+        Check("Windows: synthesized display messages with nothing changed raise no display events, as Chromium's diff", Names().Length == 0, Names());
+
+        // An app bar makes Explorer shrink the work area and broadcast WM_SETTINGCHANGE(SPI_SETWORKAREA); removing it undoes both.
+        var primary = Screen.GetPrimaryDisplay();
+        var start = clock.ElapsedMilliseconds;
+        var bar = WindowsDisplayProbe.ReserveTopEdge(original.Right - original.Left, 24);
+        try
+        {
+            Eventually(() => Names().Length > 0, step);
+            await Task.Delay(800);
+        }
+        finally { bar.Dispose(); }
+        Eventually(() => Names().Split(',').Length >= 2, step);
+        await Task.Delay(800);
+        (string Name, Display Display, long Ms)[] seen;
+        lock (events) seen = [.. events];
+        string Seen() => string.Join(" ", seen.Select(e => $"{e.Name}:{e.Display.WorkArea}@{e.Ms - start}ms"));
+        Check("Windows: a real work-area change (an app bar, SPI_SETWORKAREA broadcast) raises display-metrics-changed ['workArea'] for the primary with the new area",
+            seen.Length > 0 && seen[0].Name == "metrics:WorkArea" && seen[0].Display.Id == primary.Id && seen[0].Display.WorkArea.Y > primary.WorkArea.Y && seen[0].Display.Bounds == primary.Bounds,
+            $"{Seen()} (was {primary.WorkArea})");
+        Check("Windows: removing it raises it exactly once more, back to the original, and nothing else", seen.Length == 2 && seen[1].Name == "metrics:WorkArea" && seen[1].Display.WorkArea == primary.WorkArea,
+            Seen());
+        Check("Windows: the work-area event comes as Chromium hears the broadcast (under 100 ms)", seen.Length > 0 && seen[0].Ms - start < 100, Seen());    }
+    finally
+    {
+        Screen.DisplayAdded -= onAdded; Screen.DisplayRemoved -= onRemoved; Screen.DisplayMetricsChanged -= onChanged;
+    }
+}
 // AppKit's mouseLocation is bottom-left based; flip it by the main display's height into CEF's top-left DIPs.
 static Point MacMouseLocation()
 {
@@ -805,19 +1093,16 @@ async Task DialogsAsync(BrowserWindow win)
             X($"windowactivate --sync {id} mousemove --window {id} {geometry["WIDTH"] - 50} {geometry["HEIGHT"] - 28} click 1");
             return true;
         }
-        if (OperatingSystem.IsWindows())
-        {
-            // IFileDialog is a top-level #32770 titled by Title; IDOK presses its default button (Save / Open / Select Folder).
-            var hwnd = (nint)0;
-            if (!Eventually(() => (hwnd = WinDialog.FindWindowW("#32770", title)) != 0 && WinDialog.IsWindowVisible(hwnd), step)) return false;
-            // Its shell view fills in after the window shows; IDOK before that can be dropped.
-            Thread.Sleep(1000);
-            return WinDialog.PostMessageW(hwnd, 0x0111 /* WM_COMMAND */, accept ? 1 /* IDOK */ : 2 /* IDCANCEL */, 0);
-        }
         return false;
     }
 
-    if (!OperatingSystem.IsMacOS() && !OperatingSystem.IsLinux() && !OperatingSystem.IsWindows()) return;
+    if (OperatingSystem.IsWindows())
+    {
+        await WindowsDialogsAsync(win, dir);
+        Directory.Delete(dir, recursive: true);
+        return;
+    }
+    if (!OperatingSystem.IsMacOS() && !OperatingSystem.IsLinux()) return;
 
     var saveOptions = new SaveDialogOptions { Title = "Oriel save test", DefaultPath = target, Filters = [new("Text", "txt")] };
     if (OperatingSystem.IsMacOS())
@@ -2172,6 +2457,207 @@ async Task PreferredSizeAsync()
     File.Delete(page);
 }
 
+// Windows: the shell's IFileDialog, read and answered through its own controls, as a user would.
+async Task WindowsDialogsAsync(BrowserWindow win, string dir)
+{
+    var real = Path.Combine(dir, "real.txt");
+    File.WriteAllText(real, "");
+    File.WriteAllText(Path.Combine(dir, "a.txt"), "");
+    File.WriteAllText(Path.Combine(dir, "b.dat"), "");
+    var secret = Path.Combine(dir, "secret.txt");
+    File.WriteAllText(secret, "");
+    File.SetAttributes(secret, FileAttributes.Hidden);
+    Directory.CreateDirectory(Path.Combine(dir, "sub1"));
+    Directory.CreateDirectory(Path.Combine(dir, "sub2"));
+    var winHwnd = win.GetNativeWindowHandle();
+    static bool Same(string? a, string? b) => a is not null && b is not null
+        && string.Equals(Path.GetFullPath(a).TrimEnd('\\'), Path.GetFullPath(b).TrimEnd('\\'), StringComparison.OrdinalIgnoreCase);
+    static bool Listed(List<string> names, string file) => names.Contains(file) || names.Contains(Path.GetFileNameWithoutExtension(file));
+
+    // Waits for the dialog and for its shell view to fill in: commands before that can be dropped.
+    nint Find(string title)
+    {
+        var hwnd = (nint)0;
+        if (!Eventually(() => (hwnd = WindowsShell.FileDialog(title)) != 0, step)) return 0;
+        Thread.Sleep(1000);
+        return hwnd;
+    }
+    static void Press(nint dialog, bool accept) => WinDialog.PostMessageW(dialog, 0x0111 /* WM_COMMAND */, accept ? 1 /* IDOK */ : 2 /* IDCANCEL */, 0);
+    void Type(nint dialog, string text) => WindowsShell.SetText(WindowsShell.NameBox(dialog), text);
+    async Task<T?> Result<T>(Task<T> dialog) where T : class => await Task.WhenAny(dialog, Task.Delay(step)) == dialog ? dialog.Result : null;
+    static string Paths(OpenDialogReturnValue? r) => r is null ? "none" : $"{r.Canceled}: {string.Join(",", r.FilePaths)}";
+
+    // Window-less: no owner, as Electron passes none; defaultPath names a file, so the name box and folder follow it.
+    var loose = Dialog.ShowOpenDialogAsync(new OpenDialogOptions { Title = "Oriel windowless open", DefaultPath = real });
+    var d = Find("Oriel windowless open");
+    Check("window-less open dialog shows", d != 0);
+    Check("window-less open dialog has no owner", d != 0 && WindowsShell.Owner(d) == 0, WindowsShell.Owner(d));
+    Check("defaultPath file: the name box shows its name", WindowsShell.Text(WindowsShell.NameBox(d)) == "real.txt", WindowsShell.Text(WindowsShell.NameBox(d)));
+    Check("defaultPath file: the dialog opens in its directory", Same(WindowsShell.Address(d), dir), WindowsShell.Address(d));
+    Press(d, accept: true);
+    var looseResult = await Result(loose);
+    Check("window-less open accepts and returns the file", looseResult is { Canceled: false, FilePaths: [var p] } && Same(p, real), Paths(looseResult));
+
+    // With a window: owned by it and modal to it; buttonLabel on the accept button; defaultPath a directory.
+    var owned = Dialog.ShowOpenDialogAsync(win, new OpenDialogOptions { Title = "Oriel owned open", DefaultPath = dir, ButtonLabel = "Pick it" });
+    d = Find("Oriel owned open");
+    Check("an open dialog with a window is owned by it", d != 0 && WindowsShell.Owner(d) == winHwnd, $"{WindowsShell.Owner(d)} vs {winHwnd}");
+    Check("the owner is disabled while the dialog is up", d != 0 && !WindowsShell.IsEnabled(winHwnd));
+    Check("buttonLabel is the accept button's text", WindowsShell.DialogItemText(d, 1) == "Pick it", WindowsShell.DialogItemText(d, 1));
+    Check("defaultPath directory: the dialog opens in it with an empty name box",
+        Same(WindowsShell.Address(d), dir) && WindowsShell.Text(WindowsShell.NameBox(d)) == "", $"{WindowsShell.Address(d)} | {WindowsShell.Text(WindowsShell.NameBox(d))}");
+    Press(d, accept: false);
+    var cancelled = await Result(owned);
+    Check("a cancelled open dialog reports Canceled and no paths", cancelled is { Canceled: true, FilePaths.Count: 0 }, Paths(cancelled));
+    Check("the owner is enabled again after the dialog", Eventually(() => WindowsShell.IsEnabled(winHwnd), step));
+
+    // Each dialog has a dedicated STA thread of its own, as Electron's dialog_thread: two open at once run on two threads.
+    var first = Dialog.ShowOpenDialogAsync(new OpenDialogOptions { Title = "Oriel pair one", DefaultPath = dir });
+    var second = Dialog.ShowOpenDialogAsync(new OpenDialogOptions { Title = "Oriel pair two", DefaultPath = dir });
+    var one = Find("Oriel pair one");
+    var two = Find("Oriel pair two");
+    Check("two dialogs open at once run on two threads", one != 0 && two != 0 && WindowsShell.ThreadOf(one) != WindowsShell.ThreadOf(two),
+        $"{WindowsShell.ThreadOf(one)} {WindowsShell.ThreadOf(two)}");
+    Press(one, accept: false);
+    Press(two, accept: false);
+    Check("both cancel", Task.WaitAll([first, second], step));
+    // multiSelections: several quoted names in the name box.
+    var multi = Dialog.ShowOpenDialogAsync(win, new OpenDialogOptions { Title = "Oriel multi open", DefaultPath = dir, Properties = OpenDialogProperties.OpenFile | OpenDialogProperties.MultiSelections });
+    d = Find("Oriel multi open");
+    Type(d, "\"a.txt\" \"b.dat\"");
+    Press(d, accept: true);
+    var multiResult = await Result(multi);
+    Check("MultiSelections returns several files", multiResult is { Canceled: false, FilePaths.Count: 2 }
+        && multiResult.FilePaths.Any(f => Same(f, Path.Combine(dir, "a.txt"))) && multiResult.FilePaths.Any(f => Same(f, Path.Combine(dir, "b.dat"))), Paths(multiResult));
+
+    // openDirectory + multiSelections: FOS_PICKFOLDERS | FOS_ALLOWMULTISELECT.
+    // A folder picker ignores quoted names typed in its box, so the folders are selected in the view, as Ctrl+clicks would.
+    var folders = Dialog.ShowOpenDialogAsync(win, new OpenDialogOptions { Title = "Oriel folders open", DefaultPath = dir, Properties = OpenDialogProperties.OpenDirectory | OpenDialogProperties.MultiSelections });
+    d = Find("Oriel folders open");
+    var picked = await Task.Run(() => WindowsShell.SelectItems(d, ["sub1", "sub2"]));
+    Thread.Sleep(500);
+    Press(d, accept: true);
+    var foldersResult = await Result(folders);
+    Check("OpenDirectory with MultiSelections returns several directories", foldersResult is { Canceled: false, FilePaths.Count: 2 }
+        && foldersResult.FilePaths.Any(f => Same(f, Path.Combine(dir, "sub1"))) && foldersResult.FilePaths.Any(f => Same(f, Path.Combine(dir, "sub2"))), $"selected {picked}; {Paths(foldersResult)}");
+
+    // One folder: accepting with an empty name box chooses the folder shown.
+    var folder = Dialog.ShowOpenDialogAsync(win, new OpenDialogOptions { Title = "Oriel folder open", DefaultPath = dir, Properties = OpenDialogProperties.OpenDirectory });
+    d = Find("Oriel folder open");
+    Press(d, accept: true);
+    var folderResult = await Result(folder);
+    Check("OpenDirectory returns the directory it started in", folderResult is { Canceled: false, FilePaths: [var only] } && Same(only, dir), Paths(folderResult));
+
+    // showHiddenFiles: a hidden file is listed only with it, which shows only while Explorer hides hidden files
+    // (FOS_FORCESHOWHIDDEN does not reveal protected system files either).
+    List<string> NamesIn(OpenDialogOptions options)
+    {
+        var t = Dialog.ShowOpenDialogAsync(win, options);
+        var h = Find(options.Title!);
+        var names = WindowsShell.ElementNames(h);
+        Press(h, accept: false);
+        t.Wait(step);
+        return names;
+    }
+    var plain = NamesIn(new OpenDialogOptions { Title = "Oriel plain list", DefaultPath = dir });
+    var hidden = NamesIn(new OpenDialogOptions { Title = "Oriel hidden list", DefaultPath = dir, Properties = OpenDialogProperties.ShowHiddenFiles });
+    Check("the item view lists the folder's files", Listed(plain, "a.txt") && Listed(hidden, "a.txt"));
+    var explorerHides = OperatingSystem.IsWindows() && Microsoft.Win32.Registry.GetValue(@"HKEY_CURRENT_USER\Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced", "Hidden", 2) is 2;
+    if (explorerHides)
+    {
+        Check("without ShowHiddenFiles a hidden file is not listed", !Listed(plain, "secret.txt"));
+        Check("ShowHiddenFiles lists a hidden file", Listed(hidden, "secret.txt"));
+    }
+    else Console.WriteLine($"SKIP  ShowHiddenFiles lists a hidden file  [Explorer shows hidden files on this machine, so the flag has no visible effect; listed without it: {Listed(plain, "secret.txt")}]");
+
+    // Filters: '*' is "*.*", so every file is listed; an extension filter narrows the list; the combo shows the name.
+    var anyTask = Dialog.ShowOpenDialogAsync(win, new OpenDialogOptions { Title = "Oriel any filter", DefaultPath = dir, Filters = [new("Everything", "*")] });
+    d = Find("Oriel any filter");
+    var anyType = WindowsShell.FileType(d);
+    var any = WindowsShell.ElementNames(d);
+    Press(d, accept: false);
+    anyTask.Wait(step);
+    var textOnly = NamesIn(new OpenDialogOptions { Title = "Oriel text filter", DefaultPath = dir, Filters = [new("Text", "txt")] });
+    Check("a '*' filter is offered as *.*", anyType == "Everything (*.*)", anyType);
+    Check("a '*' filter lists every file", Listed(any, "a.txt") && Listed(any, "b.dat"));
+    Check("an extension filter lists only its files", Listed(textOnly, "a.txt") && !Listed(textOnly, "b.dat"));
+
+    // Save: a typed name gets the first filter's extension (SetDefaultExtension).
+    var save = Dialog.ShowSaveDialogAsync(win, new SaveDialogOptions { Title = "Oriel save", DefaultPath = dir, Filters = [new("Text", "txt")] });
+    d = Find("Oriel save");
+    Type(d, "named");
+    Press(d, accept: true);
+    var saved = await Result(save);
+    Check("save dialog accepts a typed name and adds the filter's extension", saved is { Canceled: false } && Same(saved.FilePath, Path.Combine(dir, "named.txt")), saved);
+
+    // Save with defaultPath naming a new file: the name box shows it and accepting returns it.
+    var target = Path.Combine(dir, "saved.txt");
+    save = Dialog.ShowSaveDialogAsync(win, new SaveDialogOptions { Title = "Oriel save path", DefaultPath = target });
+    d = Find("Oriel save path");
+    Check("save defaultPath: the name box shows the file name", WindowsShell.Text(WindowsShell.NameBox(d)) == "saved.txt", WindowsShell.Text(WindowsShell.NameBox(d)));
+    Press(d, accept: true);
+    saved = await Result(save);
+    Check("ShowSaveDialogAsync returns the chosen path", saved is { Canceled: false } && Same(saved.FilePath, target), saved);
+
+    // Sync on the UI thread: the dialog runs on its own thread while the UI thread dispatches the owner's messages.
+    string? syncPath = null;
+    using (var syncDone = new ManualResetEventSlim())
+    {
+        Oriel.Cef.CefThread.PostUi(() =>
+        {
+            try { syncPath = Dialog.ShowSaveDialogSync(win, new SaveDialogOptions { Title = "Oriel sync save", DefaultPath = Path.Combine(dir, "sync.txt") }); }
+            catch (Exception e) { syncPath = e.GetType().Name; }
+            finally { syncDone.Set(); }
+        });
+        d = Find("Oriel sync save");
+        Check("ShowSaveDialogSync on the UI thread shows a dialog owned by the window", d != 0 && WindowsShell.Owner(d) == winHwnd, WindowsShell.Owner(d));
+        Check("the owner is disabled while the Sync dialog is up", d != 0 && !WindowsShell.IsEnabled(winHwnd));
+        Press(d, accept: true);
+        Check("ShowSaveDialogSync on the UI thread returns the path", syncDone.Wait(step) && Same(syncPath, Path.Combine(dir, "sync.txt")), syncPath);
+    }
+
+    // Sync off the UI thread, window-less, cancelled: null.
+    var worker = Task.Run(() => Dialog.ShowOpenDialogSync(null, new OpenDialogOptions { Title = "Oriel sync worker", DefaultPath = dir }));
+    d = Find("Oriel sync worker");
+    Press(d, accept: false);
+    Check("ShowOpenDialogSync off the UI thread returns null when cancelled", await Task.WhenAny(worker, Task.Delay(step)) == worker && worker.Result is null);
+
+    // No defaultPath: Electron's GetDefaultPath, so app.setPath('downloads') moves where the dialog starts, and a
+    // downloads directory that is gone falls back to app.getPath('home').
+    var previousDownloads = app.GetPath("downloads");
+    var previousHome = app.GetPath("home");
+    var movedDownloads = Path.Combine(dir, "sub1");
+    var goneDownloads = Directory.CreateDirectory(Path.Combine(dir, "gone")).FullName;
+    try
+    {
+        app.SetPath("downloads", movedDownloads);
+        var moved = Dialog.ShowOpenDialogAsync(new OpenDialogOptions { Title = "Oriel moved downloads" });
+        d = Find("Oriel moved downloads");
+        Check("no defaultPath: the dialog opens in GetPath(\"downloads\") after SetPath, as Electron", Same(WindowsShell.Address(d), movedDownloads), WindowsShell.Address(d));
+        Press(d, accept: false);
+        await Result(moved);
+
+        app.SetPath("downloads", goneDownloads);
+        Directory.Delete(goneDownloads);
+        app.SetPath("home", Path.Combine(dir, "sub2"));
+        var homeSave = Dialog.ShowSaveDialogAsync(win, new SaveDialogOptions { Title = "Oriel moved home" });
+        d = Find("Oriel moved home");
+        Check("no defaultPath and no downloads directory: the dialog opens in GetPath(\"home\"), as Electron",
+            Same(WindowsShell.Address(d), Path.Combine(dir, "sub2")), WindowsShell.Address(d));
+        Press(d, accept: false);
+        await Result(homeSave);
+    }
+    finally
+    {
+        if (Directory.Exists(previousDownloads)) app.SetPath("downloads", previousDownloads);
+        app.SetPath("home", previousHome);
+    }
+
+    // Nothing left open.
+    foreach (var title in new[] { "Oriel moved downloads", "Oriel moved home", "Oriel windowless open", "Oriel pair one", "Oriel pair two", "Oriel owned open", "Oriel multi open", "Oriel folders open", "Oriel folder open", "Oriel plain list", "Oriel hidden list", "Oriel any filter", "Oriel text filter", "Oriel save", "Oriel save path", "Oriel sync save", "Oriel sync worker" })
+        if (WindowsShell.FileDialog(title) is var left and not 0) Press(left, accept: false);
+    File.SetAttributes(secret, FileAttributes.Normal);
+}
 async Task ContextMenusAsync(BrowserWindow win)
 {
     win.Focus();
@@ -2852,7 +3338,9 @@ async Task TaskbarAsync(BrowserWindow win)
     if (!OperatingSystem.IsWindows()) return;
 
     // The shell groups an app's windows under one button named "<app> - N running windows"; DeleteTab lowers N.
-    var app = System.Diagnostics.Process.GetCurrentProcess().ProcessName;
+    // The shell names the group after the exe's FileDescription; in the bootstrap layout the exe's own name differs.
+    var app = System.Diagnostics.FileVersionInfo.GetVersionInfo(Environment.ProcessPath!).FileDescription is { Length: > 0 } description
+        ? description : System.Diagnostics.Process.GetCurrentProcess().ProcessName;
     int? Buttons() => WindowsShell.TaskbarNames().FirstOrDefault(n => n.StartsWith(app + " - ", StringComparison.Ordinal)) is { } name
         && System.Text.RegularExpressions.Regex.Match(name[(app.Length + 3)..], @"\d+") is { Success: true } m ? int.Parse(m.Value) : null;
 
@@ -2880,15 +3368,12 @@ async Task TaskbarAsync(BrowserWindow win)
     later.Destroy();
 
     // ITaskbarList3 is write-only, and the shell answers S_OK to progress calls even for a wrong window, so
-    // progress has no check here. The overlay can at least fail to build its icon; Oriel logs that to stderr.
-    var refusals = new StringWriter();
-    var stderr = Console.Error;
-    Console.SetError(refusals);
+    // progress has no check here. The overlay's description comes back as the button's UI Automation help text.
+    string? OverlayHelp() => WindowsShell.TaskbarButton(app + " - ")?.Help;
     tb.SetOverlayIcon(NativeImage.CreateFromPath(OverlayPng()), "Oriel overlay test");
+    var overlaid = Eventually(() => OverlayHelp() == "Oriel overlay test", step);
     tb.SetOverlayIcon(null, "");
-    await Task.Delay(500);
-    Console.SetError(stderr);
-    Check("the shell takes the overlay icon (weak: no read-back)", refusals.ToString().Length == 0, refusals.ToString().Trim());
+    Check("SetOverlayIcon shows its description on the taskbar button; null removes it (UI Automation help text)", overlaid && Eventually(() => OverlayHelp() == "", step), $"{overlaid} [{OverlayHelp()}]");
 
     // The shell hook's HSHELL_FLASH is the only read-back of a flash. The first comes about 0.5 s after the call;
     // a later one can come from the shell itself, so only an early one counts.
@@ -2906,11 +3391,98 @@ async Task TaskbarAsync(BrowserWindow win)
     await Task.Delay(300);
 }
 
+// app.setBadgeCount on Windows: the shell exposes the overlay's description as the taskbar button's UI Automation
+// help text, and the badge itself shows up as screen pixels over the button.
+async Task BadgeAsync(BrowserWindow win)
+{
+    if (!OperatingSystem.IsWindows()) return;
+    // The shell names the group after the exe's FileDescription; in the bootstrap layout the exe's own name differs.
+    var prefix = (System.Diagnostics.FileVersionInfo.GetVersionInfo(Environment.ProcessPath!).FileDescription is { Length: > 0 } description
+        ? description : System.Diagnostics.Process.GetCurrentProcess().ProcessName) + " - ";
+    string? Help() => WindowsShell.TaskbarButton(prefix)?.Help;
+    win.Show();
+    await Task.Delay(1000);
+    if (WindowsShell.TaskbarButton(prefix) is not { } button)
+    {
+        Check("the taskbar button is found for the badge checks", false, prefix);
+        return;
+    }
+    var before = WindowsShell.ScreenPixels(button.Bounds);
+    (int Changed, int Dark, int Bright) Diff((byte R, byte G, byte B)[] now)
+    {
+        int changed = 0, dark = 0, bright = 0;
+        for (var i = 0; i < Math.Min(now.Length, before.Length); i++)
+        {
+            var (a, b) = (before[i], now[i]);
+            if (Math.Max(Math.Abs(a.R - b.R), Math.Max(Math.Abs(a.G - b.G), Math.Abs(a.B - b.B))) <= 60) continue;
+            changed++;
+            if (Math.Max(b.R, Math.Max(b.G, b.B)) < 90) dark++;
+            if (Math.Min(b.R, Math.Min(b.G, b.B)) > 200) bright++;
+        }
+        return (changed, dark, bright);
+    }
+
+    var set = app.SetBadgeCount(5);
+    Check("SetBadgeCount(5) returns true and GetBadgeCount reads 5", set && app.GetBadgeCount() == 5, $"{set} {app.GetBadgeCount()}");
+    Check("SetBadgeCount gives the taskbar button Chromium's description (UI Automation help text)", Eventually(() => Help() == "5 Unread Notifications", step), Help());
+    await Task.Delay(500);
+    var drawn = Diff(WindowsShell.ScreenPixels(button.Bounds));
+    Check("the badge is drawn over the taskbar button: dark circle, white text (screen pixels)", drawn is { Dark: >= 20, Bright: >= 2 }, $"{drawn} {button.Bounds}");
+    set = app.SetBadgeCount(150);
+    Check("past 99 the description says more than 99 and GetBadgeCount keeps the count", set && Eventually(() => Help() == "More than 99 unread notifications", step) && app.GetBadgeCount() == 150, $"{Help()} {app.GetBadgeCount()}");
+    set = app.SetBadgeCount();
+    Check("SetBadgeCount() shows the unspecified badge and GetBadgeCount reads 0", set && Eventually(() => Help() == "Unread Notifications", step) && app.GetBadgeCount() == 0, $"{Help()} {app.GetBadgeCount()}");
+    app.SetBadgeCount(7);
+    set = app.SetBadgeCount(0);
+    // Electron passes the description with the null icon, and the shell keeps it as the help text.
+    var cleared = Eventually(() => Help() == "0 Unread Notifications", step);
+    await Task.Delay(500);
+    var after = Diff(WindowsShell.ScreenPixels(button.Bounds));
+    Check("SetBadgeCount(0) returns true and removes the overlay's pixels, leaving Electron's '0 Unread Notifications'", set && cleared && app.GetBadgeCount() == 0 && after.Changed <= 4, $"{set} [{Help()}] {app.GetBadgeCount()} {after}");
+
+    // Electron badges the windows open at the call and no later ones; the button shows the overlay of any window that has one.
+    var later = new BrowserWindow(new BrowserWindowOptions { Title = "Oriel window test: badge, opened later", Width = 300, Height = 200 });
+    await Task.Delay(1500);
+    bool KeptWithout(BrowserWindow dropped)
+    {
+        app.SetBadgeCount(4);
+        if (!Eventually(() => Help() == "4 Unread Notifications", step)) return false;
+        dropped.SetOverlayIcon(null, "");
+        return Stays(() => Help() == "4 Unread Notifications");
+    }
+    var keptWithoutFirst = KeptWithout(win);
+    var keptWithoutSecond = KeptWithout(later);
+    Check("SetBadgeCount badges every open window: the button keeps it when either window drops its overlay", keptWithoutFirst && keptWithoutSecond, $"{keptWithoutFirst} {keptWithoutSecond} [{Help()}]");
+    app.SetBadgeCount(3);
+    var newest = new BrowserWindow(new BrowserWindowOptions { Title = "Oriel window test: badge, opened after the call", Width = 300, Height = 200 });
+    await Task.Delay(1500);
+    var shown = Eventually(() => Help() == "3 Unread Notifications", step);
+    win.SetOverlayIcon(null, "");
+    later.SetOverlayIcon(null, "");
+    Check("a window opened after SetBadgeCount gets no badge", shown && Eventually(() => Help() == "", step), Help());
+    app.SetBadgeCount(0);
+    newest.Destroy();
+    later.Destroy();
+    await Task.Delay(300);
+
+    bool Stays(Func<bool> condition)
+    {
+        for (var i = 0; i < 10; i++)
+        {
+            if (!condition()) return false;
+            Thread.Sleep(150);
+        }
+        return true;
+    }
+}
+
 async Task WindowsApisAsync()
 {
     if (!OperatingSystem.IsWindows()) return;
 
-    var app = System.Diagnostics.Process.GetCurrentProcess().ProcessName;
+    // The shell names the group after the exe's FileDescription; in the bootstrap layout the exe's own name differs.
+    var app = System.Diagnostics.FileVersionInfo.GetVersionInfo(Environment.ProcessPath!).FileDescription is { Length: > 0 } description
+        ? description : System.Diagnostics.Process.GetCurrentProcess().ProcessName;
     int? Buttons() => WindowsShell.TaskbarNames().FirstOrDefault(n => n.StartsWith(app + " - ", StringComparison.Ordinal)) is { } name
         && System.Text.RegularExpressions.Regex.Match(name[(app.Length + 3)..], @"\d+") is { Success: true } m ? int.Parse(m.Value) : null;
 
@@ -3078,10 +3650,26 @@ async Task TransparencyAsync()
     Check("the user cannot resize a transparent window: no sizing code at its edge (WM_NCHITTEST)", WindowsShell.LeftEdgeHitTest(framelessHwnd) is not (>= 10 and <= 17), WindowsShell.LeftEdgeHitTest(framelessHwnd));
     var before = frameless.GetBounds();
     var workArea = Screen.GetDisplayMatching(before).WorkArea;
+    var stateEvents = new System.Collections.Concurrent.ConcurrentQueue<string>();
+    frameless.Maximized += (_, _) => stateEvents.Enqueue("maximize");
+    frameless.Unmaximized += (_, _) => stateEvents.Enqueue("unmaximize");
+    frameless.Restored += (_, _) => stateEvents.Enqueue("restore");
     frameless.Maximize();
     Check("Maximize on a transparent window fills the work area and reports maximized", Eventually(() => frameless.GetBounds() == workArea && frameless.IsMaximized, step), $"{frameless.GetBounds()} vs {workArea}");
+    await Task.Delay(600);
+    // Electron's NativeWindowViews emulates both on Windows and notifies maximize/unmaximize itself.
+    Check("Maximize on a transparent window raises Maximized once, as Electron's emulated maximize", stateEvents.SequenceEqual(["maximize"]), string.Join(",", stateEvents));
+    stateEvents.Clear();
     frameless.Unmaximize();
     Check("Unmaximize puts a transparent window back", Eventually(() => frameless.GetBounds() == before && !frameless.IsMaximized, step), frameless.GetBounds());
+    await Task.Delay(600);
+    Check("Unmaximize on a transparent window raises Unmaximized once", stateEvents.SequenceEqual(["unmaximize"]), string.Join(",", stateEvents));
+    stateEvents.Clear();
+    frameless.Maximize();
+    Eventually(() => frameless.IsMaximized, step);
+    stateEvents.Clear();
+    frameless.Restore();
+    Check("Restore leaves a transparent window's emulated maximize and raises Restored once, as Electron", Eventually(() => frameless.GetBounds() == before && !frameless.IsMaximized, step) && Eventually(() => stateEvents.SequenceEqual(["restore"]), step), $"{frameless.GetBounds()} [{string.Join(",", stateEvents)}]");
     await Close(frameless);
 
     // Views in a transparent window: each page is its own child window, composited over the see-through one. Electron
@@ -3414,6 +4002,842 @@ async Task ClipboardAsync()
     File.Delete(outFile);
 }
 
+async Task ShellApisAsync()
+{
+    if (!OperatingSystem.IsWindows()) return;
+
+    // hookWindowMessage: the callback runs inside the window procedure, so SendMessage returns after it.
+    var w = new BrowserWindow(new BrowserWindowOptions { Title = "Oriel window test: hooks", Width = 320, Height = 220 });
+    await Task.Delay(1000);
+    var hwnd = w.GetNativeWindowHandle();
+    const uint custom = 0x0400 + 0x77; // WM_USER + 0x77
+    var seen = new List<(nint W, nint L, bool OnWindowThread)>();
+    var hooked = w.HookWindowMessage(custom, (wp, lp) => seen.Add((wp, lp, WindowsShell.OnWindowThread(hwnd))));
+    WindowsShell.Send(hwnd, custom, 0x1234, -5);
+    Check("HookWindowMessage: the callback gets wParam and lParam, synchronously on the window's thread",
+        hooked && seen is [(0x1234, -5, true)], string.Join(";", seen));
+    Check("IsWindowMessageHooked after HookWindowMessage", w.IsWindowMessageHooked(custom) && !w.IsWindowMessageHooked(custom + 1));
+    var replaced = new List<string>();
+    w.HookWindowMessage(custom, (_, _) => replaced.Add("second"));
+    seen.Clear();
+    WindowsShell.Send(hwnd, custom, 1, 2);
+    Check("a second HookWindowMessage replaces the callback", seen.Count == 0 && replaced is ["second"], $"{seen.Count} {string.Join(",", replaced)}");
+    w.UnhookWindowMessage(custom);
+    replaced.Clear();
+    WindowsShell.Send(hwnd, custom, 1, 2);
+    Check("UnhookWindowMessage stops the callback", replaced.Count == 0 && !w.IsWindowMessageHooked(custom), $"{replaced.Count} {w.IsWindowMessageHooked(custom)}");
+    var all = new List<uint>();
+    w.HookWindowMessage(custom, (_, _) => all.Add(custom));
+    w.HookWindowMessage(custom + 1, (_, _) => all.Add(custom + 1));
+    w.UnhookAllWindowMessages();
+    WindowsShell.Send(hwnd, custom, 0, 0);
+    WindowsShell.Send(hwnd, custom + 1, 0, 0);
+    Check("UnhookAllWindowMessages stops every callback", all.Count == 0 && !w.IsWindowMessageHooked(custom) && !w.IsWindowMessageHooked(custom + 1), all.Count);
+
+    // The message goes on to Chromium and DefWindowProc: WM_SETTEXT still retitles, WM_GETTEXT still answers.
+    string? setTextSeen = null;
+    w.HookWindowMessage(0x000C /* WM_SETTEXT */, (_, lp) => setTextSeen = WindowsShell.ReadString(lp));
+    WindowsShell.SetText(hwnd, "hooked title");
+    Check("a hooked WM_SETTEXT reaches the callback and still sets the title", setTextSeen == "hooked title" && WindowsShell.GetText(hwnd) == "hooked title",
+        $"{setTextSeen} / {WindowsShell.GetText(hwnd)}");
+    var getTexts = 0;
+    w.HookWindowMessage(0x000D /* WM_GETTEXT */, (_, _) => getTexts++);
+    var text = WindowsShell.GetText(hwnd);
+    Check("a hooked WM_GETTEXT reaches the callback and still answers", getTexts >= 1 && text == "hooked title", $"{getTexts} {text}");
+    var stderr = Console.Error;
+    var logged = new StringWriter();
+    Console.SetError(logged);
+    w.HookWindowMessage(0x000C, (_, _) => throw new InvalidOperationException("hook threw"));
+    WindowsShell.SetText(hwnd, "after a throw");
+    Console.SetError(stderr);
+    Check("a throwing hook does not stop the message or cross into the window procedure",
+        WindowsShell.GetText(hwnd) == "after a throw" && logged.ToString().Contains("hook threw"), WindowsShell.GetText(hwnd));
+    w.UnhookAllWindowMessages();
+    w.Destroy();
+    await Task.Delay(300);
+
+    // thickFrame and roundedCorners: GWL_STYLE and DWMWA_WINDOW_CORNER_PREFERENCE read back.
+    const uint caption = 0x00C00000, thick = 0x00040000, sysMenu = 0x00080000, minBox = 0x00020000, maxBox = 0x00010000;
+    BrowserWindow Open(BrowserWindowOptions o) => new(o with { Width = 300, Height = 200, Title = "Oriel window test: frame" });
+    var frameless = Open(new BrowserWindowOptions { Frame = false });
+    var noThick = Open(new BrowserWindowOptions { Frame = false, ThickFrame = false });
+    var square = Open(new BrowserWindowOptions { Frame = false, RoundedCorners = false });
+    var fixedSize = Open(new BrowserWindowOptions { Frame = false, Resizable = false });
+    var framedNoThick = Open(new BrowserWindowOptions { ThickFrame = false });
+    await Task.Delay(1500);
+    uint Style(BrowserWindow b) => WindowsShell.Style(b.GetNativeWindowHandle());
+    uint? Corners(BrowserWindow b) => WindowsShell.Dwm(b.GetNativeWindowHandle(), 33);
+    string Hex(uint? v) => v is { } x ? $"0x{x:X8}" : "null";
+    var fs = Style(frameless);
+    Check("frameless: Electron's style (caption, thick frame, min and max boxes, no system menu)",
+        (fs & (caption | thick | minBox | maxBox)) == (caption | thick | minBox | maxBox) && (fs & sysMenu) == 0, Hex(fs));
+    Check("thickFrame = false: a frameless window loses WS_THICKFRAME and WS_CAPTION", (Style(noThick) & (caption | thick)) == 0 && (Style(noThick) & minBox) != 0, Hex(Style(noThick)));
+    Check("resizable = false: a frameless window has no thick frame and no maximize box", (Style(fixedSize) & (thick | maxBox)) == 0 && (Style(fixedSize) & caption) == caption, Hex(Style(fixedSize)));
+    Check("thickFrame = false: a framed window loses WS_THICKFRAME only, and is not resizable",
+        (Style(framedNoThick) & thick) == 0 && (Style(framedNoThick) & caption) == caption && !framedNoThick.IsResizable, $"{Hex(Style(framedNoThick))} {framedNoThick.IsResizable}");
+    Check("roundedCorners: a frameless window asks DWM to round (DWMWCP_ROUND)", Corners(frameless) == 2, Hex(Corners(frameless)));
+    Check("roundedCorners = false: DWMWCP_DONOTROUND", Corners(square) == 1, Hex(Corners(square)));
+    Check("thickFrame = false squares the corners too", Corners(noThick) == 1, Hex(Corners(noThick)));
+    noThick.SetResizable(false);
+    noThick.SetResizable(true);
+    noThick.Maximize();
+    await Task.Delay(500);
+    noThick.Unmaximize();
+    await Task.Delay(500);
+    Check("thickFrame = false stays off through SetResizable and maximize", (Style(noThick) & (caption | thick)) == 0, Hex(Style(noThick)));
+    framedNoThick.SetResizable(true);
+    Check("a framed window without a thick frame stays unresizable after SetResizable(true)", !framedNoThick.IsResizable && (Style(framedNoThick) & thick) == 0, Hex(Style(framedNoThick)));
+    foreach (var b in new[] { frameless, noThick, square, fixedSize, framedNoThick }) b.Destroy();
+    await Task.Delay(300);
+
+    // Full screen squares a framed window's corners and rounds them again after, as Electron's SetFullScreen.
+    var framed = Open(new BrowserWindowOptions());
+    await Task.Delay(1000);
+    framed.SetFullScreen(true);
+    var fullCorners = Eventually(() => Corners(framed) == 1, step);
+    framed.SetFullScreen(false);
+    Check("full screen sets DWMWCP_DONOTROUND, leaving it DWMWCP_ROUND", fullCorners && Eventually(() => Corners(framed) == 2, step), Hex(Corners(framed)));
+    framed.Destroy();
+    await Task.Delay(300);
+
+    // accentColor: DWM takes DWMWA_BORDER_COLOR and DWMWA_CAPTION_COLOR but will not read them back, so the frame's
+    // pixels are the read-back: the caption's middle and the 1px border along the bottom. The display is colour-managed.
+    static bool Near((byte R, byte G, byte B) c, uint argb) => Math.Abs(c.R - (int)((argb >> 16) & 0xFF)) < 40 && Math.Abs(c.G - (int)((argb >> 8) & 0xFF)) < 40 && Math.Abs(c.B - (int)(argb & 0xFF)) < 40;
+    static string Px((byte R, byte G, byte B) c) => $"{c.R},{c.G},{c.B}";
+    (byte, byte, byte) CaptionPixel(BrowserWindow b) => WindowsShell.FramePixel(b.GetNativeWindowHandle(), caption: true);
+    (byte, byte, byte) BorderPixel(BrowserWindow b) => WindowsShell.FramePixel(b.GetNativeWindowHandle(), caption: false);
+    var system = WindowsWindow.SystemAccentColor() ?? 0;
+    var dwmLog = new StringWriter();
+    Console.SetError(dwmLog);
+    BrowserWindow Accent(AccentColor? accent, bool frame = true, int x = 60) => new(new BrowserWindowOptions
+    {
+        Title = "accent", X = x, Y = 60, Width = 640, Height = 240, AlwaysOnTop = true, Frame = frame, AccentColor = accent,
+    });
+    var red = Accent("#FF0000");
+    await Task.Delay(1200);
+    red.Focus();
+    Check("accentColor string: the caption and border take the colour (pixels)",
+        Eventually(() => Near(CaptionPixel(red), 0xFF0000) && Near(BorderPixel(red), 0xFF0000), step), $"{Px(CaptionPixel(red))} / {Px(BorderPixel(red))}");
+    Check("GetAccentColor returns the colour as #RRGGBB", red.GetAccentColor().Color == "#FF0000", red.GetAccentColor().Color);
+    red.SetAccentColor("rgb(0, 255, 0)");
+    Check("SetAccentColor(string) recolours caption and border", Eventually(() => Near(CaptionPixel(red), 0x00FF00) && Near(BorderPixel(red), 0x00FF00), step), $"{Px(CaptionPixel(red))} / {Px(BorderPixel(red))}");
+    red.SetAccentColor("not a colour");
+    await Task.Delay(400);
+    Check("SetAccentColor with an unparsable string changes nothing", Near(CaptionPixel(red), 0x00FF00) && red.GetAccentColor().Color == "#00FF00", $"{Px(CaptionPixel(red))} {red.GetAccentColor().Color}");
+    red.SetAccentColor(true);
+    Check("SetAccentColor(true): the system accent colour", Eventually(() => Near(CaptionPixel(red), system) && Near(BorderPixel(red), system), step), $"{Px(CaptionPixel(red))} / {Px(BorderPixel(red))} vs {system:X6}");
+    Check("GetAccentColor after true is the system colour", red.GetAccentColor().Color == $"#{system & 0xFFFFFF:X6}", red.GetAccentColor().Color);
+    red.SetAccentColor(false);
+    Check("SetAccentColor(false): DWM's default frame, and GetAccentColor is false",
+        Eventually(() => !Near(CaptionPixel(red), system) && !Near(CaptionPixel(red), 0x00FF00), step) && red.GetAccentColor() == AccentColor.None, $"{Px(CaptionPixel(red))} {red.GetAccentColor()}");
+    red.Destroy();
+    var on = Accent(true, x: 80);
+    var off = Accent(false, frame: false, x: 760);
+    await Task.Delay(1200);
+    on.Focus();
+    await Task.Delay(500);
+    off.Focus();
+    await Task.Delay(500);
+    Check("accentColor = true: the system accent colour, even inactive", Eventually(() => Near(CaptionPixel(on), system), step), $"{Px(CaptionPixel(on))} vs {system:X6}");
+    Check("accentColor = false: GetAccentColor is false", off.GetAccentColor() == AccentColor.None, off.GetAccentColor());
+    on.Destroy();
+    off.Destroy();
+    // Created hidden, the window gets its colour from the activation that showing it brings, as in Electron.
+    var late = new BrowserWindow(new BrowserWindowOptions { Title = "accent", X = 60, Y = 60, Width = 640, Height = 240, AlwaysOnTop = true, Show = false, AccentColor = "#0000FF" });
+    await Task.Delay(800);
+    late.Show();
+    late.Focus();
+    Check("accentColor on a window created hidden applies when it is shown and activated", Eventually(() => Near(CaptionPixel(late), 0x0000FF), step), Px(CaptionPixel(late)));
+    late.Destroy();
+    await Task.Delay(300);
+    Console.SetError(stderr);
+    Check("DWM takes every accent colour (frameless: border only)", !dwmLog.ToString().Contains("accent colour"), dwmLog.ToString().Trim());
+}
+
+async Task TitleBarAsync(BrowserWindow win)
+{
+    if (!OperatingSystem.IsWindows()) return;
+
+    // The display is colour-managed: test the dominant channel, not exact values.
+    static string Rgb((byte R, byte G, byte B) c) => $"{c.R},{c.G},{c.B}";
+    static bool IsBlue((byte R, byte G, byte B) c) => c.B > 120 && c.B > c.R + 50 && c.B > c.G + 30;
+    static bool IsGreen((byte R, byte G, byte B) c) => c.G > 120 && c.G > c.R + 50 && c.G > c.B + 30;
+    static bool IsRed((byte R, byte G, byte B) c) => c.R > 150 && c.R > c.G + 80 && c.R > c.B + 80;
+    const int HtClient = 1, HtCaption = 2;
+    const string Page = "<body style='margin:0;background:%23FFFF00'>"
+        + "<div style='-webkit-app-region:drag;height:40px;background:%230000FF'></div>"
+        + "<div style='-webkit-app-region:no-drag;position:absolute;top:5px;left:5px;width:30px;height:30px;background:%23FF0000'></div></body>";
+
+    // app-region: CEF hit-tests the page's drag rectangles as caption, minus the no-drag ones, in a frameless window only.
+    var frameless = new BrowserWindow(new BrowserWindowOptions { Title = "Oriel window test: drag regions", X = 200, Y = 200, Width = 400, Height = 250, Frame = false });
+    await frameless.LoadUrl("data:text/html," + Page);
+    var fh = frameless.GetNativeWindowHandle();
+    int Hit((int X, int Y) p) => WindowsShell.HitTest(fh, p.X, p.Y);
+    (int X, int Y) At(int dx, int dy) { var (x, y, _, _) = WindowsShell.Bounds(fh); return (x + dx, y + dy); }
+    Check("a drag region hit-tests as caption", Eventually(() => Hit(At(200, 20)) == HtCaption, step), Hit(At(200, 20)));
+    Check("a no-drag region inside it stays client", Hit(At(20, 20)) == HtClient, Hit(At(20, 20)));
+    Check("the page outside the regions stays client", Hit(At(200, 120)) == HtClient, Hit(At(200, 120)));
+    var before = WindowsShell.Bounds(fh);
+    WindowsShell.Drag(before.X + 200, before.Y + 20, before.X + 300, before.Y + 80);
+    var after = WindowsShell.Bounds(fh);
+    Check("dragging a drag region moves the window", after.X > before.X + 50 && after.Width == before.Width, $"{before} -> {after}");
+    await frameless.WebContents.ExecuteJavaScriptAsync("document.querySelector('div').style.webkitAppRegion = 'none'");
+    Check("removing the region makes it client again", Eventually(() => Hit(At(200, 20)) == HtClient, step), Hit(At(200, 20)));
+    frameless.Destroy();
+    var framed = new BrowserWindow(new BrowserWindowOptions { Title = "Oriel window test: framed drag region", X = 200, Y = 200, Width = 400, Height = 250 });
+    await framed.LoadUrl("data:text/html," + Page);
+    await Task.Delay(500);
+    var page = framed.GetContentBounds();
+    Check("a framed window ignores drag regions", WindowsShell.HitTest(framed.GetNativeWindowHandle(), page.X + 200, page.Y + 20) == HtClient, WindowsShell.HitTest(framed.GetNativeWindowHandle(), page.X + 200, page.Y + 20));
+    framed.Destroy();
+
+    // TitleBarStyle.Hidden without an overlay: no title bar, the page fills the window.
+    var hidden = new BrowserWindow(new BrowserWindowOptions { Title = "Oriel window test: hidden title bar", X = 220, Y = 220, Width = 400, Height = 250, TitleBarStyle = TitleBarStyle.Hidden });
+    await Task.Delay(1200);
+    Check("TitleBarStyle.Hidden fills the window with the page", hidden.GetContentBounds() == hidden.GetBounds() && hidden.GetTitleBarOverlayBounds() == default, $"{hidden.GetContentBounds()} vs {hidden.GetBounds()}");
+    Check("SetTitleBarOverlay without an overlay throws", Throws<InvalidOperationException>(() => hidden.SetTitleBarOverlay(new TitleBarOverlayOptions { Color = "#000000" })));
+    hidden.Destroy();
+
+    // TitleBarOverlay: buttons at the top right in the colours asked for, over the page.
+    var closed = false;
+    // Without an application menu the window has no menu bar, and Chromium's page window comes later and is re-created:
+    // the overlay's hit-test pass-through must still reach it.
+    var appMenu = Menu.GetApplicationMenu();
+    Menu.SetApplicationMenu(null);
+    var overlaid = new BrowserWindow(new BrowserWindowOptions
+    {
+        Title = "Oriel window test: title bar overlay", X = 240, Y = 240, Width = 500, Height = 300, TitleBarStyle = TitleBarStyle.Hidden,
+        TitleBarOverlay = new TitleBarOverlayOptions { Color = "#2050C0", SymbolColor = "#FFFFFF", Height = 40 },
+    });
+    overlaid.Closed += (_, _) => closed = true;
+    await overlaid.LoadUrl("data:text/html," + Page);
+    await Task.Delay(800);
+    var oh = overlaid.GetNativeWindowHandle();
+    var box = overlaid.GetTitleBarOverlayBounds();
+    // Electron's buttons: 45 DIPs, the second and third one DIP wider for the spacing on their left.
+    Check("the overlay sits at the top right, 45 + 46 + 46 DIPs wide, at the height asked", box == new Rectangle(500 - 137, 0, 137, 40), box);
+    int ButtonLeft(int index) { var (x, _, w, _) = WindowsShell.Bounds(oh); return x + w - 137 + (index == 0 ? 0 : 45 + (index - 1) * 46); }
+    (int X, int Y) Button(int index, int dy = 0) => (ButtonLeft(index) + 6, WindowsShell.Bounds(oh).Y + 6 + dy);
+    var resting = WindowsShell.ScreenPixel(Button(0).X, Button(0).Y);
+    Check("the overlay has its colour", IsBlue(resting), Rgb(resting));
+    var under = WindowsShell.ScreenPixel(Button(0).X, Button(0, 40).Y);
+    Check("the page shows just below the overlay", under.R > 150 && under.G > 150 && under.B < 100, Rgb(under));
+    // The hover fade: Electron's 150 ms ease-out, so colours between resting and red show on the way in and out.
+    List<(byte R, byte G, byte B)> Samples(int ms, int x, int y)
+    {
+        var seen = new List<(byte R, byte G, byte B)>();
+        for (var end = DateTime.UtcNow.AddMilliseconds(ms); DateTime.UtcNow < end; Thread.Sleep(4)) seen.Add(WindowsShell.ScreenPixel(x, y));
+        return seen;
+    }
+    static bool Between((byte R, byte G, byte B) c, (byte R, byte G, byte B) a, (byte R, byte G, byte B) b)
+        => !Near(c, a, 12) && !Near(c, b, 12) && c.R >= Math.Min(a.R, b.R) - 6 && c.R <= Math.Max(a.R, b.R) + 6 && c.B >= Math.Min(a.B, b.B) - 6 && c.B <= Math.Max(a.B, b.B) + 6;
+    var closeResting = WindowsShell.ScreenPixel(Button(2).X, Button(2).Y);
+    WindowsShell.MovePointer(Button(2).X, Button(2).Y + 10);
+    var fadeIn = Samples(400, Button(2).X, Button(2).Y);
+    var red = fadeIn[^1];
+    Check("the close button turns red under the pointer", Eventually(() => IsRed(WindowsShell.ScreenPixel(Button(2).X, Button(2).Y)), step), Rgb(WindowsShell.ScreenPixel(Button(2).X, Button(2).Y)));
+    Check("the close button fades to red: in-between colours show on the way", IsRed(red) && fadeIn.Any(c => Between(c, closeResting, red)), string.Join(" ", fadeIn.Select(Rgb).Distinct()));
+    var gap = WindowsShell.ScreenPixel(ButtonLeft(2), Button(2).Y);
+    var firstFilled = WindowsShell.ScreenPixel(ButtonLeft(2) + 1, Button(2).Y);
+    Check("the close button's one-DIP spacing stays the overlay colour while its background turns red", Near(gap, closeResting, 12) && IsRed(firstFilled), $"gap {Rgb(gap)} next {Rgb(firstFilled)} resting {Rgb(closeResting)}");
+    WindowsShell.MovePointer(Button(0).X, Button(0).Y + 120);
+    var fadeOut = Samples(400, Button(2).X, Button(2).Y);
+    Check("leaving the close button fades it back", Near(fadeOut[^1], closeResting, 12) && fadeOut.Any(c => Between(c, red, closeResting)), string.Join(" ", fadeOut.Select(Rgb).Distinct()));
+    WindowsShell.Hover(Button(0).X, Button(0).Y + 10);
+    // Electron: the caption foreground (black on a light frame, white on a dark one) at 0x1A x 1.3 over an opaque colour.
+    var foreground = TitleBar.CaptionForeground(TitleBar.DefaultFrame(WindowsWindowStyle.AppsUseDarkTheme())) & 0xFF;
+    byte Toward(byte from) => (byte)Math.Round(from + (foreground - from) * 0x22 / 255.0);
+    static bool Near((byte R, byte G, byte B) a, (byte R, byte G, byte B) b, int within = 6) => Math.Abs(a.R - b.R) <= within && Math.Abs(a.G - b.G) <= within && Math.Abs(a.B - b.B) <= within;
+    var tinted = (Toward(resting.R), Toward(resting.G), Toward(resting.B));
+    Check("a hovered button lays the caption foreground at alpha 0x22 over its colour", Eventually(() => Near(WindowsShell.ScreenPixel(Button(0).X, Button(0).Y), tinted), step),
+        $"{Rgb(resting)} -> {Rgb(WindowsShell.ScreenPixel(Button(0).X, Button(0).Y))}, expected {Rgb(tinted)}");
+    overlaid.SetTitleBarOverlay(new TitleBarOverlayOptions { Color = "#20A050", Height = 32 });
+    WindowsShell.Hover(Button(0).X, Button(0).Y + 120);
+    Check("SetTitleBarOverlay changes the colour and height", Eventually(() => IsGreen(WindowsShell.ScreenPixel(Button(0).X, Button(0).Y)) && overlaid.GetTitleBarOverlayBounds().Height == 32, step),
+        $"{Rgb(WindowsShell.ScreenPixel(Button(0).X, Button(0).Y))} {overlaid.GetTitleBarOverlayBounds()}");
+    var shrunk = WindowsShell.ScreenPixel(Button(0).X, Button(0, 30).Y);
+    Check("the page shows below the shorter overlay (its blue drag strip)", IsBlue(shrunk), Rgb(shrunk));
+    static string? ErrorOf(Action act) { try { act(); return null; } catch (Exception e) { return $"{e.GetType().Name}: {e.Message}"; } }
+    var badColor = ErrorOf(() => overlaid.SetTitleBarOverlay(new TitleBarOverlayOptions { Color = "nonsense" }));
+    Check("SetTitleBarOverlay rejects a colour Chromium cannot parse, with Electron's message", badColor == "ArgumentException: Could not parse color as CSS color", badColor);
+    var badSymbol = ErrorOf(() => overlaid.SetTitleBarOverlay(new TitleBarOverlayOptions { Color = "rgb(255, 0, 0)", SymbolColor = "#12345" }));
+    await Task.Delay(500);
+    var notRepainted = WindowsShell.ScreenPixel(Button(0).X, Button(0).Y);
+    overlaid.SetTitleBarOverlay(new TitleBarOverlayOptions { Height = 32 });
+    Check("a bad symbol colour throws Electron's message, the colour before it is kept unpainted until the next update",
+        badSymbol == "ArgumentException: Could not parse symbol color as CSS color" && IsGreen(notRepainted) && Eventually(() => IsRed(WindowsShell.ScreenPixel(Button(0).X, Button(0).Y)), step),
+        $"{badSymbol} {Rgb(notRepainted)} -> {Rgb(WindowsShell.ScreenPixel(Button(0).X, Button(0).Y))}");
+    overlaid.SetTitleBarOverlay(new TitleBarOverlayOptions { Color = "hsl(120, 100%, 25%)" });
+    Check("SetTitleBarOverlay takes hsl() colours", Eventually(() => IsGreen(WindowsShell.ScreenPixel(Button(0).X, Button(0).Y)), step), Rgb(WindowsShell.ScreenPixel(Button(0).X, Button(0).Y)));
+    overlaid.SetTitleBarOverlay(new TitleBarOverlayOptions { Color = "#00000000" });
+    Check("a transparent overlay colour shows the page through the buttons", Eventually(() => IsBlue(WindowsShell.ScreenPixel(Button(0).X, Button(0).Y)), step), Rgb(WindowsShell.ScreenPixel(Button(0).X, Button(0).Y)));
+    overlaid.SetTitleBarOverlay(new TitleBarOverlayOptions { Color = "#20A050" });
+    await Task.Delay(500);
+    // Snap layouts: Windows asks what is under the pointer, and the drawn maximize button answers HTMAXBUTTON.
+    const int HtMaxButton = 9;
+    var (mx, my) = (Button(1).X + 17, Button(1).Y + 8);
+    Check("the maximize button answers HTMAXBUTTON, its neighbours do not", WindowsShell.HitTest(oh, mx, my) == HtMaxButton && WindowsShell.HitTest(oh, Button(0).X + 17, my) == HtClient,
+        $"{WindowsShell.HitTest(oh, mx, my)} {WindowsShell.HitTest(oh, Button(0).X + 17, my)}");
+    var maxResting = WindowsShell.ScreenPixel(Button(1).X, Button(1).Y);
+    var below = (X: mx, Y: WindowsShell.Bounds(oh).Y + 150);
+    static bool IsYellow((byte R, byte G, byte B) c) => c.R > 200 && c.G > 200 && c.B < 100;
+    // Windows offers snap layouts to the foreground window only, and a load no longer activates a window, so a click does.
+    WindowsShell.Click(below.X, below.Y);
+    await Task.Delay(300);
+    var pageBelow = WindowsShell.ScreenPixel(below.X, below.Y);
+    WindowsShell.Hover(mx - 4, my);
+    WindowsShell.Hover(mx, my);
+    var maxHovered = WindowsShell.ScreenPixel(Button(1).X, Button(1).Y);
+    Check("the maximize button shows its hover through HTMAXBUTTON", maxHovered.R > maxResting.R + 8 && maxHovered.G > maxResting.G + 8, $"{Rgb(maxResting)} -> {Rgb(maxHovered)}");
+    Check("hovering it opens Windows 11's snap layouts over the page", IsYellow(pageBelow) && Eventually(() => !IsYellow(WindowsShell.ScreenPixel(below.X, below.Y)), TimeSpan.FromSeconds(4)),
+        $"{Rgb(pageBelow)} -> {Rgb(WindowsShell.ScreenPixel(below.X, below.Y))}");
+    WindowsShell.Hover(WindowsShell.Bounds(oh).X + 60, WindowsShell.Bounds(oh).Y + 200);
+    await Task.Delay(800);
+
+    // The buttons follow the window's flags: a disabled one takes no clicks and offers no snap layouts.
+    overlaid.SetMaximizable(false);
+    await Task.Delay(300);
+    WindowsShell.Click(Button(1).X, Button(1).Y + 8);
+    Check("SetMaximizable(false) disables the maximize button", WindowsShell.HitTest(oh, mx, my) != HtMaxButton && !overlaid.IsMaximized, $"hit={WindowsShell.HitTest(oh, mx, my)} maximized={overlaid.IsMaximized}");
+    overlaid.SetMaximizable(true);
+    overlaid.SetMinimizable(false);
+    await Task.Delay(300);
+    WindowsShell.Click(Button(0).X, Button(0).Y + 8);
+    Check("SetMinimizable(false) disables the minimize button", !overlaid.IsMinimized);
+    overlaid.SetMinimizable(true);
+    overlaid.SetClosable(false);
+    await Task.Delay(300);
+    WindowsShell.Click(Button(2).X, Button(2).Y + 8);
+    await Task.Delay(500);
+    Check("SetClosable(false) disables the close button", !closed && !overlaid.IsDestroyed);
+    overlaid.SetClosable(true);
+    await Task.Delay(300);
+
+    WindowsShell.Click(Button(1).X, Button(1).Y + 8);
+    Check("the maximize button maximizes", Eventually(() => overlaid.IsMaximized, step));
+    WindowsShell.Click(Button(1).X, Button(1).Y + 8);
+    Check("the same button then restores", Eventually(() => !overlaid.IsMaximized, step));
+    await Task.Delay(500);
+    WindowsShell.Click(Button(0).X, Button(0).Y + 8);
+    Check("the minimize button minimizes", Eventually(() => overlaid.IsMinimized, step));
+    overlaid.Restore();
+    await Task.Delay(800);
+    overlaid.SetFullScreen(true);
+    await Task.Delay(1500);
+    var (fx, fy, fw, _) = WindowsShell.Bounds(oh);
+    var fullscreenCorner = WindowsShell.ScreenPixel(fx + fw - 120, fy + 6);
+    Check("the overlay hides in full screen", Eventually(() => overlaid.IsFullScreen, step) && !IsGreen(fullscreenCorner), Rgb(fullscreenCorner));
+    overlaid.SetFullScreen(false);
+    await Task.Delay(1500);
+    WindowsShell.Click(Button(2).X, Button(2).Y + 8);
+    Check("the close button closes the window", Eventually(() => closed, step));
+    Menu.SetApplicationMenu(appMenu);
+
+    // Defaults: the system's caption height and button colours.
+    var plain = new BrowserWindow(new BrowserWindowOptions { Title = "Oriel window test: default overlay", X = 260, Y = 260, Width = 400, Height = 250, TitleBarStyle = TitleBarStyle.Hidden, TitleBarOverlay = new() { Color = "not a colour" } });
+    await Task.Delay(1500);
+    var caption = WindowsWindowStyle.CaptionHeight(plain.GetNativeWindowHandle());
+    Check("an overlay without a height takes the system caption height", plain.GetTitleBarOverlayBounds().Height == caption && caption is > 20 and < 50, $"{plain.GetTitleBarOverlayBounds()} caption={caption}");
+    var (px, py, pw, _) = WindowsShell.Bounds(plain.GetNativeWindowHandle());
+    var face = WindowsWindowStyle.ButtonColors().Face;
+    var plainPixel = WindowsShell.ScreenPixel(px + pw - 137 + 6, py + 6);
+    Check("an unparsable Color option is ignored: the button face colour shows, as Electron", Near(plainPixel, ((byte)(face >> 16), (byte)(face >> 8), (byte)face), within: 12), $"{Rgb(plainPixel)} vs face {face:X8}");
+    plain.Destroy();
+
+    // SetParentWindow: Win32's owner, read back, and Oriel's parent/child bookkeeping with it.
+    var owner = new BrowserWindow(new BrowserWindowOptions { Title = "Oriel window test: new parent", X = 200, Y = 200, Width = 400, Height = 300 });
+    var owned = new BrowserWindow(new BrowserWindowOptions { Title = "Oriel window test: reparented", X = 260, Y = 260, Width = 300, Height = 200 });
+    await Task.Delay(1200);
+    var (ph, ch) = (owner.GetNativeWindowHandle(), owned.GetNativeWindowHandle());
+    owned.SetParentWindow(owner);
+    Check("SetParentWindow makes the parent the Win32 owner", WindowsWindowStyle.GetOwner(ch) == ph, $"{WindowsWindowStyle.GetOwner(ch)} vs {ph}");
+    Check("SetParentWindow updates GetParentWindow and GetChildWindows", owned.GetParentWindow() == owner && owner.GetChildWindows().Contains(owned));
+    var (ox, oy, ow, oh2) = WindowsShell.Bounds(ch);
+    Check("SetParentWindow re-shows a visible window and brings it to the top", owned.IsVisible && WindowsShell.RootAt(ox + ow / 2, oy + oh2 / 2) == ch, $"visible={owned.IsVisible} top={WindowsShell.RootAt(ox + ow / 2, oy + oh2 / 2)} vs {ch}");
+    owned.Maximize();
+    Check("(maximized before reparenting)", Eventually(() => owned.IsMaximized, step));
+    owned.SetParentWindow(null);
+    Check("SetParentWindow(null) makes it top-level again", WindowsWindowStyle.GetOwner(ch) == 0 && owned.GetParentWindow() is null && owner.GetChildWindows().Count == 0, WindowsWindowStyle.GetOwner(ch));
+    await Task.Delay(500);
+    Check("the re-show keeps the window's show state: still maximized and visible", owned.IsMaximized && owned.IsVisible, $"maximized={owned.IsMaximized} visible={owned.IsVisible}");
+    owned.Restore();
+    await Task.Delay(500);
+    var hiddenChild = new BrowserWindow(new BrowserWindowOptions { Title = "Oriel window test: hidden reparented", Width = 200, Height = 150, Show = false });
+    await Task.Delay(800);
+    hiddenChild.SetParentWindow(owner);
+    await Task.Delay(500);
+    Check("SetParentWindow leaves a hidden window hidden", WindowsWindowStyle.GetOwner(hiddenChild.GetNativeWindowHandle()) == ph && !hiddenChild.IsVisible && !WindowsShell.Visible(hiddenChild.GetNativeWindowHandle()), $"visible={hiddenChild.IsVisible}");
+    owned.SetParentWindow(owner);
+    owner.Destroy();
+    Check("a window given a parent later closes with it", Eventually(() => owned.IsDestroyed, step));
+    var modalParent = new BrowserWindow(new BrowserWindowOptions { Title = "Oriel window test: modal's parent", Width = 300, Height = 200 });
+    var modal = new BrowserWindow(new BrowserWindowOptions { Title = "Oriel window test: modal", Width = 200, Height = 150, Parent = modalParent, Modal = true });
+    await Task.Delay(800);
+    Check("a modal window keeps its parent", Throws<InvalidOperationException>(() => modal.SetParentWindow(null)));
+    modalParent.Destroy();
+    win.Focus();
+    await Task.Delay(300);
+}
+
+async Task WindowPolishAsync(BrowserWindow win)
+{
+    // Windows only so far; Win32 reads each setting back.
+    if (!OperatingSystem.IsWindows()) return;
+
+    BrowserWindow Solid(string title, string colour, int x, int y, int width, int height, bool show = true, bool frame = true, double opacity = 1, bool kiosk = false)
+    {
+        var b = new BrowserWindow(new BrowserWindowOptions { Title = title, X = x, Y = y, Width = width, Height = height, Show = show, Frame = frame, Opacity = opacity, Kiosk = kiosk, BackgroundColor = colour });
+        _ = b.LoadUrl($"data:text/html,<body style='margin:0;background:{Uri.EscapeDataString(colour)}'></body>");
+        return b;
+    }
+    static string Rgb((byte R, byte G, byte B) c) => $"{c.R},{c.G},{c.B}";
+    // The display is colour-managed: pure red reads about (238, 0, 0), blue (55, 0, 255), green (92, 255, 0).
+    static bool IsRed((byte R, byte G, byte B) c) => c.R > 200 && c.G < 60 && c.B < 60;
+    static bool IsGreen((byte R, byte G, byte B) c) => c.G > 200 && c.R < 140 && c.B < 60;
+    static bool IsBlue((byte R, byte G, byte B) c) => c.B > 200 && c.R < 100 && c.G < 60;
+    (int X, int Y) Centre(BrowserWindow b) { var (x, y, w, h) = WindowsShell.Bounds(b.GetNativeWindowHandle()); return (x + w / 2, y + h / 2 + 10); }
+
+    // A white backdrop under the test windows makes blending and shadows measurable.
+    var backdrop = Solid("Oriel window test: backdrop", "#FFFFFF", 80, 80, 700, 500);
+    await Task.Delay(1500);
+
+    // ShowInactive: visible, painted, and the foreground window is unchanged.
+    var foreground = WindowsShell.Foreground();
+    var shownCount = 0;
+    var inactive = Solid("Oriel window test: show inactive", "#FF0000", 120, 120, 300, 200, show: false);
+    inactive.Shown += (_, _) => shownCount++;
+    await Task.Delay(800);
+    inactive.ShowInactive();
+    var ih = inactive.GetNativeWindowHandle();
+    Check("ShowInactive shows the window and raises Shown", Eventually(() => inactive.IsVisible && shownCount == 1, step), $"visible={inactive.IsVisible} shown={shownCount}");
+    await Task.Delay(1000);
+    Check("ShowInactive leaves the foreground window alone", WindowsShell.Foreground() == foreground && WindowsShell.Foreground() != ih, $"{foreground} -> {WindowsShell.Foreground()} (window {ih})");
+    Check("a window shown inactive paints its page", Eventually(() => IsRed(WindowsShell.ScreenPixel(Centre(inactive).X, Centre(inactive).Y)), step), Rgb(WindowsShell.ScreenPixel(Centre(inactive).X, Centre(inactive).Y)));
+
+    // CEF activates a window created hidden, and a window that starts a load; Electron does neither.
+    var front = WindowsShell.Foreground();
+    var hiddenOne = Solid("Oriel window test: created hidden", "#00FF00", 500, 120, 200, 150, show: false);
+    await Task.Delay(1500);
+    Check("a window created hidden does not take the foreground", WindowsShell.Foreground() == front && !hiddenOne.IsVisible, $"{front} -> {WindowsShell.Foreground()} (window {hiddenOne.GetNativeWindowHandle()})");
+    _ = hiddenOne.LoadUrl("data:text/html,again");
+    await Task.Delay(1000);
+    Check("LoadUrl in a hidden window does not take the foreground", WindowsShell.Foreground() == front, $"{front} -> {WindowsShell.Foreground()}");
+    hiddenOne.Destroy();
+    _ = inactive.LoadUrl("data:text/html,<body style='margin:0;background:%23FF0000'></body>");
+    await Task.Delay(1000);
+    Check("LoadUrl in a background window does not bring it to the front", WindowsShell.Foreground() == front, $"{front} -> {WindowsShell.Foreground()} (window {ih})");
+
+    // Opacity: the layered alpha reads back, and the red page blends with the white backdrop.
+    var faded = Solid("Oriel window test: opacity", "#FF0000", 450, 350, 300, 200, opacity: 0.5);
+    await Task.Delay(1500);
+    var fh = faded.GetNativeWindowHandle();
+    var blended = WindowsShell.ScreenPixel(Centre(faded).X, Centre(faded).Y);
+    Check("the Opacity option makes the window layered at that alpha", WindowsShell.Alpha(fh) == 127 && faded.GetOpacity() == 0.5, $"{WindowsShell.Alpha(fh)} {faded.GetOpacity()}");
+    Check("a half-opaque red window over white shows pink", blended.R > 200 && blended.G is > 90 and < 170 && blended.B is > 90 and < 170, Rgb(blended));
+    faded.SetOpacity(0.25);
+    Check("SetOpacity changes the alpha", Eventually(() => WindowsShell.Alpha(fh) == 63, step) && faded.GetOpacity() == 0.25, $"{WindowsShell.Alpha(fh)} {faded.GetOpacity()}");
+    faded.SetOpacity(3);
+    Check("SetOpacity clamps to 1", Eventually(() => WindowsShell.Alpha(fh) == 255, step) && faded.GetOpacity() == 1, $"{WindowsShell.Alpha(fh)} {faded.GetOpacity()}");
+    faded.SetOpacity(0.5);
+    await Task.Delay(300);
+
+    // Click-through: the window stops taking the mouse, and keeps its opacity when it takes it again.
+    var (fx, fy) = Centre(faded);
+    Check("before SetIgnoreMouseEvents the window takes the mouse", WindowsShell.RootAt(fx, fy) == fh, $"{WindowsShell.RootAt(fx, fy)} vs {fh}");
+    faded.SetIgnoreMouseEvents(true);
+    Check("SetIgnoreMouseEvents(true) passes the mouse to the window below", Eventually(() => WindowsShell.ClickThrough(fh) && WindowsShell.RootAt(fx, fy) != fh, step), $"{WindowsShell.RootAt(fx, fy)} vs {fh}");
+    faded.SetIgnoreMouseEvents(false);
+    Check("SetIgnoreMouseEvents(false) takes it back and keeps the opacity", Eventually(() => WindowsShell.RootAt(fx, fy) == fh, step) && WindowsShell.Alpha(fh) == 127, $"{WindowsShell.RootAt(fx, fy)} alpha={WindowsShell.Alpha(fh)}");
+    var clicky = Solid("Oriel window test: click-through, opaque", "#00FF00", 450, 120, 200, 150);
+    await Task.Delay(1500);
+    var ch = clicky.GetNativeWindowHandle();
+    var (cx, cy) = Centre(clicky);
+    clicky.SetIgnoreMouseEvents(true);
+    await Task.Delay(300);
+    var opaqueThrough = WindowsShell.RootAt(cx, cy) != ch;
+    var opaquePainted = WindowsShell.ScreenPixel(cx, cy);
+    clicky.SetIgnoreMouseEvents(false);
+    Check("an opaque click-through window still draws, and is no longer layered after", opaqueThrough && IsGreen(opaquePainted) && Eventually(() => WindowsShell.Alpha(ch) is null, step), $"through={opaqueThrough} {Rgb(opaquePainted)} alpha={WindowsShell.Alpha(ch)}");
+    clicky.Destroy();
+    faded.Destroy();
+
+    // Forward: the page still sees mouse moves while clicks pass through; without it, it sees none.
+    var hover = new BrowserWindow(new BrowserWindowOptions { Title = "Oriel window test: forward", X = 450, Y = 120, Width = 300, Height = 200, BackgroundColor = "#0000FF" });
+    _ = hover.LoadUrl("data:text/html," + Uri.EscapeDataString("<body style='margin:0;height:100vh;background:#0000FF' onmousemove='moves++' onmousedown='downs++'><script>var moves=0,downs=0</script></body>"));
+    await Task.Delay(1500);
+    var hh = hover.GetNativeWindowHandle();
+    var (hx, hy) = Centre(hover);
+    async Task<int> PageCount(string name) => int.TryParse(await Js(hover, name) as string, out var n) ? n : -1;
+    async Task<int> MovesOver()
+    {
+        await Js(hover, "moves=0,downs=0");
+        WindowsShell.MoveMouse(hx, hy);
+        WindowsShell.MoveMouse(hx + 20, hy + 10);
+        await Task.Delay(400);
+        return await PageCount("moves");
+    }
+    hover.SetIgnoreMouseEvents(true, new IgnoreMouseEventsOptions { Forward = true });
+    await Task.Delay(300);
+    var forwarded = await MovesOver();
+    Check("SetIgnoreMouseEvents(true, Forward) still delivers mouse moves to the page", forwarded > 0 && WindowsShell.ClickThrough(hh) && WindowsShell.Forwarding(hh), $"moves={forwarded} forwarding={WindowsShell.Forwarding(hh)}");
+    WindowsShell.Drag(hx, hy, hx, hy);
+    var downs = await PageCount("downs");
+    Check("with Forward a click still passes through to the window below", WindowsShell.RootAt(hx, hy) != hh && downs == 0, $"{WindowsShell.RootAt(hx, hy)} vs {hh} downs={downs}");
+    hover.SetIgnoreMouseEvents(true);
+    await Task.Delay(300);
+    var unforwarded = await MovesOver();
+    Check("SetIgnoreMouseEvents(true) without Forward delivers no mouse moves", unforwarded == 0 && !WindowsShell.Forwarding(hh) && WindowsShell.ClickThrough(hh), $"moves={unforwarded}");
+    hover.SetIgnoreMouseEvents(true, new IgnoreMouseEventsOptions { Forward = true });
+    await Task.Delay(300);
+    // The pass-through clicks activated the window below; bring this one back over it before hit-testing.
+    hover.Focus();
+    await Task.Delay(300);
+    var wasForwarding = WindowsShell.Forwarding(hh);
+    hover.SetIgnoreMouseEvents(false, new IgnoreMouseEventsOptions { Forward = true });
+    Check("SetIgnoreMouseEvents(false, Forward) takes the mouse back and ends forwarding", wasForwarding && Eventually(() => !WindowsShell.Forwarding(hh) && !WindowsShell.ClickThrough(hh) && WindowsShell.RootAt(hx, hy) == hh, step), $"was={wasForwarding} forwarding={WindowsShell.Forwarding(hh)} root={WindowsShell.RootAt(hx, hy)}");
+    hover.Destroy();
+
+    // Content protection: capture sees what is behind the window.
+    var secret = Solid("Oriel window test: content protection", "#0000FF", 200, 200, 300, 200);
+    await Task.Delay(1500);
+    var (sx, sy) = Centre(secret);
+    var before = Rgb(WindowsShell.ScreenPixel(sx, sy));
+    secret.SetContentProtection(true);
+    Check("SetContentProtection(true) hides the window from capture", IsBlue(WindowsShell.ScreenPixel(sx, sy)) && Eventually(() => secret.IsContentProtected() && !IsBlue(WindowsShell.ScreenPixel(sx, sy)), step), $"{before} -> {Rgb(WindowsShell.ScreenPixel(sx, sy))} protected={secret.IsContentProtected()}");
+    secret.SetContentProtection(false);
+    Check("SetContentProtection(false) shows it again", Eventually(() => !secret.IsContentProtected() && IsBlue(WindowsShell.ScreenPixel(sx, sy)), step), Rgb(WindowsShell.ScreenPixel(sx, sy)));
+    secret.Destroy();
+
+    // Shadow: Electron only stores hasShadow on Windows; a frameless window keeps darkening the backdrop just below it.
+    var flat = Solid("Oriel window test: shadow", "#FF0000", 220, 160, 300, 200, frame: false);
+    await Task.Delay(1500);
+    var lh = flat.GetNativeWindowHandle();
+    // 8 px below the window against the backdrop's white beside it, at the same height, out of the shadow's reach.
+    (byte R, byte G, byte B) Below() { var (x, y, w, h) = WindowsShell.Bounds(lh); return WindowsShell.ScreenPixel(x + w / 2, y + h + 8); }
+    var white = WindowsShell.ScreenPixel(WindowsShell.Bounds(lh).X - 60, WindowsShell.Bounds(lh).Y + WindowsShell.Bounds(lh).Height + 8).R;
+    var shaded = Below();
+    flat.SetHasShadow(false);
+    await Task.Delay(800);
+    Check("SetHasShadow(false) keeps a frameless window's shadow, as Electron on Windows, and reads back false", shaded.R < white - 20 && Below().R < white - 20 && !flat.GetHasShadow(), $"white={white} {Rgb(shaded)} -> {Rgb(Below())}");
+    flat.SetHasShadow(true);
+    Check("SetHasShadow(true) reads back true", flat.GetHasShadow() && Below().R < white - 20, $"white={white} {Rgb(Below())}");
+    flat.Destroy();
+    var framed = Solid("Oriel window test: framed shadow", "#FF0000", 220, 160, 300, 200);
+    await Task.Delay(1200);
+    framed.SetHasShadow(false);
+    await Task.Delay(300);
+    Check("a framed window keeps its frame (and DWM's shadow) under SetHasShadow(false)", WindowsShell.NcRendering(framed.GetNativeWindowHandle()) && !framed.GetHasShadow());
+    framed.Destroy();
+
+    // GetNormalBounds: the restored bounds survive maximize and minimize.
+    var normal = Solid("Oriel window test: normal bounds", "#FFFF00", 240, 180, 320, 220);
+    await Task.Delay(1500);
+    var placed = normal.GetBounds();
+    Check("GetNormalBounds is the bounds of a normal window", normal.GetNormalBounds() == placed, $"{normal.GetNormalBounds()} vs {placed}");
+    normal.Maximize();
+    Check("GetNormalBounds keeps the restored bounds while maximized", Eventually(() => normal.IsMaximized, step) && normal.GetNormalBounds() == placed && normal.GetBounds() != placed, $"{normal.GetNormalBounds()} vs {placed}");
+    normal.Restore();
+    await Task.Delay(500);
+    normal.Minimize();
+    Check("GetNormalBounds keeps the restored bounds while minimized", Eventually(() => normal.IsMinimized, step) && normal.GetNormalBounds() == placed, $"{normal.GetNormalBounds()} vs {placed}");
+    normal.Restore();
+    await Task.Delay(500);
+
+    // WillMove and WillResize: a real drag of the title bar and corner, then WM_SIZING for an edge.
+    var nh = normal.GetNativeWindowHandle();
+    var moves = new List<Rectangle>();
+    var cancelMove = true;
+    normal.WillMove += (_, e) => { moves.Add(e.NewBounds); e.Cancel = cancelMove; };
+    var (nx, ny, nw, nhh) = WindowsShell.Bounds(nh);
+    WindowsShell.Drag(nx + 60, ny + 15, nx + 160, ny + 75);
+    Check("a cancelled WillMove keeps the window where it is", moves.Count > 0 && WindowsShell.Bounds(nh) == (nx, ny, nw, nhh), $"{moves.Count} moves, {WindowsShell.Bounds(nh)} vs {(nx, ny, nw, nhh)}");
+    Check("WillMove reports the bounds the drag proposed", moves.Count > 0 && moves[^1].X > placed.X && moves[^1].Width == placed.Width, moves.Count > 0 ? moves[^1] : null);
+    cancelMove = false;
+    WindowsShell.Drag(nx + 60, ny + 15, nx + 160, ny + 75);
+    var moved = WindowsShell.Bounds(nh);
+    Check("an uncancelled WillMove lets the drag move the window", moved.X > nx + 50 && moved.Width == nw, $"{(nx, ny)} -> {moved}");
+    var resizes = new List<WillResizeEventArgs>();
+    var cancelResize = true;
+    normal.WillResize += (_, e) => { resizes.Add(e); e.Cancel = cancelResize; };
+    WindowsShell.Drag(moved.X + moved.Width - 2, moved.Y + moved.Height - 2, moved.X + moved.Width + 80, moved.Y + moved.Height + 60);
+    Check("a cancelled WillResize keeps the size; the edge is bottom-right", resizes.Count > 0 && WindowsShell.Bounds(nh) == moved && resizes[^1].Edge == ResizeEdge.BottomRight && resizes[^1].NewBounds.Width > placed.Width,
+        $"{resizes.Count} resizes, {WindowsShell.Bounds(nh)} vs {moved}, {(resizes.Count > 0 ? $"{resizes[^1].Edge} {resizes[^1].NewBounds}" : "")}");
+    cancelResize = false;
+    WindowsShell.Drag(moved.X + moved.Width - 2, moved.Y + moved.Height - 2, moved.X + moved.Width + 80, moved.Y + moved.Height + 60);
+    Check("an uncancelled WillResize lets the drag resize the window", WindowsShell.Bounds(nh).Width > moved.Width + 40, $"{moved} -> {WindowsShell.Bounds(nh)}");
+    resizes.Clear();
+    cancelResize = true;
+    var now = WindowsShell.Bounds(nh);
+    var left = WindowsShell.SendDrag(nh, 3 /* WMSZ_TOP */, (now.X, now.Y - 40, now.X + now.Width, now.Y + now.Height));
+    Check("WM_SIZING on the top edge reports Top, and cancelling restores the rectangle", resizes.Count == 1 && resizes[0].Edge == ResizeEdge.Top && left == (now.X, now.Y, now.X + now.Width, now.Y + now.Height),
+        $"{resizes.Count} {(resizes.Count > 0 ? resizes[0].Edge : null)} {left}");
+    normal.Destroy();
+
+    // Kiosk: full screen on the window's display, and back.
+    var kiosk = Solid("Oriel window test: kiosk", "#000000", 260, 200, 300, 200, kiosk: true);
+    Check("the Kiosk option opens full screen", Eventually(() => kiosk.IsFullScreen && kiosk.IsKiosk(), step) && kiosk.GetBounds() == Screen.GetDisplayMatching(kiosk.GetBounds()).Bounds, $"{kiosk.IsFullScreen} {kiosk.GetBounds()}");
+    kiosk.SetKiosk(false);
+    Check("SetKiosk(false) leaves full screen", Eventually(() => !kiosk.IsFullScreen && !kiosk.IsKiosk(), step), $"{kiosk.IsFullScreen} {kiosk.GetBounds()}");
+    kiosk.SetKiosk(true);
+    Check("SetKiosk(true) enters it again", Eventually(() => kiosk.IsFullScreen && kiosk.IsKiosk(), step));
+    kiosk.SetFullScreen(false);
+    Check("IsKiosk is IsFullScreen, as Electron answers: SetFullScreen(false) ends it", Eventually(() => !kiosk.IsFullScreen && !kiosk.IsKiosk(), step), $"{kiosk.IsFullScreen} {kiosk.IsKiosk()}");
+    kiosk.SetFullScreen(true);
+    Check("SetFullScreen(true) makes IsKiosk true", Eventually(() => kiosk.IsFullScreen && kiosk.IsKiosk(), step), $"{kiosk.IsFullScreen} {kiosk.IsKiosk()}");
+    kiosk.Destroy();
+    inactive.Destroy();
+    backdrop.Destroy();
+    win.Focus();
+    await Task.Delay(500);
+}
+
+async Task PowerAndShortcutsAsync()
+{
+    if (!OperatingSystem.IsWindows())
+    {
+        Check("globalShortcut, powerMonitor and powerSaveBlocker throw off Windows", Throws<PlatformNotSupportedException>(() => GlobalShortcut.IsRegistered("Ctrl+A"))
+            && Throws<PlatformNotSupportedException>(() => PowerMonitor.GetSystemIdleTime()) && Throws<PlatformNotSupportedException>(() => PowerSaveBlocker.Start(PowerSaveBlockerType.PreventAppSuspension)));
+        return;
+    }
+
+    // Global shortcuts: Windows refuses a combination another app holds, so this test can see Oriel holding it.
+    const uint Mods = 0x1 | 0x2 | 0x4; // MOD_ALT | MOD_CONTROL | MOD_SHIFT
+    const uint F9 = 0x78;
+    var fired = 0;
+    Check("Register takes a free shortcut", GlobalShortcut.Register("Ctrl+Alt+Shift+F9", () => fired++) && GlobalShortcut.IsRegistered("Ctrl+Alt+Shift+F9"));
+    Check("the shortcut is held system-wide", !WindowsShell.HotKeyFree(Mods, F9));
+    Check("the same combination written differently is the same shortcut", GlobalShortcut.IsRegistered("Shift+Control+Alt+F9") && !GlobalShortcut.Register("Alt+Shift+CmdOrCtrl+F9", () => { }));
+    WindowsShell.Chord(0x11 /* VK_CONTROL */, 0x12 /* VK_MENU */, 0x10 /* VK_SHIFT */, (byte)F9);
+    Check("pressing it runs the callback, whatever has focus", Eventually(() => fired == 1, step), fired);
+    // Chromium registers without MOD_NOREPEAT: a held key's repeated key-downs fire the callback each time.
+    fired = 0;
+    WindowsShell.Hold(4, 0x11, 0x12, 0x10, (byte)F9);
+    Check("a held shortcut repeats the callback (no MOD_NOREPEAT)", Eventually(() => fired >= 3, step), fired);
+    GlobalShortcut.Unregister("Ctrl+Alt+Shift+F9");
+    fired = 1;
+    Check("Unregister lets it go", !GlobalShortcut.IsRegistered("Ctrl+Alt+Shift+F9") && WindowsShell.HotKeyFree(Mods, F9));
+    WindowsShell.Chord(0x11, 0x12, 0x10, (byte)F9);
+    await Task.Delay(300);
+    Check("a released shortcut no longer runs the callback", fired == 1, fired);
+    GlobalShortcut.RegisterAll(["Ctrl+Alt+Shift+F10", "Ctrl+Alt+Shift+F11"], () => { });
+    Check("RegisterAll takes each", GlobalShortcut.IsRegistered("Ctrl+Alt+Shift+F10") && GlobalShortcut.IsRegistered("Ctrl+Alt+Shift+F11") && !WindowsShell.HotKeyFree(Mods, 0x79));
+    GlobalShortcut.UnregisterAll();
+    Check("UnregisterAll lets them all go", !GlobalShortcut.IsRegistered("Ctrl+Alt+Shift+F10") && WindowsShell.HotKeyFree(Mods, 0x79) && WindowsShell.HotKeyFree(Mods, 0x7A));
+    Check("an invalid accelerator throws", Throws<ArgumentException>(() => GlobalShortcut.Register("Ctrl+Nope", () => { })));
+
+    // Idle time and power source, read independently.
+    WindowsShell.Nudge();
+    await Task.Delay(2500);
+    var quiet = PowerMonitor.GetSystemIdleTime();
+    WindowsShell.Nudge();
+    Check("GetSystemIdleTime counts seconds without input, and input resets it", quiet is 2 or 3 && PowerMonitor.GetSystemIdleTime() <= 1, $"{quiet} -> {PowerMonitor.GetSystemIdleTime()}");
+    Check("GetSystemIdleState: active under the threshold, idle at zero", PowerMonitor.GetSystemIdleState(60) == SystemIdleState.Active && PowerMonitor.GetSystemIdleState(0) == SystemIdleState.Idle,
+        $"{PowerMonitor.GetSystemIdleState(60)} {PowerMonitor.GetSystemIdleState(0)}");
+    var psi = new System.Diagnostics.ProcessStartInfo("powershell.exe") { UseShellExecute = false, CreateNoWindow = true, RedirectStandardOutput = true };
+    foreach (var arg in new[] { "-NoProfile", "-Command", "Add-Type -AssemblyName System.Windows.Forms; [Windows.Forms.SystemInformation]::PowerStatus.PowerLineStatus" }) psi.ArgumentList.Add(arg);
+    var line = System.Diagnostics.Process.Start(psi)!.StandardOutput.ReadToEnd().Trim();
+    Check("IsOnBatteryPower agrees with Windows' power line status", PowerMonitor.IsOnBatteryPower() == (line == "Offline") && PowerMonitor.OnBatteryPower == PowerMonitor.IsOnBatteryPower(), $"{line} {PowerMonitor.IsOnBatteryPower()}");
+
+    // Power and session notifications reach the host window; the machine is neither suspended nor locked here.
+    var power = new List<string>();
+    PowerMonitor.Suspended += (_, _) => power.Add("suspend");
+    PowerMonitor.Resumed += (_, _) => power.Add("resume");
+    PowerMonitor.OnAc += (_, _) => power.Add("on-ac");
+    PowerMonitor.OnBattery += (_, _) => power.Add("on-battery");
+    PowerMonitor.ScreenLocked += (_, _) => power.Add("lock");
+    PowerMonitor.ScreenUnlocked += (_, _) => power.Add("unlock");
+    var speed = new List<int>();
+    PowerMonitor.SpeedLimitChanged += (_, e) => speed.Add(e.Limit);
+    var host = WindowsShell.SystemHost();
+    foreach (var pbt in new nint[] { 0x4, 0x7, 0x12, 0xA }) WindowsShell.Send(host, 0x0218 /* WM_POWERBROADCAST */, pbt);
+    foreach (var wts in new nint[] { 0x7, 0x8, 0x5 }) WindowsShell.Send(host, 0x02B1 /* WM_WTSSESSION_CHANGE */, wts);
+    Check("power and session notifications raise Electron's events (a status change without a new source raises none)",
+        host != 0 && power.SequenceEqual(["suspend", "resume", "lock", "unlock"]), string.Join(",", power));
+
+    // The limit is 100 at start and only changes under real throttling, which the test cannot cause.
+    await Task.Delay(2500);
+    Check("SpeedLimitChanged subscribes and reports only limits under 100 (weak: no throttling to read back)", speed.All(l => l is >= 0 and < 100), string.Join(",", speed));
+
+    // powercfg /requests lists each request by type; it needs elevation, so without it only the display request is read back
+    // through the execution state (ES_DISPLAY_REQUIRED 2).
+    var product = System.Diagnostics.FileVersionInfo.GetVersionInfo(Environment.ProcessPath!).ProductName;
+    if (string.IsNullOrWhiteSpace(product)) product = "Oriel.WindowTest";
+    var win11 = Environment.OSVersion.Version.Build >= 22000;
+    bool Held(Dictionary<string, List<string>> requests, string section) => requests.TryGetValue(section, out var entries) && entries.Any(e => e.Trim() == product);
+    string Held3(Dictionary<string, List<string>> r) => $"DISPLAY={Held(r, "DISPLAY")} SYSTEM={Held(r, "SYSTEM")} EXECUTION={Held(r, "EXECUTION")}";
+    var baseline = WindowsShell.ExecutionState();
+    var display = PowerSaveBlocker.Start(PowerSaveBlockerType.PreventDisplaySleep);
+    if (WindowsShell.PowerRequests() is { } r1)
+    {
+        Check("PreventDisplaySleep is a display request, plus a system request below Windows 11, named for the product",
+            PowerSaveBlocker.IsStarted(display) && Held(r1, "DISPLAY") && Held(r1, "SYSTEM") == !win11 && !Held(r1, "EXECUTION"), Held3(r1));
+        var app = PowerSaveBlocker.Start(PowerSaveBlockerType.PreventAppSuspension);
+        var r2 = WindowsShell.PowerRequests()!;
+        Check("with both active one lock holds, at the display type: the app type adds no execution request", app != display && Held(r2, "DISPLAY") && !Held(r2, "EXECUTION"), Held3(r2));
+        Check("stopping the display blocker drops the lock to the app type: an execution request, no display or system",
+            PowerSaveBlocker.Stop(display) && WindowsShell.PowerRequests() is { } r3 && Held(r3, "EXECUTION") && !Held(r3, "DISPLAY") && !Held(r3, "SYSTEM"), Held3(WindowsShell.PowerRequests()!));
+        Check("Stop ends the last blocker and releases every request; a stopped id cannot be stopped again",
+            PowerSaveBlocker.Stop(app) && !PowerSaveBlocker.Stop(app) && !PowerSaveBlocker.IsStarted(app) && WindowsShell.PowerRequests() is { } r4 && !Held(r4, "DISPLAY") && !Held(r4, "SYSTEM") && !Held(r4, "EXECUTION"),
+            Held3(WindowsShell.PowerRequests()!));
+    }
+    else
+    {
+        Check("PreventDisplaySleep keeps the display required (weak: powercfg /requests needs elevation)", PowerSaveBlocker.IsStarted(display) && (WindowsShell.ExecutionState() & 0x2) != 0, $"0x{baseline:X} -> 0x{WindowsShell.ExecutionState():X}");
+        var app = PowerSaveBlocker.Start(PowerSaveBlockerType.PreventAppSuspension);
+        Check("ids count up from the process's first start, and starting never throws", app == display + 1, $"{display} {app}");
+        Check("Stop ends each, and a stopped blocker cannot be stopped again", PowerSaveBlocker.Stop(display) && PowerSaveBlocker.Stop(app) && !PowerSaveBlocker.Stop(app) && !PowerSaveBlocker.IsStarted(display)
+            && WindowsShell.ExecutionState() == baseline, $"0x{baseline:X} -> 0x{WindowsShell.ExecutionState():X}");
+    }
+}
+
+async Task TrayAsync()
+{
+    static NativeImage Square(byte b, byte g, byte r)
+    {
+        var pixels = new byte[16 * 16 * 4];
+        for (var i = 0; i < pixels.Length; i += 4) (pixels[i], pixels[i + 1], pixels[i + 2], pixels[i + 3]) = (b, g, r, 255);
+        return NativeImage.CreateFromBitmap(pixels, new NativeImageBitmapOptions { Width = 16, Height = 16 });
+    }
+    if (!OperatingSystem.IsWindows())
+    {
+        Check("Tray throws PlatformNotSupportedException off Windows", Throws<PlatformNotSupportedException>(() => _ = new Tray(Square(0, 0, 255))));
+        return;
+    }
+
+    // The process's first tray icon: Electron numbers icons from 2.
+    const uint Id = 2;
+    var tray = new Tray(Square(0, 0, 255));
+    tray.SetToolTip("Oriel tray test");
+    var host = WindowsShell.TrayHost();
+    Check("a Tray puts an icon in the notification area under Electron's first id (the shell holds it)", host != 0 && WindowsShell.NotifyIcon(host, Id, delete: false), host);
+    var bounds = tray.GetBounds();
+    Check("GetBounds is the icon's place, or empty while it sits in the overflow", bounds == default || Screen.GetAllDisplays().Any(d => d.Bounds.X <= bounds.X && bounds.X < d.Bounds.X + d.Bounds.Width), bounds);
+
+    // Version 0 callbacks, as Electron leaves the icon: the id in wParam, the message in lParam; events arrive posted.
+    var events = new List<string>();
+    TrayEventArgs? clickArgs = null, doubleArgs = null;
+    tray.Clicked += (_, e) => { events.Add("click"); clickArgs = e; };
+    tray.DoubleClicked += (_, e) => { events.Add("double"); doubleArgs = e; };
+    tray.MiddleClicked += (_, _) => events.Add("middle");
+    tray.RightClicked += (_, _) => events.Add("right");
+    tray.MouseMoved += (_, _) => events.Add("move");
+    tray.MouseEntered += (_, _) => events.Add("enter");
+    tray.MouseLeft += (_, _) => events.Add("leave");
+    tray.BalloonShown += (_, _) => events.Add("balloon-show");
+    tray.BalloonClicked += (_, _) => events.Add("balloon-click");
+    tray.BalloonClosed += (_, _) => events.Add("balloon-closed");
+    var savedCursor = WindowsShell.CursorPos();
+    var primary = Screen.GetPrimaryDisplay().Bounds;
+    var away = Screen.DipToScreenPoint(new Point(primary.X + primary.Width / 2, primary.Y + primary.Height / 2));
+    WindowsShell.MoveCursor(away.X, away.Y);
+    string[] expected = ["click", "double", "middle", "middle", "right", "right", "balloon-show", "balloon-click", "balloon-closed"];
+    // WM_L/M/RBUTTON(DOWN|DBLCLK), WM_CONTEXTMENU, NIN_KEYSELECT, NIN_BALLOON*, WM_LBUTTONUP.
+    foreach (var message in new uint[] { 0x0201, 0x0203, 0x0207, 0x0209, 0x0204, 0x007B, 0x0206, 0x0401, 0x0402, 0x0405, 0x0404, 0x0403, 0x0202 })
+        WindowsShell.TrayCallback(host, Id, message);
+    Check("the shell's callbacks raise Electron's events (presses, not releases; no right double click, key select or balloon hide)",
+        Eventually(() => events.Count >= expected.Length, step) && events.SequenceEqual(expected), string.Join(",", events));
+    Check("a click carries the bounds and the pointer; a double click the bounds only",
+        clickArgs is { } c && doubleArgs is { } d && c.Position == Screen.ScreenToDipPoint(new Point(away.X, away.Y)) && c.Bounds == tray.GetBounds() && d.Position == default(Point) && d.Bounds == c.Bounds,
+        $"{clickArgs?.Position} {clickArgs?.Bounds} {doubleArgs?.Position}");
+
+    // Hover, as Electron's MouseEnteredExitedDetector: a move counts only inside the bounds; leaving is polled every 250 ms.
+    events.Clear();
+    WindowsShell.TrayCallback(host, Id, 0x0200 /* WM_MOUSEMOVE */);
+    await Task.Delay(600);
+    Check("a move reported while the pointer is off the icon raises nothing", events.Count == 0, string.Join(",", events));
+    bounds = tray.GetBounds();
+    if (bounds == default) Check("entering and leaving the icon raise MouseEntered once, then MouseLeft (skipped: the icon is in the overflow)", true);
+    else
+    {
+        var centre = Screen.DipToScreenPoint(new Point(bounds.X + bounds.Width / 2, bounds.Y + bounds.Height / 2));
+        WindowsShell.MoveCursor(centre.X, centre.Y);
+        WindowsShell.TrayCallback(host, Id, 0x0200);
+        WindowsShell.TrayCallback(host, Id, 0x0200);
+        var entered = Eventually(() => events.Count >= 3, step) && events.SequenceEqual(["enter", "move", "move"]);
+        WindowsShell.MoveCursor(away.X, away.Y);
+        Check("entering and leaving the icon raise MouseEntered once, then MouseLeft",
+            entered && Eventually(() => events.Count >= 4, step) && events.SequenceEqual(["enter", "move", "move", "leave"]), string.Join(",", events));
+    }
+    WindowsShell.MoveCursor(savedCursor.X, savedCursor.Y);
+
+    // The context menu: a Chromium Views menu, as Electron's, read back through UI Automation.
+    var shown = false;
+    var menu = new Menu
+    {
+        new MenuItem { Label = "&Show", Accelerator = "CmdOrCtrl+S", Click = (_, _, _) => shown = true },
+        new MenuItem { Type = MenuItemType.Separator },
+        new MenuItem { Label = "Pinned", Type = MenuItemType.Checkbox, Checked = true },
+        new MenuItem { Label = "Off", Enabled = false },
+        new MenuItem { Label = "Hidden", Visible = false },
+        new MenuItem { Label = "More", Submenu = new Menu { new MenuItem { Label = "Deep" } } },
+    };
+    tray.SetContextMenu(menu);
+    events.Clear();
+    WindowsShell.TrayCallback(host, Id, 0x0204 /* WM_RBUTTONDOWN */);
+    nint menuWindow = 0;
+    Check("a right press opens the context menu, a Views menu, instead of raising RightClicked",
+        Eventually(() => (menuWindow = WindowsShell.ViewsMenuWindow()) != 0, step) && WindowsShell.MenuWindow() == 0 && !events.Contains("right"), string.Join(",", events));
+    var names = menuWindow != 0 ? WindowsShell.ElementNames(menuWindow).Where(n => n.Length > 0).ToList() : [];
+    Check("the menu has the visible items and accelerators of Oriel's Menu", names.SequenceEqual(["Show Ctrl+S", "Pinned", "Off", "More"]), string.Join(" | ", names));
+    WindowsShell.PostKey(menuWindow, 0x28 /* VK_DOWN */);
+    WindowsShell.PostKey(menuWindow, 0x0D /* VK_RETURN */);
+    Check("choosing an item runs its click", Eventually(() => shown && WindowsShell.ViewsMenuWindow() == 0, step), $"shown={shown} open={WindowsShell.ViewsMenuWindow() != 0}");
+    var popped = Task.Run(() => tray.PopUpContextMenu(position: new Point(200, 200)));
+    Check("PopUpContextMenu opens it from code and returns while it is open", popped.Wait(step) && Eventually(() => WindowsShell.ViewsMenuWindow() != 0, step));
+    Check("other Tray calls answer while the menu is open", Task.Run(() => tray.GetTitle()).Wait(step) && WindowsShell.ViewsMenuWindow() != 0);
+    tray.CloseContextMenu();
+    Check("CloseContextMenu closes it", Eventually(() => WindowsShell.ViewsMenuWindow() == 0, step));
+
+    // Explorer restarting broadcasts TaskbarCreated; the icon comes back as Electron's ResetIcon re-adds it: image, no tooltip.
+    tray.SetToolTip("Oriel tray test");
+    await Task.Delay(500);
+    var tipShown = WindowsShell.TaskbarNames().Contains("Oriel tray test");
+    WindowsShell.NotifyIcon(host, Id, delete: true);
+    var goneBehindOurBack = !WindowsShell.NotifyIcon(host, Id, delete: false);
+    WindowsShell.SendRegistered(host, "TaskbarCreated");
+    await Task.Delay(500);
+    var tipAfter = WindowsShell.TaskbarNames().Contains("Oriel tray test");
+    Check("TaskbarCreated adds the icon again", goneBehindOurBack && WindowsShell.NotifyIcon(host, Id, delete: false), goneBehindOurBack);
+    // The notification area names a visible icon by its tooltip; an icon in the overflow has no name to read.
+    Check(tipShown ? "TaskbarCreated drops the tooltip, as Electron" : "TaskbarCreated drops the tooltip, as Electron (skipped: the icon is in the overflow)", !tipShown || !tipAfter, $"before={tipShown} after={tipAfter}");
+
+    // As Electron, a refused icon is logged, not thrown, and a GUID in use is only warned about: the first icon keeps it.
+    var refused = new StringWriter();
+    var stderrBefore = Console.Error;
+    Console.SetError(refused);
+    var guid = Guid.NewGuid();
+    Tray? first = null, second = null;
+    var threw = false;
+    var firstLog = "";
+    try { first = new Tray(Square(0, 0, 255), guid); firstLog = refused.ToString(); second = new Tray(Square(0, 0, 255), guid); }
+    catch (Exception) { threw = true; }
+    Console.SetError(stderrBefore);
+    var log = refused.ToString();
+    Check("a GUID already in use is warned about, the shell's refusal logged, nothing thrown, and the first icon keeps it",
+        !threw && second is not null && !firstLog.Contains("Guid already in use.") && log.Contains("Guid already in use.") && log.Contains("Unable to create status tray icon.") && WindowsShell.NotifyIcon(host, Id + 1, delete: false, guid),
+        $"threw={threw} log=[{log.Trim()}]");
+    first?.Destroy();
+    second?.Destroy();
+
+    // A balloon is a toast on Windows 11; the shell reports it shown unless notifications are off or quiet hours hold it.
+    events.Clear();
+    tray.DisplayBalloon(new DisplayBalloonOptions { Title = "Oriel", Content = "Tray balloon test", IconType = BalloonIconType.Info, NoSound = true });
+    Check("DisplayBalloon shows a balloon (BalloonShown)", Eventually(() => events.Contains("balloon-show"), TimeSpan.FromSeconds(8)), string.Join(",", events));
+    tray.RemoveBalloon();
+    tray.SetImage(Square(0, 200, 0));
+    Check("SetImage keeps the icon in place", WindowsShell.NotifyIcon(host, Id, delete: false));
+    Check("the macOS-only title and double-click setting read back as Electron's Windows defaults", Ok(() => { tray.SetTitle("t"); tray.SetIgnoreDoubleClickEvents(true); }) && tray.GetTitle() == "" && !tray.GetIgnoreDoubleClickEvents(),
+        $"{tray.GetTitle()} {tray.GetIgnoreDoubleClickEvents()}");
+    tray.Destroy();
+    Check("Destroy removes the icon", tray.IsDestroyed() && !WindowsShell.NotifyIcon(host, Id, delete: false) && tray.GetBounds() == default);
+}
+
+static bool Ok(Action action)
+{
+    action();
+    return true;
+}
+
 async Task NativeImageAsync()
 {
     // A solid premultiplied BGRA square.
@@ -3616,24 +5040,444 @@ async Task NativeImageAsync()
             new ThumbarButton { Icon = green, Tooltip = "Play", Click = () => clicks.Add("play") },
             new ThumbarButton { Icon = redIcon, Tooltip = "Stop", Flags = ThumbarButtonFlags.DismissOnClick, Click = () => clicks.Add("stop") },
         ]);
-        WindowsShell.ClickThumbButton(hwnd, 1);
-        WindowsShell.ClickThumbButton(hwnd, 0);
+        WindowsShell.ClickThumbButton(hwnd, 40002);
+        WindowsShell.ClickThumbButton(hwnd, 40001);
         Check("SetThumbarButtons adds buttons whose clicks reach their handlers", addedButtons && clicks.SequenceEqual(["stop", "play"]), $"{addedButtons} {string.Join(",", clicks)}");
+        // A hook sees WM_COMMAND first; its exception must not keep Oriel's own handling from the click.
+        clicks.Clear();
+        w.HookWindowMessage(0x0111 /* WM_COMMAND */, (_, _) => throw new InvalidOperationException("command hook threw"));
+        Console.SetError(TextWriter.Null);
+        WindowsShell.ClickThumbButton(hwnd, 40001);
+        Console.SetError(stderr);
+        w.UnhookAllWindowMessages();
+        Check("a throwing WM_COMMAND hook does not stop the thumbar click", clicks.SequenceEqual(["play"]), string.Join(",", clicks));
         clicks.Clear();
         var updated = w.SetThumbarButtons([new ThumbarButton { Icon = redIcon, Click = () => clicks.Add("next") }]);
-        WindowsShell.ClickThumbButton(hwnd, 0);
-        WindowsShell.ClickThumbButton(hwnd, 1);
+        WindowsShell.ClickThumbButton(hwnd, 40001);
+        WindowsShell.ClickThumbButton(hwnd, 40002);
         Check("a second SetThumbarButtons updates them; a removed button's handler is gone", updated && clicks.SequenceEqual(["next"]), $"{updated} {string.Join(",", clicks)}");
         Check("SetThumbarButtons refuses more than seven", !w.SetThumbarButtons([.. Enumerable.Range(0, 8).Select(_ => new ThumbarButton { Icon = green })]));
+        // Electron's ids are 40001 + slot; THBN_CLICKED for another id is not a thumbar click.
+        clicks.Clear();
+        WindowsShell.ClickThumbButton(hwnd, 0);
+        WindowsShell.ClickThumbButton(hwnd, 40000);
+        Check("thumbar clicks route by Electron's ids (40001 + slot) only", clicks.Count == 0, string.Join(",", clicks));
+        // Electron replaces the callbacks before a bad flag stops the call: earlier buttons take their new handlers.
+        var badFlag = w.SetThumbarButtons([
+            new ThumbarButton { Icon = green, Click = () => clicks.Add("new") },
+            new ThumbarButton { Icon = green, Flags = (ThumbarButtonFlags)32, Click = () => clicks.Add("bad") },
+        ]);
+        WindowsShell.ClickThumbButton(hwnd, 40001);
+        WindowsShell.ClickThumbButton(hwnd, 40002);
+        Check("SetThumbarButtons with an unknown flag fails after replacing the earlier handlers", !badFlag && clicks.SequenceEqual(["new"]), $"{badFlag} {string.Join(",", clicks)}");
         clicks.Clear();
         var cleared = w.SetThumbarButtons([]);
-        WindowsShell.ClickThumbButton(hwnd, 0);
+        WindowsShell.ClickThumbButton(hwnd, 40001);
         Check("SetThumbarButtons([]) removes them", cleared && clicks.Count == 0, $"{cleared} {string.Join(",", clicks)}");
         w.Destroy();
         await Task.Delay(300);
     }
     Directory.Delete(dir, recursive: true);
 }
+// Windows PowerShell 5.1 reads Oriel's work back through .NET Framework and WinRT; stdout is base64 UTF-8.
+static string PowerShell(string script)
+{
+    var psi = new System.Diagnostics.ProcessStartInfo("powershell.exe", "-NoProfile -NonInteractive -EncodedCommand "
+        + Convert.ToBase64String(System.Text.Encoding.Unicode.GetBytes("$ErrorActionPreference='Stop'; $r = & { " + script + " }; [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes([string]$r))")))
+    { RedirectStandardOutput = true, RedirectStandardError = true, UseShellExecute = false, CreateNoWindow = true };
+    using var p = System.Diagnostics.Process.Start(psi)!;
+    var output = p.StandardOutput.ReadToEndAsync();
+    var error = p.StandardError.ReadToEndAsync();
+    if (!p.WaitForExit(30000)) { p.Kill(); return "timeout"; }
+    try { return System.Text.Encoding.UTF8.GetString(Convert.FromBase64String(output.Result.Trim())); }
+    catch (FormatException) { return "error: " + error.Result.Trim(); }
+}
+
+// Read back independently: Windows PowerShell unwraps os_crypt's key from CEF's Local State file with ProtectedData,
+// and .NET's own AesGcm opens and seals the "v10" format.
+async Task SafeStorageAsync()
+{
+    const string secret = "Oriel secret ✓ 日本";
+    const string unwrap = "Add-Type -AssemblyName System.Security; $k = [Convert]::FromBase64String((Get-Content -Raw -Encoding UTF8 -LiteralPath '{0}' | ConvertFrom-Json).os_crypt.encrypted_key); if ([Text.Encoding]::ASCII.GetString($k, 0, 5) -ne 'DPAPI') {{ 'no DPAPI header' }} else {{ [Convert]::ToBase64String([Security.Cryptography.ProtectedData]::Unprotect([byte[]]$k[5..($k.Length - 1)], $null, 'CurrentUser')) }}";
+    var localState = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "Oriel.WindowTest", "Local State");
+    static byte[]? FromBase64(string s) { try { return Convert.FromBase64String(s); } catch (FormatException) { return null; } }
+    static byte[] Seal(byte[] key, string text)
+    {
+        var plain = System.Text.Encoding.UTF8.GetBytes(text);
+        var nonce = System.Security.Cryptography.RandomNumberGenerator.GetBytes(12);
+        var sealedText = new byte[plain.Length];
+        var tag = new byte[16];
+        using (var aes = new System.Security.Cryptography.AesGcm(key, 16)) aes.Encrypt(nonce, plain, sealedText, tag);
+        return [.. "v10"u8, .. nonce, .. sealedText, .. tag];
+    }
+    static string Open(byte[] key, byte[] data)
+    {
+        if (data.Length < 31 || data[0] != 'v' || data[1] != '1' || data[2] != '0') return "not v10";
+        var plain = new byte[data.Length - 31];
+        try
+        {
+            using var aes = new System.Security.Cryptography.AesGcm(key, 16);
+            aes.Decrypt(data.AsSpan(3, 12), data.AsSpan(15, plain.Length), data.AsSpan(data.Length - 16), plain);
+        }
+        catch (System.Security.Cryptography.CryptographicException e) { return e.GetType().Name; }
+        return System.Text.Encoding.UTF8.GetString(plain);
+    }
+
+    // CEF creates the key at startup; read it before Oriel touches it, so a key Oriel replaced shows up below however
+    // late CEF writes the file.
+    var unwrapped = "";
+    byte[]? key = null;
+    Check("Local State holds os_crypt's DPAPI-wrapped 32-byte key (os_crypt.encrypted_key)",
+        Eventually(() => (key = FromBase64(unwrapped = PowerShell(string.Format(unwrap, localState)))) is { Length: 32 }, step), unwrapped);
+    key ??= new byte[32];
+    Check("SafeStorage.IsEncryptionAvailable", SafeStorage.IsEncryptionAvailable());
+
+    byte[] encrypted;
+    try { encrypted = SafeStorage.EncryptString(secret); }
+    catch (InvalidOperationException) { encrypted = []; }
+    var opened = Open(key, encrypted);
+    Check("EncryptString is os_crypt's v10 + nonce + AES-256-GCM under the Local State key", opened == secret && encrypted.Length == 31 + System.Text.Encoding.UTF8.GetByteCount(secret), opened);
+    string decrypted;
+    try { decrypted = SafeStorage.DecryptString(Seal(key, "from AesGcm ✓")); }
+    catch (Exception e) { decrypted = e.GetType().Name + ": " + e.Message; }
+    Check("DecryptString opens v10 data sealed with the Local State key", decrypted == "from AesGcm ✓", decrypted);
+
+    var raw = FromBase64(PowerShell("Add-Type -AssemblyName System.Security; [Convert]::ToBase64String([Security.Cryptography.ProtectedData]::Protect([Text.Encoding]::UTF8.GetBytes('x'), $null, 'CurrentUser'))")) ?? [1];
+    var refusal = "";
+    try { SafeStorage.DecryptString(raw); }
+    catch (InvalidOperationException e) { refusal = e.Message; }
+    Check("DecryptString refuses raw DPAPI data as Electron does", refusal == "Error while decrypting the ciphertext provided to safeStorage.decryptString. Ciphertext does not appear to be encrypted.", refusal);
+
+    string asyncOpened;
+    SafeStorageDecryptResult? asyncResult = null;
+    try
+    {
+        asyncOpened = Open(key, await SafeStorage.EncryptStringAsync("async ✓"));
+        asyncResult = await SafeStorage.DecryptStringAsync(Seal(key, "sealed ✓"));
+    }
+    catch (InvalidOperationException e) { asyncOpened = e.Message; }
+    Check("EncryptStringAsync and DecryptStringAsync use the same key and format", asyncOpened == "async ✓" && asyncResult == new SafeStorageDecryptResult(false, "sealed ✓"), $"{asyncOpened} | {asyncResult}");
+}
+
+#pragma warning disable CA1416 // Called only on Windows.
+// Toasts need the AppUserModelID registered; an AppUserModelId key with a DisplayName does what a Start-menu shortcut
+// does. Shown toasts are read back from the Action Center history through Windows PowerShell's WinRT projection, the
+// activator's shortcut through the shell's property system, and its registration from the registry.
+async Task NotificationAsync()
+{
+    var product = System.Diagnostics.FileVersionInfo.GetVersionInfo(Environment.ProcessPath!).ProductName ?? "";
+    var atStartup = WindowsShell.ProcessAppUserModelId();
+    var defaultId = app.AppUserModelId;
+    var afterUse = WindowsShell.ProcessAppUserModelId();
+    Check("the AppUserModelID is unset at startup; first use sets electron.app.{product name}",
+        atStartup is null && defaultId == "electron.app." + product && afterUse == defaultId, $"{atStartup} | {defaultId} | {afterUse}");
+
+    var id = "Oriel.WindowTest.Toast." + Environment.ProcessId;
+    var key = @"Software\Classes\AppUserModelId\" + id;
+    var lnk = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.Programs), product + ".lnk");
+    using (var k = Microsoft.Win32.Registry.CurrentUser.CreateSubKey(key)) k.SetValue("DisplayName", "Oriel WindowTest");
+    const string history = "$null = [Windows.UI.Notifications.ToastNotificationManager,Windows.UI.Notifications,ContentType=WindowsRuntime]; ([Windows.UI.Notifications.ToastNotificationManager]::History.GetHistory('{0}') | ForEach-Object {{ $_.Tag + '/' + $_.Group + ' ' + $_.Content.GetXml() }}) -join '|'";
+    const string shortcut = "$f = (New-Object -ComObject Shell.Application).NameSpace('{0}').ParseName('{1}'); $l = (New-Object -ComObject WScript.Shell).CreateShortcut('{2}'); if ($f) {{ $l.TargetPath + '|' + $l.Arguments + '|' + $l.Description + '|' + $l.WorkingDirectory + '|' + $f.ExtendedProperty('System.AppUserModel.ID') + '|' + $f.ExtendedProperty('System.AppUserModel.ToastActivatorCLSID') }} else {{ 'missing' }}";
+    var clsid = "";
+    try
+    {
+        app.SetAppUserModelId(id);
+        Check("SetAppUserModelId sets the process's explicit AppUserModelID", WindowsShell.ProcessAppUserModelId() == id && app.AppUserModelId == id, WindowsShell.ProcessAppUserModelId());
+        Check("Notification.IsSupported", Notification.IsSupported());
+
+        var props = "";
+        Check("the first notification writes Electron's Start-menu shortcut: the exe, its product name, the AppUserModelID and activator CLSID",
+            Eventually(() => (props = PowerShell(string.Format(shortcut, Path.GetDirectoryName(lnk), Path.GetFileName(lnk), lnk)))
+                == $"{Environment.ProcessPath}||{product}|{Path.GetDirectoryName(Environment.ProcessPath)}|{id}|{clsid = app.ToastActivatorClsid!}", step), props);
+        string? server = null, name = null;
+        object? custom = null;
+        Check("... and registers that CLSID's LocalServer32 under HKCU",
+            Eventually(() =>
+            {
+                using var c = Microsoft.Win32.Registry.CurrentUser.OpenSubKey(@"Software\Classes\CLSID\" + clsid);
+                using var s = c?.OpenSubKey("LocalServer32");
+                (name, custom, server) = (c?.GetValue(null) as string, c?.GetValue("CustomActivator"), s?.GetValue(null) as string);
+                return name == "Electron Notification Activator" && custom is 1 && server == Environment.ProcessPath;
+            }, step), $"{name} | {custom} | {server}");
+
+        var tag = "oriel-toast-" + Guid.NewGuid().ToString("N")[..8];
+        var events = new System.Collections.Concurrent.ConcurrentQueue<string>();
+        ActivationArguments? activation = null;
+        Notification.HandleActivation(a => activation = a);
+        var n = Oriel.Cef.CefThread.InvokeOnUi(() => new Notification
+        {
+            Id = tag, Title = "Oriel toast", Body = "Body text", Silent = true, TimeoutType = "never", Icon = OverlayPng(),
+            HasReply = true, ReplyPlaceholder = "Say", Actions = [new() { Text = "Open" }, new() { Type = "selection", Text = "Pick", Items = ["a", "b", "c"] }],
+        });
+        n.Shown += (_, _) => events.Enqueue("shown");
+        n.Closed += (_, r) => events.Enqueue("closed " + r);
+        n.Failed += (_, e) => events.Enqueue("failed " + e);
+        n.Action += (_, e) => events.Enqueue($"action {e.ActionIndex} {e.SelectionIndex}");
+        n.Reply += (_, r) => events.Enqueue("reply " + r);
+        var shownDuringShow = Oriel.Cef.CefThread.InvokeOnUi(() => { n.Show(); return events.Contains("shown"); });
+        Check("Show raises Shown after it returns, posted as Electron posts it", !shownDuringShow && Eventually(() => events.Contains("shown"), step), $"{shownDuringShow} {string.Join(",", events)}");
+        var shown = "";
+        Check("the toast reaches the Action Center tagged with its Id in group Notifications, with Electron's reminder, reply and action XML",
+            Eventually(() => (shown = PowerShell(string.Format(history, id))).Contains($"{tag}/Notifications <toast scenario=\"reminder\">")
+                && shown.Contains("<text>Oriel toast</text><text>Body text</text>")
+                && shown.Contains("<actions><action activationType=\"system\" arguments=\"dismiss\" content=\"Close\"/><input id=\"reply\" type=\"text\" placeHolderContent=\"Say\"/>")
+                && shown.Contains($"<action activationType=\"foreground\" arguments=\"type=action&amp;action=0&amp;tag={tag}\" content=\"Open\"/>")
+                && shown.Contains($"<action activationType=\"foreground\" arguments=\"type=action&amp;action=1&amp;tag={tag}\" content=\"Pick\" hint-inputId=\"selection1\"/>")
+                && shown.Contains($"<action activationType=\"foreground\" arguments=\"type=reply&amp;tag={tag}\" content=\"Reply\" hint-inputId=\"reply\"/></actions>"), step), shown);
+        var icon = System.Text.RegularExpressions.Regex.Match(shown, "<image id=\"1\" placement=\"appLogoOverride\" hint-crop=\"none\" src=\"([^\"]+)\"/>").Groups[1].Value;
+        Check("the icon is a PNG copy in a scoped_dir temporary directory, by plain path",
+            icon.StartsWith(Path.GetTempPath(), StringComparison.OrdinalIgnoreCase) && Path.GetFileName(Path.GetDirectoryName(icon))!.StartsWith("scoped_dir", StringComparison.Ordinal) && File.Exists(icon) && File.ReadAllBytes(icon).AsSpan().StartsWith((byte[])[0x89, (byte)'P', (byte)'N', (byte)'G']), icon);
+
+        Check("the activator's class object is registered", Eventually(() => WindowsToastActivator.IsRegistered, step));
+        var hr = WindowsShell.ActivateToast(Guid.Parse(clsid), id, $"type=action&action=1&tag={tag}", ("selection1", "2"));
+        Check("Windows' activation of the CLSID (local server) with a selection raises Action (1, 2)",
+            hr == 0 && Eventually(() => events.Contains("action 1 2"), step), $"0x{hr:X8} {string.Join(",", events)}");
+        hr = WindowsShell.ActivateToast(Guid.Parse(clsid), id, $"type=reply&tag={tag}", ("reply", "typed ✓"));
+        Check("an activation with a reply raises Reply with its text", hr == 0 && Eventually(() => events.Contains("reply typed ✓"), step), $"0x{hr:X8} {string.Join(",", events)}");
+        Check("HandleActivation hears every activation with its details",
+            activation is { Type: "reply", Reply: "typed ✓" } && activation.UserInputs?.GetValueOrDefault("reply") == "typed ✓", activation?.ToString());
+
+        Oriel.Cef.CefThread.InvokeOnUi(() => { n.Close(); return 0; });
+        Check("Close removes it from the Action Center", Eventually(() => !(shown = PowerShell(string.Format(history, id))).Contains(tag), step), shown);
+        await Task.Delay(1000);
+        Check("Close raises no Closed, as Electron's close() on Windows", !events.Any(e => e.StartsWith("closed", StringComparison.Ordinal)) && !n.IsShown, string.Join(",", events));
+
+        var bad = new Notification { ToastXml = "<toast><visual>" };
+        var failed = "";
+        bad.Failed += (_, e) => failed = e;
+        var failedDuringShow = Oriel.Cef.CefThread.InvokeOnUi(() => { bad.Show(); return failed; });
+        Check("malformed ToastXml raises Failed with Electron's text after Show returns, and is not shown",
+            failedDuringShow.Length == 0 && Eventually(() => failed.StartsWith("XML: Invalid XML, ERROR  (HRESULT: ", StringComparison.Ordinal), step) && !bad.IsShown, $"[{failedDuringShow}] {failed}");
+
+        var custom2 = new Notification { ToastXml = $"<toast><visual><binding template=\"ToastGeneric\"><text>{tag} custom</text></binding></visual><audio silent=\"true\"/></toast>" };
+        Oriel.Cef.CefThread.InvokeOnUi(() => { custom2.Show(); return 0; });
+        Check("ToastXml is shown as given", Eventually(() => (shown = PowerShell(string.Format(history, id))).Contains(tag + " custom"), step), shown);
+        Oriel.Cef.CefThread.InvokeOnUi(() => { custom2.Close(); return 0; });
+
+        var imaged = Oriel.Cef.CefThread.InvokeOnUi(() => new Notification { Id = tag + "-img", Title = "Oriel image", Silent = true, IconImage = NativeImage.CreateFromPath(OverlayPng()) });
+        Oriel.Cef.CefThread.InvokeOnUi(() => { imaged.Show(); return 0; });
+        var imageSrc = "";
+        Check("an IconImage (NativeImage) is shown as a PNG copy in the scoped_dir temporary directory",
+            Eventually(() =>
+            {
+                shown = PowerShell(string.Format(history, id));
+                imageSrc = System.Text.RegularExpressions.Regex.Match(shown, $"{tag}-img/Notifications <toast>.*?<image id=\"1\" placement=\"appLogoOverride\" hint-crop=\"none\" src=\"([^\"]+)\"/>").Groups[1].Value;
+                return imageSrc.Length > 0;
+            }, step)
+            && Path.GetFileName(Path.GetDirectoryName(imageSrc))!.StartsWith("scoped_dir", StringComparison.Ordinal) && File.Exists(imageSrc)
+            && File.ReadAllBytes(imageSrc).AsSpan().StartsWith((byte[])[0x89, (byte)'P', (byte)'N', (byte)'G']), imageSrc.Length > 0 ? imageSrc : shown);
+        Oriel.Cef.CefThread.InvokeOnUi(() => { imaged.Close(); return 0; });
+        await Task.Delay(500);
+    }
+    finally
+    {
+        PowerShell($"$null = [Windows.UI.Notifications.ToastNotificationManager,Windows.UI.Notifications,ContentType=WindowsRuntime]; [Windows.UI.Notifications.ToastNotificationManager]::History.Clear('{id}')");
+        Microsoft.Win32.Registry.CurrentUser.DeleteSubKeyTree(key, throwOnMissingSubKey: false);
+        File.Delete(lnk);
+        if (app.ToastActivatorClsid is { } registered) Microsoft.Win32.Registry.CurrentUser.DeleteSubKeyTree(@"Software\Classes\CLSID\" + registered, throwOnMissingSubKey: false);
+    }
+}
+#pragma warning restore CA1416
+
+#pragma warning disable CA1416 // Called only on Windows.
+// app's Windows integration, read back from a separate PowerShell process and the registry.
+async Task AppWindowsAsync()
+{
+    static int Opaque(byte[] bgra) { var n = 0; for (var i = 3; i < bgra.Length; i += 4) if (bgra[i] > 128) n++; return n; }
+    static string Measure(NativeImage image) { var b = image.ToBitmap(); return $"{(int)Math.Sqrt(b.Length / 4)} {Opaque(b)}"; }
+    static bool Close(string mine, string reference) => mine.Split(' ') is [var w, var n] && reference.Split(' ') is [var rw, var rn]
+        && w == rw && int.TryParse(n, out var a) && int.TryParse(rn, out var b) && b > 0 && Math.Abs(a - b) <= b / 10;
+    // SHGetFileInfo by type and PrivateExtractIcons from the file, measured as "<width> <opaque pixels>".
+    string ShellIcon(string call) => PowerShell(
+        "Add-Type -ReferencedAssemblies System.Drawing -TypeDefinition 'using System;using System.Runtime.InteropServices;using System.Drawing;"
+        + "public static class OI{[DllImport(\"user32.dll\")]public static extern IntPtr SetThreadDpiAwarenessContext(IntPtr c);"
+        + "[StructLayout(LayoutKind.Sequential,CharSet=CharSet.Unicode)]public struct FI{public IntPtr h;public int i;public uint a;[MarshalAs(UnmanagedType.ByValTStr,SizeConst=260)]public string d;[MarshalAs(UnmanagedType.ByValTStr,SizeConst=80)]public string t;}"
+        + "[DllImport(\"shell32.dll\",CharSet=CharSet.Unicode)]public static extern IntPtr SHGetFileInfo(string p,uint a,ref FI f,uint s,uint fl);"
+        + "[DllImport(\"user32.dll\",CharSet=CharSet.Unicode)]public static extern uint PrivateExtractIcons(string f,int i,int cx,int cy,IntPtr[] h,uint[] id,uint n,uint fl);"
+        + "static string Count(IntPtr h){var b=Icon.FromHandle(h).ToBitmap();int n=0;for(int y=0;y<b.Height;y++)for(int x=0;x<b.Width;x++)if(b.GetPixel(x,y).A>128)n++;return b.Width+\" \"+n;}"
+        + "public static string Type(string e,bool small){SetThreadDpiAwarenessContext(new IntPtr(-4));var f=new FI();SHGetFileInfo(e,0x80,ref f,(uint)Marshal.SizeOf(f),0x110|(small?1u:0u));return Count(f.h);}"
+        + "public static string File(string p,int s){var h=new IntPtr[1];var id=new uint[1];PrivateExtractIcons(p,0,s,s,h,id,1,0);return Count(h[0]);}}'; " + call);
+    var notepad = Path.Combine(Environment.SystemDirectory, "notepad.exe");
+    var text = await app.GetFileIcon(Path.Combine(Path.GetTempPath(), Guid.NewGuid() + ".txt"));
+    var small = await app.GetFileIcon("x.txt", new FileIconOptions { Size = FileIconSize.Small });
+    var large = await app.GetFileIcon("x.txt", new FileIconOptions { Size = FileIconSize.Large });
+    Check("GetFileIcon sizes: normal and large 32, small 16 (a missing .txt still has its type's icon)",
+        text.GetSize() == (32, 32) && large.GetSize() == (32, 32) && small.GetSize() == (16, 16), $"{text.GetSize()} {large.GetSize()} {small.GetSize()}");
+    var shellText = ShellIcon("[OI]::Type('.txt', $false)");
+    Check("GetFileIcon of a type matches SHGetFileInfo's icon for it", Close(Measure(text), shellText), $"{Measure(text)} vs {shellText}");
+    var exe = await app.GetFileIcon(notepad);
+    var reference = PowerShell($"Add-Type -AssemblyName System.Drawing; $b = [System.Drawing.Icon]::ExtractAssociatedIcon('{notepad}').ToBitmap(); $n = 0; for ($y = 0; $y -lt $b.Height; $y++) {{ for ($x = 0; $x -lt $b.Width; $x++) {{ if ($b.GetPixel($x, $y).A -gt 128) {{ $n++ }} }} }}; \"$($b.Width) $n\"");
+    Check("GetFileIcon of an .exe is its own icon (System.Drawing's ExtractAssociatedIcon agrees), not the text icon",
+        Close(Measure(exe), reference) && !exe.ToBitmap().SequenceEqual(text.ToBitmap()), $"{Measure(exe)} vs {reference}");
+    var exeLarge = await app.GetFileIcon(notepad, new FileIconOptions { Size = FileIconSize.Large });
+    var reference48 = ShellIcon($"[OI]::File('{notepad}', 48)");
+    Check("GetFileIcon(large) of an .exe is its 48 px icon at scale 1 (PrivateExtractIcons agrees)",
+        exeLarge.GetSize() == (48, 48) && exeLarge.GetScaleFactors() is [1.0] && Close(Measure(exeLarge), reference48), $"{Measure(exeLarge)} {exeLarge.GetSize()} vs {reference48}");
+    var missingExe = await app.GetFileIcon(Path.Combine(Path.GetTempPath(), Guid.NewGuid() + ".exe"));
+    var shellExe = ShellIcon("[OI]::Type('.exe', $false)");
+    Check("GetFileIcon of a missing .exe resolves with the .exe type icon (SHGetFileInfo agrees)",
+        Close(Measure(missingExe), shellExe) && !missingExe.ToBitmap().SequenceEqual(exe.ToBitmap()), $"{Measure(missingExe)} vs {shellExe}");
+    var bare = await app.GetFileIcon(Path.Combine(Path.GetTempPath(), "oriel-no-extension"));
+    var shellBare = ShellIcon("[OI]::Type('', $false)");
+    Check("GetFileIcon of a file without an extension is the empty type's icon (SHGetFileInfo agrees)", Close(Measure(bare), shellBare), $"{Measure(bare)} vs {shellBare}");
+
+    // The shell persists jump lists as CustomDestinations\*.customDestinations-ms, titles in UTF-16.
+    var destinations = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), @"Microsoft\Windows\Recent\CustomDestinations");
+    bool Listed(string title) => Directory.Exists(destinations) && Directory.GetFiles(destinations, "*.customDestinations-ms")
+        .Any(f => { try { return System.Text.Encoding.Unicode.GetString(File.ReadAllBytes(f)).Contains(title) || System.Text.Encoding.Unicode.GetString(File.ReadAllBytes(f)[1..]).Contains(title); } catch (IOException) { return false; } });
+    bool trackDocs;
+    using (var adv = Microsoft.Win32.Registry.CurrentUser.OpenSubKey(@"Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced"))
+        trackDocs = adv?.GetValue("Start_TrackDocs") is not 0;
+    var tag = "OrielWT" + Guid.NewGuid().ToString("N")[..8];
+    // NotificationAsync may already have given the process an explicit id; jump lists keep it, as Electron's.
+    var expectedAppId = WindowsJumpList.ExplicitAppUserModelId() ?? "electron.app." + System.Diagnostics.FileVersionInfo.GetVersionInfo(Environment.ProcessPath!).ProductName;
+    try
+    {
+        var tasksSet = app.SetUserTasks([
+            new UserTask { Program = notepad, Title = tag + " one", Description = "first" },
+            new UserTask { Program = notepad, Arguments = "x.txt", Title = tag + " two" }]);
+        Check("SetUserTasks puts both tasks in the shell's jump list file", tasksSet && Listed(tag + " one") && Listed(tag + " two"), tasksSet);
+        var processAppId = WindowsJumpList.ExplicitAppUserModelId();
+        Check("jump lists set the process AppUserModelID to electron.app.<ProductName> when it has none, else keep it", processAppId == expectedAppId, processAppId);
+        var result = app.SetJumpList([
+            new JumpListCategory { Type = JumpListCategoryType.Tasks, Items = [new JumpListItem { Type = JumpListItemType.Task, Program = notepad, Title = tag + " task" }, new JumpListItem { Type = JumpListItemType.Separator }] },
+            new JumpListCategory { Type = JumpListCategoryType.Recent },
+            new JumpListCategory { Type = JumpListCategoryType.Custom, Name = tag + " custom", Items = [new JumpListItem { Type = JumpListItemType.Task, Program = notepad, Title = tag + " in custom" }] }]);
+        // With "Show recently opened items" off, the shell refuses every custom category.
+        var expected = trackDocs ? "ok" : "customCategoryAccessDeniedError";
+        Check($"SetJumpList commits the tasks and reports the custom category as Windows decides ({expected})",
+            result == expected && Listed(tag + " task") && !Listed(tag + " one"), result);
+        Check("SetJumpList rejects a separator in a custom category", app.SetJumpList([new JumpListCategory { Type = JumpListCategoryType.Custom, Name = tag, Items = [new JumpListItem { Type = JumpListItemType.Separator }] }]) == "invalidSeparatorError");
+        var settings = app.GetJumpListSettings();
+        Check("GetJumpListSettings reports the shell's minimum slot count", settings.MinItems > 0, settings.MinItems);
+        app.SetUserTasks([new UserTask { Program = notepad, Title = tag + " again" }]);
+        var emptied = app.SetJumpList([]);
+        Check("SetJumpList([]) commits an empty list, which replaces the tasks", emptied == "ok" && !Listed(tag + " again"), emptied);
+        app.SetUserTasks([new UserTask { Program = notepad, Title = tag + " last" }]);
+        Check("SetJumpList(null) deletes the list", app.SetJumpList(null) == "ok" && !Listed(tag + " last"));
+    }
+    finally { app.SetJumpList(null); }
+
+    // The shell only records recent documents when the user allows it. ClearRecentDocuments is not called: like
+    // Electron's, it empties the user's whole Recent list.
+    var recentFile = Path.Combine(Path.GetTempPath(), tag + ".txt");
+    File.WriteAllText(recentFile, "recent");
+    var recentFolder = Environment.GetFolderPath(Environment.SpecialFolder.Recent);
+    var recentLink = Path.Combine(recentFolder, tag + ".txt.lnk");
+    var ownLink = Path.Combine(recentFolder, tag + "-own.lnk");
+    try
+    {
+        app.AddRecentDocument(recentFile);
+        if (trackDocs) Check("AddRecentDocument adds a Recent shortcut", Eventually(() => File.Exists(recentLink), step), recentLink);
+        else Console.WriteLine($"SKIP  AddRecentDocument read-back: Start_TrackDocs is off, so the shell records nothing  [{File.Exists(recentLink)}]");
+        var made = PowerShell($"$s = (New-Object -ComObject WScript.Shell).CreateShortcut('{ownLink}'); $s.TargetPath = '{recentFile}'; $s.Save(); 'ok'");
+        var documents = app.GetRecentDocuments();
+        Check("GetRecentDocuments lists the target of a shortcut WScript.Shell put in the Recent folder",
+            made == "ok" && documents.Count(d => string.Equals(d, recentFile, StringComparison.OrdinalIgnoreCase)) == (File.Exists(recentLink) ? 2 : 1), $"{made} {documents.Count}");
+    }
+    finally
+    {
+        File.Delete(recentFile);
+        if (File.Exists(recentLink)) File.Delete(recentLink);
+        if (File.Exists(ownLink)) File.Delete(ownLink);
+    }
+    // The protocol and login-item keys are read back through the registry directly and Windows' merged HKCR view.
+    var exePath = Environment.ProcessPath!;
+    var scheme = "oriel-wt-" + Environment.ProcessId;
+    var classKey = @"Software\Classes\" + scheme;
+    var runName = "OrielWindowTest" + Environment.ProcessId;
+    const string runKey = @"Software\Microsoft\Windows\CurrentVersion\Run";
+    const string approvedKey = @"Software\Microsoft\Windows\CurrentVersion\Explorer\StartupApproved\Run";
+    bool appIdTaken;
+    using (var probe = Microsoft.Win32.Registry.CurrentUser.OpenSubKey(runKey))
+        appIdTaken = probe?.GetValue(expectedAppId) is not null;
+    try
+    {
+        var invalid = app.SetAsDefaultProtocolClient("oriel_wt");
+        using (var k = Microsoft.Win32.Registry.CurrentUser.OpenSubKey(@"Software\Classes\oriel_wt"))
+            Check("SetAsDefaultProtocolClient rejects a scheme RFC 3986 does not allow, writing nothing", !invalid && k is null, invalid);
+        Check("RemoveAsDefaultProtocolClient is true when nothing is registered", app.RemoveAsDefaultProtocolClient(scheme));
+        var set = app.SetAsDefaultProtocolClient(scheme);
+        using (var k = Microsoft.Win32.Registry.CurrentUser.OpenSubKey(classKey + @"\shell\open\command"))
+            Check("SetAsDefaultProtocolClient writes the class's open command", set && k?.GetValue(null) as string == $"\"{exePath}\" \"%1\"", k?.GetValue(null));
+        var merged = PowerShell($"if ((Get-ItemProperty 'Registry::HKEY_CLASSES_ROOT\\{scheme}').'URL Protocol' -eq '') {{ (Get-ItemProperty 'Registry::HKEY_CLASSES_ROOT\\{scheme}\\shell\\open\\command').'(default)' }} else {{ 'not a URL protocol' }}");
+        Check("Windows sees it as a URL protocol (HKCR)", merged == $"\"{exePath}\" \"%1\"", merged);
+        Check("IsDefaultProtocolClient: true for this exe, false with other arguments or other casing",
+            app.IsDefaultProtocolClient(scheme) && !app.IsDefaultProtocolClient(scheme, args: ["--other"]) && !app.IsDefaultProtocolClient(scheme, exePath.ToUpperInvariant()));
+        var friendly = app.GetApplicationNameForProtocol(scheme + "://x");
+        Check("GetApplicationNameForProtocol names the handler", friendly.Length > 0 && friendly == (System.Diagnostics.FileVersionInfo.GetVersionInfo(exePath).FileDescription ?? Path.GetFileNameWithoutExtension(exePath)), friendly);
+        var info = await app.GetApplicationInfoForProtocol(scheme + "://x");
+        // An exe without an icon resource falls back to the .exe type icon, as Chromium's IconLoader does.
+        var embedded = ShellIcon($"[OI]::File('{exePath}', 48)");
+        var appIcon = embedded.Length > 0 ? embedded : ShellIcon("[OI]::Type('.exe', $false)");
+        Check("GetApplicationInfoForProtocol gives the handler's path, name and large icon (its own at 48 px, else the .exe type icon)",
+            string.Equals(info.Path, exePath, StringComparison.OrdinalIgnoreCase) && info.Name == friendly && info.Icon.GetSize() == (embedded.Length > 0 ? (48, 48) : (32, 32)) && Close(Measure(info.Icon), appIcon),
+            $"{info.Path} | {info.Name} | {Measure(info.Icon)} vs {appIcon}");
+        using (var k = Microsoft.Win32.Registry.CurrentUser.OpenSubKey(classKey, writable: true)) k!.DeleteValue("URL Protocol");
+        var progIdName = app.GetApplicationNameForProtocol(scheme + "://x");
+        var progIdInfo = "";
+        try { await app.GetApplicationInfoForProtocol(scheme + "://x"); progIdInfo = "resolved"; }
+        catch (InvalidOperationException e) { progIdInfo = e.Message; }
+        Check("without a URL Protocol value the class is not a protocol: no name, and the info rejects",
+            progIdName == "" && progIdInfo == "Unable to retrieve installation path to app", $"{progIdName} | {progIdInfo}");
+        using (var k = Microsoft.Win32.Registry.CurrentUser.OpenSubKey(classKey, writable: true)) k!.SetValue("URL Protocol", "");
+        var removed = app.RemoveAsDefaultProtocolClient(scheme);
+        using (var k = Microsoft.Win32.Registry.CurrentUser.OpenSubKey(classKey))
+            Check("RemoveAsDefaultProtocolClient deletes the class", removed && k is null && !app.IsDefaultProtocolClient(scheme), removed);
+
+        app.SetLoginItemSettings(new LoginItemSettings { OpenAtLogin = true, Name = runName, Args = ["--hidden", "x y"] });
+        using (var k = Microsoft.Win32.Registry.CurrentUser.OpenSubKey(runKey))
+        using (var a = Microsoft.Win32.Registry.CurrentUser.OpenSubKey(approvedKey))
+            Check("SetLoginItemSettings writes the Run value and no StartupApproved marker", k?.GetValue(runName) as string == $"\"{exePath}\" --hidden \"x y\"" && a?.GetValue(runName) is null, k?.GetValue(runName));
+        var status = app.GetLoginItemSettings(new LoginItemQuery { Args = ["--hidden", "x y"] });
+        Check("GetLoginItemSettings lists it enabled with its non-switch args, but openAtLogin reads only the AppUserModelID's value",
+            !status.OpenAtLogin && status.ExecutableWillLaunchAtLogin && status.LaunchItems.Any(i => i.Name == runName && i.Enabled && i.Scope == "user" && i.Args.SequenceEqual(["x y"])),
+            $"{status.OpenAtLogin} {status.ExecutableWillLaunchAtLogin} {string.Join(",", status.LaunchItems.Select(i => $"{i.Name}:{string.Join(' ', i.Args)}"))}");
+        app.SetLoginItemSettings(new LoginItemSettings { OpenAtLogin = true, Name = runName, Args = ["--hidden"], Enabled = false });
+        using (var k = Microsoft.Win32.Registry.CurrentUser.OpenSubKey(approvedKey))
+            Check("Enabled = false writes 03 and eleven zero bytes to StartupApproved, and the item is disabled",
+                k?.GetValue(runName) is byte[] marker && Convert.ToHexString(marker) == "030000000000000000000000"
+                && app.GetLoginItemSettings().LaunchItems.Any(i => i.Name == runName && !i.Enabled),
+                k?.GetValue(runName) is byte[] b ? Convert.ToHexString(b) : "none");
+        app.SetLoginItemSettings(new LoginItemSettings { OpenAtLogin = true, Name = runName, Args = ["--hidden"] });
+        using (var k = Microsoft.Win32.Registry.CurrentUser.OpenSubKey(approvedKey))
+            Check("Enabled = true deletes the StartupApproved marker", k?.GetValue(runName) is null && app.GetLoginItemSettings().LaunchItems.Any(i => i.Name == runName && i.Enabled));
+        // Disabled first, so turning it off must remove a marker that exists.
+        app.SetLoginItemSettings(new LoginItemSettings { OpenAtLogin = true, Name = runName, Args = ["--hidden"], Enabled = false });
+        app.SetLoginItemSettings(new LoginItemSettings { OpenAtLogin = false, Name = runName });
+        using (var run = Microsoft.Win32.Registry.CurrentUser.OpenSubKey(runKey))
+        using (var approved = Microsoft.Win32.Registry.CurrentUser.OpenSubKey(approvedKey))
+            Check("OpenAtLogin = false removes both values", run?.GetValue(runName) is null && approved?.GetValue(runName) is null && !app.GetLoginItemSettings().LaunchItems.Any(i => i.Name == runName));
+
+        if (appIdTaken)
+        {
+            Console.WriteLine($"SKIP  default login-item name: a Run value named {expectedAppId} already exists and is left alone");
+            return;
+        }
+        app.SetLoginItemSettings(new LoginItemSettings { OpenAtLogin = true, Args = ["--bg"] });
+        using (var k = Microsoft.Win32.Registry.CurrentUser.OpenSubKey(runKey))
+            Check("without a name the Run value is named by the AppUserModelID, and openAtLogin reads it",
+                k?.GetValue(expectedAppId) as string == $"\"{exePath}\" --bg" && app.GetLoginItemSettings(new LoginItemQuery { Args = ["--bg"] }).OpenAtLogin
+                && !app.GetLoginItemSettings(new LoginItemQuery { Args = ["--other"] }).OpenAtLogin, k?.GetValue(expectedAppId));
+        app.SetLoginItemSettings(new LoginItemSettings { OpenAtLogin = false });
+        using (var k = Microsoft.Win32.Registry.CurrentUser.OpenSubKey(runKey))
+            Check("OpenAtLogin = false without a name removes the AppUserModelID's value", k?.GetValue(expectedAppId) is null);
+    }
+    finally
+    {
+        Microsoft.Win32.Registry.CurrentUser.DeleteSubKeyTree(classKey, throwOnMissingSubKey: false);
+        Microsoft.Win32.Registry.CurrentUser.DeleteSubKeyTree(@"Software\Classes\oriel_wt", throwOnMissingSubKey: false);
+        using (var run = Microsoft.Win32.Registry.CurrentUser.OpenSubKey(runKey, writable: true))
+        {
+            run?.DeleteValue(runName, throwOnMissingValue: false);
+            if (!appIdTaken) run?.DeleteValue(expectedAppId, throwOnMissingValue: false);
+        }
+        using (var approved = Microsoft.Win32.Registry.CurrentUser.OpenSubKey(approvedKey, writable: true))
+        {
+            approved?.DeleteValue(runName, throwOnMissingValue: false);
+            if (!appIdTaken) approved?.DeleteValue(expectedAppId, throwOnMissingValue: false);
+        }
+    }}
 // A 16x16 red PNG, written once to a temp file.
 static string OverlayPng()
 {

@@ -5,9 +5,14 @@
     <Project Path="src/Oriel.Subprocess/Oriel.Subprocess.csproj" />
   </Folder>
   <Folder Name="/samples/">
+    <Project Path="samples/Oriel.CrashTest/Oriel.CrashTest.csproj" />
     <Project Path="samples/Oriel.IpcTest/Oriel.IpcTest.csproj" />
+    <Project Path="samples/Oriel.NetTest/Oriel.NetTest.csproj" />
     <Project Path="samples/Oriel.ProtocolTest/Oriel.ProtocolTest.csproj" />
     <Project Path="samples/Oriel.SessionTest/Oriel.SessionTest.csproj" />
+    <Project Path="samples/Oriel.UtilityTest/Oriel.UtilityTest.csproj" />
+    <Project Path="samples/Oriel.UtilityTest.Child/Oriel.UtilityTest.Child.csproj" />
+    <Project Path="samples/Oriel.SafeStorageTest/Oriel.SafeStorageTest.csproj" />
     <Project Path="samples/Oriel.Sample/Oriel.Sample.csproj" />
     <Project Path="samples/Oriel.ShellTest/Oriel.ShellTest.csproj" />
     <Project Path="samples/Oriel.WindowTest/Oriel.WindowTest.csproj" />

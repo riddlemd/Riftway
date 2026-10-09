@@ -49,11 +49,21 @@ Needs Git Bash (for `fetch-cef.sh`) and Visual Studio or Build Tools with the "D
 
 ```powershell
 bash eng/fetch-cef.sh windows64
-src/Oriel.Subprocess.Native/build.ps1 artifacts/subprocess/Oriel.Subprocess.exe
+src/Oriel.Host.Native/build.ps1 artifacts/host/Oriel.Host.dll
 dotnet publish samples/Oriel.Sample -r win-x64 -c Release --self-contained -o artifacts/sample
-eng/layout-windows.ps1 artifacts/sample artifacts/subprocess/Oriel.Subprocess.exe
-artifacts/sample/Oriel.Sample.exe
+eng/layout-windows.ps1 artifacts/sample artifacts/host/Oriel.Host.dll OrielSample
+artifacts/sample/OrielSample.exe
 ```
+
+Renderers run in Chromium's sandbox, as in Electron. Only CEF's `bootstrap.exe` can host the Windows sandbox broker, so the layout makes it the app: `bootstrap.exe` is renamed to the exe name you give (`OrielSample.exe`), `Oriel.Host.dll` sits beside it under the same name (`OrielSample.dll`), and the .NET apphost is removed, its version resources and icon copied onto the new exe. Every process starts as that exe. The host DLL runs CEF directly in renderer, GPU and utility processes, and starts .NET (hostfxr from the self-contained publish) and the app's `Main` in the browser process only. So:
+
+- the exe name must differ from the app's assembly name, whose `.dll` stays beside it;
+- publish self-contained (no framework-dependent or single-file publish);
+- sign the exe and `<Exe>.dll` with the same certificate, or neither;
+- a crash on start writes its reason to stderr, or shows it in a message box when there is none;
+- `--no-sandbox` turns the sandbox off; there is no per-window `sandbox: false` (docs/DRIFT.md W13).
+
+`dotnet run`, and `eng/layout-windows.ps1 <publish-dir> -Subprocess <Oriel.Subprocess.exe>` (built by `src/Oriel.Subprocess.Native/build.ps1`), keep the unsandboxed apphost layout: the app's own `.exe`, with `Oriel.Subprocess.exe` for the children.
 
 ## Known issues
 
@@ -69,10 +79,11 @@ The workaround goes once Chromium fixes libyuv upstream: it should require SVE f
 
 - `src/Oriel` - public API: Electron's modules in C# (`OrielApp`, `BrowserWindow`, ...)
 - `src/Oriel.Cef` - CEF C API bindings (`Interop/` is generated) and the native plumbing under them
-- `src/Oriel.Subprocess.Native` - the exe Chromium runs for its zygote/renderer/GPU/utility processes on Linux and Windows (a small C program: the zygote must be single-threaded, which no .NET process is)
+- `src/Oriel.Host.Native` - Windows: the DLL that CEF's `bootstrap.exe`, renamed to the app's exe, loads in every process; it runs the children and starts .NET in the browser process (C, reusing the subprocess code)
+- `src/Oriel.Subprocess.Native` - the exe Chromium runs for its zygote/renderer/GPU/utility processes on Linux, and on Windows in the unsandboxed apphost layout (a small C program: the zygote must be single-threaded, which no .NET process is)
 - `src/Oriel.Subprocess` - the same exe for macOS, in NativeAOT C# (until the macOS sandbox moves it to the native one)
 - `tools/cef-interop` - regenerates `Oriel.Cef/Interop` from the pinned CEF headers (ClangSharp)
-- `eng/` - `cef.json` pins the CEF release; `fetch-cef.sh` downloads it; `bundle-macos.sh` assembles a .app
+- `eng/` - `cef.json` pins the CEF release; `fetch-cef.sh` downloads it; `bundle-macos.sh` assembles a .app; `layout-windows.ps1` lays out a Windows app
 - `samples/` - sample apps
 - `tests/` - unit tests
 

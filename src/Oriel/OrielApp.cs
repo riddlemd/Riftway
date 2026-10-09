@@ -73,8 +73,12 @@ public sealed unsafe partial class OrielApp
     /// <summary>The application's name; also names its data directory.</summary>
     public string Name { get; }
 
-    /// <summary>Whether Chromium's sandbox is on for child processes; see <see cref="EnableSandbox"/>.</summary>
+    /// <summary>Whether Chromium's sandbox is on for child processes. Before <see cref="Run"/>, whether
+    /// <see cref="EnableSandbox"/> was called; from <see cref="Run"/> on, the outcome: always on in the Windows bootstrap
+    /// layout (as Electron's default), unless the app was launched with <c>--no-sandbox</c>.</summary>
     public bool IsSandboxed { get; private set; }
+
+    private bool _sandboxRequested;
 
     /// <summary>Whether <see cref="Ready"/> has fired.</summary>
     public bool IsReady { get; private set; }
@@ -130,23 +134,73 @@ public sealed unsafe partial class OrielApp
         return s_current;
     }
 
-    /// <summary>Turns on Chromium's sandbox for every child process. Electron's <c>app.enableSandbox()</c>.</summary>
-    /// <remarks>Call before <see cref="Run"/>. Linux only so far: macOS and Windows link CEF's sandbox library into
-    /// the subprocess exe, which their packaging does not do yet.</remarks>
+    private string? _appUserModelId;
+
+    /// <summary>Windows: the AppUserModelID that groups the app's taskbar buttons and sends its notifications. Not set at
+    /// startup; on first use it is the process's explicit id if one was set, else <c>electron.app.{product name}</c>
+    /// (the executable's VERSIONINFO product name), which then becomes the process's, as in Electron. Elsewhere the id
+    /// given to <see cref="SetAppUserModelId"/>, else <c>electron.app.{Name}</c>.</summary>
+    public string AppUserModelId => OperatingSystem.IsWindows()
+        ? WindowsAppIdentity.AppUserModelId
+        : _appUserModelId ?? "electron.app." + Name;
+
+    /// <summary>Sets the process's AppUserModelID; Electron's <c>app.setAppUserModelId()</c>. No-op off Windows.</summary>
+    public void SetAppUserModelId(string id)
+    {
+        ArgumentException.ThrowIfNullOrEmpty(id);
+        if (OperatingSystem.IsWindows()) WindowsAppIdentity.SetAppUserModelId(id);
+        else _appUserModelId = id;
+    }
+
+    /// <summary>Windows: the CLSID of the COM class that receives toast activations, in <c>{XXXXXXXX-...}</c> form; a
+    /// random one on first use unless set, or the one an existing Start-menu shortcut carries once a notification has
+    /// been prepared. Electron's <c>app.toastActivatorCLSID</c>. Null elsewhere.</summary>
+    public string? ToastActivatorClsid => OperatingSystem.IsWindows() ? WindowsAppIdentity.ToastActivatorClsid : null;
+
+    /// <summary>Windows: sets <see cref="ToastActivatorClsid"/>, with or without braces. Electron's
+    /// <c>app.setToastActivatorCLSID()</c>. No-op elsewhere.</summary>
+    /// <exception cref="ArgumentException">Not a CLSID ("Invalid CLSID format").</exception>
+    public void SetToastActivatorClsid(string clsid)
+    {
+        ArgumentNullException.ThrowIfNull(clsid);
+        if (OperatingSystem.IsWindows() && !WindowsAppIdentity.SetToastActivatorClsid(clsid))
+            throw new ArgumentException("Invalid CLSID format", nameof(clsid));
+    }
+
+    /// <summary>Turns on Chromium's sandbox for every child process, renderers included. Electron's <c>app.enableSandbox()</c>.</summary>
+    /// <remarks>Call before <see cref="Run"/>. In the Windows bootstrap layout (eng/layout-windows.ps1) every child is
+    /// already sandboxed, as no window can opt out (drift W13). Elsewhere on Windows and on macOS <see cref="Run"/>
+    /// throws: only the bootstrap exe holds Chromium's sandbox broker, and the macOS helper lacks the sandbox library.</remarks>
     /// <exception cref="InvalidOperationException">The application is already running.</exception>
     public void EnableSandbox()
     {
         if (IsReady) throw new InvalidOperationException("Enable the sandbox before OrielApp.Run().");
-        IsSandboxed = true;
+        _sandboxRequested = IsSandboxed = true;
+    }
+
+    /// <summary>Whether children run sandboxed: Chromium's <c>--no-sandbox</c> always wins, the Windows bootstrap layout
+    /// sandboxes by default, and elsewhere only <see cref="EnableSandbox"/> does, where the layout allows it.</summary>
+    internal static bool SandboxChildren(bool requested, bool bootstrapSandbox, bool canSandbox, IEnumerable<string> args)
+    {
+        if (args.Contains("--no-sandbox")) return false;
+        if (bootstrapSandbox) return true;
+        if (!requested) return false;
+        if (!canSandbox)
+            throw new PlatformNotSupportedException(OperatingSystem.IsWindows()
+                ? "On Windows the sandbox needs the bootstrap layout (eng/layout-windows.ps1), not the .NET apphost."
+                : "The sandbox is not wired up on this OS yet.");
+        return true;
     }
 
     /// <summary>Runs the application on the calling thread, which must be the process's main thread,
     /// until <see cref="Quit"/>. Returns the process exit code.</summary>
-    /// <exception cref="PlatformNotSupportedException">Not yet implemented on this OS.</exception>
+    /// <exception cref="PlatformNotSupportedException">Not yet implemented on this OS, or <see cref="EnableSandbox"/>
+    /// was called where the layout cannot sandbox.</exception>
     public int Run()
     {
-        if (IsSandboxed && !OperatingSystem.IsLinux())
-            throw new PlatformNotSupportedException("The sandbox is only wired up on Linux so far.");
+        void* sandboxInfo = null;
+        var bootstrap = OperatingSystem.IsWindows() && BootstrapHost.TryGetSandboxInfo(out sandboxInfo);
+        IsSandboxed = SandboxChildren(_sandboxRequested, sandboxInfo is not null, OperatingSystem.IsLinux(), Environment.GetCommandLineArgs());
 
         CefRuntime.Load(CefLayout.MainProcessLibrary());
         if (OperatingSystem.IsMacOS()) MacApplication.Install();
@@ -158,10 +212,12 @@ public sealed unsafe partial class OrielApp
             {
                 ContextInitialized = OnContextInitialized,
                 AlreadyRunningAppRelaunch = OnSecondInstance,
+                RegisterPreferences = WindowStateStore.Register,
                 // Every child (the Linux zygote included) must register the same schemes as this process.
                 BeforeChildProcessLaunch = commandLine =>
                 {
                     if (schemeSwitch is not null) AppendSwitch(commandLine, SchemeSwitch.Name, schemeSwitch);
+                    CrashReporterNative.OnChildProcessLaunch(commandLine);
                 },
             },
             OnBeforeCommandLineProcessing,
@@ -169,8 +225,9 @@ public sealed unsafe partial class OrielApp
         var args = CefLayout.MainArgs();
 
         NativeObject.AddRef(app.Native);
-        var exitCode = CefNative.cef_execute_process((cef_main_args_t*)&args, app.Native, null);
+        var exitCode = CefNative.cef_execute_process((cef_main_args_t*)&args, app.Native, sandboxInfo);
         if (exitCode >= 0) return exitCode;
+        CrashReporter.OnCrashpadStarted();
 
         // userData or sessionData set before Run moves the profile, as Electron's before ready.
         var dataDirectory = DataDirectory = GetPath("sessionData");
@@ -186,12 +243,13 @@ public sealed unsafe partial class OrielApp
         CefString.Set(&settings.user_agent, ProcessUserAgent);
         CefString.Set(&settings.root_cache_path, dataDirectory);
         CefString.Set(&settings.cache_path, dataDirectory);
-        CefString.Set(&settings.browser_subprocess_path, CefLayout.SubprocessPath());
+        // Under bootstrap every child runs as this same exe; naming another would make CEF drop the sandbox.
+        if (!bootstrap) CefString.Set(&settings.browser_subprocess_path, CefLayout.SubprocessPath());
 
         // Before Chromium starts its own portal reads, so both see the portal from the same moment.
         if (OperatingSystem.IsLinux()) LinuxPortalSettings.Start();
         NativeObject.AddRef(app.Native);
-        var initialized = CefNative.cef_initialize((cef_main_args_t*)&args, &settings, app.Native, null) != 0;
+        var initialized = CefNative.cef_initialize((cef_main_args_t*)&args, &settings, app.Native, sandboxInfo) != 0;
         CefString.Clear(&settings.user_agent);
         CefString.Clear(&settings.root_cache_path);
         CefString.Clear(&settings.cache_path);
@@ -206,6 +264,7 @@ public sealed unsafe partial class OrielApp
 
         CefNative.cef_run_message_loop();
         Exited?.Invoke(this, new ExitedEventArgs(_exitCode));
+        UtilityProcess.TerminateAll();
         CefNative.cef_shutdown();
         return _exitCode;
     }
@@ -231,6 +290,9 @@ public sealed unsafe partial class OrielApp
 
     private int _exitCode;
     private bool _quitting;
+
+    /// <summary>Whether a quit is in progress: Electron's <c>Browser::is_quitting()</c>.</summary>
+    internal bool IsQuitting => _quitting;
 
     private void QuitOnUi()
     {

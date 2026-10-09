@@ -69,7 +69,7 @@ public sealed unsafe class WebContentsView : View
         };
         _client = new ClientHandler(WebContents.Display, WebContents.Load, WebContents.JsDialog, WebContents.Request, WebContents.Command,
             // Only before-input-event here: an Alloy page's unhandled keys reach the window delegate, and so the menu bar.
-            WebContents.ContextMenuRequests, new KeyboardHandler(keyEvent => WebContents.OnPreKeyEvent(keyEvent)), lifeSpan)
+            WebContents.ContextMenuRequests, new KeyboardHandler(keyEvent => BrowserWindow.BlocksInputAround(this) || WebContents.OnPreKeyEvent(keyEvent)), lifeSpan)
         {
             Permission = WebContents.Permissions,
             Download = WebContents.Downloads,

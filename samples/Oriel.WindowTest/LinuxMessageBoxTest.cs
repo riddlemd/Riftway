@@ -59,6 +59,8 @@ static class LinuxMessageBoxTest
         check("DefaultId makes its button the default", read?.Default == "Save", read?.Default);
         check("the checkbox sits in the message area, starting checked", read is { Checkbox: "Remember", Checked: true }, read);
         check("a box with a window is transient for its X11 window and modal", read is { Modal: true } && read.TransientFor == parent, $"{read?.TransientFor} vs {parent}, modal {read?.Modal}");
+        // Electron's GtkMessageBox disables the window itself, as openbox ignores the modal hint.
+        check("a box with a window disables the window", !win.IsEnabled, null);
         if (read is not null)
         {
             OnMain(() => { gtk_toggle_button_set_active(read.CheckButton, 0); return 0; });
@@ -66,6 +68,7 @@ static class LinuxMessageBoxTest
         }
         var answer = await Within(box, step);
         check("clicking answers that button's index and the checkbox's state", answer is { Response: 2, CheckboxChecked: false }, answer);
+        check("the window is enabled again once the box answers", Eventually(() => win.IsEnabled, step), null);
         check("the box is gone once it answers", WaitGone(step), null);
     }
 
@@ -134,6 +137,7 @@ static class LinuxMessageBoxTest
         check("while a Sync box runs gtk_dialog_run's nested loop, CEF's UI tasks wait", sync.IsCompleted is false && !ran, ran);
         if (read is not null) OnMain(() => Click(read.Dialog, "Go"));
         check("ShowMessageBoxSync returns the button's index", await Within(sync, step) == 1, sync.IsCompleted ? sync.Result : null);
+        check("the window is enabled again once a Sync box returns", win.IsEnabled, null);
         check("UI tasks run again once it returns", Eventually(() => ran, step), ran);
 
         var escaped = Task.Run(() => Dialog.ShowMessageBoxSync(win, new MessageBoxOptions { Message = "Sync escape", Buttons = ["Stay", "Leave"], CancelId = 1 }));

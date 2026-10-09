@@ -52,7 +52,7 @@ public sealed unsafe partial class OrielApp
             "assets" => AssetsDirectory(CefLayout.MainProcessLibrary(), Environment.ProcessPath, OperatingSystem.IsMacOS()),
             "desktop" => UserDirectory("DESKTOP", "Desktop", Environment.SpecialFolder.DesktopDirectory),
             "documents" => UserDirectory("DOCUMENTS", "Documents", Environment.SpecialFolder.MyDocuments),
-            "downloads" => UserDirectory("DOWNLOAD", "Downloads", null),
+            "downloads" => OperatingSystem.IsWindows() ? WindowsFileDialog.DownloadsFolder() : UserDirectory("DOWNLOAD", "Downloads", null),
             "music" => UserDirectory("MUSIC", "Music", Environment.SpecialFolder.MyMusic),
             "pictures" => UserDirectory("PICTURES", "Pictures", Environment.SpecialFolder.MyPictures),
             "videos" => UserDirectory("VIDEOS", OperatingSystem.IsMacOS() ? "Movies" : "Videos", Environment.SpecialFolder.MyVideos),

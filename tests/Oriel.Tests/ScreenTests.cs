@@ -1,5 +1,3 @@
-using Change = Oriel.Screen.DisplayChange;
-
 namespace Oriel.Tests;
 
 public sealed class ScreenTests
@@ -8,25 +6,35 @@ public sealed class ScreenTests
     private static readonly Display s_side = new() { Id = 2, Bounds = new(1600, 0, 1920, 1080), WorkArea = new(1600, 0, 1920, 1080), ScaleFactor = 1 };
 
     [Fact]
-    public void Compare_NothingChanged()
-        => Assert.Empty(Screen.Compare([s_main, s_side], [s_side, s_main], compareRefreshRate: true));
-
-    [Fact]
-    public void Compare_FindsAddedAndRemovedById()
+    public void Between_NothingChanged()
     {
-        var replacement = s_side with { Id = 3 };
-        Assert.Equal([(Change.Removed, s_side, DisplayMetrics.None), (Change.Added, replacement, DisplayMetrics.None)],
-            Screen.Compare([s_main, s_side], [s_main, replacement], compareRefreshRate: true));
+        Assert.Empty(DisplayChanges.Between([s_main, s_side], [s_side, s_main]));
     }
 
     [Fact]
-    public void Compare_ReportsRemovalsFirst_ThenEachCurrentDisplayInOrder()
+    public void Between_FindsAddedAndRemovedById_RemovedFirst()
     {
-        // DisplayChangeNotifier: every removal, then added or changed per display in the new list's order.
-        var added = s_side with { Id = 3 };
-        var moved = s_main with { Bounds = new(0, 0, 1280, 800) };
-        Assert.Equal([Change.Removed, Change.Added, Change.MetricsChanged],
-            Screen.Compare([s_main, s_side], [added, moved], compareRefreshRate: true).Select(e => e.Change));
+        var replacement = s_side with { Id = 3 };
+        Assert.Equal(
+            [new(DisplayChangeKind.Removed, s_side, DisplayMetrics.None), new(DisplayChangeKind.Added, replacement, DisplayMetrics.None)],
+            DisplayChanges.Between([s_main, s_side], [s_main, replacement]));
+    }
+
+    [Fact]
+    public void Between_FollowsChromiumOrder_RemovedThenEachCurrentDisplayInTurn()
+    {
+        var third = s_side with { Id = 3 };
+        var added = s_side with { Id = 4 };
+        var moved = s_main with { Bounds = new(10, 0, 1600, 1000) };
+        var changes = DisplayChanges.Between([s_main, s_side, third], [added, moved]);
+        Assert.Equal(
+            [
+                new(DisplayChangeKind.Removed, s_side, DisplayMetrics.None),
+                new(DisplayChangeKind.Removed, third, DisplayMetrics.None),
+                new(DisplayChangeKind.Added, added, DisplayMetrics.None),
+                new(DisplayChangeKind.MetricsChanged, moved, DisplayMetrics.Bounds),
+            ],
+            changes);
     }
 
     [Theory]
@@ -34,7 +42,7 @@ public sealed class ScreenTests
     [InlineData(nameof(Display.WorkArea), DisplayMetrics.WorkArea)]
     [InlineData(nameof(Display.ScaleFactor), DisplayMetrics.ScaleFactor)]
     [InlineData(nameof(Display.Rotation), DisplayMetrics.Rotation)]
-    public void Compare_NamesTheMetricThatChanged(string metric, DisplayMetrics expected)
+    public void Between_NamesTheMetricThatChanged(string metric, DisplayMetrics expected)
     {
         var after = metric switch
         {
@@ -43,40 +51,62 @@ public sealed class ScreenTests
             nameof(Display.ScaleFactor) => s_main with { ScaleFactor = 1 },
             _ => s_main with { Rotation = 90 },
         };
-        Assert.Equal([(Change.MetricsChanged, after, expected)], Screen.Compare([s_main], [after], compareRefreshRate: true));
+        Assert.Equal([new(DisplayChangeKind.MetricsChanged, after, expected)], DisplayChanges.Between([s_main], [after]));
     }
 
     [Fact]
-    public void Compare_ReportsSeveralMetricsAtOnce()
+    public void Between_ReportsSeveralMetricsAtOnce()
     {
         var after = s_main with { Bounds = new(0, 0, 1280, 800), ScaleFactor = 1 };
-        Assert.Equal(DisplayMetrics.Bounds | DisplayMetrics.ScaleFactor, Assert.Single(Screen.Compare([s_main], [after], compareRefreshRate: true)).Metrics);
+        Assert.Equal(DisplayMetrics.Bounds | DisplayMetrics.ScaleFactor, Assert.Single(DisplayChanges.Between([s_main], [after])).Metrics);
     }
 
     [Theory]
     [InlineData(nameof(Display.ColorSpace))]
+    [InlineData(nameof(Display.ColorDepth))]
     [InlineData(nameof(Display.ColorSpacesKey))]
     [InlineData(nameof(Display.HdrMaxLuminanceRelative))]
-    public void Compare_AColorSpaceChangeIsAMetricsChangeNamingNothing(string what)
+    public void Between_ColourSpaceChange_RaisesMetricsChangedWithNoNamedMetric(string field)
     {
-        // Electron emits display-metrics-changed with an empty changedMetrics for DISPLAY_METRIC_COLOR_SPACE.
-        var after = what switch
+        var after = field switch
         {
-            nameof(Display.ColorSpace) => s_main with { ColorSpace = "{primaries:P3, transfer:SRGB, matrix:RGB, range:FULL}" },
-            nameof(Display.ColorSpacesKey) => s_main with { ColorSpacesKey = "|hdr" },
+            nameof(Display.ColorSpace) => s_main with { ColorSpace = DisplayMapping.HdrRaster },
+            nameof(Display.ColorDepth) => s_main with { ColorDepth = 30 },
+            nameof(Display.ColorSpacesKey) => s_main with { ColorSpacesKey = "240 1000" },
             _ => s_main with { HdrMaxLuminanceRelative = 2 },
         };
-        Assert.Equal([(Change.MetricsChanged, after, DisplayMetrics.None)], Screen.Compare([s_main], [after], compareRefreshRate: false));
+        Assert.Equal([new(DisplayChangeKind.MetricsChanged, after, DisplayMetrics.None)], DisplayChanges.Between([s_main], [after]));
+    }
+
+    [Fact]
+    public void Between_IgnoresFieldsChromiumDoesNotCompare()
+    {
+        var after = s_main with { Label = "Renamed", DisplayFrequency = 144, Internal = true, NativeOrigin = new(5, 5), DepthPerComponent = 10 };
+        Assert.Empty(DisplayChanges.Between([s_main], [after]));
+    }
+
+    [Theory]
+    [InlineData(0x007Eu, 0, true)]   // WM_DISPLAYCHANGE
+    [InlineData(0x001Cu, 1, true)]   // WM_ACTIVATEAPP, activating
+    [InlineData(0x001Cu, 0, false)]  // WM_ACTIVATEAPP, deactivating
+    [InlineData(0x001Au, 0x2F, true)] // WM_SETTINGCHANGE, SPI_SETWORKAREA
+    [InlineData(0x001Au, 0x14, false)] // WM_SETTINGCHANGE, SPI_SETDESKWALLPAPER
+    [InlineData(0x001Au, 0, false)]  // WM_SETTINGCHANGE for a policy or locale
+    [InlineData(0x02E0u, 0x00780078, true)] // WM_DPICHANGED
+    [InlineData(0x0005u, 0, false)]  // WM_SIZE
+    public void ReadsDisplays_TheMessagesScreenWinUpdatesOn(uint message, int wParam, bool expected)
+    {
+        Assert.Equal(expected, Screen.ReadsDisplays(message, wParam));
     }
 
     [Theory]
     [InlineData(60.02, true, true)]
     [InlineData(60.005, true, false)]
     [InlineData(120, false, false)]
-    public void Compare_ARefreshRateChangeCountsOnMacBeyondTheEpsilon(double rate, bool compareRefreshRate, bool reported)
+    public void Between_ARefreshRateChangeCountsOnMacBeyondTheEpsilon(double rate, bool compareRefreshRate, bool reported)
     {
-        var events = Screen.Compare([s_main], [s_main with { DisplayFrequency = rate }], compareRefreshRate);
-        Assert.Equal(reported ? [(Change.MetricsChanged, s_main with { DisplayFrequency = rate }, DisplayMetrics.None)] : [], events);
+        var events = DisplayChanges.Between([s_main], [s_main with { DisplayFrequency = rate }], compareRefreshRate);
+        Assert.Equal(reported ? [new(DisplayChangeKind.MetricsChanged, s_main with { DisplayFrequency = rate }, DisplayMetrics.None)] : [], events);
     }
 
     [Fact]

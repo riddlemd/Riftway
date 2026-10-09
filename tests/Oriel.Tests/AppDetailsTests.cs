@@ -45,12 +45,16 @@ public sealed class AppDetailsTests
     }
 
     [Theory]
-    [InlineData(1.0, 10, 20, 100, 50, 10, 20, 110, 70)]
-    [InlineData(1.5, 10, 20, 100, 50, 15, 30, 165, 105)]
-    [InlineData(1.25, 1, 1, 1, 1, 1, 1, 3, 3)]
-    [InlineData(1.25, 3, 3, 3, 3, 3, 3, 8, 8)]
-    public void ClipToPixels_EnclosesTheScaledRegion(double scale, int x, int y, int w, int h, int left, int top, int right, int bottom)
-        => Assert.Equal((left, top, right, bottom), AppDetails.ClipToPixels(new Rectangle(x, y, w, h), scale));
+    [InlineData(1.0f, 10, 20, 100, 50, 10, 20, 110, 70)]
+    [InlineData(1.5f, 10, 20, 100, 50, 15, 30, 165, 105)]
+    [InlineData(1.25f, 1, 1, 1, 1, 1, 1, 3, 3)]
+    [InlineData(1.25f, 3, 3, 3, 3, 3, 3, 8, 8)]
+    public void ClipToPixels_SizeEnclosesTheScaledRegion(float scale, int x, int y, int w, int h, int left, int top, int right, int bottom)
+        => Assert.Equal((left, top, right, bottom), AppDetails.ClipToPixels(new Rectangle(x, y, w, h), scale, ((int)MathF.Floor(x * scale), (int)MathF.Floor(y * scale))));
+
+    [Fact]
+    public void ClipToPixels_TakesTheConvertedOrigin()
+        => Assert.Equal((1930, 7, 1930 + 150, 7 + 75), AppDetails.ClipToPixels(new Rectangle(10, 20, 100, 50), 1.5f, (1930, 7)));
 
     [Theory]
     [InlineData(0, 10)]
@@ -58,7 +62,7 @@ public sealed class AppDetailsTests
     [InlineData(-1, 10)]
     [InlineData(10, -1)]
     public void ClipToPixels_EmptyRegion_ClearsTheClip(int w, int h)
-        => Assert.Null(AppDetails.ClipToPixels(new Rectangle(5, 5, w, h), 1.5));
+        => Assert.Null(AppDetails.ClipToPixels(new Rectangle(5, 5, w, h), 1.5f, (0, 0)));
 
     [Theory]
     [InlineData(BackgroundMaterial.Auto, WindowsBackdrop.Auto)]

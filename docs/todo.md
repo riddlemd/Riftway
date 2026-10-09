@@ -12,8 +12,10 @@ Cross-platform work. Platform-specific items: [linux-todo.md](linux-todo.md), [w
   - [x] `webPreferences` batch 1 (devTools, zoomFactor, javascript, images, textarea, webgl, fonts, disableDialogs)
   - [ ] Remaining `webPreferences` (see the parity doc: process-wide switches, spellcheck, ...; session/partition done)
   - [x] `parent`/`modal`, `isModal`, `getChildWindows`, `getParentWindow`
-  - [ ] `setParentWindow` (needs OS code: CEF sets the parent only at creation)
-  - [ ] `titleBarStyle`, `titleBarOverlay`, `trafficLightPosition`
+  - [x] `setParentWindow` on Windows (branch `title-bar-2`)
+  - [ ] `setParentWindow` on macOS and Linux (DRIFT W8)
+  - [x] Windows: `titleBarStyle`, `titleBarOverlay`/`setTitleBarOverlay`, `app-region` drag regions (branch `title-bar`)
+  - [ ] Title bar on macOS (`trafficLightPosition`, hidden styles) and the page's Window Controls Overlay API (DRIFT W34, W37)
   - [x] Taskbar on Windows: `setProgressBar`, `flashFrame`, `setSkipTaskbar`/`skipTaskbar`, `setOverlayIcon`
   - [x] Taskbar on macOS (Dock progress and bounce) and Linux (urgency hint, skip taskbar)
   - [x] `setThumbarButtons`, `setIcon`/`setOverlayIcon` with `NativeImage`
@@ -21,10 +23,11 @@ Cross-platform work. Platform-specific items: [linux-todo.md](linux-todo.md), [w
   - [x] Windows: `setAppDetails`, `setThumbnailClip`, `setThumbnailToolTip`, `backgroundMaterial`/`setBackgroundMaterial`
   - [x] Make `backgroundMaterial` visible; `transparent` on Windows
   - [ ] `transparent` on macOS and Linux (DRIFT W24)
-  - [ ] `showInactive`
+  - [x] Windows: `hookWindowMessage` family, `thickFrame`, `roundedCorners`, `accentColor`/`setAccentColor`/`getAccentColor` (branch `win-shell-apis`)
+  - [x] Windows: `showInactive`, `opacity`, `hasShadow` (stored, as Electron), `setIgnoreMouseEvents` (with `forward`), content protection, kiosk, `getNormalBounds`, `will-resize`/`will-move` (branch `window-polish`)
   - [x] `loadURL` options (userAgent, extraHeaders, httpReferrer, postData); `baseURLForDataURL` throws
-  - [ ] Window state persistence (`getNormalBounds`, `persisted-state-restored`)
-  - [ ] `opacity`, `hasShadow`, `setIgnoreMouseEvents`, content protection, `setKiosk`, `will-*` events
+  - [ ] Window state persistence (`persisted-state-restored`)
+  - [ ] `resized`/`moved` events
   - [ ] Accuracy gaps: `Shown`/`Hidden` fire only from `Show()`/`Hide()`
 - [x] webContents: `executeJavaScript`, DevTools open/close/toggle, zoom factor/level, `setUserAgent`/`getUserAgent`
 - [x] File `Dialog` and `Screen`; gaps in [DRIFT.md](DRIFT.md)
@@ -67,5 +70,7 @@ Cross-platform work. Platform-specific items: [linux-todo.md](linux-todo.md), [w
 
 - [x] `Shell` and `Clipboard` on Windows (branch `shell-clipboard`); `Shell` on Linux (branch `linux-shell`); the macOS
       `Shell` and the Linux `Clipboard` backends to come (DRIFT H1, K1)
+- [x] `GlobalShortcut`, `PowerMonitor`, `PowerSaveBlocker` on Windows (branch `power-shortcuts`); macOS and Linux to come (DRIFT J1, U1)
+- [x] `Tray` on Windows (branch `tray`); macOS and Linux to come (DRIFT T1)
 - [ ] M3 Blazor Hybrid · M4 ship it · M5 desktop integration · M6 session/network/processes · M7 own CEF builds
       (see [PLAN.md](PLAN.md#milestones))

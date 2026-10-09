@@ -12,13 +12,13 @@ Percentages are over the non-n/a items; the second counts a partial item as half
 |---|---|---|---|---|---|---|---|
 | Static methods | 5 | 2 | 2 | 1 | 0 | 40.0% | 60.0% |
 | Instance events | 59 | 31 | 18 | 8 | 2 | 54.4% | 70.2% |
-| Instance methods | 118 | 38 | 23 | 49 | 8 | 34.5% | 45.0% |
+| Instance methods | 118 | 39 | 26 | 45 | 8 | 35.5% | 47.3% |
 | Instance properties | 18 | 10 | 1 | 6 | 1 | 58.8% | 61.8% |
 | navigationHistory | 14 | 12 | 0 | 2 | 0 | 85.7% | 85.7% |
 | WebFrameMain events and statics | 3 | 1 | 1 | 1 | 0 | 33.3% | 50.0% |
 | WebFrameMain methods | 9 | 1 | 4 | 4 | 0 | 11.1% | 33.3% |
 | WebFrameMain properties | 15 | 10 | 3 | 2 | 0 | 66.7% | 76.7% |
-| **Total** | 241 | 105 | 52 | 73 | 11 | 45.7% | 57.0% |
+| **Total** | 241 | 106 | 55 | 69 | 11 | 46.1% | 58.0% |
 
 ## Checklist
 
@@ -77,7 +77,7 @@ Percentages are over the non-n/a items; the second counts a partial item as half
 | `devtools-closed` | `DevToolsClosed` | partial | Watched, within a quarter second (C36). |
 | `devtools-focused` | — | missing | Chrome style's DevTools window is not CEF's (C36). |
 | `certificate-error` | `CertificateError` | done | The app's `CertificateError` follows, with the same arguments. |
-| `select-client-certificate` | `SelectClientCertificate` | done | The app's follows with the same arguments; checked on Linux (E25). |
+| `select-client-certificate` | `SelectClientCertificate` | done | The app's follows with the same arguments; checked on Linux and Windows (E25). |
 | `login` | `Login` | done | The app's `Login` follows, with the same arguments. |
 | `found-in-page` | `FoundInPage` | done |  |
 | `media-started-playing` | `MediaStartedPlaying` | partial | From the page's media events (C33). |
@@ -166,9 +166,9 @@ Percentages are over the non-n/a items; the second counts a partial item as half
 | `stopFindInPage(action)` | `StopFindInPage` | partial | `activateSelection` keeps the selection (C18). |
 | `capturePage()` | `CapturePageAsync` | partial | `stayHidden`/`stayAwake` have no effect (C22). |
 | `isBeingCaptured()` | — | missing |  |
-| `getPrintersAsync()` | — | missing |  |
-| `print()` | — | missing |  |
-| `printToPDF()` | — | missing |  |
+| `getPrintersAsync()` | `GetPrintersAsync` | partial | Windows only, listed as Chromium lists them (Z4). |
+| `print()` | `Print` | partial | Electron's option checks and device-name errors; opens Chromium's print dialog without the settings; no silent printing or outcome callback (Z1-Z3). |
+| `printToPDF()` | `PrintToPDFAsync` | done | Page.printToPDF over DevTools with Electron's defaults, validation messages and per-page queue. |
 | `addWorkSpace()` | — | missing |  |
 | `removeWorkSpace()` | — | missing |  |
 | `setDevToolsWebContents()` | — | missing |  |
@@ -186,7 +186,7 @@ Percentages are over the non-n/a items; the second counts a partial item as half
 | `disableDeviceEmulation()` | `DisableDeviceEmulation` | done |  |
 | `beginFrameSubscription()` | — | missing |  |
 | `endFrameSubscription()` | — | missing |  |
-| `startDrag()` | — | missing |  |
+| `startDrag()` | `StartDrag` | partial | Windows only; the drag blocks queued UI tasks and its image is painted with GDI (C40). |
 | `savePage()` | — | missing |  |
 | `showDefinitionForSelection()` | — | missing |  |
 | `isOffscreen()` | — | missing |  |
