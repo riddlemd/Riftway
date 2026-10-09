@@ -84,6 +84,9 @@ Cross-platform work. Platform-specific items: [linux-todo.md](linux-todo.md), [w
       CEF patches for E13-E16, E39-E41
 - [ ] `Notification`: Windows (branch `notify-storage`) and Linux (branch `linux-notification`, WindowTest checks written,
       not run: [linux-todo.md](linux-todo.md)); macOS not started (DRIFT Q3)
+- [ ] `session.serviceWorkers` / `ServiceWorkerMain` (branch `service-workers`): done over DevTools (DRIFT SW1-SW8); run
+      SessionTest's `ServiceWorkerChecks` (written, never run); `send`, `ipc` and `ipcMainServiceWorker` wait on the
+      service worker patch described after DRIFT SW8
 - [ ] M3 Blazor Hybrid · M4 ship it · M5 desktop integration · M6 session/network/processes · M7 own CEF builds
       (see [PLAN.md](PLAN.md#milestones))
 - [ ] M7: CEF patches in [eng/cef](../eng/cef/README.md): 0001 `CefWindowDelegate::IsTranslucent` (W24), 0002

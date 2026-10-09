@@ -130,7 +130,7 @@ internal sealed unsafe partial class SessionHelperPage
     internal bool IsAlive => _browser is not null;
 
     // UI thread.
-    private void Send(string method, Action<Utf8JsonWriter>? writeParams, TaskCompletionSource<JsonElement> result)
+    private void Send(string method, Action<Utf8JsonWriter>? writeParams, TaskCompletionSource<JsonElement> result, string? sessionId)
     {
         if (_browser is null)
         {
@@ -141,7 +141,7 @@ internal sealed unsafe partial class SessionHelperPage
         {
             if (error is null) result.SetResult(value);
             else result.SetException(new InvalidOperationException($"DevTools {method} failed: {error}"));
-        });
+        }, sessionId);
     }
 
     /// <summary>DevTools events from the page.</summary>
@@ -149,6 +149,13 @@ internal sealed unsafe partial class SessionHelperPage
     {
         add => _devTools.EventReceived += value;
         remove => _devTools.EventReceived -= value;
+    }
+
+    /// <summary>DevTools events from the page and from the targets it attached to, with their session (null for the page).</summary>
+    internal event Action<string, JsonElement, string?>? AnyEventReceived
+    {
+        add => _devTools.AnyEventReceived += value;
+        remove => _devTools.AnyEventReceived -= value;
     }
 
     /// <summary>Starts a download in the session. UI thread, once <see cref="Ready"/>.</summary>
@@ -180,12 +187,13 @@ internal sealed unsafe partial class SessionHelperPage
 // Outside the unsafe part: C# does not allow await in an unsafe context.
 internal sealed partial class SessionHelperPage
 {
-    /// <summary>Sends a DevTools command once the page is ready; the task carries its result or fails with its error.</summary>
-    internal async Task<JsonElement> SendAsync(string method, Action<Utf8JsonWriter>? writeParams = null)
+    /// <summary>Sends a DevTools command once the page is ready, to the page or to a target session from
+    /// <c>Target.attachToTarget</c> (<paramref name="sessionId"/>); the task carries its result or fails with its error.</summary>
+    internal async Task<JsonElement> SendAsync(string method, Action<Utf8JsonWriter>? writeParams = null, string? sessionId = null)
     {
         await _ready.Task.ConfigureAwait(false);
         var result = new TaskCompletionSource<JsonElement>(TaskCreationOptions.RunContinuationsAsynchronously);
-        CefThread.RunOnUi(() => Send(method, writeParams, result));
+        CefThread.RunOnUi(() => Send(method, writeParams, result, sessionId));
         return await result.Task.ConfigureAwait(false);
     }
 }
