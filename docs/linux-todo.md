@@ -25,6 +25,7 @@ General items: [todo.md](todo.md).
         (`ElectronFrameViewLinux`); Oriel only transparent ones. Check whether anything visible depends on it
 - [ ] Linux sandbox on Ubuntu 24.04+: AppArmor profile, or documented `--no-sandbox` (M4)
 - [ ] Wayland: CEF Views on Wayland is still being fixed upstream; Oriel targets X11/XWayland for now
+- [ ] Clipboard: the Wayland data device with Wayland, and the XDG portal file targets (DRIFT K1)
 - [ ] linux-x64: only linux-arm64 is tested end to end (Docker on Apple Silicon). On linux-x64 (amd64 image under QEMU)
       `Oriel.Subprocess.Native` links and `dotnet test tests/Oriel.Tests` passes (1302 passed, 3 skipped).
   - [ ] Run `eng/docker/test-linux.sh` on real x64 hardware: under QEMU `dotnet publish` segfaults (needs

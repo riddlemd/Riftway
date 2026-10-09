@@ -9,6 +9,11 @@
   </PropertyGroup>
 
   <ItemGroup>
+    <!-- The independent X client LinuxClipboardTest runs with python3. -->
+    <EmbeddedResource Include="x11clip.py" LogicalName="x11clip.py" />
+  </ItemGroup>
+
+  <ItemGroup>
     <ProjectReference Include="..\..\src\Oriel\Oriel.csproj" />
   </ItemGroup>
 

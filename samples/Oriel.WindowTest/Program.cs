@@ -4452,11 +4452,12 @@ async Task ClipboardAsync()
         await MacClipboardTest.RunAsync(Check);
         return;
     }
-    if (!OperatingSystem.IsWindows())
+    if (OperatingSystem.IsLinux())
     {
-        Check("Clipboard throws PlatformNotSupportedException off Windows and macOS", Throws<PlatformNotSupportedException>(Clipboard.Clear));
+        await LinuxClipboardTest.RunAsync(Check);
         return;
     }
+    Check("clipboard.selection is undefined off Linux", Clipboard.Selection is null);
 
     // Windows PowerShell in another process reads and writes the clipboard independently of Oriel's code.
     var outFile = Path.Combine(Path.GetTempPath(), "oriel-clipboard-" + Path.GetRandomFileName());
