@@ -24,8 +24,11 @@ static class MacTrayTest
             check("new Tray() puts a visible NSStatusItem in the system status bar", Ui(() => MacStatusItem.IsVisible(view)));
             check("its guid becomes the status item's autosave name, lowercase", Ui(() => MacStatusItem.AutosaveName(view)) == guid.ToString("D"), Ui(() => MacStatusItem.AutosaveName(view)));
             check("the image is a 16x16-point template image on the button", Ui(() => MacStatusItem.ImageInfo(view)) == (16, 16, true), Ui(() => MacStatusItem.ImageInfo(view)));
+            // The status bar sizes the item window, then places it, after statusItemWithLength: returns; until then the
+            // frame is empty, then below the screen at the origin.
             var bounds = tray.GetBounds();
-            check("getBounds() is the status item window's frame, at the top of the primary display", bounds.Width > 0 && bounds.Height > 0 && bounds.Y < 50, bounds);
+            var placed = Eventually(() => (bounds = tray.GetBounds()) is { Width: > 0, Height: > 0, Y: < 50 }, step);
+            check("getBounds() is the status item window's frame, at the top of the primary display", placed, bounds);
 
             tray.SetToolTip("Oriel tip");
             check("setToolTip() sets the view's tooltip", Ui(() => MacStatusItem.ToolTip(view)) == "Oriel tip");

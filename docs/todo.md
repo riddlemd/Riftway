@@ -10,13 +10,13 @@ Cross-platform work. Platform-specific items: [linux-todo.md](linux-todo.md), [w
   - [x] Window menus (`setMenu`, `removeMenu`, `autoHideMenuBar`), with the `Menu` module
   - [x] `Menu.popup` (context menus), webContents `context-menu`, mouse `sendInputEvent`
   - [x] `Menu` events `menu-will-show`/`menu-will-close` with `_menuWillShow`'s radio fix-up (branch `menu-events`;
-        WindowTest passes on Linux, its macOS and Windows checks are unrun)
+        WindowTest passes on Linux and macOS, its Windows checks are unrun)
   - [x] `webPreferences` batch 1 (devTools, zoomFactor, javascript, images, textarea, webgl, fonts, disableDialogs)
   - [ ] Remaining `webPreferences` (see the parity doc: process-wide switches, spellcheck, ...; session/partition done)
   - [x] `parent`/`modal`, `isModal`, `getChildWindows`, `getParentWindow`
   - [x] `setParentWindow` on Windows (branch `title-bar-2`)
   - [x] `setParentWindow` on Linux (branch `linux-parent`)
-  - [x] `setParentWindow` on macOS (branch `mac-menu-parent`; WindowTest checks unrun, DRIFT W8)
+  - [x] `setParentWindow` on macOS (branch `mac-menu-parent`; WindowTest checks pass, DRIFT W8)
   - [x] Windows: `titleBarStyle`, `titleBarOverlay`/`setTitleBarOverlay`, `app-region` drag regions (branch `title-bar`)
   - [ ] Title bar on macOS (`trafficLightPosition`, hidden styles) and the page's Window Controls Overlay API (DRIFT W34, W37)
   - [x] Taskbar on Windows: `setProgressBar`, `flashFrame`, `setSkipTaskbar`/`skipTaskbar`, `setOverlayIcon`
@@ -74,8 +74,8 @@ Cross-platform work. Platform-specific items: [linux-todo.md](linux-todo.md), [w
 ## Later milestones
 
 - [x] `Shell` and `Clipboard` on Windows (branch `shell-clipboard`); `Shell` on Linux (branch `linux-shell`); `Clipboard` on
-      macOS (branch `mac-clipboard`) and Linux X11 with `selection` (branch `linux-clipboard`); the macOS `Shell` (branch `mac-shell-shortcut`, unrun: DRIFT H1)
-- [x] `GlobalShortcut`, `PowerMonitor`, `PowerSaveBlocker` on Windows (branch `power-shortcuts`) and Linux (branch `linux-power-shortcuts`); `PowerMonitor` and `PowerSaveBlocker` on macOS (branch `mac-power-tray`); macOS `GlobalShortcut` (branch `mac-shell-shortcut`, unrun: DRIFT J1)
+      macOS (branch `mac-clipboard`) and Linux X11 with `selection` (branch `linux-clipboard`); the macOS `Shell` (branch `mac-shell-shortcut`, WindowTest checks pass: DRIFT H1)
+- [x] `GlobalShortcut`, `PowerMonitor`, `PowerSaveBlocker` on Windows (branch `power-shortcuts`) and Linux (branch `linux-power-shortcuts`); `PowerMonitor` and `PowerSaveBlocker` on macOS (branch `mac-power-tray`); macOS `GlobalShortcut` (branch `mac-shell-shortcut`, WindowTest checks pass: DRIFT J1)
 - [x] `Tray` on Windows (branch `tray`), Linux (branch `linux-tray`) and macOS (branch `mac-power-tray`)
 - [ ] M3 Blazor Hybrid · M4 ship it · M5 desktop integration · M6 session/network/processes · M7 own CEF builds
       (see [PLAN.md](PLAN.md#milestones))

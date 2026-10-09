@@ -353,12 +353,14 @@ public static unsafe class MacStatusItem
         return frame.Y + frame.Height;
     }
 
-    private static MacStatusItemEvent Read(nint e)
+    // clickCount raises NSInternalInconsistencyException on enter/exit events; tray_icon_cocoa.mm reads only the
+    // location and modifiers in mouseEntered:, mouseExited: and mouseMoved:.
+    private static MacStatusItemEvent Read(nint e, bool clicks = true)
     {
         var location = ((delegate* unmanaged<nint, nint, NSPoint>)s_msgSend)(e, Sel("locationInWindow"u8));
         var window = Send(e, Sel("window"u8));
         var frame = window == 0 ? default : Frame(window);
-        return new(location.X, location.Y, (ulong)Send(e, Sel("modifierFlags"u8)), Send(e, Sel("clickCount"u8)),
+        return new(location.X, location.Y, (ulong)Send(e, Sel("modifierFlags"u8)), clicks ? Send(e, Sel("clickCount"u8)) : 0,
             frame.X, frame.Y, frame.Width, frame.Height, PrimaryHeight());
     }
 
@@ -443,13 +445,13 @@ public static unsafe class MacStatusItem
     private static void OnRightMouseUp(nint self, nint cmd, nint e) => Signal(self, MacStatusItemSignal.RightMouseUp, Read(e));
 
     [UnmanagedCallersOnly]
-    private static void OnMouseEntered(nint self, nint cmd, nint e) => Signal(self, MacStatusItemSignal.MouseEntered, Read(e));
+    private static void OnMouseEntered(nint self, nint cmd, nint e) => Signal(self, MacStatusItemSignal.MouseEntered, Read(e, clicks: false));
 
     [UnmanagedCallersOnly]
-    private static void OnMouseExited(nint self, nint cmd, nint e) => Signal(self, MacStatusItemSignal.MouseExited, Read(e));
+    private static void OnMouseExited(nint self, nint cmd, nint e) => Signal(self, MacStatusItemSignal.MouseExited, Read(e, clicks: false));
 
     [UnmanagedCallersOnly]
-    private static void OnMouseMoved(nint self, nint cmd, nint e) => Signal(self, MacStatusItemSignal.MouseMoved, Read(e));
+    private static void OnMouseMoved(nint self, nint cmd, nint e) => Signal(self, MacStatusItemSignal.MouseMoved, Read(e, clicks: false));
 
     [UnmanagedCallersOnly]
     private static void OnUpdateTrackingAreas(nint self, nint cmd)

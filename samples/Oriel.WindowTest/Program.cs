@@ -2963,8 +2963,11 @@ async Task MenuEventsAsync(BrowserWindow win)
         }
         var toggled = new MenuItem { Label = "Toggled", Type = MenuItemType.Checkbox };
         var disabled = new MenuItem { Label = "Disabled" };
-        var states = new Menu { toggled, disabled, new MenuItem { Label = "First", Type = MenuItemType.Radio }, new MenuItem { Label = "Second", Type = MenuItemType.Radio } };
-        Menu.SetApplicationMenu(new Menu { new MenuItem { Role = MenuItemRole.AppMenu }, new MenuItem { Label = "States", Submenu = states } });
+        var first = new MenuItem { Label = "First", Type = MenuItemType.Radio };
+        var states = new Menu { toggled, disabled, first, new MenuItem { Label = "Second", Type = MenuItemType.Radio } };
+        var rootRadio = new MenuItem { Label = "Root A", Type = MenuItemType.Radio };
+        Menu.SetApplicationMenu(new Menu { new MenuItem { Role = MenuItemRole.AppMenu }, new MenuItem { Label = "States", Submenu = states },
+            rootRadio, new MenuItem { Label = "Root B", Type = MenuItemType.Radio } });
         nint statesNs = 0;
         Eventually(() => (statesNs = Oriel.Cef.CefThread.InvokeOnUi(() => Sub(MacMenu.MainMenu(), "States"))) != 0, step);
         var refreshed = Oriel.Cef.CefThread.InvokeOnUi(() =>
@@ -2977,12 +2980,17 @@ async Task MenuEventsAsync(BrowserWindow win)
         });
         Check("macOS: menuNeedsUpdate: shows a MenuItem's new Checked and Enabled in its NSMenuItem", refreshed is (true, true, false), refreshed);
         await Task.Delay(300);
+        // Electron's controller calls the root model's MenuWillShow for any menu opening, and Menu::OnMenuWillShow runs
+        // only the root's _menuWillShow: a submenu's radio group is never fixed up from the application menu.
         var fixedUp = Oriel.Cef.CefThread.InvokeOnUi(() =>
         {
-            var menu = Sub(MacMenu.MainMenu(), "States");
-            return MacMenu.SendToDelegate(menu, "menuWillOpen:") && MacMenu.SendToDelegate(menu, "menuDidClose:") && MacMenu.IsChecked(Named(menu, "First"));
+            var bar = MacMenu.MainMenu();
+            var menu = Sub(bar, "States");
+            var sent = MacMenu.SendToDelegate(menu, "menuWillOpen:") && MacMenu.SendToDelegate(bar, "menuDidClose:");
+            return (sent, Root: MacMenu.IsChecked(Named(bar, "Root A")), First: MacMenu.IsChecked(Named(menu, "First")));
         });
-        Check("macOS: menuDidClose: shows menu-will-show's radio fix-up in the NSMenu", fixedUp);
+        Check("macOS: menuDidClose: shows menu-will-show's radio fix-up of the root menu's group in the NSMenu, and leaves a submenu's group, as Electron",
+            fixedUp is (true, true, false) && rootRadio.Checked && !first.Checked, $"{fixedUp} model={rootRadio.Checked},{first.Checked}");
         Menu.SetApplicationMenu(previous);
 #pragma warning restore CA1416
     }
@@ -3045,8 +3053,10 @@ async Task MacMenusAsync(BrowserWindow win, Menu menu, MenuItem save, MenuItem c
     Menu.SetApplicationMenu(menu);
     Check("SetApplicationMenu replaces the menu bar", Eventually(() => BarTitles() == "Oriel.WindowTest,File,Edit", step), BarTitles());
     Check("GetApplicationMenu", Menu.GetApplicationMenu() == menu);
-    Check("accelerator becomes the key equivalent",
-        OnItem("File", "Save", item => MacMenu.KeyEquivalent(item) == "k" && MacMenu.ModifierMask(item) == (MacMenu.CommandKeyMask | MacMenu.ShiftKeyMask), false),
+    // GetKeyEquivalentAndModifierMaskFromAccelerator: Shift+K's US-shifted character "K" differs from "k", so the
+    // equivalent is "K" and Shift leaves the mask, as the capital already requires it.
+    Check("accelerator becomes the key equivalent: Shift+K is \"K\" with Command alone",
+        OnItem("File", "Save", item => MacMenu.KeyEquivalent(item) == "K" && MacMenu.ModifierMask(item) == MacMenu.CommandKeyMask, false),
         OnItem("File", "Save", item => $"{MacMenu.KeyEquivalent(item)} {MacMenu.ModifierMask(item):X}", "missing"));
 
     win.Focus();

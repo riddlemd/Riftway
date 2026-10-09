@@ -194,12 +194,14 @@ public static unsafe class MacWindow
         if (window != 0) SendObject(window, Sel("orderOut:"u8), 0);
     }
 
-    /// <summary>Electron's <c>NativeWindowMac::IsVisible</c>: ordered in, not occluded, and not minimized.</summary>
+    /// <summary>Electron's <c>NativeWindowMac::IsVisible</c>, literally: ordered in, not minimized, and an occlusion state
+    /// other than exactly <c>NSWindowOcclusionStateVisible</c>.</summary>
     public static bool IsVisible(nint contentView)
     {
         var window = NSWindowOf(contentView);
-        // NSWindowOcclusionStateVisible
-        return window != 0 && SendGetBool(window, Sel("isVisible"u8)) != 0 && Send(window, Sel("occlusionState"u8)) == 2
+        // Electron calls the state == NSWindowOcclusionStateVisible "occluded"; AppKit reports 0x2002 for an on-screen
+        // window, so in practice only isVisible and minimized decide.
+        return window != 0 && SendGetBool(window, Sel("isVisible"u8)) != 0 && Send(window, Sel("occlusionState"u8)) != 2
             && SendGetBool(window, Sel("isMiniaturized"u8)) == 0;
     }
 

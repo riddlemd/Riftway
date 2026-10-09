@@ -430,7 +430,7 @@ Parameters in brackets are optional in Electron. `webContents` members are in [w
 | `isContentProtected()` | `IsContentProtected` | partial | Windows only for now (W30). |
 | `setFocusable(focusable)` | `SetFocusable` | partial | Windows: style, taskbar button, blur, as Electron; stored only elsewhere (W43). |
 | `isFocusable()` | `IsFocusable` | partial | Windows reads `WS_EX_NOACTIVATE` too (W43). |
-| `setParentWindow(parent)` | `SetParentWindow` | done | As Electron on each OS: Windows `GWLP_HWNDPARENT` with re-show, Linux `WM_TRANSIENT_FOR`, macOS `addChildWindow:`; modal throws. macOS checks unrun (W8). |
+| `setParentWindow(parent)` | `SetParentWindow` | done | As Electron on each OS: Windows `GWLP_HWNDPARENT` with re-show, Linux `WM_TRANSIENT_FOR`, macOS `addChildWindow:`; modal throws. macOS checks pass (W8). |
 | `getParentWindow()` | `GetParentWindow` | done |  |
 | `getChildWindows()` | `GetChildWindows` | done |  |
 | `setAutoHideCursor(autoHide)` | — | missing |  |

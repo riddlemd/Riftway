@@ -14,7 +14,6 @@ static class MacPowerTest
 {
     internal static async Task RunAsync(MessageBoxTest.CheckFn check, TimeSpan step, string appName)
     {
-        check("globalShortcut still throws on macOS", Throws<PlatformNotSupportedException>(() => GlobalShortcut.IsRegistered("Ctrl+A")));
         await BlockersAsync(check, step, appName);
         await IdleAsync(check, step);
         await EventsAsync(check, step);

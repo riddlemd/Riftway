@@ -224,8 +224,17 @@ public static unsafe class MacHotKeys
         s_tapSource = 0;
     }
 
+    /// <summary>Whether the media-key tap is installed and enabled; for tests.</summary>
+    public static bool IsMediaTapEnabled => s_tap != 0 && CGEventTapIsEnabled(s_tap) != 0;
+
+    /// <summary>Runs a system-defined CGEvent through the tap callback and returns whether the tap swallows it; for tests,
+    /// as macOS delivers no posted NX_SYSDEFINED event to an event tap.</summary>
+    public static bool TapSwallows(nint cgEvent) => s_tap != 0 && Tap(SystemDefined, cgEvent) == 0;
+
     [UnmanagedCallersOnly]
-    private static nint OnTap(nint proxy, uint type, nint cgEvent, nint userInfo)
+    private static nint OnTap(nint proxy, uint type, nint cgEvent, nint userInfo) => Tap(type, cgEvent);
+
+    private static nint Tap(uint type, nint cgEvent)
     {
         try
         {
@@ -323,6 +332,7 @@ public static unsafe class MacHotKeys
     [DllImport(CoreFoundation)] private static extern void CFRunLoopRemoveSource(nint loop, nint source, nint mode);
     [DllImport(CoreGraphics)] private static extern nint CGEventTapCreate(uint tap, uint place, uint options, ulong eventsOfInterest, delegate* unmanaged<nint, uint, nint, nint, nint> callback, nint userInfo);
     [DllImport(CoreGraphics)] private static extern void CGEventTapEnable(nint tap, byte enable);
+    [DllImport(CoreGraphics)] private static extern byte CGEventTapIsEnabled(nint tap);
     [DllImport(ApplicationServices)] private static extern byte AXIsProcessTrusted();
     [DllImport(IOKit)] private static extern uint IOHIDCheckAccess(uint requestType);
 }

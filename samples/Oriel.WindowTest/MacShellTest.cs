@@ -38,10 +38,11 @@ static class MacShellTest
         Check(check, "TrashItemAsync moves the file to ~/.Trash", error is null && !File.Exists(victim) && inTrash.Length == 1, $"{error?.Message} | {string.Join(",", inTrash)}");
         foreach (var file in inTrash.Where(File.Exists)) File.Delete(file);
 
-        // The rejection is NSFileManager's own localizedDescription, as a JXA script gets it independently.
+        // The rejection is NSFileManager's own localizedDescription, as a JXA script gets it independently. A Ref()
+        // out-parameter crashes osascript on macOS 26; $() is JXA's NSError** form.
         var missing = Path.Combine(dir, "missing.txt");
         error = await ThrowsAsync(() => Shell.TrashItemAsync(missing));
-        var expected = Jxa($"const e = Ref(); $.NSFileManager.defaultManager.trashItemAtURLResultingItemURLError($.NSURL.fileURLWithPath('{missing}'), null, e); e[0].localizedDescription.js");
+        var expected = Jxa($"const e = $(); $.NSFileManager.defaultManager.trashItemAtURLResultingItemURLError($.NSURL.fileURLWithPath('{missing}'), $(), e); e.localizedDescription.js");
         Check(check, "TrashItemAsync of a missing file rejects with the system's description", error is IOException && error.Message == expected && expected.Length > 0, $"{error?.Message} | {expected}");
         error = await ThrowsAsync(() => Shell.TrashItemAsync(""));
         Check(check, "TrashItemAsync(\"\") rejects with Electron's Invalid file path", error?.Message == "Invalid file path: ", error?.Message);
@@ -61,12 +62,17 @@ static class MacShellTest
         // A handler applet for a fresh scheme writes each URL it is sent to a file.
         var scheme = $"oriel-test-{Guid.NewGuid():N}"[..24];
         var received = Path.Combine(dir, "received.txt");
-        var applet = Path.Combine(dir, "OrielUrlHandler.app");
+        // LaunchServices marks an app in a temporary folder launch-disabled and never binds its schemes.
+        var appletDir = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), "Library", "Caches", "oriel-test-" + Path.GetRandomFileName());
+        var applet = Path.Combine(appletDir, "OrielUrlHandler.app");
+        Directory.CreateDirectory(appletDir);
         Run("osacompile", "-o", applet, "-e", $"on open location u\n do shell script \"printf %s \" & quoted form of u & \" > \" & quoted form of \"{received}\"\nend open location");
         var plist = Path.Combine(applet, "Contents", "Info.plist");
         Run("plutil", "-replace", "CFBundleIdentifier", "-string", "dev.oriel.test." + scheme.Replace('-', '.'), plist);
         Run("plutil", "-insert", "CFBundleURLTypes", "-json", $"[{{\"CFBundleURLName\":\"Oriel test\",\"CFBundleURLSchemes\":[\"{scheme}\"]}}]", plist);
         const string LsRegister = "/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister";
+        // The plist edits break osacompile's ad-hoc signature.
+        Run("codesign", "-f", "-s", "-", applet);
         Run(LsRegister, "-f", applet);
         try
         {
@@ -81,6 +87,7 @@ static class MacShellTest
         {
             Run(LsRegister, "-u", applet);
             Run("pkill", "-f", applet);
+            if (Directory.Exists(appletDir)) Directory.Delete(appletDir, recursive: true);
         }
     }
 
@@ -90,10 +97,14 @@ static class MacShellTest
         File.WriteAllText(file, "oriel");
         Shell.ShowItemInFolder(file);
         // Finder's selection needs the Automation permission for osascript; the detail shows a refusal.
+        // Finder answers with the resolved path: /private/var/folders for the temp folder's /var/folders.
+        var real = Run("realpath", file);
         string selected = "";
-        var found = Eventually(() => (selected = Run("osascript", "-e", "tell application \"Finder\" to get POSIX path of (item 1 of (get selection) as alias)")) == file, step);
-        Check(check, "ShowItemInFolder selects the file in Finder", found, selected);
-        Run("osascript", "-e", "tell application \"Finder\" to close front window");
+        var found = Eventually(() => (selected = Run("osascript", "-e", "tell application \"Finder\" to get POSIX path of (item 1 of (get selection) as alias)")) == real, step * 2);
+        var front = found ? "" : Run("osascript", "-e", "tell application \"Finder\" to get POSIX path of (target of front Finder window as alias)");
+        Check(check, "ShowItemInFolder selects the file in Finder", found, $"{selected} | front window: {front}");
+        // Only the window ShowItemInFolder opened; any other Finder window is the user's.
+        if (found) Run("osascript", "-e", "tell application \"Finder\" to close front window");
     }
 
     private static void Check(MessageBoxTest.CheckFn check, string name, bool pass, object? detail = null) => check("macOS shell: " + name, pass, detail);
