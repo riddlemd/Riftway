@@ -7,6 +7,30 @@ public sealed class MacShellAndShortcutTests
     private static HotKey K(string accelerator) => GlobalShortcuts.Key(accelerator);
 
     [Theory]
+    [InlineData("num0", 0x60u)]
+    [InlineData("num9", 0x69u)]
+    [InlineData("numdec", 0x6Eu)]
+    [InlineData("numadd", 0x6Bu)]
+    [InlineData("numsub", 0x6Du)]
+    [InlineData("nummult", 0x6Au)]
+    [InlineData("numdiv", 0x6Fu)]
+    [InlineData("numlock", 0x90u)]
+    [InlineData("capslock", 0x14u)]
+    [InlineData("scrolllock", 0x91u)]
+    [InlineData("printscreen", 0x2Cu)]
+    public void Key_NewNamesAreWindowsVirtualKeys(string key, uint virtualKey)
+        => Assert.Equal(new HotKey(0x2, virtualKey), K("Ctrl+" + key));
+
+    [Theory]
+    [InlineData("!", 0x4u, 0x31u)]
+    [InlineData("@", 0x4u, 0x32u)]
+    [InlineData(")", 0x4u, 0x30u)]
+    [InlineData("Plus", 0x4u, 0xBBu)]
+    [InlineData("=", 0u, 0xBBu)]
+    public void Key_ShiftedCharacterRegistersWithShift(string key, uint shift, uint virtualKey)
+        => Assert.Equal(new HotKey(0x2 | shift, virtualKey), K("Ctrl+" + key));
+
+    [Theory]
     [InlineData("Shift+K", 0x200u)]
     [InlineData("Ctrl+K", 0x1000u)]
     [InlineData("Alt+K", 0x800u)]
@@ -47,6 +71,14 @@ public sealed class MacShellAndShortcutTests
     [InlineData(0xBB, 0x18, '=')] // Plus is the = key
     [InlineData(0xDE, 0x27, '\'')]
     [InlineData(0x10, 0x38, '\0')] // Shift has no character
+    [InlineData(0x14, 0x39, '\0')] // CapsLock
+    [InlineData(0x60, 0x52, '0')] // Num0
+    [InlineData(0x69, 0x5C, '9')] // Num9
+    [InlineData(0x6A, 0x43, '*')] // NumMult
+    [InlineData(0x6B, 0x45, '+')] // NumAdd
+    [InlineData(0x6D, 0x4E, '-')] // NumSub
+    [InlineData(0x6E, 0x41, '.')] // NumDec
+    [InlineData(0x6F, 0x4B, '/')] // NumDiv
     public void ForWindowsKeyCode_IsChromiumsTable(int vk, int macKeyCode, char character)
         => Assert.Equal((macKeyCode, character), MacKeyCodes.ForWindowsKeyCode(vk));
 
@@ -56,6 +88,9 @@ public sealed class MacShellAndShortcutTests
     [InlineData(0xB3)] // MediaPlayPause
     [InlineData(0xAF)] // VolumeUp
     [InlineData(0x13)] // Pause: Chromium lists a character but no key code, so neither counts
+    [InlineData(0x2C)] // PrintScreen
+    [InlineData(0x90)] // NumLock
+    [InlineData(0x91)] // ScrollLock
     public void ForWindowsKeyCode_NoMacKeyCode_IsMinusOneWithoutCharacter(int vk)
         => Assert.Equal((MacKeyCodes.None, '\0'), MacKeyCodes.ForWindowsKeyCode(vk));
 
