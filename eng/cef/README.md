@@ -109,15 +109,14 @@ checks that `Transparent` is still ignored (W24). It starts `xcompmgr` itself af
 The same goes for `LinuxPatchedInputAsync` (0002, real X input through xdotool), `ThemeAsync`'s page checks after a
 GTK theme change (0003) and `LinuxActivationTokenAsync` (0004, the next window's `_NET_STARTUP_ID`). None has run yet.
 
-### Wiring left for other branches
+### Wiring
 
-The Linux code that 0002 and 0004 serve is not on this branch yet. After the merges:
-
-- `linux-integrate`'s `BrowserWindow.ApplyLinuxEnabled`: call `LinuxCefPatches.SetWindowInputEnabled(_window,
-  _enabled.Enabled)` first and return when it is true, so a patched libcef blocks input in Views (crossing events
-  included) and the X11 input cover stays the stock fallback.
-- `linux-tray`'s `Tray.Linux.cs` `HandleItemCall`: add `case "ProvideXdgActivationToken":
-  LinuxCefPatches.ProvideActivationToken((string)call.Args[0]!); break;` (it runs on the UI thread already).
+- `BrowserWindow.ApplyLinuxEnabled` calls `LinuxCefPatches.SetWindowInputEnabled(_window, _enabled.Enabled)` first
+  and returns when it is true: a patched libcef blocks input in Views (crossing events and keys included) and Oriel
+  adds neither the X11 input cover nor its key filter, as Electron relies on `DisableEventListening` alone. With stock
+  CEF the cover and the dropped keys stay.
+- `Tray.Linux.cs` `HandleItemCall` passes `ProvideXdgActivationToken`'s token to `LinuxCefPatches.ProvideActivationToken`
+  (on the UI thread) and replies as before.
 
 The `cef-build-linux` script builds with `is_official_build=false`. The macOS build with the same defines died at
 startup on a PartitionAlloc DCHECK ([docs/todo.md](../../docs/todo.md#runtime-and-codecs)); if the Linux one does too,

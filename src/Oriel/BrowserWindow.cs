@@ -818,8 +818,8 @@ public sealed unsafe partial class BrowserWindow
         if (increment ? _enabled.IncrementChildModals() : _enabled.DecrementChildModals()) ApplyLinuxEnabled();
     }
 
-    // Keys go to the X focus window, past the input cover, so the keyboard handlers drop them while disabled.
-    private bool BlocksInput => OperatingSystem.IsLinux() && !_enabled.Enabled;
+    // Keys go to the X focus window, past the stock-CEF input cover, so the keyboard handlers drop them while disabled.
+    private bool BlocksInput => OperatingSystem.IsLinux() && _enabled.DropsKeys;
 
     // UI thread. A view's page has a keyboard handler of its own, so it asks the window its view tree hangs from.
     internal static bool BlocksInputAround(View view)
@@ -832,6 +832,9 @@ public sealed unsafe partial class BrowserWindow
     private void ApplyLinuxEnabled()
     {
         if (!OperatingSystem.IsLinux() || _window is null) return;
+        // Patch 0002 blocks keys too, so no key filter is added: Electron relies on DisableEventListening alone.
+        _enabled.BlockedInViews = LinuxCefPatches.SetWindowInputEnabled(_window, _enabled.Enabled);
+        if (_enabled.BlockedInViews) return;
         if (!_enabled.Enabled && _inputCover == 0) _inputCover = X11Window.BlockInput(Hwnd(_window));
         else if (_enabled.Enabled && _inputCover != 0)
         {

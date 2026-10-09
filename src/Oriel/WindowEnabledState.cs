@@ -13,6 +13,13 @@ internal sealed class WindowEnabledState
     /// <summary>The state in force, which <c>isEnabled()</c> reports.</summary>
     public bool Enabled { get; private set; } = true;
 
+    /// <summary>Linux: whether libcef applies <see cref="Enabled"/> in Views itself (CEF patch 0002), with no X11 input
+    /// cover.</summary>
+    public bool BlockedInViews { get; set; }
+
+    /// <summary>Linux: whether the keyboard handlers must drop keys, which pass the stock-CEF input cover.</summary>
+    public bool DropsKeys => !Enabled && !BlockedInViews;
+
     /// <summary>Returns whether <see cref="Enabled"/> changed.</summary>
     public bool SetEnabled(bool enable)
     {

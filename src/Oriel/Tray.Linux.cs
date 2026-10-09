@@ -790,7 +790,11 @@ internal sealed class StatusNotifierItem
             case "ContextMenu":
                 _delegate.ShowContextMenu(new Point((int)call.Args[0]!, (int)call.Args[1]!));
                 break;
-            // Scroll is ignored; the activation token cannot reach Chromium (DRIFT T5).
+            // Stock CEF drops the token (DRIFT T5); the reply is the same either way, as Chromium's.
+            case "ProvideXdgActivationToken":
+                LinuxCefPatches.ProvideActivationToken((string)call.Args[0]!);
+                break;
+            // Scroll is ignored.
         }
         return DbusReply.Empty;
     }

@@ -84,4 +84,24 @@ public sealed class WindowEnabledStateTests
         Assert.True(state.IncrementChildModals());
         Assert.False(state.Enabled);
     }
+
+    [Fact]
+    public void UnderTheStockCover_KeysAreDroppedOnlyWhileDisabled()
+    {
+        var state = new WindowEnabledState();
+        Assert.False(state.DropsKeys);
+        state.SetEnabled(false);
+        Assert.True(state.DropsKeys);
+        state.SetEnabled(true);
+        Assert.False(state.DropsKeys);
+    }
+
+    // Patch 0002's DisableEventListening keeps keys from the window, as in Electron.
+    [Fact]
+    public void BlockedInViews_KeysAreNotDropped()
+    {
+        var state = new WindowEnabledState { BlockedInViews = true };
+        state.SetEnabled(false);
+        Assert.False(state.DropsKeys);
+    }
 }

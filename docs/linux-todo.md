@@ -38,7 +38,7 @@ General items: [todo.md](todo.md).
   - [ ] Crossing events still reach a disabled window's page with stock CEF (DRIFT W5)
     - [x] CEF patch [eng/cef](../eng/cef/README.md) 0002 (`CefWindow::SetEventListeningEnabled`, Electron's
           `DisableEventListening`) and `LinuxCefPatches.SetWindowInputEnabled`; written, not built or run
-    - [ ] Call it first in `ApplyLinuxEnabled`, keeping the X11 input cover and dropped keys for stock CEF
+    - [x] Called first in `ApplyLinuxEnabled`; the X11 input cover and dropped keys stay the stock fallback
     - [ ] Run WindowTest's `LinuxPatchedInputAsync` on the patched libcef (crossing events, clicks, wheel, keys),
           and the modal and `SetEnabled` checks on both libcefs
   - [ ] Check an input method (ibus) composing into a disabled window's focused field
@@ -70,6 +70,6 @@ General items: [todo.md](todo.md).
       patch [eng/cef](../eng/cef/README.md) 0003 clears the GTK style colour cache on the settings notifications;
       written, not built. Run `ThemeAsync`'s patched page checks on it
 - [ ] Tray activation token (linux-tray's T5): CEF patch [eng/cef](../eng/cef/README.md) 0004
-      (`CefWindow::SetXdgActivationToken`) and `LinuxCefPatches.ProvideActivationToken`; written, not built. Once
-      `linux-tray` merges, call it from `Tray.Linux.cs` `HandleItemCall` for `ProvideXdgActivationToken`, then run
+      (`CefWindow::SetXdgActivationToken`) and `LinuxCefPatches.ProvideActivationToken`; written, not built; called
+      from `Tray.Linux.cs` `HandleItemCall` for `ProvideXdgActivationToken`. Run
       WindowTest's `LinuxActivationTokenAsync`. T6 (Chromium's `dbus::Bus`) is not patched: see the eng/cef README
