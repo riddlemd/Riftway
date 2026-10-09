@@ -20,6 +20,33 @@ public enum SystemIdleState
     Unknown,
 }
 
+/// <summary>How hot the system runs. Electron's return value of <c>getCurrentThermalState()</c> and the
+/// <c>state</c> of <c>'thermal-state-change'</c>.</summary>
+public enum ThermalState
+{
+    /// <summary>Electron's <c>unknown</c>; always the answer off macOS.</summary>
+    Unknown,
+
+    /// <summary>Electron's <c>nominal</c>.</summary>
+    Nominal,
+
+    /// <summary>Electron's <c>fair</c>.</summary>
+    Fair,
+
+    /// <summary>Electron's <c>serious</c>.</summary>
+    Serious,
+
+    /// <summary>Electron's <c>critical</c>.</summary>
+    Critical,
+}
+
+/// <summary>The thermal state changed. Electron's <c>'thermal-state-change'</c> data.</summary>
+public sealed class ThermalStateChangedEventArgs(ThermalState state) : EventArgs
+{
+    /// <summary>Electron's <c>state</c>.</summary>
+    public ThermalState State { get; } = state;
+}
+
 /// <summary>The CPU speed limit changed. Electron's <c>'speed-limit-change'</c> data.</summary>
 public sealed class SpeedLimitChangedEventArgs(int limit) : EventArgs
 {
@@ -28,12 +55,15 @@ public sealed class SpeedLimitChangedEventArgs(int limit) : EventArgs
 }
 
 /// <summary>Power and session changes: sleep, wake, power source, screen lock, idle time. Electron's <c>powerMonitor</c>.</summary>
-/// <remarks>Windows and Linux for now: macOS throws <see cref="PlatformNotSupportedException"/>. Use it once the app is
-/// ready; events are raised on the UI thread. On Linux, as in Electron, only suspend, resume and shutdown are raised
-/// (from logind), and the machine never counts as on battery.</remarks>
+/// <remarks>Use it once the app is ready; events are raised on the UI thread. On Linux, as in Electron, only suspend,
+/// resume and shutdown are raised (from logind), and the machine never counts as on battery. On macOS, as Chromium's
+/// <c>PowerMonitorDeviceSource</c> and Electron's <c>MacLockMonitor</c>: IOKit sleep and wake, the
+/// <c>IOPMPowerSource</c> battery, <c>NSProcessInfo</c> thermal state, the CPU speed limit, the screen lock and the
+/// session's activity, all started by the first handler of any event.</remarks>
 public static class PowerMonitor
 {
-    private static EventHandler? s_suspended, s_resumed, s_onAc, s_onBattery, s_locked, s_unlocked;
+    private static EventHandler? s_suspended, s_resumed, s_onAc, s_onBattery, s_locked, s_unlocked, s_becameActive, s_resignedActive;
+    private static EventHandler<ThermalStateChangedEventArgs>? s_thermal;
     private static EventHandler<CancelEventArgs>? s_shutdown;
     private static EventHandler<SpeedLimitChangedEventArgs>? s_speedLimit;
     private static bool? s_onBatteryLast;
@@ -56,14 +86,22 @@ public static class PowerMonitor
     public static event EventHandler? OnBattery { add => Add(ref s_onBattery, value); remove => s_onBattery -= value; }
 
     /// <summary>The system is shutting down; set <see cref="CancelEventArgs.Cancel"/> (Electron's
-    /// <c>event.preventDefault()</c>) to hold the shutdown back for as long as logind allows. Linux only: never raised on
-    /// Windows, as in Electron. Electron's <c>'shutdown'</c>.</summary>
-    /// <remarks>While there is a handler, Oriel holds a logind shutdown delay lock, as Electron does.</remarks>
+    /// <c>event.preventDefault()</c>) to hold the shutdown back: on Linux for as long as logind allows, on macOS by
+    /// ignoring the <c>terminate:</c> that follows. Never raised on Windows, as in Electron. Electron's
+    /// <c>'shutdown'</c>.</summary>
+    /// <remarks>On Linux, while there is a handler, Oriel holds a logind shutdown delay lock, as Electron does. On macOS it
+    /// is raised on <c>NSWorkspaceWillPowerOffNotification</c>, and, as in Electron, once one shutdown has been held back
+    /// <c>terminate:</c> is ignored for the rest of the process.</remarks>
     public static event EventHandler<CancelEventArgs>? Shutdown
     {
         add
         {
-            if (!OperatingSystem.IsWindows() && !OperatingSystem.IsLinux()) throw NotYet();
+            if (OperatingSystem.IsMacOS())
+            {
+                MacPowerMonitor.Start();
+                s_shutdown += value;
+                return;
+            }
             if (OperatingSystem.IsWindows()) SystemHost.Start();
             s_shutdown += value;
             if (OperatingSystem.IsLinux()) LinuxPowerMonitor.Start().SetListeningForShutdown(s_shutdown is not null);
@@ -75,20 +113,49 @@ public static class PowerMonitor
         }
     }
 
-    /// <summary>The screen was locked. Windows only; never raised on Linux, as in Electron. Electron's
+    /// <summary>The screen was locked. Windows and macOS; never raised on Linux, as in Electron. Electron's
     /// <c>'lock-screen'</c>.</summary>
     public static event EventHandler? ScreenLocked { add => Add(ref s_locked, value); remove => s_locked -= value; }
 
-    /// <summary>The screen was unlocked. Windows only; never raised on Linux, as in Electron. Electron's
+    /// <summary>The screen was unlocked. Windows and macOS; never raised on Linux, as in Electron. Electron's
     /// <c>'unlock-screen'</c>.</summary>
     public static event EventHandler? ScreenUnlocked { add => Add(ref s_unlocked, value); remove => s_unlocked -= value; }
 
-    /// <summary>The CPU speed limit changed, sampled once a second. Windows only; never raised on macOS or Linux. Electron's
-    /// <c>'speed-limit-change'</c>.</summary>
+    /// <summary>The user's session became active (fast user switching back). macOS only. Electron's
+    /// <c>'user-did-become-active'</c>.</summary>
+    public static event EventHandler? UserDidBecomeActive { add => Add(ref s_becameActive, value); remove => s_becameActive -= value; }
+
+    /// <summary>The user's session became inactive (fast user switching away). macOS only. Electron's
+    /// <c>'user-did-resign-active'</c>.</summary>
+    public static event EventHandler? UserDidResignActive { add => Add(ref s_resignedActive, value); remove => s_resignedActive -= value; }
+
+    /// <summary>The thermal state changed. macOS only: Chromium has no thermal source on Windows or Linux. Electron's
+    /// <c>'thermal-state-change'</c>.</summary>
+    public static event EventHandler<ThermalStateChangedEventArgs>? ThermalStateChanged
+    {
+        add
+        {
+            if (OperatingSystem.IsMacOS()) MacPowerMonitor.Start();
+            else if (OperatingSystem.IsLinux()) LinuxPowerMonitor.Start();
+            else if (OperatingSystem.IsWindows()) SystemHost.Start();
+            else throw NotYet();
+            s_thermal += value;
+        }
+        remove => s_thermal -= value;
+    }
+
+    /// <summary>The CPU speed limit changed: on Windows sampled once a second, on macOS when IOKit announces a CPU power
+    /// change. Never raised on Linux. Electron's <c>'speed-limit-change'</c>.</summary>
     public static event EventHandler<SpeedLimitChangedEventArgs>? SpeedLimitChanged
     {
         add
         {
+            if (OperatingSystem.IsMacOS())
+            {
+                MacPowerMonitor.Start();
+                s_speedLimit += value;
+                return;
+            }
             if (OperatingSystem.IsLinux())
             {
                 LinuxPowerMonitor.Start();
@@ -105,26 +172,41 @@ public static class PowerMonitor
 
     /// <summary>Whether the machine runs on battery; always false on Linux, where Chromium's power monitor source is a stub
     /// that reports external power. Electron's <c>powerMonitor.isOnBatteryPower()</c>.</summary>
-    public static bool IsOnBatteryPower() => OperatingSystem.IsWindows() ? WindowsSystem.OnBattery() ?? false : OperatingSystem.IsLinux() ? false : throw NotYet();
+    public static bool IsOnBatteryPower()
+        => OperatingSystem.IsWindows() ? WindowsSystem.OnBattery() ?? false
+            : OperatingSystem.IsLinux() ? false
+            : OperatingSystem.IsMacOS() ? MacPowerMonitor.BatteryStatus() == BatteryPowerStatus.Battery
+            : throw NotYet();
+
+    /// <summary>The system's thermal state; <see cref="ThermalState.Unknown"/> off macOS, as Chromium. Electron's
+    /// <c>powerMonitor.getCurrentThermalState()</c>.</summary>
+    public static ThermalState GetCurrentThermalState()
+        => OperatingSystem.IsMacOS() ? PowerRules.ThermalStateOf(MacPower.ThermalState())
+            : OperatingSystem.IsWindows() || OperatingSystem.IsLinux() ? ThermalState.Unknown
+            : throw NotYet();
 
     /// <summary>Electron's <c>powerMonitor.onBatteryPower</c>.</summary>
     public static bool OnBatteryPower => IsOnBatteryPower();
 
     /// <summary>Seconds since the last keyboard or mouse input. Electron's <c>powerMonitor.getSystemIdleTime()</c>.</summary>
-    /// <remarks>On Linux, the X screen saver extension's idle time; 0 when it cannot be read.</remarks>
+    /// <remarks>On Linux, the X screen saver extension's idle time; 0 when it cannot be read. On macOS,
+    /// <c>CGEventSourceSecondsSinceLastEventType</c> for any input in the combined session.</remarks>
     public static int GetSystemIdleTime()
-        => OperatingSystem.IsWindows() ? WindowsSystem.IdleSeconds() : OperatingSystem.IsLinux() ? X11System.IdleSeconds() : throw NotYet();
+        => OperatingSystem.IsWindows() ? WindowsSystem.IdleSeconds() : OperatingSystem.IsLinux() ? X11System.IdleSeconds()
+            : OperatingSystem.IsMacOS() ? MacPower.IdleSeconds() : throw NotYet();
 
     /// <summary>Locked, idle after <paramref name="idleThreshold"/> seconds without input, or active. Electron's
     /// <c>powerMonitor.getSystemIdleState()</c>.</summary>
     /// <remarks>On Linux "locked" comes from the desktop's screen saver service on the session bus, or, until one has
-    /// answered, from the X screen saver, as Chromium's <c>CheckIdleStateIsLocked</c>.</remarks>
+    /// answered, from the X screen saver, as Chromium's <c>CheckIdleStateIsLocked</c>. On macOS "locked" means the screen
+    /// saver runs or the screen is locked, as Chromium's screen monitor has heard since the app became ready.</remarks>
     /// <exception cref="ArgumentOutOfRangeException"><paramref name="idleThreshold"/> is not above 0, where Electron throws
     /// a <c>TypeError</c>.</exception>
     public static SystemIdleState GetSystemIdleState(int idleThreshold)
     {
         ArgumentOutOfRangeException.ThrowIfNegativeOrZero(idleThreshold);
         if (OperatingSystem.IsWindows()) return PowerRules.IdleState(WindowsSystem.IdleSeconds(), idleThreshold, WindowsSystem.IsLocked());
+        if (OperatingSystem.IsMacOS()) return PowerRules.IdleState(MacPower.IdleSeconds(), idleThreshold, MacPower.IdleLocked);
         if (!OperatingSystem.IsLinux()) throw NotYet();
         var locked = PowerRules.LinuxLocked(LinuxScreenSaverWatcher.Instance.Locked, X11System.ScreenSaverActive);
         return PowerRules.IdleState(locked ? 0 : X11System.IdleSeconds(), idleThreshold, locked);
@@ -134,6 +216,12 @@ public static class PowerMonitor
 
     private static void Add(ref EventHandler? field, EventHandler? handler)
     {
+        if (OperatingSystem.IsMacOS())
+        {
+            MacPowerMonitor.Start();
+            field += handler;
+            return;
+        }
         if (OperatingSystem.IsLinux())
         {
             LinuxPowerMonitor.Start();
@@ -199,7 +287,13 @@ public static class PowerMonitor
         catch (InvalidOperationException) { return true; }
     }
 
-    private static void Raise(PowerEvent e)
+    /// <summary>The thermal state changed; UI thread.</summary>
+    internal static void RaiseThermal(ThermalState state) => s_thermal?.Invoke(null, new ThermalStateChangedEventArgs(state));
+
+    /// <summary>The speed limit changed; UI thread.</summary>
+    internal static void RaiseSpeedLimit(int limit) => s_speedLimit?.Invoke(null, new SpeedLimitChangedEventArgs(limit));
+
+    internal static void Raise(PowerEvent e)
     {
         var handler = e switch
         {
@@ -209,6 +303,8 @@ public static class PowerMonitor
             PowerEvent.OnBattery => s_onBattery,
             PowerEvent.Lock => s_locked,
             PowerEvent.Unlock => s_unlocked,
+            PowerEvent.UserDidBecomeActive => s_becameActive,
+            PowerEvent.UserDidResignActive => s_resignedActive,
             _ => null,
         };
         handler?.Invoke(null, EventArgs.Empty);
@@ -225,6 +321,16 @@ internal enum PowerEvent
     OnBattery,
     Lock,
     Unlock,
+    UserDidBecomeActive,
+    UserDidResignActive,
+}
+
+/// <summary>Chromium's <c>PowerStateObserver::BatteryPowerStatus</c>.</summary>
+internal enum BatteryPowerStatus
+{
+    Unknown,
+    Battery,
+    External,
 }
 
 internal static class PowerRules
@@ -262,9 +368,76 @@ internal static class PowerRules
     /// X screen saver is active (read only then).</summary>
     internal static bool LinuxLocked(bool? dbusLocked, Func<bool> x11ScreenSaverActive) => dbusLocked ?? x11ScreenSaverActive();
 
+    /// <summary>Chromium's <c>NSProcessInfoThermalStateToDeviceThermalState</c>; a value AppKit does not define (Chromium's
+    /// <c>NOTREACHED</c>) counts as unknown.</summary>
+    internal static ThermalState ThermalStateOf(long nsProcessInfoThermalState) => nsProcessInfoThermalState switch
+    {
+        0 => ThermalState.Nominal,
+        1 => ThermalState.Fair,
+        2 => ThermalState.Serious,
+        3 => ThermalState.Critical,
+        _ => ThermalState.Unknown,
+    };
+
+    /// <summary>Chromium's <c>PowerMonitorDeviceSource::SystemPowerEventCallback</c>: will-sleep is suspend, will-power-on
+    /// is resume; can-sleep and the rest raise nothing.</summary>
+    internal static PowerEvent MacSystemPowerEventOf(uint message) => message switch
+    {
+        0xE0000280 => PowerEvent.Suspend,
+        0xE0000320 => PowerEvent.Resume,
+        _ => PowerEvent.None,
+    };
+
+    /// <summary>Chromium's <c>BatteryLevelProviderMac</c> and <c>OnBatteryStateReceived</c>: no <c>IOPMPowerSource</c>
+    /// means no batteries, which counts as external power; a battery whose properties are missing is unknown.</summary>
+    internal static BatteryPowerStatus MacBatteryStatus(MacBatteryReading r)
+    {
+        if (!r.HasService) return BatteryPowerStatus.External;
+        if (!r.PropertiesRead || r.BatteryInstalled != true || r.ExternalConnected is not { } external || !r.HasCapacities || !r.HasVoltage)
+            return BatteryPowerStatus.Unknown;
+        return external ? BatteryPowerStatus.External : BatteryPowerStatus.Battery;
+    }
+
+    /// <summary>Chromium's <c>NotifyPowerStateChange</c> (only a change notifies) and Electron's
+    /// <c>OnBatteryPowerStatusChange</c> (unknown is ignored).</summary>
+    internal static PowerEvent BatteryEventOf(BatteryPowerStatus was, BatteryPowerStatus now)
+        => now == was ? PowerEvent.None : now switch
+        {
+            BatteryPowerStatus.Battery => PowerEvent.OnBattery,
+            BatteryPowerStatus.External => PowerEvent.OnAc,
+            _ => PowerEvent.None,
+        };
+
+    /// <summary>Electron's <c>MacLockMonitor</c> events.</summary>
+    internal static PowerEvent MacSessionEventOf(MacSessionNotification n) => n switch
+    {
+        MacSessionNotification.ScreenLocked => PowerEvent.Lock,
+        MacSessionNotification.ScreenUnlocked => PowerEvent.Unlock,
+        MacSessionNotification.SessionDidBecomeActive => PowerEvent.UserDidBecomeActive,
+        MacSessionNotification.SessionDidResignActive => PowerEvent.UserDidResignActive,
+        _ => PowerEvent.None,
+    };
+
     /// <summary>Electron's order: locked first, then idle once the input has been quiet for the threshold.</summary>
     internal static SystemIdleState IdleState(int idleSeconds, int threshold, bool locked)
         => locked ? SystemIdleState.Locked : idleSeconds >= threshold ? SystemIdleState.Idle : SystemIdleState.Active;
+}
+
+/// <summary>Chromium's <c>PowerMonitor::NotifySuspend</c> and <c>NotifyResume</c>: a suspend while suspended, or a resume
+/// while awake, notifies nothing.</summary>
+internal sealed class SuspendFilter
+{
+    private bool _suspended;
+
+    /// <summary>Whether <paramref name="e"/> is raised; anything but suspend and resume passes.</summary>
+    internal bool Accept(PowerEvent e)
+    {
+        if (e is not (PowerEvent.Suspend or PowerEvent.Resume)) return true;
+        var suspend = e == PowerEvent.Suspend;
+        if (suspend == _suspended) return false;
+        _suspended = suspend;
+        return true;
+    }
 }
 
 /// <summary>Chromium's <c>SpeedLimitObserverWin</c> smoothing: a 10-sample moving average that stays at 100 until it is full.</summary>

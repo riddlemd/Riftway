@@ -14,6 +14,7 @@ internal static class MacApplicationMenu
     private static bool s_rebuildPosted;
     private static MacMenuController? s_barController;
     private static MacMenuController? s_dockController;
+    private static readonly List<MacMenuController> s_popupControllers = [];
 
     /// <summary>Starts following the application menu; call on the UI thread once CEF is ready.</summary>
     internal static void Install()
@@ -84,6 +85,27 @@ internal static class MacApplicationMenu
         return MacMenu.Autorelease(nsMenu);
     }
 
+    /// <summary>A tray menu as Electron's <c>ElectronMenuController initWithModel:useDefaultAccelerator:NO</c> builds it:
+    /// an NSMenu (owned by the controller until <see cref="ReleasePopupMenu"/>) whose delegate reports to
+    /// <paramref name="menu"/>. UI thread.</summary>
+    internal static MacMenuController CreatePopupMenu(Menu menu)
+    {
+        MacMenu.Chosen = OnChosen;
+        InstallMenuEvents();
+        var nsMenu = MacMenu.CreateMenu(string.Empty);
+        foreach (var item in menu.Items) AddItem(nsMenu, item, inMenuBar: false);
+        MacMenu.SetDelegate(nsMenu);
+        var controller = new MacMenuController(menu, nsMenu, MacMenuTree.Instance);
+        s_popupControllers.Add(controller);
+        return controller;
+    }
+
+    /// <summary>Forgets a <see cref="CreatePopupMenu"/> controller and releases its NSMenu. UI thread.</summary>
+    internal static void ReleasePopupMenu(MacMenuController controller)
+    {
+        if (s_popupControllers.Remove(controller)) MacMenu.Release(controller.NativeMenu);
+    }
+
     private static void AddItem(nint nsMenu, MenuItem item) => AddItem(nsMenu, item, inMenuBar: true);
 
     private static void AddItem(nint nsMenu, MenuItem item, bool inMenuBar)
@@ -94,7 +116,7 @@ internal static class MacApplicationMenu
             return;
         }
 
-        var accelerator = item.Accelerator is { } text ? Accelerator.Parse(text, macOS: true) : (Accelerator?)null;
+        var accelerator = MacMenuItemState.ShownAccelerator(item, inMenuBar) is { } text ? Accelerator.Parse(text, macOS: true) : (Accelerator?)null;
         var native = MacMenu.AddItem(nsMenu, MenuLabels.WithoutMnemonics(item.Label), item.CommandId,
             accelerator?.MacKeyEquivalent ?? string.Empty, accelerator is { } a ? MaskOf(a.Modifiers) : 0,
             MenuRoles.MacSelector(item.Role));
@@ -129,7 +151,8 @@ internal static class MacApplicationMenu
         var top = menu;
         for (var up = MacMenu.Supermenu(top); up != 0; up = MacMenu.Supermenu(top)) top = up;
         if (s_barController?.NativeMenu == top) return s_barController;
-        return s_dockController?.NativeMenu == top ? s_dockController : null;
+        if (s_dockController?.NativeMenu == top) return s_dockController;
+        return s_popupControllers.Find(c => c.NativeMenu == top);
     }
 
     // macOS adds a hidden duplicate "Toggle Full Screen" to a submenu that has a delegate; Electron removes it.
@@ -152,7 +175,14 @@ internal static class MacApplicationMenu
 
     private static void OnChosen(nint tag)
     {
-        if ((s_shown?.FindByCommandId((int)tag) ?? s_dock?.FindByCommandId((int)tag)) is not { } item) return;
+        var item = s_shown?.FindByCommandId((int)tag) ?? s_dock?.FindByCommandId((int)tag);
+        // Command ids are unique across menus, so the first popup menu that has one owns it.
+        foreach (var c in s_popupControllers)
+        {
+            if (item is not null) break;
+            item = c.Menu.FindByCommandId((int)tag);
+        }
+        if (item is null) return;
         var (flags, keyDown) = MacMenu.CurrentEvent();
         item.Activate(BrowserWindow.GetFocusedWindow(), KeyboardEvent.FromMacModifiers(flags, keyDown));
     }
@@ -163,6 +193,10 @@ internal static class MacApplicationMenu
 /// whatever the type. <see cref="RoleSelector"/> is the role's AppKit action, set again after the image is cleared.</remarks>
 internal readonly record struct MacMenuItemState(bool Enabled, bool Hidden, bool Checked, string Title, string? RoleSelector)
 {
+    /// <summary>Electron's <c>useDefaultAccelerator</c>: YES for the menu bar, NO for the Dock and tray menus, where a
+    /// role shows only an accelerator set on the item.</summary>
+    internal static string? ShownAccelerator(MenuItem item, bool inMenuBar) => inMenuBar ? item.Accelerator : item.ExplicitAccelerator;
+
     /// <summary>The state for <paramref name="item"/>, or null for the items Electron's NSMenuItem carries no model for
     /// (separators, the Services submenu), which it leaves alone.</summary>
     internal static MacMenuItemState? Of(MenuItem item)
@@ -219,6 +253,18 @@ internal sealed class MacMenuController(Menu menu, nint nativeMenu, IMacMenuTree
     internal Menu Menu { get; } = menu;
 
     internal nint NativeMenu { get; } = nativeMenu;
+
+    /// <summary>Electron's <c>isMenuOpen</c>: between <c>menuWillOpen:</c> and the top level's close.</summary>
+    internal bool IsMenuOpen => _isMenuOpen;
+
+    /// <summary>Electron's <c>cancel</c>: an open menu stops tracking and raises <c>menu-will-close</c> at once.</summary>
+    internal void Cancel(Action<nint> cancelTracking)
+    {
+        if (!_isMenuOpen) return;
+        cancelTracking(NativeMenu);
+        _isMenuOpen = false;
+        Menu.OnMenuWillClose();
+    }
 
     /// <summary><c>menuNeedsUpdate:</c>, for <paramref name="menu"/> or any submenu: AppKit sends it before the menu
     /// shows and before it matches a key equivalent in it.</summary>

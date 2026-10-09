@@ -203,7 +203,12 @@ public sealed unsafe partial class OrielApp
         IsSandboxed = SandboxChildren(_sandboxRequested, sandboxInfo is not null, OperatingSystem.IsLinux(), Environment.GetCommandLineArgs());
 
         CefRuntime.Load(CefLayout.MainProcessLibrary());
-        if (OperatingSystem.IsMacOS()) MacApplication.Install();
+        if (OperatingSystem.IsMacOS())
+        {
+            MacApplication.Install();
+            // Electron's ui::InitIdleMonitor runs before ready, so a lock begun before the first idle query still counts.
+            MacPower.InstallScreenMonitor();
+        }
 
         var schemes = Protocol.TakePrivilegedSchemes();
         var schemeSwitch = schemes.Count > 0 ? SchemeSwitch.Format(schemes) : null;
@@ -377,6 +382,8 @@ public sealed unsafe partial class OrielApp
         NativeTheme.OnReady();
         // Before Ready, so the first window's page can already load from a custom scheme.
         Protocol.OnContextInitialized();
+        // Electron's terminate: runs Browser::Quit.
+        if (OperatingSystem.IsMacOS()) MacApplication.Quit = Quit;
         IsReady = true;
         Ready?.Invoke(this, EventArgs.Empty);
         // After Ready, so an app that sets its own menu there never shows the default (Electron sets it just before
