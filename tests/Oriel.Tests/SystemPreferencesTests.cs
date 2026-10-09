@@ -137,12 +137,31 @@ public sealed class SystemPreferencesTests
     [InlineData("force-prefers-reduced-motion", false)]
     [InlineData("--force-prefers-reduced-motion-x", false)]
     public void HasSwitch_ParsesLikeBaseCommandLine(string arg, bool expected) =>
-        Assert.Equal(expected, SystemPreferences.HasSwitch(["app.exe", arg], "force-prefers-reduced-motion"));
+        Assert.Equal(expected, SystemPreferences.HasSwitch(["app.exe", arg], "force-prefers-reduced-motion", windows: true));
 
     [Fact]
     public void HasSwitch_SkipsTheProgramAndStopsAtDoubleDash()
     {
-        Assert.False(SystemPreferences.HasSwitch(["--force-prefers-reduced-motion"], "force-prefers-reduced-motion"));
-        Assert.False(SystemPreferences.HasSwitch(["app.exe", "--", "--force-prefers-reduced-motion"], "force-prefers-reduced-motion"));
+        Assert.False(SystemPreferences.HasSwitch(["--force-prefers-reduced-motion"], "force-prefers-reduced-motion", windows: true));
+        Assert.False(SystemPreferences.HasSwitch(["app.exe", "--", "--force-prefers-reduced-motion"], "force-prefers-reduced-motion", windows: true));
+        Assert.False(SystemPreferences.HasSwitch(["app", "--", "--force-prefers-reduced-motion"], "force-prefers-reduced-motion", windows: false));
+    }
+
+    [Theory]
+    [InlineData("--force-prefers-reduced-motion", true)]
+    [InlineData("-force-prefers-reduced-motion", true)]
+    [InlineData("--force-prefers-reduced-motion=1", true)]
+    [InlineData("/force-prefers-reduced-motion", false)]
+    [InlineData("--FORCE-prefers-reduced-motion", false)]
+    public void HasSwitch_OnPosixTakesDashesOnlyAndKeepsCase(string arg, bool expected) =>
+        Assert.Equal(expected, SystemPreferences.HasSwitch(["app", arg], "force-prefers-reduced-motion", windows: false));
+
+    [Fact]
+    public void ForcedReducedMotion_ReducedSwitchWinsAndNoneIsNull()
+    {
+        Assert.Null(SystemPreferences.ForcedReducedMotion(["app"], windows: false));
+        Assert.True(SystemPreferences.ForcedReducedMotion(["app", "--force-prefers-reduced-motion"], windows: false));
+        Assert.False(SystemPreferences.ForcedReducedMotion(["app", "--force-prefers-no-reduced-motion"], windows: false));
+        Assert.True(SystemPreferences.ForcedReducedMotion(["app", "--force-prefers-no-reduced-motion", "--force-prefers-reduced-motion"], windows: false));
     }
 }

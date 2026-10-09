@@ -4,7 +4,9 @@ using Oriel;
 using Oriel.Cef;
 using Oriel.Cef.Platform;
 
-/// <summary>systemPreferences on Windows, each value read back through Win32 or the registry by the test itself.</summary>
+/// <summary>systemPreferences on Windows, each value read back through Win32 or the registry by the test itself; and on
+/// macOS, read back through <c>defaults</c>, <c>ioreg</c> and Oriel's other modules. The Linux checks are in LinuxThemeAsync,
+/// which owns the fake portal.</summary>
 static unsafe class SystemPreferencesChecks
 {
     private const uint WmSysColorChange = 0x0015;
@@ -23,7 +25,164 @@ static unsafe class SystemPreferencesChecks
     ];
 
     internal static Task RunAsync(Action<string, bool, object?> check, TimeSpan step) =>
-        Task.Run(() => { if (OperatingSystem.IsWindows()) Run(check, step); });
+        Task.Run(() =>
+        {
+            if (OperatingSystem.IsWindows()) Run(check, step);
+            else if (OperatingSystem.IsMacOS()) RunMac(check, step);
+        });
+
+    [System.Runtime.Versioning.SupportedOSPlatform("macos")]
+    private static void RunMac(Action<string, bool, object?> check, TimeSpan step)
+    {
+        void Try(string name, Func<(bool Pass, object? Detail)> test)
+        {
+            try
+            {
+                var (pass, detail) = test();
+                check(name, pass, detail);
+            }
+            catch (Exception e) { check(name, false, $"threw {e.GetType().Name}: {e.Message}"); }
+        }
+        static bool IsHex(string s, bool hash) => s.Length == (hash ? 9 : 8) && (!hash || s[0] == '#')
+            && s[(hash ? 1 : 0)..].All(c => c is >= '0' and <= '9' or >= 'A' and <= 'F');
+
+        string[] macNames =
+        [
+            "control-background", "control", "control-text", "disabled-control-text", "find-highlight", "grid", "header-text",
+            "highlight", "keyboard-focus-indicator", "label", "link", "placeholder-text", "quaternary-label",
+            "scrubber-textured-background", "secondary-label", "selected-content-background", "selected-control",
+            "selected-control-text", "selected-menu-item-text", "selected-text-background", "selected-text", "separator", "shadow",
+            "tertiary-label", "text-background", "text", "under-page-background", "unemphasized-selected-content-background",
+            "unemphasized-selected-text-background", "unemphasized-selected-text", "window-background", "window-frame-text",
+        ];
+        Try("systemPreferences (macOS): GetColor gives #RRGGBBAA for all 32 Electron names, GetSystemColor for all 9", () =>
+        {
+            var bad = macNames.Select(n => (n, c: SystemPreferences.GetColor(n)))
+                .Concat(new[] { "blue", "brown", "gray", "green", "orange", "pink", "purple", "red", "yellow" }.Select(n => (n, c: SystemPreferences.GetSystemColor(n))))
+                .Where(x => !IsHex(x.c, hash: true)).Select(x => $"{x.n}={x.c}").ToList();
+            return (bad.Count == 0, bad.Count == 0 ? $"label={SystemPreferences.GetColor("label")} blue={SystemPreferences.GetSystemColor("blue")}" : string.Join("; ", bad));
+        });
+        Try("systemPreferences (macOS): GetAccentColor is opaque RRGGBBAA without #", () =>
+        {
+            var accent = SystemPreferences.GetAccentColor();
+            return (IsHex(accent, hash: false) && accent.EndsWith("FF", StringComparison.Ordinal), accent);
+        });
+
+        // Dynamic colours and the appearance resolve on the main thread against the app's appearance, which ThemeSource sets.
+        var source = NativeTheme.ThemeSource;
+        try
+        {
+            NativeTheme.ThemeSource = ThemeSource.Dark;
+            var darkAppearance = SystemPreferences.GetEffectiveAppearance();
+            var darkLabel = SystemPreferences.GetColor("label");
+            NativeTheme.ThemeSource = ThemeSource.Light;
+            var lightAppearance = SystemPreferences.GetEffectiveAppearance();
+            var lightLabel = SystemPreferences.GetColor("label");
+            check("systemPreferences (macOS): GetEffectiveAppearance follows the app's appearance (Dark, then Light)",
+                darkAppearance == SystemAppearance.Dark && lightAppearance == SystemAppearance.Light && SystemPreferences.EffectiveAppearance == SystemAppearance.Light,
+                $"{darkAppearance} / {lightAppearance}");
+            check("systemPreferences (macOS): GetColor(label) resolves against the app's appearance (light text on dark)",
+                Convert.ToInt32(darkLabel[1..3], 16) > 0xC0 && Convert.ToInt32(lightLabel[1..3], 16) < 0x40, $"dark={darkLabel} light={lightLabel}");
+            NativeTheme.ThemeSource = ThemeSource.System;
+            var systemDark = Defaults("read -g AppleInterfaceStyle") == "Dark";
+            check("systemPreferences (macOS): with ThemeSource System the appearance is the system's (defaults AppleInterfaceStyle)",
+                SystemPreferences.GetEffectiveAppearance() == (systemDark ? SystemAppearance.Dark : SystemAppearance.Light), $"system dark={systemDark}");
+        }
+        finally { NativeTheme.ThemeSource = source; }
+
+#pragma warning disable CS0618 // The deprecated property is part of what is checked.
+        Try("systemPreferences (macOS): accessibilityDisplayShouldReduceTransparency matches NativeTheme.PrefersReducedTransparency",
+            () => (SystemPreferences.AccessibilityDisplayShouldReduceTransparency == NativeTheme.PrefersReducedTransparency, NativeTheme.PrefersReducedTransparency));
+#pragma warning restore CS0618
+        Try("systemPreferences (macOS): IsSwipeTrackingFromScrollEventsEnabled matches AppleEnableSwipeNavigateWithScrolls (on when unset)", () =>
+        {
+            var raw = Defaults("read -g AppleEnableSwipeNavigateWithScrolls");
+            var want = raw is null || raw == "1";
+            return (SystemPreferences.IsSwipeTrackingFromScrollEventsEnabled() == want, $"defaults={raw ?? "unset"}");
+        });
+        Try("systemPreferences (macOS): GetAnimationSettings follows Reduce motion and NSScrollAnimationEnabled", () =>
+        {
+            var s = SystemPreferences.GetAnimationSettings();
+            var reduce = Defaults("read com.apple.universalaccess reduceMotion") == "1";
+            var scroll = Defaults("read -g NSScrollAnimationEnabled");
+            return (s.PrefersReducedMotion == reduce && s.ShouldRenderRichAnimation == !reduce && s.ScrollAnimationsEnabledBySystem == (scroll == "1"),
+                $"{s} vs reduceMotion={reduce} NSScrollAnimationEnabled={scroll ?? "unset"}");
+        });
+        Try("systemPreferences (macOS): IsTrustedAccessibilityClient(false) is AXIsProcessTrusted", () =>
+            (SystemPreferences.IsTrustedAccessibilityClient(false) == Oriel.Cef.Platform.MacHotKeys.IsTrustedAccessibilityClient(), SystemPreferences.IsTrustedAccessibilityClient(false)));
+        Try("systemPreferences (macOS): CanPromptTouchID is false without a Touch ID sensor", () =>
+        {
+            var sensor = (Run("/usr/sbin/ioreg", "-c AppleBiometricSensor -r") ?? "").Contains("AppleBiometricSensor", StringComparison.Ordinal);
+            var can = SystemPreferences.CanPromptTouchID();
+            return (sensor || !can, $"sensor={sensor} canPrompt={can} (lid closed or no enrolled finger also gives false)");
+        });
+        foreach (var type in new[] { MediaAccessType.Camera, MediaAccessType.Microphone })
+        {
+            Try($"systemPreferences (macOS): AskForMediaAccessAsync({type}) answers an already-decided consent without a prompt", () =>
+            {
+                var status = SystemPreferences.GetMediaAccessStatus(type);
+                if (status is not (MediaAccessStatus.Granted or MediaAccessStatus.Denied)) return (true, $"{status}: skipped, asking would prompt");
+                var ask = SystemPreferences.AskForMediaAccessAsync(type);
+                return (ask.Wait(step) && ask.Result == (status == MediaAccessStatus.Granted), $"{status} -> {(ask.IsCompleted ? ask.Result : "pending")}");
+            });
+        }
+
+        // Distributed notifications come back through the system's daemon to the main run loop.
+        var name = $"dev.oriel.windowtest.sysprefs.{Guid.NewGuid():N}";
+        var got = new List<(SubscribedNotification N, bool OnUi)>();
+        var id = SystemPreferences.SubscribeNotification(name, n => { lock (got) got.Add((n, CefThread.IsOnUiThread)); });
+        int Got() { lock (got) return got.Count; }
+        Try("systemPreferences (macOS): PostNotification reaches SubscribeNotification on the UI thread with its user info", () =>
+        {
+            SystemPreferences.PostNotification(name, new Dictionary<string, object?> { ["k"] = "v", ["n"] = 2 }, deliverImmediately: true);
+            var arrived = Eventually(() => Got() == 1, step);
+            (SubscribedNotification N, bool OnUi) first;
+            lock (got) first = got.FirstOrDefault();
+            return (arrived && first.OnUi && first.N.Object == "" && first.N.UserInfo.ToJsonString() == "{\"k\":\"v\",\"n\":2}",
+                arrived ? $"{first.N} onUi={first.OnUi}" : "nothing arrived");
+        });
+        Try("systemPreferences (macOS): UnsubscribeNotification stops delivery", () =>
+        {
+            SystemPreferences.UnsubscribeNotification(id);
+            SystemPreferences.PostNotification(name, new Dictionary<string, object?>(), deliverImmediately: true);
+            Thread.Sleep(1000);
+            return (Got() == 1, Got());
+        });
+        Try("systemPreferences (macOS): a local post from a worker thread is delivered on the UI thread", () =>
+        {
+            var onUi = (bool?)null;
+            var local = SystemPreferences.SubscribeLocalNotification(name, _ => onUi = CefThread.IsOnUiThread);
+            SystemPreferences.PostLocalNotification(name, new Dictionary<string, object?>());
+            SystemPreferences.UnsubscribeLocalNotification(local);
+            return (onUi == true, onUi);
+        });
+    }
+
+    private static string? Defaults(string arguments) => Run("/usr/bin/defaults", arguments);
+
+    // Trimmed stdout, or null when the command fails (a missing defaults key exits 1).
+    private static string? Run(string file, string arguments)
+    {
+        using var process = System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo(file, arguments)
+        {
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+        })!;
+        var output = process.StandardOutput.ReadToEnd().Trim();
+        process.WaitForExit();
+        return process.ExitCode == 0 ? output : null;
+    }
+
+    private static bool Eventually(Func<bool> condition, TimeSpan timeout)
+    {
+        var deadline = DateTime.UtcNow + timeout;
+        while (!condition())
+        {
+            if (DateTime.UtcNow > deadline) return false;
+            Thread.Sleep(50);
+        }
+        return true;
+    }
 
     [System.Runtime.Versioning.SupportedOSPlatform("windows")]
     private static void Run(Action<string, bool, object?> check, TimeSpan step)

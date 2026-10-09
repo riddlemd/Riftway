@@ -77,6 +77,8 @@ Cross-platform work. Platform-specific items: [linux-todo.md](linux-todo.md), [w
       macOS (branch `mac-clipboard`) and Linux X11 with `selection` (branch `linux-clipboard`); the macOS `Shell` (branch `mac-shell-shortcut`, WindowTest checks pass: DRIFT H1)
 - [x] `GlobalShortcut`, `PowerMonitor`, `PowerSaveBlocker` on Windows (branch `power-shortcuts`) and Linux (branch `linux-power-shortcuts`); `PowerMonitor` and `PowerSaveBlocker` on macOS (branch `mac-power-tray`); macOS `GlobalShortcut` (branch `mac-shell-shortcut`, WindowTest checks pass: DRIFT J1)
 - [x] `Tray` on Windows (branch `tray`), Linux (branch `linux-tray`) and macOS (branch `mac-power-tray`)
+- [x] `systemPreferences` on macOS and Linux (branch `system-preferences`; was DRIFT SP1): unit and host-side macOS tests
+      pass; the macOS GUI and Linux WindowTest checks are written, not run ([mac-todo.md](mac-todo.md), [linux-todo.md](linux-todo.md))
 - [ ] `DownloadItem` parity (branch `download-item`, [parity/download-item.md](parity/download-item.md)): Chromium's resume
       rules, the save dialog's URL title and Windows filters, `savePath`, `hasUserGesture`/`getETag`/`getLastModifiedTime`
       (DRIFT E13), pause/cancel before CEF hands a control. Unit tests pass; run the new SessionTest `HTTP:` download checks
