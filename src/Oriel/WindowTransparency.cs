@@ -1,6 +1,6 @@
 namespace Oriel;
 
-/// <summary>Electron's rules for transparent windows and background materials on Windows, apart from the window.</summary>
+/// <summary>Electron's rules for transparent windows and background materials, apart from the window.</summary>
 internal static class WindowTransparency
 {
     /// <summary>The colour behind the page: the window's own, else transparent for a transparent window or one with a
@@ -26,9 +26,16 @@ internal static class WindowTransparency
         => windowColor ?? (transparentPreference ? "#00000000" : null);
 
     /// <summary>What the window itself is filled with: its colour, else white under a page made transparent (Electron's
-    /// default window colour, where CEF's would follow the theme), else none.</summary>
-    internal static string? WindowFill(string? windowColor, bool transparentPreference)
-        => windowColor ?? (transparentPreference ? "#FFFFFFFF" : null);
+    /// default window colour, where CEF's would follow the theme), else none. A transparent window on Linux stays clear
+    /// whatever its colour, as Electron's <c>NativeWindowViews::SetBackgroundColor</c> keeps it there, so only the page
+    /// paints the colour.</summary>
+    internal static string? WindowFill(string? windowColor, bool transparentPreference, bool clearWindow = false)
+        => clearWindow ? "#00000000" : windowColor ?? (transparentPreference ? "#FFFFFFFF" : null);
+
+    /// <summary>Whether CEF creates the window translucent (<c>Widget::InitParams::opacity</c>, as Electron's
+    /// <c>NativeWindowViews</c> for a transparent window). Only a libcef with Oriel's CEF patch can; Windows keeps its
+    /// own see-through path, which is applied after creation.</summary>
+    internal static bool TranslucentWidget(bool transparent, bool cefPatched, bool windows) => transparent && cefPatched && !windows;
 
     /// <summary>The browser view's colour: the window's when opaque, else transparent, so a translucent colour is
     /// painted once by the page and once by the window, as Electron's root view and page do.</summary>

@@ -75,10 +75,13 @@ public sealed partial record BrowserWindowOptions
     /// on a <see cref="Transparent"/> window. Electron's <c>backgroundColor</c>.</summary>
     public string? BackgroundColor { get; init; }
 
-    /// <summary>Makes the window see-through wherever the page and <see cref="BackgroundColor"/> are (Windows; ignored
-    /// on macOS and Linux). As in Electron, such a window has no title bar or sizing border, cannot be resized by the
-    /// user or maximized from the system menu, and <see cref="BrowserWindow.Maximize"/> fills the work area instead.
-    /// Electron's <c>transparent</c>.</summary>
+    /// <summary>Makes the window see-through wherever the page and <see cref="BackgroundColor"/> are. Electron's
+    /// <c>transparent</c>.</summary>
+    /// <remarks>Windows: as in Electron, such a window has no title bar or sizing border, cannot be resized by the user
+    /// or maximized from the system menu, and <see cref="BrowserWindow.Maximize"/> fills the work area instead.
+    /// macOS and Linux: the window stays resizable and maximizable. Linux needs a libcef built with Oriel's CEF patches
+    /// (<c>eng/cef</c>) and, as in Electron, a running compositing manager, without which the window is opaque; with
+    /// stock CEF the option is ignored there (DRIFT W24).</remarks>
     public bool Transparent { get; init; }
 
     /// <summary>Linux: asks GTK window managers for the dark variant of the window's frame. Electron's <c>darkTheme</c>.</summary>
@@ -340,11 +343,14 @@ public sealed unsafe partial class BrowserWindow
     private bool _closeFromCode;
     private bool _readyToShowRaised;
     private string? _backgroundColor;
-    // Transparent windows are Windows-only so far (DRIFT W24).
+    // Windows: a transparent window loses its frame, resizing and maximizing.
     private readonly bool _transparent;
 
     // macOS keeps resizing and maximizing for a transparent window, as Electron's NativeWindowMac does.
     private readonly bool _macTransparent;
+
+    // Linux: transparent only with a patched libcef, which can create the X window with an ARGB visual (DRIFT W24).
+    private readonly bool _linuxTransparent;
     private bool _resizable;
     // A transparent window's bounds before Maximize filled the work area.
     private Rectangle? _restoreBounds;
@@ -403,8 +409,9 @@ public sealed unsafe partial class BrowserWindow
         _icon = _options.IconImage ?? (_options.Icon is { } iconPath ? NativeImage.CreateFromBuffer(File.ReadAllBytes(iconPath)) : null);
         _transparent = _options.Transparent && OperatingSystem.IsWindows();
         _macTransparent = _options.Transparent && OperatingSystem.IsMacOS();
+        _linuxTransparent = _options.Transparent && OperatingSystem.IsLinux() && CefRuntime.IsPatched;
         _resizable = _options.Resizable;
-        _backgroundColor = WindowTransparency.InitialBackgroundColor(_options.BackgroundColor, _transparent || _macTransparent,
+        _backgroundColor = WindowTransparency.InitialBackgroundColor(_options.BackgroundColor, _transparent || _macTransparent || _linuxTransparent,
             OperatingSystem.IsWindows() ? _options.BackgroundMaterial : null);
         var adopted = _options.WebContents;
         var session = adopted?.Session ?? _options.WebPreferences.ResolveSession();
@@ -472,6 +479,7 @@ public sealed unsafe partial class BrowserWindow
             Maximizable = _options.Maximizable && !_transparent,
             ThemeChanged = () => Command(ApplyBackgroundColor),
             Frameless = IsFrameless,
+            Translucent = WindowTransparency.TranslucentWidget(_options.Transparent, CefRuntime.IsPatched, OperatingSystem.IsWindows()),
             MinimumSize = new cef_size_t { width = _options.MinWidth, height = _options.MinHeight },
             MaximumSize = new cef_size_t { width = _options.MaxWidth, height = _options.MaxHeight },
             Parent = _parent is { } parent ? () => (nint)parent._window : null,
@@ -1663,7 +1671,7 @@ public sealed unsafe partial class BrowserWindow
     private void ApplyBackgroundColor(cef_window_t* w)
     {
         var transparentPage = _options.WebPreferences.Transparent;
-        if (WindowTransparency.WindowFill(_backgroundColor, transparentPage) is not { } fill
+        if (WindowTransparency.WindowFill(_backgroundColor, transparentPage, clearWindow: _linuxTransparent) is not { } fill
             || WindowTransparency.PageBackgroundColor(_backgroundColor, transparentPage) is not { } page) return;
         w->@base.@base.set_background_color(&w->@base.@base, ParseColor(fill));
         var under = WindowTransparency.BrowserViewColor(ParseColor(page));
@@ -2015,6 +2023,9 @@ public sealed unsafe partial class BrowserWindow
     {
         foreach (var window in GetAllWindows()) window.Focus();
     }
+
+    // WindowTest's handle on CEF patch 0002 (DRIFT W5); false on stock CEF.
+    internal bool SetLinuxInputEnabled(bool enabled) => Query(w => LinuxCefPatches.SetWindowInputEnabled(w, enabled), false);
 
     // Window calls are only valid on the UI thread and before the window is destroyed.
     private void Command(WindowAction action) => CefThread.RunOnUi(() =>

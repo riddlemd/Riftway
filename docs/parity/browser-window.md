@@ -239,7 +239,7 @@ Parameters in brackets are optional in Electron. `webContents` members are in [w
 | `hasShadow` | `HasShadow` | partial | Stored only, which is Electron's behaviour on Windows; macOS and Linux not yet (W31). |
 | `opacity` | `Opacity` | partial | Windows only for now (W30). |
 | `darkTheme` | `DarkTheme` | done | Linux: `_GTK_THEME_VARIANT=dark` at creation, as Electron; Chromium 154 already writes dark when its GTK UI is loaded. |
-| `transparent` | `Transparent` | partial | Windows and macOS; not Linux (W24). |
+| `transparent` | `Transparent` | partial | Windows and macOS; Linux only with Oriel's CEF patch, not yet built (W24). |
 | `type` | `Type` | partial | Windows `toolbar` (`WS_EX_TOOLWINDOW`); Linux and macOS types not yet (W43). |
 | `visualEffectState` | — | missing |  |
 | `titleBarStyle` | `TitleBarStyle` | partial | Windows (and Linux, unchecked): anything but `Default` is frameless; macOS keeps its title bar (W37). |

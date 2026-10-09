@@ -13,6 +13,16 @@ General items: [todo.md](todo.md).
       the bug: `cpu_id.cc` enables SME without SVE on purpose. No libyuv fix found; recheck when CEF moves past 154
   - [x] `Oriel.Subprocess.Native` builds and links on linux-x64 (clang 18, GNU ld; `--export-dynamic-symbol` is accepted).
         The override is `__aarch64__`-only, so x64 exports no `getauxval` by design.
+- [ ] **Transparent windows** (DRIFT W24): CEF patch [eng/cef](../eng/cef/README.md) 0001 and Oriel's side are written,
+      not yet built or run.
+  - [ ] Build the patched libcef (`eng/cef/apply-patches.sh`, then `cef-build-linux/build.sh --no-update --force-build`);
+        check its next-version hashes against `CefPatchedApi.cs`
+  - [ ] Rebuild `oriel-linux-dev` (adds xcompmgr, x11-utils) and run WindowTest with `ORIEL_CEF_DIR`; the
+        `LinuxTransparencyAsync` checks read the X visual and the screen over a red backdrop
+  - [ ] Compare with Electron what shows where the page is clear without a compositing manager: Electron also clears
+        the compositor colour, which CEF cannot
+  - [ ] Electron gives every frameless window on Linux a translucent widget, for its own client-side frame
+        (`ElectronFrameViewLinux`); Oriel only transparent ones. Check whether anything visible depends on it
 - [ ] Linux sandbox on Ubuntu 24.04+: AppArmor profile, or documented `--no-sandbox` (M4)
 - [ ] Wayland: CEF Views on Wayland is still being fixed upstream; Oriel targets X11/XWayland for now
 - [ ] linux-x64: only linux-arm64 is tested end to end (Docker on Apple Silicon). On linux-x64 (amd64 image under QEMU)
@@ -25,7 +35,12 @@ General items: [todo.md](todo.md).
       No window manager would do it: `X11Window::Map` rewrites `_NET_WM_STATE` and drops the modal hint, so without
       the cover the parent's page takes clicks under openbox, Mutter, KWin and Xfwm4. Focus goes to the parent, as Electron
   - [x] Re-run the input-blocking checks under Mutter, KWin and Xfwm4 (`ORIEL_WM`): all pass, view pages included
-  - [ ] Crossing events still reach a disabled window's page (DRIFT W5); needs a CEF patch
+  - [ ] Crossing events still reach a disabled window's page with stock CEF (DRIFT W5)
+    - [x] CEF patch [eng/cef](../eng/cef/README.md) 0002 (`CefWindow::SetEventListeningEnabled`, Electron's
+          `DisableEventListening`) and `LinuxCefPatches.SetWindowInputEnabled`; written, not built or run
+    - [ ] Call it first in `ApplyLinuxEnabled`, keeping the X11 input cover and dropped keys for stock CEF
+    - [ ] Run WindowTest's `LinuxPatchedInputAsync` on the patched libcef (crossing events, clicks, wheel, keys),
+          and the modal and `SetEnabled` checks on both libcefs
   - [ ] Check an input method (ibus) composing into a disabled window's focused field
 - [x] Window-manager behaviour beyond openbox: WindowTest passes under Mutter 46 (`--x11`), KWin 5.27 (`kwin_x11`) and
       Xfwm4 4.18 as under openbox, including maximize, minimize, full screen, always on top, focus and workspaces.
@@ -51,5 +66,10 @@ General items: [todo.md](todo.md).
         and a real screen locker's `ActiveChanged`
 - [ ] nativeTheme against a real `xdg-desktop-portal` (GNOME, KDE): Docker has none, so the checks use a fake portal
       (`samples/Shared/FakePortal.cs`) that WindowTest starts before CEF
-- [ ] nativeTheme: with no portal preference, pages keep GTK's colours from startup (DRIFT Y2); a CEF patch to clear
-      Chromium's GTK style colour cache on theme notifications would let them follow
+- [ ] nativeTheme: with no portal preference, pages keep GTK's colours from startup with stock CEF (DRIFT Y2). Chromium
+      patch [eng/cef](../eng/cef/README.md) 0003 clears the GTK style colour cache on the settings notifications;
+      written, not built. Run `ThemeAsync`'s patched page checks on it
+- [ ] Tray activation token (linux-tray's T5): CEF patch [eng/cef](../eng/cef/README.md) 0004
+      (`CefWindow::SetXdgActivationToken`) and `LinuxCefPatches.ProvideActivationToken`; written, not built. Once
+      `linux-tray` merges, call it from `Tray.Linux.cs` `HandleItemCall` for `ProvideXdgActivationToken`, then run
+      WindowTest's `LinuxActivationTokenAsync`. T6 (Chromium's `dbus::Bus`) is not patched: see the eng/cef README

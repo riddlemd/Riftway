@@ -1,0 +1,69 @@
+Oriel CEF patch 0004: CefWindow::SetXdgActivationToken.
+
+Lets a client hand Chromium an XDG activation token, as Chromium's own
+StatusIconLinuxDbus::OnProvideXdgActivationToken does with the token a status
+notifier host passes to ProvideXdgActivationToken (base::nix::SetActivationToken).
+Chromium puts it on the next window it maps or activates (_NET_STARTUP_ID on
+X11, xdg-activation on Wayland), so a window that a tray click opens gets
+focus. A static method (cef_window_set_xdg_activation_token) at CEF_NEXT
+(999998): API version 15400 and its hash are unchanged.
+
+Resolves: Oriel docs/DRIFT.md T5 (branch linux-tray).
+Base: CEF a03e714 (branch 8037, CEF 154) with 0001-0002. Applies in chromium/src/cef.
+
+diff --git a/include/views/cef_window.h b/include/views/cef_window.h
+index a7be650..e099f7c 100644
+--- a/include/views/cef_window.h
++++ b/include/views/cef_window.h
+@@ -66,6 +66,20 @@ class CefWindow : public CefPanel {
+   static CefRefPtr<CefWindow> CreateTopLevelWindow(
+       CefRefPtr<CefWindowDelegate> delegate);
+ 
++#if CEF_API_ADDED(CEF_NEXT)
++  ///
++  /// Hand an XDG activation token to the next Window that is shown or
++  /// activated, as for a token received from a status notifier host's
++  /// ProvideXdgActivationToken. Chromium puts it on that window as
++  /// _NET_STARTUP_ID on X11 or through xdg-activation on Wayland, so the
++  /// window manager lets it take focus. The token is used once; a later call
++  /// replaces an unused one. Only implemented on Linux; does nothing on other
++  /// platforms.
++  ///
++  /*--cef(added=next)--*/
++  static void SetXdgActivationToken(const CefString& token);
++#endif
++
+   ///
+   /// Show the Window.
+   ///
+diff --git a/libcef/browser/views/window_impl.cc b/libcef/browser/views/window_impl.cc
+index 33b4110..9b139d4 100644
+--- a/libcef/browser/views/window_impl.cc
++++ b/libcef/browser/views/window_impl.cc
+@@ -30,6 +30,10 @@
+ #include "ui/aura/window.h"
+ #endif  // defined(USE_AURA)
+ 
++#if BUILDFLAG(IS_LINUX)
++#include "base/nix/xdg_util.h"
++#endif
++
+ #if BUILDFLAG(IS_WIN)
+ #include "ui/aura/test/ui_controls_aurawin.h"
+ #include "ui/display/win/screen_win.h"
+@@ -142,6 +146,15 @@ CefRefPtr<CefWindow> CefWindow::CreateTopLevelWindow(
+   return CefWindowImpl::Create(delegate, gfx::kNullAcceleratedWidget);
+ }
+ 
++// static
++void CefWindow::SetXdgActivationToken(const CefString& token) {
++  CEF_REQUIRE_UIT_RETURN_VOID();
++#if BUILDFLAG(IS_LINUX)
++  // As StatusIconLinuxDbus::OnProvideXdgActivationToken.
++  base::nix::SetActivationToken(token.ToString());
++#endif
++}
++
+ // static
+ CefRefPtr<CefWindowImpl> CefWindowImpl::Create(
+     CefRefPtr<CefWindowDelegate> delegate,

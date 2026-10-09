@@ -5,6 +5,8 @@
 # Run inside Linux containers mounted from Windows checkouts, where CRLF breaks the shebang.
 *.sh text eol=lf
 *.py text eol=lf
+# git apply matches CEF's LF sources byte for byte.
+*.patch text eol=lf
 
 ###############################################################################
 # Set default behavior for command prompt diff.

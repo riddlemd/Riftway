@@ -25,7 +25,9 @@ Cross-platform work. Platform-specific items: [linux-todo.md](linux-todo.md), [w
   - [x] Linux taskbar progress and badge count (Unity launcher entry on the session bus), `app.setDesktopName`
   - [x] Windows: `setAppDetails`, `setThumbnailClip`, `setThumbnailToolTip`, `backgroundMaterial`/`setBackgroundMaterial`
   - [x] Make `backgroundMaterial` visible; `transparent` on Windows
-  - [ ] `transparent` on macOS and Linux (DRIFT W24)
+  - [x] `transparent` on macOS
+  - [ ] `transparent` on Linux (DRIFT W24): needs the CEF patch in [eng/cef](../eng/cef/README.md); written, to build and
+        run ([linux-todo.md](linux-todo.md))
   - [x] Windows: `hookWindowMessage` family, `thickFrame`, `roundedCorners`, `accentColor`/`setAccentColor`/`getAccentColor` (branch `win-shell-apis`)
   - [x] Windows: `showInactive`, `opacity`, `hasShadow` (stored, as Electron), `setIgnoreMouseEvents` (with `forward`), content protection, kiosk, `getNormalBounds`, `will-resize`/`will-move` (branch `window-polish`)
   - [x] `loadURL` options (userAgent, extraHeaders, httpReferrer, postData); `baseURLForDataURL` throws
@@ -77,3 +79,8 @@ Cross-platform work. Platform-specific items: [linux-todo.md](linux-todo.md), [w
 - [x] `Tray` on Windows (branch `tray`) and Linux (branch `linux-tray`); macOS to come (DRIFT T1)
 - [ ] M3 Blazor Hybrid · M4 ship it · M5 desktop integration · M6 session/network/processes · M7 own CEF builds
       (see [PLAN.md](PLAN.md#milestones))
+- [ ] M7: CEF patches in [eng/cef](../eng/cef/README.md): 0001 `CefWindowDelegate::IsTranslucent` (W24), 0002
+      `CefWindow::SetEventListeningEnabled` (W5), 0003 GTK style colour cache, a Chromium patch (Y2), 0004
+      `CefWindow::SetXdgActivationToken` (linux-tray's T5). Oriel detects a patched libcef by its next-version API
+      hash (`CefRuntime.IsPatched`) and runs unchanged on stock CEF. None is built yet: build, check the hashes, run
+      WindowTest on Linux ([linux-todo.md](linux-todo.md))

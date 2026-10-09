@@ -1,0 +1,72 @@
+Oriel CEF patch 0001: CefWindowDelegate::IsTranslucent.
+
+Lets a client create a top-level Views window translucent
+(views::Widget::InitParams::opacity = kTranslucent), as Electron's
+NativeWindowViews does for `transparent: true`. On Linux X11 Chromium then
+picks a 32-bit ARGB visual whenever a compositing manager runs. The method is
+API at CEF_NEXT (999998): API version 15400 and its hash are unchanged.
+
+Resolves: Oriel docs/DRIFT.md W24 (Linux; and macOS's InitParams::opacity).
+Base: CEF a03e714 (branch 8037, CEF 154). Applies in chromium/src/cef.
+
+diff --git a/include/views/cef_window_delegate.h b/include/views/cef_window_delegate.h
+index 2773985..a524c4a 100644
+--- a/include/views/cef_window_delegate.h
++++ b/include/views/cef_window_delegate.h
+@@ -38,6 +38,7 @@
+ #define CEF_INCLUDE_VIEWS_CEF_WINDOW_DELEGATE_H_
+ #pragma once
+ 
++#include "include/cef_api_hash.h"
+ #include "include/views/cef_panel_delegate.h"
+ 
+ class CefWindow;
+@@ -288,6 +289,22 @@ class CefWindowDelegate : public CefPanelDelegate {
+                                         CefLinuxWindowProperties& properties) {
+     return false;
+   }
++
++#if CEF_API_ADDED(CEF_NEXT)
++  ///
++  /// Return true if |window| should be created translucent, so that the areas
++  /// its views and contents leave transparent show what is behind the window.
++  /// Called once before the native window is created, and only for top-level
++  /// windows without a native parent. On Linux (X11) the window gets a 32-bit
++  /// ARGB visual when a compositing manager is running, and stays opaque
++  /// otherwise. On macOS the NSWindow is created non-opaque. On Windows the
++  /// window is created for alpha blending, which also needs a frameless
++  /// window. Use CefView::SetBackgroundColor with a transparent color on the
++  /// window and its views to let the background through.
++  ///
++  /*--cef(added=next)--*/
++  virtual bool IsTranslucent(CefRefPtr<CefWindow> window) { return false; }
++#endif
+ };
+ 
+ #endif  // CEF_INCLUDE_VIEWS_CEF_WINDOW_DELEGATE_H_
+diff --git a/libcef/browser/views/window_view.cc b/libcef/browser/views/window_view.cc
+index 9c030f0..f202129 100644
+--- a/libcef/browser/views/window_view.cc
++++ b/libcef/browser/views/window_view.cc
+@@ -21,6 +21,7 @@
+ #include "cef/libcef/browser/image_impl.h"
+ #include "cef/libcef/browser/views/widget.h"
+ #include "cef/libcef/browser/views/window_impl.h"
++#include "cef/libcef/common/api_version_util.h"
+ #include "ui/base/hit_test.h"
+ #include "ui/base/metadata/metadata_impl_macros.h"
+ #include "ui/base/mojom/ui_base_types.mojom-shared.h"
+@@ -562,6 +563,13 @@ void CefWindowView::CreateWidget(gfx::AcceleratedWidget parent_widget) {
+     } else {
+       is_frameless_ = cef_delegate()->IsFrameless(cef_window);
+ 
++      // A client built against an older API version has no IsTranslucent.
++      if (CEF_API_IS_ADDED(CEF_NEXT) &&
++          cef_delegate()->IsTranslucent(cef_window)) {
++        params.opacity =
++            views::Widget::InitParams::WindowOpacity::kTranslucent;
++      }
++
+       params.native_widget =
+           view_util::CreateNativeWidget(widget, cef_window, cef_delegate());
+ 
