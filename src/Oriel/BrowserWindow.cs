@@ -736,14 +736,14 @@ public sealed unsafe partial class BrowserWindow
     public BrowserWindow? GetParentWindow() => CefThread.InvokeOnUi(() => _parent);
 
     /// <summary>Makes <paramref name="parent"/> this window's parent, or makes it a top-level window again: it stays above
-    /// the parent and closes with it. A visible window is re-shown in its state and brought to the top. As in Electron,
-    /// nothing stops a cycle. Windows only. Electron's <c>win.setParentWindow()</c>.</summary>
-    /// <exception cref="PlatformNotSupportedException">macOS or Linux: CEF sets the parent only when it creates the window.</exception>
+    /// the parent and closes with it. Windows: a visible window is re-shown in its state and brought to the top. Linux:
+    /// <c>WM_TRANSIENT_FOR</c>, as Electron on X11. As in Electron, nothing stops a cycle. Electron's <c>win.setParentWindow()</c>.</summary>
+    /// <exception cref="PlatformNotSupportedException">macOS: CEF sets the parent only when it creates the window.</exception>
     /// <exception cref="InvalidOperationException">The window is modal, whose parent is fixed, or the parent is closed.</exception>
     public void SetParentWindow(BrowserWindow? parent)
     {
-        if (!OperatingSystem.IsWindows())
-            throw new PlatformNotSupportedException("SetParentWindow is Windows only: CEF sets a window's parent when it creates it.");
+        if (OperatingSystem.IsMacOS())
+            throw new PlatformNotSupportedException("SetParentWindow is not supported on macOS yet: CEF sets a window's parent when it creates it.");
         if (_options.Modal) throw new InvalidOperationException("Can not be called for modal window");
         CefThread.InvokeOnUi(() =>
         {
@@ -752,6 +752,8 @@ public sealed unsafe partial class BrowserWindow
             _parent = parent;
             parent?._children.Add(this);
             if (OperatingSystem.IsWindows() && _window is not null) WindowsWindowStyle.SetOwner(Hwnd(_window), parent is null ? 0 : Hwnd(parent._window));
+            if (OperatingSystem.IsLinux() && _window is not null && !X11Window.SetTransientFor(Hwnd(_window), parent is null ? 0 : Hwnd(parent._window)))
+                Console.Error.WriteLine("[Oriel] No X display for SetParentWindow.");
             return true;
         });
     }

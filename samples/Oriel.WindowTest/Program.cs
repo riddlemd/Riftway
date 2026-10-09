@@ -588,6 +588,27 @@ async Task ParentAndModalAsync(BrowserWindow win)
     await Task.Delay(200);
     childAlive = child;
     if (OperatingSystem.IsLinux() && File.Exists("/usr/bin/xdotool")) await LinuxDisabledInputAsync(child);
+    if (OperatingSystem.IsLinux()) await LinuxSetParentAsync();
+}
+
+// Electron's SetParentWindow on X11 is WM_TRANSIENT_FOR alone: the parent's window, or the root window to clear it.
+async Task LinuxSetParentAsync()
+{
+    if (!OperatingSystem.IsLinux()) return;
+    var owner = new BrowserWindow(new BrowserWindowOptions { Title = "Oriel window test: new parent", X = 200, Y = 200, Width = 400, Height = 300 });
+    var owned = new BrowserWindow(new BrowserWindowOptions { Title = "Oriel window test: reparented", X = 260, Y = 260, Width = 300, Height = 200 });
+    await Task.Delay(800);
+    var (ph, ch) = (owner.GetNativeWindowHandle(), owned.GetNativeWindowHandle());
+    owned.SetParentWindow(owner);
+    Check("Linux: SetParentWindow makes the window transient for the parent", X11Window.TransientFor(ch) == ph, $"{X11Window.TransientFor(ch)} vs {ph}");
+    Check("Linux: SetParentWindow updates GetParentWindow and GetChildWindows", owned.GetParentWindow() == owner && owner.GetChildWindows().Contains(owned));
+    owned.SetParentWindow(null);
+    Check("Linux: SetParentWindow(null) makes it transient for the root window, as Electron",
+        X11Window.TransientFor(ch) == X11Window.RootWindow() && owned.GetParentWindow() is null && owner.GetChildWindows().Count == 0,
+        $"{X11Window.TransientFor(ch)} vs root {X11Window.RootWindow()}");
+    owned.SetParentWindow(owner);
+    owner.Destroy();
+    Check("Linux: a window given a parent later closes with it", Eventually(() => owned.IsDestroyed, step));
 }
 
 // Electron disables a modal's parent itself on Linux (Chromium's DisableEventListening): the modal hint reaches no

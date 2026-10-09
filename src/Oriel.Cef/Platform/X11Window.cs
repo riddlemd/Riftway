@@ -113,6 +113,32 @@ public static unsafe partial class X11Window
 
     private const long AllWorkspaces = 0xFFFFFFFF;
 
+    /// <summary>Makes the window transient for <paramref name="parent"/> (<c>WM_TRANSIENT_FOR</c>), or for the root
+    /// window when it is 0, as Electron's <c>SetParentWindow</c> does on X11. False without an X display.</summary>
+    public static bool SetTransientFor(nint window, nint parent)
+    {
+        var display = Display();
+        if (display == 0 || window == 0) return false;
+        _ = XSetTransientForHint(display, window, parent == 0 ? XDefaultRootWindow(display) : parent);
+        _ = XFlush(display);
+        return true;
+    }
+
+    /// <summary>The window's <c>WM_TRANSIENT_FOR</c>, or 0 when it has none.</summary>
+    public static nint TransientFor(nint window)
+    {
+        var display = Display();
+        if (display == 0 || window == 0) return 0;
+        return XGetTransientForHint(display, window, out var parent) != 0 ? parent : 0;
+    }
+
+    /// <summary>The root window of Oriel's X display, or 0 without one.</summary>
+    public static nint RootWindow()
+    {
+        var display = Display();
+        return display == 0 ? 0 : XDefaultRootWindow(display);
+    }
+
     // Xlib's XSetWindowAttributes on 64-bit platforms.
     [StructLayout(LayoutKind.Sequential)]
     private struct XSetWindowAttributes
@@ -232,6 +258,8 @@ public static unsafe partial class X11Window
     [LibraryImport(LibX11)] private static partial int XSetWMHints(nint display, nint window, XWMHints* hints);
     [LibraryImport(LibX11)] private static partial int XFree(void* data);
     [LibraryImport(LibX11)] private static partial int XFlush(nint display);
+    [LibraryImport(LibX11)] private static partial int XSetTransientForHint(nint display, nint window, nint parent);
+    [LibraryImport(LibX11)] private static partial int XGetTransientForHint(nint display, nint window, out nint parent);
     [LibraryImport(LibX11)] private static partial int XChangeProperty(nint display, nint window, nint property, nint type, int format, int mode, byte* data, int count);
     [LibraryImport(LibX11)] private static partial int XSendEvent(nint display, nint window, int propagate, long eventMask, long* e);
     [LibraryImport(LibX11)] private static partial nint XCreateWindow(nint display, nint parent, int x, int y, uint width, uint height, uint borderWidth,
