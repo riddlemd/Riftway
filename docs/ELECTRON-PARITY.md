@@ -9,7 +9,7 @@ These figures are counted from the rows: after changing a row or checklist item,
 
 | Measure | Done | Partial | Not started | Total |
 |---|---|---|---|---|
-| Module rows below | 7 | 38 | 22 | 67 |
+| Module rows below | 7 | 39 | 21 | 67 |
 | M2 rows | 3 | 17 | 1 | 21 |
 
 The 67 rows include `BrowserView` (deprecated, never implemented; counted as not started).
@@ -102,7 +102,7 @@ Detailed item-by-item status, including `navigationHistory` and `WebFrameMain`: 
 | `ClientRequest` / `IncomingMessage` | `ClientRequest` / `IncomingMessage` | CEF | M6 | partial _(branch `net-module`)_: headers with Electron's rules and errors, write/end, abort, redirect modes with `followRedirect`, `login`, Electron's event order and `net::ERR_*` errors; gaps in DRIFT L1-L7 |
 | `WebSocket` (main process) | `WebSocket` | CEF or Patch (verify) | M6 | — |
 | `netLog` | `NetLog` | CEF | M6 | — |
-| `ServiceWorkers` / `ServiceWorkerMain` | `ServiceWorkers` / `ServiceWorkerMain` | CEF + Patch (verify) | M6 | — |
+| `ServiceWorkers` / `ServiceWorkerMain` | `Session.ServiceWorkers` / `ServiceWorkerMain` | CEF (DevTools) + Patch | M6 | partial _(branch `service-workers`)_: `getAllRunning`, `getInfoFromVersionID`, `getFromVersionID` (deprecated, warns), `getWorkerFromVersionID`, `startWorkerForScope`, `console-message`, `registration-completed`, `running-status-changed`; `ServiceWorkerMain` `versionId`, `scope`, `scriptURL`, `isDestroyed`, `startTask`; through DevTools on the session's hidden page, so state starts at first use, `renderProcessId` is 0 and console listeners keep workers alive; no `send`/`ipc` (Patch; DRIFT SW1-SW8) |
 | `Extensions` / extensions API | `Extensions` | CEF (verify Chrome-style support) | M6 | — |
 
 ## Desktop integration

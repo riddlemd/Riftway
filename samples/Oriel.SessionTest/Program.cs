@@ -438,6 +438,7 @@ async Task RunAsync()
     downloadWin.Destroy();
     Directory.Delete(downloadDir, recursive: true);
     await StorageChecks();
+    await ServiceWorkerChecks();
 
     // webRequest: the session's listeners see, cancel, redirect and change requests, as Electron's.
     var watched = Session.FromPartition("webrequest");
@@ -1757,6 +1758,114 @@ async Task StorageChecks()
     listener.Stop();
     var inMemory = await Throws(() => store.GetCacheSizeAsync());
     Check("GetCacheSizeAsync refuses an in-memory session", inMemory is NotSupportedException, inMemory?.GetType().Name);
+}
+
+// session.serviceWorkers: a worker that a page from an HTTP server on 127.0.0.1 (a secure context) registers.
+async Task ServiceWorkerChecks()
+{
+    var swSession = Session.FromPartition("service-workers");
+    // Read before the page loads: the DevTools lists arrive after the first use (drift SW1).
+    var workers = swSession.ServiceWorkers;
+    var completed = new TaskCompletionSource<string>(TaskCreationOptions.RunContinuationsAsynchronously);
+    var statuses = new System.Collections.Concurrent.ConcurrentQueue<ServiceWorkerRunningStatusChangedEventArgs>();
+    var messages = new System.Collections.Concurrent.ConcurrentQueue<ServiceWorkerConsoleMessageEventArgs>();
+    workers.RegistrationCompleted += (_, e) => completed.TrySetResult(e.Scope);
+    workers.RunningStatusChanged += (_, e) => statuses.Enqueue(e);
+    workers.ConsoleMessage += (_, e) => messages.Enqueue(e);
+
+    var listener = new TcpListener(IPAddress.Loopback, 0);
+    listener.Start();
+    var origin = $"http://127.0.0.1:{((IPEndPoint)listener.LocalEndpoint).Port}";
+    // Line 3 logs at start-up; a message from the page logs a warning.
+    var script = "self.addEventListener('install', () => self.skipWaiting());\n"
+        + "self.addEventListener('activate', e => e.waitUntil(self.clients.claim()));\n"
+        + "console.log('sw says hi', 42);\n"
+        + "self.addEventListener('message', e => console.warn('ping', e.data));\n";
+    _ = Task.Run(async () =>
+    {
+        while (true)
+        {
+            TcpClient client;
+            try { client = await listener.AcceptTcpClientAsync(); }
+            catch (Exception) { return; }
+            _ = Task.Run(async () =>
+            {
+                using var _ = client;
+                var stream = client.GetStream();
+                var reader = new StreamReader(stream, Encoding.ASCII);
+                var first = await reader.ReadLineAsync() ?? "";
+                while (!string.IsNullOrEmpty(await reader.ReadLineAsync())) { }
+                var isScript = first.Contains("/sw.js");
+                var body = Encoding.UTF8.GetBytes(isScript ? script : "<!doctype html><title>sw</title><p>service worker test</p>");
+                var head = $"HTTP/1.1 200 OK\r\nContent-Type: {(isScript ? "text/javascript" : "text/html")}\r\nContent-Length: {body.Length}\r\n"
+                    + "Cache-Control: no-store\r\nConnection: close\r\n\r\n";
+                await stream.WriteAsync(Encoding.ASCII.GetBytes(head));
+                await stream.WriteAsync(body);
+            });
+        }
+    });
+
+    var swWin = new BrowserWindow(new BrowserWindowOptions { Show = false, WebPreferences = new WebPreferences { Session = swSession } });
+    await swWin.LoadUrl(origin + "/");
+    var registered = await swWin.WebContents.ExecuteJavaScriptAsync("navigator.serviceWorker.register('/sw.js').then(r => r.scope)");
+    var scope = await completed.Task.WaitAsync(TimeSpan.FromSeconds(10)).ContinueWith(t => t.IsCompletedSuccessfully ? t.Result : null);
+    Check("serviceWorkers: registration-completed fires with the registration's scope", scope == origin + "/", $"{scope} (register: {registered})");
+
+    long versionId = 0;
+    ServiceWorkerInfo? info = null;
+    for (var i = 0; i < 100 && info is null; i++)
+    {
+        foreach (var (id, running) in workers.GetAllRunning())
+            if (running.ScriptUrl == origin + "/sw.js") (versionId, info) = (id, running);
+        if (info is null) await Task.Delay(100);
+    }
+    Check("serviceWorkers: getAllRunning lists the worker with its scope and scriptURL",
+        info is { RenderProcessId: 0 } && info.Scope == origin + "/" && info.ScriptUrl == origin + "/sw.js", info);
+    Check("serviceWorkers: getInfoFromVersionID reads the same worker", info is not null && workers.GetInfoFromVersionId(versionId) == info);
+    var transitions = statuses.Where(e => e.VersionId == versionId).Select(e => e.RunningStatus).ToList();
+    Check("serviceWorkers: running-status-changed goes starting, then running",
+        transitions.Take(2).SequenceEqual([ServiceWorkerRunningStatus.Starting, ServiceWorkerRunningStatus.Running]), string.Join(",", transitions));
+
+    var hi = await WaitFor(() => messages.FirstOrDefault(m => m.Message == "sw says hi 42"));
+    Check("serviceWorkers: console-message carries the worker's console.log with Electron's fields",
+        hi is { Source: "console-api", Level: ConsoleMessageLevel.Info, LineNumber: 3 } && hi.VersionId == versionId && hi.SourceUrl == origin + "/sw.js", hi);
+    await swWin.WebContents.ExecuteJavaScriptAsync("navigator.serviceWorker.ready.then(r => { r.active.postMessage('x'); return true; })");
+    var warned = await WaitFor(() => messages.FirstOrDefault(m => m.Message == "ping x"));
+    Check("serviceWorkers: console.warn arrives at level 2", warned is { Level: ConsoleMessageLevel.Warning, LineNumber: 4 }, warned);
+    Check("serviceWorkers: each message arrives once", messages.Count(m => m.Message == "sw says hi 42") == 1, messages.Count);
+
+    var worker = workers.GetWorkerFromVersionId(versionId);
+    Check("ServiceWorkerMain: versionId, scope and scriptURL; one object per version",
+        worker is not null && !worker.IsDestroyed() && worker.VersionId == versionId && worker.Scope == origin + "/"
+            && worker.ScriptUrl == origin + "/sw.js" && ReferenceEquals(worker, workers.GetWorkerFromVersionId(versionId)), worker?.Scope);
+    var send = worker is null ? null : await Throws(() => { worker.Send("channel", 1); return Task.CompletedTask; });
+    Check("ServiceWorkerMain.send is not supported (drift SW5)", send is NotSupportedException, send?.GetType().Name);
+    var taskError = worker is null ? null : await Throws(() => { worker.StartTask().End(); return Task.CompletedTask; });
+    Check("ServiceWorkerMain.startTask on a running worker, then end()", worker is not null && taskError is null, taskError?.Message);
+
+    var started = await Throws(async () =>
+    {
+        var again = await workers.StartWorkerForScopeAsync(origin + "/");
+        if (!ReferenceEquals(again, worker)) throw new InvalidOperationException($"another worker: {again.VersionId}");
+    });
+    Check("serviceWorkers: startWorkerForScope resolves the running worker", started is null, started?.Message);
+    var noScope = await Throws(() => workers.StartWorkerForScopeAsync(origin + "/elsewhere/"));
+    Check("serviceWorkers: startWorkerForScope rejects a scope with no registration",
+        noScope is InvalidOperationException { Message: "Failed to start service worker." }, noScope?.Message);
+
+    // Clearing the registration makes the version redundant, which stops it and destroys its ServiceWorkerMain.
+    await swSession.ClearStorageDataAsync(new ClearStorageDataOptions { Origin = origin, Storages = ["serviceworkers"] });
+    for (var i = 0; i < 100 && worker is { } alive && !alive.IsDestroyed(); i++) await Task.Delay(100);
+    transitions = statuses.Where(e => e.VersionId == versionId).Select(e => e.RunningStatus).ToList();
+    Check("serviceWorkers: running-status-changed goes stopping, then stopped once the registration is cleared",
+        transitions.TakeLast(2).SequenceEqual([ServiceWorkerRunningStatus.Stopping, ServiceWorkerRunningStatus.Stopped]), string.Join(",", transitions));
+    Check("ServiceWorkerMain: destroyed once redundant and stopped; scope and scriptURL empty",
+        worker is not null && worker.IsDestroyed() && worker.Scope == "" && worker.ScriptUrl == "" && workers.GetWorkerFromVersionId(versionId) is null);
+    Check("serviceWorkers: getAllRunning no longer lists it", !workers.GetAllRunning().ContainsKey(versionId), workers.GetAllRunning().Count);
+    var gone = await Throws(() => { workers.GetInfoFromVersionId(versionId); return Task.CompletedTask; });
+    Check("serviceWorkers: getInfoFromVersionID throws Electron's error for it", gone is InvalidOperationException { Message: "Could not find service worker with that version_id" }, gone?.Message);
+    swWin.Destroy();
+    listener.Stop();
 }
 
 async Task CookieChangeChecks()

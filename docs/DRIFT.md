@@ -254,6 +254,35 @@ Entries marked _(branch `x`)_ are on that branch and not yet in `main`.
 | E38 | `resolveHost(host, options)` takes `queryType`, `source`, `cacheUsage`, `secureDnsPolicy`, and rejects with `net::ERR_...` | `ResolveHostAsync(host)` without options; `HostResolutionException` carries the net error code | CEF: `resolve_host` takes a host only | Patch |
 | E11 | Session events (`select-hid-device`, `select-serial-port`, `select-usb-device`, `select-bluetooth-device`, `hid-device-added`, ...) | None | CEF: Chrome's own chooser UI, with no hook (see E31) | Patch |
 
+## session.serviceWorkers / ServiceWorkerMain _(branch `service-workers`)_
+
+Oriel reads a session's service workers through DevTools' `ServiceWorker` domain on the session's hidden page (E37),
+which reports every registration and version of the session's storage partition (`ServiceWorkerContextWatcher`).
+Console messages and tasks go through a DevTools session on the worker's own target (`Target.attachToTarget`, flattened).
+
+| ID | Electron | Oriel | Why | Possible resolution |
+|---|---|---|---|---|
+| SW1 | `ses.serviceWorkers` reads the context synchronously: `getAllRunning()` and the rest see every worker at once | The first read of `Session.ServiceWorkers` enables the `ServiceWorker` domain; until its first lists arrive the methods see no workers and `StartWorkerForScopeAsync` waits, and events start then | CEF: no `content::ServiceWorkerContext` or observer in its API | Patch |
+| SW2 | `ServiceWorkerInfo.renderProcessId` is the worker's child process ID | Always 0 | CEF: DevTools' versions and targets name no process, and CEF exposes no child process IDs | Patch |
+| SW3 | `console-message` observes the context without touching workers; `startTask()` is an external request | Both attach DevTools to the worker: while a `ConsoleMessage` handler is added, every starting or running worker of the session is attached (`Runtime.enable` and `Log.enable`), and Chromium never stops an attached worker for being idle; a task attaches too, and a worker going idle before the attach lands can still stop. Messages logged before the first handler was added are dropped from the attach's replay; each arrives once, after Electron would raise it | CEF: no `OnReportConsoleMessage` observer and no `StartingExternalRequest` | Patch |
+| SW4 | `registration-completed` fires for every successful `register()` (`OnRegistrationCompleted`) | DevTools' `workerRegistrationUpdated` carries no reason and also fires when a registration is loaded into memory (`OnNewLiveRegistration`). Raised for a known registration's update while one of its workers is starting or running (a register job resolves with the worker it installs started, or with the active one): the first update of a registration is never raised; a repeated `register()` while the worker is stopped raises nothing, and a reload from storage while a worker runs raises it | CEF: as SW1 | Patch |
+| SW5 | `ServiceWorkerMain.send()` reaches `ipcRenderer` in the worker's preload; `ipc` is its `IpcMainServiceWorker` | `Send` throws `NotSupportedException`; no `Ipc` (and no `ipcMainServiceWorker`) | CEF: no embedder script runs in a service worker (E21), and nothing routes a message from the browser to one | Patch (below) |
+| SW6 | `console-message`'s `message` is V8's `V8ValueStringBuilder` text of the console call's arguments | Rebuilt from the protocol's `RemoteObject`s: exact for primitives, symbols, functions, dates, regexps, proxies and built-ins; errors cut at their first stack frame; class instances and `Symbol.toStringTag` objects read `[object Object]`, wrapper objects (`new String('a')`) too; arrays from the object preview (nested arrays empty, nested objects `[object Object]`, preview's element limit) | DevTools sends the values, not V8's string | Patch (with SW3) |
+| SW7 | `getWorkerFromVersionID()` returns `undefined` for a version not loaded into memory | Returns a `ServiceWorkerMain` for any version DevTools lists that is not redundant, including those of registrations only on disk | DevTools lists stored versions with live ones and says nothing when they load | Patch |
+| SW8 | `startWorkerForScope()` settles on the start's own callbacks | Sends `ServiceWorker.startWorker` (`StartActiveServiceWorker`, which reports nothing) when the scope has a registration with an active version, and settles on that version's running status: resolves at `running`, fails at `stopped` or `redundant`; a start Chromium never begins leaves the task pending | DevTools' `startWorker` answers before the worker starts | Patch |
+
+What a patch would need (not written): a CEF API on `CefRequestContext` for its default storage partition's
+`content::ServiceWorkerContext`, all of it public `content` API as Electron uses it: an observer
+(`OnRegistrationCompleted`, `OnVersionStartingRunning`, `OnVersionStartedRunning` with `ServiceWorkerRunningInfo`'s
+script, scope and `render_process_id`, `OnVersionStoppingRunning`, `OnVersionStoppedRunning`, `OnVersionRedundant`,
+`OnReportConsoleMessage`), `GetRunningServiceWorkerInfos`, `StartWorkerForScope` with its success and failure callbacks,
+and `StartingExternalRequest`/`FinishedExternalRequest`; a live-version lookup (`ServiceWorkerContextWrapper::GetLiveVersion`,
+a private header Electron includes) for SW7. That closes SW1-SW4 and SW6-SW8. SW5 needs more: Electron binds its
+`mojom::ElectronRenderer` through `ServiceWorkerContext::GetRemoteAssociatedInterfaces` and runs `ipcRenderer` and the
+`service-worker` preloads on the worker thread from its renderer client (`WillEvaluateServiceWorkerOnWorkerThread`).
+CEF's `CefRenderProcessHandler` has no worker context callbacks, so the patch is a render-process hook for service
+worker contexts plus a browser-to-worker message route (and back, for `ipcMainServiceWorker`): the patch E21 needs.
+
 ## globalShortcut
 
 | ID | Electron | Oriel | Why | Possible resolution |
