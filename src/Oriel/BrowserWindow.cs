@@ -355,8 +355,10 @@ public sealed unsafe partial class BrowserWindow
     private nint _inputCover;
     // Touched only on the UI thread.
     private readonly List<BrowserWindow> _children = [];
-    // The option until SetParentWindow changes it.
+    // The option until SetParentWindow changes it; UI thread.
     private BrowserWindow? _parent;
+    // macOS: Electron's NativeWindowMac parent links, which attach this window to its parent as an AppKit child window.
+    private readonly MacParentLink? _macLink;
     // Popups allowed by on_before_popup whose view CEF has not created yet, by the client CEF will use; UI thread only.
     private static readonly Dictionary<nint, PendingPopup> s_pendingPopups = [];
     private WebContents? _opener;
@@ -385,6 +387,9 @@ public sealed unsafe partial class BrowserWindow
         _options = options ?? new BrowserWindowOptions();
         if (_options.Modal && _options.Parent is null) throw new ArgumentException("A modal window needs a Parent.", nameof(options));
         _options.WebPreferences.Validate(nameof(options));
+        _parent = _options.Parent;
+        if (OperatingSystem.IsMacOS())
+            _macLink = new MacParentLink(MacChildWindows.Instance, () => _window is null ? 0 : (nint)_window->get_window_handle(_window), _options.Modal);
 
         ClaimName();
         Id = Interlocked.Increment(ref s_nextId);
@@ -527,6 +532,8 @@ public sealed unsafe partial class BrowserWindow
         lock (s_openGate) s_open.Add(this);
         Menu.ApplicationMenuChanged += _applicationMenuChanged;
         _parent?._children.Add(this);
+        // NativeWindowMac's constructor: a non-modal parent is linked, and attached when the window is shown.
+        _macLink?.SetParent(_parent?._macLink, attach: false);
         NativeObject.AddRef(_windowDelegate.Native);
         _window = CefNative.cef_window_create_top_level(_windowDelegate.Native);
     }
@@ -737,13 +744,12 @@ public sealed unsafe partial class BrowserWindow
 
     /// <summary>Makes <paramref name="parent"/> this window's parent, or makes it a top-level window again: it stays above
     /// the parent and closes with it. Windows: a visible window is re-shown in its state and brought to the top. Linux:
-    /// <c>WM_TRANSIENT_FOR</c>, as Electron on X11. As in Electron, nothing stops a cycle. Electron's <c>win.setParentWindow()</c>.</summary>
-    /// <exception cref="PlatformNotSupportedException">macOS: CEF sets the parent only when it creates the window.</exception>
+    /// <c>WM_TRANSIENT_FOR</c>, as Electron on X11. macOS: an AppKit child window of the parent
+    /// (<c>addChildWindow:ordered:NSWindowAbove</c>), attached now if this window is visible, otherwise when it is next
+    /// shown. As in Electron, nothing stops a cycle. Electron's <c>win.setParentWindow()</c>.</summary>
     /// <exception cref="InvalidOperationException">The window is modal, whose parent is fixed, or the parent is closed.</exception>
     public void SetParentWindow(BrowserWindow? parent)
     {
-        if (OperatingSystem.IsMacOS())
-            throw new PlatformNotSupportedException("SetParentWindow is not supported on macOS yet: CEF sets a window's parent when it creates it.");
         if (_options.Modal) throw new InvalidOperationException("Can not be called for modal window");
         CefThread.InvokeOnUi(() =>
         {
@@ -754,6 +760,12 @@ public sealed unsafe partial class BrowserWindow
             if (OperatingSystem.IsWindows() && _window is not null) WindowsWindowStyle.SetOwner(Hwnd(_window), parent is null ? 0 : Hwnd(parent._window));
             if (OperatingSystem.IsLinux() && _window is not null && !X11Window.SetTransientFor(Hwnd(_window), parent is null ? 0 : Hwnd(parent._window)))
                 Console.Error.WriteLine("[Oriel] No X display for SetParentWindow.");
+            if (OperatingSystem.IsMacOS())
+            {
+                // NativeWindowMac::SetParentWindow attaches only a window that is visible by its IsVisible.
+                var attach = _window is not null && MacWindow.IsVisible((nint)_window->get_window_handle(_window));
+                _macLink?.SetParent(parent?._macLink, attach);
+            }
             return true;
         });
     }
@@ -992,6 +1004,7 @@ public sealed unsafe partial class BrowserWindow
         _meantVisible = true;
         if (!wasVisible && _options.Modal) _options.Parent?.ChangeChildModals(increment: true);
         FlushPendingDisplayMode(w);
+        _macLink?.Show();
         ShowThroughCef(w, activate: _focusable ?? _options.Focusable);
         ApplySkipTaskbar(w);
         if (!wasVisible) Shown?.Invoke(this, EventArgs.Empty);
@@ -1004,6 +1017,7 @@ public sealed unsafe partial class BrowserWindow
         _meantVisible = false;
         // Electron re-enables the parent on every hide of a modal, shown or not.
         if (_options.Modal) _options.Parent?.ChangeChildModals(increment: false);
+        _macLink?.Hide();
         w->hide(w);
         if (wasVisible) Hidden?.Invoke(this, EventArgs.Empty);
     });
@@ -2100,6 +2114,7 @@ public sealed unsafe partial class BrowserWindow
         {
             if (_options.Modal) _options.Parent?.ChangeChildModals(increment: true);
             FlushPendingDisplayMode(window);
+            _macLink?.Show();
             ShowThroughCef(window, activate: _options.Focusable);
             ApplySkipTaskbar(window);
         }
@@ -2277,6 +2292,7 @@ public sealed unsafe partial class BrowserWindow
         lock (s_openGate) s_open.Remove(this);
         ReleaseName();
         _parent?._children.Remove(this);
+        _macLink?.Forget();
         // The cover went with the X window.
         _inputCover = 0;
         if (_options is { Modal: true, Parent: { } parent } && OperatingSystem.IsLinux())

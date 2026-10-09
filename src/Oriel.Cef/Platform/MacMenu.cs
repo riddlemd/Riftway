@@ -30,6 +30,10 @@ public static unsafe class MacMenu
     /// <summary>A menu whose delegate is the target closed (<c>menuDidClose:</c>); the argument is the NSMenu.</summary>
     public static Action<nint>? Closed { get; set; }
 
+    /// <summary>AppKit asks a menu whose delegate is the target to update before it shows it or matches a key equivalent
+    /// in it (<c>menuNeedsUpdate:</c>); the argument is the NSMenu.</summary>
+    public static Action<nint>? NeedsUpdate { get; set; }
+
     /// <summary>Makes the target the menu's delegate, for <see cref="Opened"/> and <see cref="Closed"/>. The delegate is
     /// a weak reference; the target lives for the process.</summary>
     public static void SetDelegate(nint menu) => Send(menu, Sel("setDelegate:"u8), Target());
@@ -37,7 +41,7 @@ public static unsafe class MacMenu
     /// <summary>The menu that holds <paramref name="menu"/> as a submenu, or 0.</summary>
     public static nint Supermenu(nint menu) => Send(menu, Sel("supermenu"u8));
 
-    /// <summary>Sends <paramref name="selector"/> (<c>menuWillOpen:</c>, <c>menuDidClose:</c>) with the menu to the menu's
+    /// <summary>Sends <paramref name="selector"/> (<c>menuNeedsUpdate:</c>, <c>menuWillOpen:</c>, <c>menuDidClose:</c>) with the menu to the menu's
     /// delegate, as AppKit does around tracking; false if it has none. For tests, as Electron's
     /// <c>SimulateSubmenuCloseSequenceForTesting</c>.</summary>
     public static bool SendToDelegate(nint menu, string selector)
@@ -94,6 +98,25 @@ public static unsafe class MacMenu
     public static void SetChecked(nint item, bool on) => SendNInt(item, Sel("setState:"u8), on ? 1 : 0);
 
     public static void SetHidden(nint item, bool hidden) => SendBool(item, Sel("setHidden:"u8), hidden);
+
+    public static void SetTitle(nint item, string title)
+    {
+        var name = NewString(title);
+        Send(item, Sel("setTitle:"u8), name);
+        Release(name);
+    }
+
+    public static nint Tag(nint item) => Send(item, Sel("tag"u8));
+
+    /// <summary>Clears the item's image, then sets its action to nil and back, as Electron's <c>applyStateToMenuItem</c>:
+    /// AppKit restores a role item's system icon (macOS 26) only when its action changes.</summary>
+    public static void ClearImage(nint item, string? roleSelector)
+    {
+        Send(item, Sel("setImage:"u8), 0);
+        if (roleSelector is null) return;
+        Send(item, Sel("setAction:"u8), 0);
+        Send(item, Sel("setAction:"u8), Sel(roleSelector));
+    }
 
     /// <summary>Replaces the menu bar; NSApp retains <paramref name="menu"/>, and 0 clears it.</summary>
     /// <summary>The modifier flags of the event AppKit is handling, and whether it is a key press.</summary>
@@ -206,6 +229,7 @@ public static unsafe class MacMenu
             class_addMethod(cls, PerformSelector(), (delegate* unmanaged<nint, nint, nint, void>)&OnPerform, types);
             class_addMethod(cls, Sel("menuWillOpen:"u8), (delegate* unmanaged<nint, nint, nint, void>)&OnMenuWillOpen, types);
             class_addMethod(cls, Sel("menuDidClose:"u8), (delegate* unmanaged<nint, nint, nint, void>)&OnMenuDidClose, types);
+            class_addMethod(cls, Sel("menuNeedsUpdate:"u8), (delegate* unmanaged<nint, nint, nint, void>)&OnMenuNeedsUpdate, types);
             objc_registerClassPair(cls);
             s_target = Send(Send(cls, Sel("alloc"u8)), Sel("init"u8));
         }
@@ -232,6 +256,13 @@ public static unsafe class MacMenu
     {
         try { Closed?.Invoke(menu); }
         catch (Exception e) { Console.Error.WriteLine($"[Oriel] Unhandled exception in menuDidClose: {e}"); }
+    }
+
+    [UnmanagedCallersOnly]
+    private static void OnMenuNeedsUpdate(nint self, nint cmd, nint menu)
+    {
+        try { NeedsUpdate?.Invoke(menu); }
+        catch (Exception e) { Console.Error.WriteLine($"[Oriel] Unhandled exception in menuNeedsUpdate: {e}"); }
     }
 
     private static nint NewString(string value)

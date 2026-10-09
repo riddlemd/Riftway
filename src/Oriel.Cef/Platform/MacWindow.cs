@@ -155,6 +155,54 @@ public static unsafe class MacWindow
         if (window != 0) SendObject(window, Sel("setLevel:"u8), (nint)level);
     }
 
+    /// <summary>The NSWindow behind <paramref name="contentView"/>, or 0.</summary>
+    public static nint WindowOf(nint contentView) => NSWindowOf(contentView);
+
+    /// <summary>The NSWindow's <c>parentWindow</c>, or 0.</summary>
+    public static nint ParentWindow(nint contentView) => NSWindowOf(contentView) is var window && window != 0 ? Send(window, Sel("parentWindow"u8)) : 0;
+
+    /// <summary>The NSWindow's <c>childWindows</c>.</summary>
+    public static IReadOnlyList<nint> ChildWindows(nint contentView)
+    {
+        var window = NSWindowOf(contentView);
+        var array = window == 0 ? 0 : Send(window, Sel("childWindows"u8));
+        if (array == 0) return [];
+        var count = (int)Send(array, Sel("count"u8));
+        var children = new nint[count];
+        for (var i = 0; i < count; i++) children[i] = SendNUIntObject(array, Sel("objectAtIndex:"u8), (nuint)i);
+        return children;
+    }
+
+    /// <summary><c>[parent addChildWindow:child ordered:NSWindowAbove]</c>; AppKit orders the child in.</summary>
+    public static void AddChildWindow(nint parentContentView, nint childContentView)
+    {
+        var (parent, child) = (NSWindowOf(parentContentView), NSWindowOf(childContentView));
+        // NSWindowAbove
+        if (parent != 0 && child != 0) SendObjectNInt(parent, Sel("addChildWindow:ordered:"u8), child, 1);
+    }
+
+    /// <summary><c>[parent removeChildWindow:child]</c>.</summary>
+    public static void RemoveChildWindow(nint parentContentView, nint childContentView)
+    {
+        var (parent, child) = (NSWindowOf(parentContentView), NSWindowOf(childContentView));
+        if (parent != 0 && child != 0) SendObject(parent, Sel("removeChildWindow:"u8), child);
+    }
+
+    public static void OrderOut(nint contentView)
+    {
+        var window = NSWindowOf(contentView);
+        if (window != 0) SendObject(window, Sel("orderOut:"u8), 0);
+    }
+
+    /// <summary>Electron's <c>NativeWindowMac::IsVisible</c>: ordered in, not occluded, and not minimized.</summary>
+    public static bool IsVisible(nint contentView)
+    {
+        var window = NSWindowOf(contentView);
+        // NSWindowOcclusionStateVisible
+        return window != 0 && SendGetBool(window, Sel("isVisible"u8)) != 0 && Send(window, Sel("occlusionState"u8)) == 2
+            && SendGetBool(window, Sel("isMiniaturized"u8)) == 0;
+    }
+
     /// <summary>Moves and resizes the window with AppKit's animation; the rectangle is in screen points with the origin at
     /// the top left of the main display, as Views uses.</summary>
     public static void AnimateFrame(nint contentView, int x, int y, int width, int height)
@@ -297,6 +345,7 @@ public static unsafe class MacWindow
     [DllImport(ObjC, EntryPoint = "objc_msgSend")] private static extern void SendObject(nint receiver, nint selector, nint arg);
     [DllImport(ObjC, EntryPoint = "objc_msgSend")] private static extern void SendBool(nint receiver, nint selector, byte value);
     [DllImport(ObjC, EntryPoint = "objc_msgSend")] private static extern byte SendGetBool(nint receiver, nint selector);
+    [DllImport(ObjC, EntryPoint = "objc_msgSend")] private static extern void SendObjectNInt(nint receiver, nint selector, nint arg, nint value);
     [DllImport(ObjC, EntryPoint = "objc_msgSend")] private static extern nint SendNUIntObject(nint receiver, nint selector, nuint value);
     [DllImport(ObjC, EntryPoint = "objc_msgSend")] private static extern nint SendBytesObject(nint receiver, nint selector, byte* value);
     [DllImport(ObjC, EntryPoint = "objc_msgSendSuper")] private static extern void SendSuperObject(ObjcSuper* super, nint selector, nint arg);

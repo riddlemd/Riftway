@@ -19,11 +19,11 @@ Counted from the Checklist at the end: `BaseWindow` and `BrowserWindow` are one 
 |---|---|---|---|---|---|---|---|
 | BaseWindow + BrowserWindow options | 54 | 32 | 12 | 10 | 0 | 59.3% | 70.4% |
 | webPreferences | 46 | 12 | 4 | 23 | 7 | 30.8% | 35.9% |
-| Instance methods | 143 | 87 | 26 | 24 | 6 | 63.5% | 73.0% |
+| Instance methods | 143 | 88 | 25 | 24 | 6 | 64.2% | 73.4% |
 | Instance properties | 24 | 13 | 4 | 7 | 0 | 54.2% | 62.5% |
 | Events | 35 | 18 | 10 | 7 | 0 | 51.4% | 65.7% |
 | Static methods | 6 | 5 | 0 | 0 | 1 | 100.0% | 100.0% |
-| **Total** | 308 | 167 | 56 | 71 | 14 | 56.8% | 66.3% |
+| **Total** | 308 | 168 | 55 | 71 | 14 | 57.1% | 66.5% |
 
 ## Done since the audit
 
@@ -112,9 +112,10 @@ Counted from the Checklist at the end: `BaseWindow` and `BrowserWindow` are one 
   `Menu.MenuWillShow`/`MenuWillClose` (Electron's `menu-will-show`/`menu-will-close`) come from CEF's
   `D.menu_will_show`/`D.menu_closed` per Views model on Windows and Linux (a popup or tray menu and each submenu on its own
   Menu; a bar dropdown on its submenu, never on the bar's Menu), from NSMenu delegates on the macOS application and Dock
-  menus (every menu under them reports on the top Menu), from DBusMenu `AboutToShow` (submenus only, no close) and
+  menus (every menu under them reports on the top Menu, and `menuNeedsUpdate:`/`menuDidClose:` re-apply item state as
+  Electron's `refreshMenuTree`), from DBusMenu `AboutToShow` (submenus only, no close) and
   `MenuGtk`'s build on the Linux tray. Before each show `_menuWillShow` checks the first item of a radio group with none
-  checked; radio groups follow Electron's `generateGroupId`. Gaps: DRIFT M8 (macOS popups report the top menu only), M9.
+  checked; radio groups follow Electron's `generateGroupId`. Gaps: DRIFT M8 (macOS popups report the top menu only), M9, M11.
 
 - Window polish, Windows (branch `window-polish`): `ShowInactive` (shown through CEF with `SWP_NOACTIVATE` forced in
   `WM_WINDOWPOSCHANGING`), `Opacity`/`SetOpacity`/`GetOpacity` (`WS_EX_LAYERED` alpha), `HasShadow`/`SetHasShadow` (stored only,
@@ -161,7 +162,7 @@ Counted from the Checklist at the end: `BaseWindow` and `BrowserWindow` are one 
      `accessibleTitle`, `scrollBounce`, `imageAnimationPolicy`, `zoomMode`, `focusOnNavigation`,
      `disableHtmlFullscreenWindowResize`, `additionalArguments`.
    - `contextIsolation` is always on; `false` is not offered.
-2. `setParentWindow` on macOS — CEF Views sets the parent only at creation; `addChildWindow:` (W8).
+2. (none: `setParentWindow` is done on every OS; W8 tracks a macOS check.)
 3. `titleBarStyle` on macOS, `trafficLightPosition`, the Window Controls Overlay page API (W34, W37) — OS, Patch.
 4. `showInactive`, `opacity`, `setIgnoreMouseEvents`, content protection, `will-resize`/`will-move` on macOS and Linux (W30) — OS.
 5. `hasShadow` on macOS and Linux (W31), kiosk presentation options on macOS (W33), the Windows window state on macOS and Linux (W43) — OS.
@@ -429,7 +430,7 @@ Parameters in brackets are optional in Electron. `webContents` members are in [w
 | `isContentProtected()` | `IsContentProtected` | partial | Windows only for now (W30). |
 | `setFocusable(focusable)` | `SetFocusable` | partial | Windows: style, taskbar button, blur, as Electron; stored only elsewhere (W43). |
 | `isFocusable()` | `IsFocusable` | partial | Windows reads `WS_EX_NOACTIVATE` too (W43). |
-| `setParentWindow(parent)` | `SetParentWindow` | partial | Windows: as Electron (`GWLP_HWNDPARENT`, re-show, modal throws) with Oriel's parent/child bookkeeping; Linux: as Electron (`WM_TRANSIENT_FOR`, the root window when cleared); macOS throws (W8). |
+| `setParentWindow(parent)` | `SetParentWindow` | done | As Electron on each OS: Windows `GWLP_HWNDPARENT` with re-show, Linux `WM_TRANSIENT_FOR`, macOS `addChildWindow:`; modal throws. macOS checks unrun (W8). |
 | `getParentWindow()` | `GetParentWindow` | done |  |
 | `getChildWindows()` | `GetChildWindows` | done |  |
 | `setAutoHideCursor(autoHide)` | — | missing |  |

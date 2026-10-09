@@ -16,7 +16,7 @@ The 67 rows include `BrowserView` (deprecated, never implemented; counted as not
 
 | Checklist | Applicable items | Done | Partial | Missing | % done | % done + partial/2 |
 |---|---|---|---|---|---|---|
-| [BrowserWindow](parity/browser-window.md) (with `BaseWindow`) | 294 | 167 | 56 | 71 | 56.8% | 66.3% |
+| [BrowserWindow](parity/browser-window.md) (with `BaseWindow`) | 294 | 168 | 55 | 71 | 57.1% | 66.5% |
 | [webContents](parity/web-contents.md) (with `navigationHistory`, `WebFrameMain`) | 230 | 106 | 55 | 69 | 46.1% | 58.0% |
 
 **Source** — where the implementation comes from:
@@ -55,7 +55,7 @@ Detailed item-by-item status: [parity/browser-window.md](parity/browser-window.m
 | Electron | Oriel | Source | Wave | Status |
 |---|---|---|---|---|
 | `BaseWindow` | `BaseWindow` | CEF (Views) | M2 | — |
-| `BrowserWindow` | `BrowserWindow` | CEF (Views) | M2 | partial: 167 of 294 applicable items done (56.8%), see parity/browser-window.md |
+| `BrowserWindow` | `BrowserWindow` | CEF (Views) | M2 | partial: 168 of 294 applicable items done (57.1%), see parity/browser-window.md |
 | `View` | `View` | CEF (Views panel) | M2 | partial: `addChildView` (index, move to top, reparent), `removeChildView`, `children`, `setBounds`/`getBounds`, `setVisible`/`getVisible`, `setBackgroundColor`, `bounds-changed`; no `setBorderRadius` (DRIFT V1) |
 | `WebContentsView` | `WebContentsView` | CEF (Views browser view) | M2 | partial: `new WebContentsView({ webPreferences })`, `webContents`, child views over the page, in `BrowserWindow.ContentView`; pages outlive their window and the view stays when its page closes, as Electron; popups and `webContents.close()` from view pages; `webContents` option for a `createWindow` popup (V4); Alloy style (DRIFT V2, V4, V7, V9, V12, V13) |
 | `ImageView` | `ImageView` | CEF + .NET | M5 | — |

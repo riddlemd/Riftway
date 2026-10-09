@@ -16,7 +16,7 @@ Cross-platform work. Platform-specific items: [linux-todo.md](linux-todo.md), [w
   - [x] `parent`/`modal`, `isModal`, `getChildWindows`, `getParentWindow`
   - [x] `setParentWindow` on Windows (branch `title-bar-2`)
   - [x] `setParentWindow` on Linux (branch `linux-parent`)
-  - [ ] `setParentWindow` on macOS (DRIFT W8)
+  - [x] `setParentWindow` on macOS (branch `mac-menu-parent`; WindowTest checks unrun, DRIFT W8)
   - [x] Windows: `titleBarStyle`, `titleBarOverlay`/`setTitleBarOverlay`, `app-region` drag regions (branch `title-bar`)
   - [ ] Title bar on macOS (`trafficLightPosition`, hidden styles) and the page's Window Controls Overlay API (DRIFT W34, W37)
   - [x] Taskbar on Windows: `setProgressBar`, `flashFrame`, `setSkipTaskbar`/`skipTaskbar`, `setOverlayIcon`

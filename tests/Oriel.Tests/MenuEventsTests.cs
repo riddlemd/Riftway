@@ -275,7 +275,7 @@ public sealed class MenuEventsTests
         var (root, _, _, log) = Tree();
         const nint bar = 1, file = 2, recent = 3;
         var removed = new List<nint>();
-        var controller = new MacMenuController(root, bar);
+        var controller = new MacMenuController(root, bar, new FakeMenuTree());
 
         controller.WillOpen(file, removed.Add);
         controller.WillOpen(recent, removed.Add);
@@ -295,7 +295,7 @@ public sealed class MenuEventsTests
     {
         var (root, _, _, log) = Tree();
         const nint top = 7;
-        var controller = new MacMenuController(root, top);
+        var controller = new MacMenuController(root, top, new FakeMenuTree());
 
         controller.WillOpen(top, _ => { });
         controller.DidClose(top, 0);
