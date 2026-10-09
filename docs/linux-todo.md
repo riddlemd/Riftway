@@ -23,6 +23,8 @@ General items: [todo.md](todo.md).
         the compositor colour, which CEF cannot
   - [ ] Electron gives every frameless window on Linux a translucent widget, for its own client-side frame
         (`ElectronFrameViewLinux`); Oriel only transparent ones. Check whether anything visible depends on it
+- [ ] Run the systemPreferences checks in WindowTest's `LinuxThemeAsync` (portal accent and `accent-color-changed`,
+      `gtk-enable-animations`, the members Electron lacks on Linux); branch `system-preferences`
 - [ ] Linux sandbox on Ubuntu 24.04+: AppArmor profile, or documented `--no-sandbox` (M4)
 - [ ] Wayland: CEF Views on Wayland is still being fixed upstream; Oriel targets X11/XWayland for now
 - [ ] Clipboard: the Wayland data device with Wayland, and the XDG portal file targets (DRIFT K1)

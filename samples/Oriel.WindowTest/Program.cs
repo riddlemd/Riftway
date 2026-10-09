@@ -6245,6 +6245,12 @@ async Task ThemeAsync(BrowserWindow win)
 #pragma warning disable CA1416 // Called only on Linux.
 async Task LinuxThemeAsync(BrowserWindow win, Func<int> updateCount)
 {
+    static Exception? ThrowsOf(Action act)
+    {
+        try { act(); return null; }
+        catch (Exception e) { return e; }
+    }
+
     async Task<bool> PageMatches(string query, bool expected)
     {
         for (var i = 0; i < 30; i++)
@@ -6297,12 +6303,40 @@ async Task LinuxThemeAsync(BrowserWindow win, Func<int> updateCount)
         !NativeTheme.ShouldUseHighContrastColors && updateCount() == quiet && await PageMatches(More, false), $"updates {quiet} -> {updateCount()}");
     portal.Set("contrast", 0u);
 
+    // systemPreferences reads the same portal accent, Chromium's NativeTheme user colour.
+    Check("systemPreferences (Linux): GetAccentColor is the portal's accent-color as RRGGBBAA", SystemPreferences.GetAccentColor() == "336699FF",
+        SystemPreferences.GetAccentColor());
+    var accents = new List<(string Color, bool OnUi)>();
+    EventHandler<AccentColorChangedEventArgs> onAccent = (_, e) => { lock (accents) accents.Add((e.NewColor, Oriel.Cef.CefThread.IsOnUiThread)); };
+    SystemPreferences.AccentColorChanged += onAccent;
+    int AccentCount() { lock (accents) return accents.Count; }
+
     var accent = Latency(() => portal.Set("accent-color", (0.9, 0.1, 0.1)));
     Check("NativeTheme: a portal accent-color change raises Updated, as Chromium's user colour does", accent is < 300, $"{accent} ms");
+    Eventually(() => AccentCount() >= 1, step);
+    lock (accents)
+        Check("systemPreferences (Linux): the accent change raises AccentColorChanged once, on the UI thread, truncated as SkColorSetRGB (E51919FF)",
+            accents is [("E51919FF", true)] && SystemPreferences.GetAccentColor() == "E51919FF", string.Join(", ", accents));
 
     var toLight = Latency(() => portal.Set("color-scheme", 2u));
     Check("NativeTheme: the portal's SettingChanged back to light raises Updated, for Oriel and the page",
         toLight is < 300 && !NativeTheme.ShouldUseDarkColors && await PageMatches(Dark, false), $"{toLight} ms");
+    await Task.Delay(300);
+    Check("systemPreferences (Linux): a theme update with the same accent raises no AccentColorChanged", AccentCount() == 1, AccentCount());
+
+    var animations = Oriel.Cef.CefThread.InvokeOnUi(LinuxGtkTheme.AnimationsEnabled);
+    Gtk("gtk-enable-animations", false);
+    var animationsOff = SystemPreferences.GetAnimationSettings();
+    Gtk("gtk-enable-animations", true);
+    var animationsOn = SystemPreferences.GetAnimationSettings();
+    Gtk("gtk-enable-animations", animations);
+    Check("systemPreferences (Linux): GetAnimationSettings follows GTK's gtk-enable-animations",
+        animationsOff == new AnimationSettings(false, false, true) && animationsOn == new AnimationSettings(true, true, false), $"off={animationsOff} on={animationsOn}");
+    Check("systemPreferences (Linux): getColor, getMediaAccessStatus and the macOS members are absent, as in Electron",
+        ThrowsOf(() => SystemPreferences.GetColor("window")) is PlatformNotSupportedException
+        && ThrowsOf(() => SystemPreferences.GetMediaAccessStatus(MediaAccessType.Camera)) is PlatformNotSupportedException
+        && ThrowsOf(() => SystemPreferences.GetSystemColor("blue")) is PlatformNotSupportedException
+        && ThrowsOf(() => SystemPreferences.SubscribeNotification(null, _ => { })) is PlatformNotSupportedException);
 
     // HighContrastInverse is one of GTK 3's built-in themes: dark, and named high contrast.
     var contrast = Latency(() => Gtk("gtk-theme-name", "HighContrastInverse"));
@@ -6330,6 +6364,10 @@ async Task LinuxThemeAsync(BrowserWindow win, Func<int> updateCount)
     portal.Set("color-scheme", 2u);
     portal.Set("accent-color", (0.2, 0.4, 0.6));
     Eventually(() => LinuxPortalSettings.Appearance.ColorScheme == 2u, step);
+    Eventually(() => AccentCount() >= 2, step);
+    lock (accents)
+        Check("systemPreferences (Linux): restoring the accent raises AccentColorChanged with it", accents is [_, ("336699FF", true)], string.Join(", ", accents));
+    SystemPreferences.AccentColorChanged -= onAccent;
 
     // DRIFT Y3: a Views menu takes its colour mode from its window's profile, which ThemeSource sets; read off the X screen.
     async Task<(int R, int G, int B)?> MenuBackground(ThemeSource source)

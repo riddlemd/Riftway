@@ -42,14 +42,28 @@ public enum MediaAccessStatus
     Unknown,
 }
 
+/// <summary>The app's appearance as <see cref="SystemPreferences.GetEffectiveAppearance"/> reports it; Electron's
+/// <c>'light'</c>, <c>'dark'</c> and <c>'unknown'</c>.</summary>
+public enum SystemAppearance
+{
+    /// <summary><c>NSAppearanceNameAqua</c>.</summary>
+    Light,
+
+    /// <summary><c>NSAppearanceNameDarkAqua</c>.</summary>
+    Dark,
+
+    /// <summary>Any other appearance, such as the high-contrast ones.</summary>
+    Unknown,
+}
+
 /// <summary>The system accent colour changed.</summary>
 /// <param name="NewColor">The new colour as <c>RRGGBBAA</c> hex, as <see cref="SystemPreferences.GetAccentColor"/> returns it.</param>
 public sealed record AccentColorChangedEventArgs(string NewColor);
 
 /// <summary>System colours, accent colour, animation settings and device consent; Electron's <c>systemPreferences</c>.</summary>
-/// <remarks>Windows only so far; the macOS-only members are not ported. Events are raised on the UI thread, once
-/// <see cref="OrielApp.Ready"/> has fired.</remarks>
-public static class SystemPreferences
+/// <remarks>Members Electron lacks on an OS throw <see cref="PlatformNotSupportedException"/> there. Events are raised on
+/// the UI thread, once <see cref="OrielApp.Ready"/> has fired.</remarks>
+public static partial class SystemPreferences
 {
     private static readonly Lock s_gate = new();
     private static EventHandler<AccentColorChangedEventArgs>? s_accentChanged;
@@ -59,33 +73,40 @@ public static class SystemPreferences
     private static string s_currentAccent = "";
 
     /// <summary>The user's accent colour as <c>RRGGBBAA</c> hex without a <c>#</c>, e.g. <c>"0078D4FF"</c>, or <c>""</c> when
-    /// Windows has none. Electron's <c>systemPreferences.getAccentColor()</c>.</summary>
-    /// <exception cref="PlatformNotSupportedException">Not Windows.</exception>
+    /// there is none: Windows' DWM accent, macOS's <c>controlAccentColor</c>, or the XDG portal's <c>accent-color</c> on
+    /// Linux. Electron's <c>systemPreferences.getAccentColor()</c>.</summary>
     public static string GetAccentColor()
     {
-        if (!OperatingSystem.IsWindows()) throw NotWindows();
+        if (OperatingSystem.IsMacOS()) return MacAccentColor();
+        if (OperatingSystem.IsLinux()) return FormatAccent(LinuxAccentArgb(LinuxPortalAccent()));
+        if (!OperatingSystem.IsWindows()) throw Unsupported("getAccentColor");
         EnsureStarted();
         lock (s_gate) return FormatAccent(s_accent);
     }
 
     /// <summary>A system colour as <c>#RRGGBBAA</c> hex, e.g. <c>"#F0F0F0FF"</c>. Electron's <c>systemPreferences.getColor()</c>.</summary>
-    /// <param name="color">One of Electron's Windows names, e.g. <c>"window"</c>, <c>"highlight"</c> or <c>"3d-face"</c>.</param>
+    /// <param name="color">One of Electron's names for the OS: on Windows e.g. <c>"window"</c>, <c>"highlight"</c> or
+    /// <c>"3d-face"</c>; on macOS e.g. <c>"control-background"</c>, <c>"label"</c> or <c>"window-background"</c>.</param>
     /// <exception cref="ArgumentException"><paramref name="color"/> is not one of the names (<c>Unknown color: …</c>).</exception>
-    /// <exception cref="PlatformNotSupportedException">Not Windows.</exception>
+    /// <exception cref="PlatformNotSupportedException">Linux, where Electron has no <c>getColor</c>.</exception>
     public static string GetColor(string color)
     {
-        if (!OperatingSystem.IsWindows()) throw NotWindows();
+        if (OperatingSystem.IsMacOS()) return MacColor(color);
+        if (!OperatingSystem.IsWindows()) throw Unsupported("getColor");
         if (SysColorIndex(color) is not { } index) throw new ArgumentException("Unknown color: " + color, nameof(color));
         return ToRgbaHex(WindowsSystemPreferences.ColorRefToArgb(WindowsSystemPreferences.SysColor(index)), includeHash: true);
     }
 
-    /// <summary>Whether the user lets desktop apps use <paramref name="mediaType"/>. Always <see cref="MediaAccessStatus.Granted"/>
-    /// for <see cref="MediaAccessType.Screen"/>. Electron's <c>systemPreferences.getMediaAccessStatus()</c>.</summary>
+    /// <summary>Whether the user lets this app use <paramref name="mediaType"/>. On Windows, the desktop-app setting, and always
+    /// <see cref="MediaAccessStatus.Granted"/> for <see cref="MediaAccessType.Screen"/>; on macOS, the app's privacy
+    /// consent (screen: <see cref="MediaAccessStatus.Granted"/> or <see cref="MediaAccessStatus.Denied"/>). Electron's
+    /// <c>systemPreferences.getMediaAccessStatus()</c>.</summary>
     /// <exception cref="ArgumentOutOfRangeException"><paramref name="mediaType"/> is not a defined value.</exception>
-    /// <exception cref="PlatformNotSupportedException">Not Windows.</exception>
+    /// <exception cref="PlatformNotSupportedException">Linux, where Electron has no <c>getMediaAccessStatus</c>.</exception>
     public static MediaAccessStatus GetMediaAccessStatus(MediaAccessType mediaType)
     {
-        if (!OperatingSystem.IsWindows()) throw NotWindows();
+        if (OperatingSystem.IsMacOS()) return MacMediaAccessStatus(mediaType);
+        if (!OperatingSystem.IsWindows()) throw Unsupported("getMediaAccessStatus");
         return mediaType switch
         {
             MediaAccessType.Camera => ToMediaAccessStatus(WindowsSystemPreferences.DeviceAccessStatus(4 /* DeviceClass_VideoCapture */)),
@@ -95,11 +116,14 @@ public static class SystemPreferences
         };
     }
 
-    /// <summary>The system's animation settings. Electron's <c>systemPreferences.getAnimationSettings()</c>.</summary>
-    /// <exception cref="PlatformNotSupportedException">Not Windows.</exception>
+    /// <summary>The system's animation settings: Windows' "Animation effects", macOS's "Reduce motion" and
+    /// <c>NSScrollAnimationEnabled</c>, GTK's <c>gtk-enable-animations</c>. Electron's
+    /// <c>systemPreferences.getAnimationSettings()</c>.</summary>
     public static AnimationSettings GetAnimationSettings()
     {
-        if (!OperatingSystem.IsWindows()) throw NotWindows();
+        if (OperatingSystem.IsMacOS()) return MacAnimationSettings();
+        if (OperatingSystem.IsLinux()) return LinuxAnimationSettings();
+        if (!OperatingSystem.IsWindows()) throw Unsupported("getAnimationSettings");
         var animation = WindowsSystemPreferences.ClientAreaAnimation();
         var rich = ShouldRenderRichAnimation(animation, WindowsSystemPreferences.IsCurrentSessionRemote);
         // ScrollAnimationsEnabledBySystem is ShouldRenderRichAnimation on Windows.
@@ -107,7 +131,9 @@ public static class SystemPreferences
     }
 
     /// <summary>The accent colour changed. Electron's <c>accent-color-changed</c>.</summary>
-    /// <remarks>Windows only. Raised when the DWM registry key changes and the colour read back differs from the last one.</remarks>
+    /// <remarks>Windows: raised when the DWM registry key changes and the colour read back differs from the last one. Linux:
+    /// raised when the portal or GTK theme settings change and the accent differs from the last one reported, which starts
+    /// as <c>""</c>, as Electron's. Never raised on macOS, as in Electron.</remarks>
     public static event EventHandler<AccentColorChangedEventArgs>? AccentColorChanged
     {
         add { lock (s_gate) s_accentChanged += value; EnsureStarted(); }
@@ -115,7 +141,8 @@ public static class SystemPreferences
     }
 
     /// <summary>A system colour changed, or high contrast was turned on or off. Electron's <c>color-changed</c>.</summary>
-    /// <remarks>Windows only: raised for <c>WM_SYSCOLORCHANGE</c>, and <c>WM_SETTINGCHANGE</c> with <c>SPI_SETHIGHCONTRAST</c>.</remarks>
+    /// <remarks>Windows only, as in Electron: raised for <c>WM_SYSCOLORCHANGE</c>, and <c>WM_SETTINGCHANGE</c> with
+    /// <c>SPI_SETHIGHCONTRAST</c>.</remarks>
     public static event EventHandler? ColorChanged
     {
         add { lock (s_gate) s_colorChanged += value; EnsureStarted(); }
@@ -125,6 +152,7 @@ public static class SystemPreferences
     // Electron's SystemPreferences constructor: the accent baseline and watch at once, the window once the app is ready.
     private static void EnsureStarted()
     {
+        if (OperatingSystem.IsLinux()) StartLinux();
         if (!OperatingSystem.IsWindows()) return;
         lock (s_gate)
         {
@@ -232,27 +260,33 @@ public static class SystemPreferences
     internal static bool ShouldRenderRichAnimation(bool? clientAreaAnimation, Func<bool> isRemoteSession) =>
         clientAreaAnimation ?? !isRemoteSession();
 
-    /// <summary>gfx::Animation's <c>PrefersReducedMotion</c>: the force switches first, then the inverse of "Animation
-    /// effects", assumed on when it can't be read.</summary>
+    /// <summary>gfx::Animation's Windows <c>PrefersReducedMotion</c>: the force switches first, then the inverse of
+    /// "Animation effects", assumed on when it can't be read.</summary>
     internal static bool PrefersReducedMotion(IReadOnlyList<string> args, bool? clientAreaAnimation)
+        => ForcedReducedMotion(args, windows: true) ?? !(clientAreaAnimation ?? true);
+
+    /// <summary>gfx::Animation's <c>PrefersReducedMotion</c> switches: <c>--force-prefers-reduced-motion</c> wins over
+    /// <c>--force-prefers-no-reduced-motion</c>; null without either.</summary>
+    internal static bool? ForcedReducedMotion(IReadOnlyList<string> args, bool windows)
     {
-        if (HasSwitch(args, "force-prefers-reduced-motion")) return true;
-        if (HasSwitch(args, "force-prefers-no-reduced-motion")) return false;
-        return !(clientAreaAnimation ?? true);
+        if (HasSwitch(args, "force-prefers-reduced-motion", windows)) return true;
+        if (HasSwitch(args, "force-prefers-no-reduced-motion", windows)) return false;
+        return null;
     }
 
-    /// <summary>base::CommandLine's <c>HasSwitch</c> on Windows: <c>--</c>, <c>-</c> or <c>/</c> prefixes, case-insensitive
-    /// names, <c>=value</c> ignored, nothing after a bare <c>--</c>. The first argument is the program.</summary>
-    internal static bool HasSwitch(IReadOnlyList<string> args, string name)
+    /// <summary>base::CommandLine's <c>HasSwitch</c>: <c>--</c> or <c>-</c> prefixes, plus <c>/</c> and case-insensitive
+    /// names on Windows; <c>=value</c> ignored, nothing after a bare <c>--</c>. The first argument is the program.</summary>
+    internal static bool HasSwitch(IReadOnlyList<string> args, string name, bool windows)
     {
         for (var i = 1; i < args.Count; i++)
         {
             var arg = args[i];
             if (arg == "--") return false;
-            var prefix = arg.StartsWith("--", StringComparison.Ordinal) ? 2 : arg.StartsWith('-') || arg.StartsWith('/') ? 1 : 0;
+            var prefix = arg.StartsWith("--", StringComparison.Ordinal) ? 2 : arg.StartsWith('-') || (windows && arg.StartsWith('/')) ? 1 : 0;
             if (prefix == 0) continue;
             var end = arg.IndexOf('=', prefix);
-            if (arg.AsSpan(prefix, (end < 0 ? arg.Length : end) - prefix).Equals(name, StringComparison.OrdinalIgnoreCase)) return true;
+            var comparison = windows ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal;
+            if (arg.AsSpan(prefix, (end < 0 ? arg.Length : end) - prefix).Equals(name, comparison)) return true;
         }
         return false;
     }
@@ -293,5 +327,10 @@ public static class SystemPreferences
         _ => null,
     };
 
-    private static PlatformNotSupportedException NotWindows() => new("systemPreferences is only implemented on Windows so far.");
+    // Electron leaves the method off the object on this OS.
+    private static PlatformNotSupportedException Unsupported(string method)
+        => new($"systemPreferences.{method} is not available on {(OperatingSystem.IsMacOS() ? "macOS" : OperatingSystem.IsLinux() ? "Linux" : OperatingSystem.IsWindows() ? "Windows" : "this OS")}, as in Electron.");
+
+    // Electron's calls run on the UI thread, which is AppKit's main thread on macOS; before Ready the caller's thread stands in.
+    private static T OnUi<T>(Func<T> read) => OrielApp.CurrentOrNull is { IsReady: true } ? CefThread.InvokeOnUi(read) : read();
 }

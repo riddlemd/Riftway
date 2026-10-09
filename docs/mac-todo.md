@@ -19,6 +19,12 @@ General items: [todo.md](todo.md).
       read-back, idle time after a posted CGEvent, lock and session notifications, the held shutdown) and the Tray checks
       (WindowTest `TrayAsync` → `MacTrayTest`: NSStatusItem, title runs and font, NSEvent-driven events, drops, menus). The
       CGEvent post and the System Events read-back need Accessibility for the test process. Pass
+- [ ] Run the systemPreferences checks (WindowTest `SystemPreferencesChecks.RunMac`: colours and appearance under each
+      `ThemeSource`, swipe, animation and transparency settings against `defaults`, Touch ID availability against `ioreg`,
+      `askForMediaAccess` on a decided consent, distributed and local notifications); branch `system-preferences`
+- [ ] systemPreferences by hand: `promptTouchID` on a Touch ID Mac (success, cancel), `askForMediaAccess` on an undecided
+      consent (needs `NSCameraUsageDescription`/`NSMicrophoneUsageDescription` in the app's Info.plist),
+      `isTrustedAccessibilityClient(true)` showing the prompt
 - [ ] Check on a MacBook that unplugging raises `OnBattery` and `IsOnBatteryPower()` flips (IOPMPowerSource interest
       notifications); and a real sleep and wake raises `Suspended`/`Resumed` once each
 - [ ] `desktopCapturer` (branch `desktop-capturer`): run WindowTest `DesktopCapturerChecks` with Screen Recording consent

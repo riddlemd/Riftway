@@ -48,6 +48,17 @@ public static unsafe partial class LinuxGtkTheme
         return result;
     }
 
+    /// <summary><c>GtkUi::AnimationsEnabled</c>: the <c>gtk-enable-animations</c> setting. UI thread, GTK loaded.</summary>
+    public static bool AnimationsEnabled()
+    {
+        var value = new GValue();
+        _ = g_value_init(&value, GTypeBoolean);
+        fixed (byte* name = "gtk-enable-animations\0"u8) g_object_get_property(gtk_settings_get_default(), name, &value);
+        var result = g_value_get_boolean(&value) != 0;
+        g_value_unset(&value);
+        return result;
+    }
+
     /// <summary>Chromium's <c>GetBgColor("")</c>: <c>window.background.chromium</c> rendered borderless into 24x24 and
     /// averaged, as ARGB. UI thread, GTK loaded.</summary>
     public static uint WindowBackground()
@@ -191,6 +202,7 @@ public static unsafe partial class LinuxGtkTheme
     [LibraryImport(LibGObject)] private static partial byte* g_value_get_string(GValue* value);
     [LibraryImport(LibGObject)] private static partial void g_value_set_string(GValue* value, byte* s);
     [LibraryImport(LibGObject)] private static partial void g_value_set_boolean(GValue* value, int b);
+    [LibraryImport(LibGObject)] private static partial int g_value_get_boolean(GValue* value);
     [LibraryImport(LibGObject)] private static partial void g_object_get_property(nint obj, byte* name, GValue* value);
     [LibraryImport(LibGObject)] private static partial void g_object_set_property(nint obj, byte* name, GValue* value);
     [LibraryImport(LibGObject)] private static partial nuint g_signal_connect_data(nint instance, byte* signal, delegate* unmanaged<nint, nint, nint, void> handler, nint data, nint destroy, int flags);
