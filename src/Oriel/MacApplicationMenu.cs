@@ -55,7 +55,7 @@ internal static class MacApplicationMenu
             var bar = MacMenu.CreateMenu(string.Empty);
             foreach (var item in menu.Items) AddItem(bar, item);
             MacMenu.SetDelegate(bar);
-            s_barController = new MacMenuController(menu, bar);
+            s_barController = new MacMenuController(menu, bar, MacMenuTree.Instance);
             MacMenu.SetMainMenu(bar);
             MacMenu.Release(bar);
         }
@@ -80,7 +80,7 @@ internal static class MacApplicationMenu
         var nsMenu = MacMenu.CreateMenu(string.Empty);
         foreach (var item in s_dock.Items) AddItem(nsMenu, item, inMenuBar: false);
         MacMenu.SetDelegate(nsMenu);
-        s_dockController = new MacMenuController(s_dock, nsMenu);
+        s_dockController = new MacMenuController(s_dock, nsMenu, MacMenuTree.Instance);
         return MacMenu.Autorelease(nsMenu);
     }
 
@@ -98,9 +98,7 @@ internal static class MacApplicationMenu
         var native = MacMenu.AddItem(nsMenu, MenuLabels.WithoutMnemonics(item.Label), item.CommandId,
             accelerator?.MacKeyEquivalent ?? string.Empty, accelerator is { } a ? MaskOf(a.Modifiers) : 0,
             MenuRoles.MacSelector(item.Role));
-        MacMenu.SetEnabled(native, item.Enabled);
-        MacMenu.SetHidden(native, !item.Visible);
-        if (item.Type is MenuItemType.Checkbox or MenuItemType.Radio) MacMenu.SetChecked(native, item.Checked);
+        if (MacMenuItemState.Of(item) is { } state) MacMenuTree.Instance.Apply(native, state);
 
         if (item.Submenu is not { } submenu) return;
         var nsSubmenu = MacMenu.CreateMenu(MenuLabels.WithoutMnemonics(item.Label));
@@ -121,6 +119,7 @@ internal static class MacApplicationMenu
     // one Menu it was made for: the application menu, or the Dock menu.
     private static void InstallMenuEvents()
     {
+        MacMenu.NeedsUpdate = menu => ControllerOf(menu)?.NeedsUpdate(menu);
         MacMenu.Opened = menu => ControllerOf(menu)?.WillOpen(menu, RemoveInjectedFullScreenItems);
         MacMenu.Closed = menu => ControllerOf(menu)?.DidClose(menu, MacMenu.Supermenu(menu));
     }
@@ -157,17 +156,83 @@ internal static class MacApplicationMenu
     }
 }
 
-/// <summary>The menu events of Electron's <c>ElectronMenuController</c> for a menu without a popup close callback (the
-/// application menu, the Dock menu): every NSMenu that opens under <see cref="NativeMenu"/> raises <c>menu-will-show</c>
-/// on <see cref="Menu"/>, and <c>menu-will-close</c> comes when <see cref="NativeMenu"/> or one of its direct submenus
-/// closes. Main thread only.</summary>
-internal sealed class MacMenuController(Menu menu, nint nativeMenu)
+/// <summary>What Electron's <c>applyStateToMenuItem</c> writes to an NSMenuItem from its model.</summary>
+/// <remarks><see cref="Checked"/> applies to any item type, as Electron's <c>IsItemCheckedAt</c> reads <c>checked</c>
+/// whatever the type. <see cref="RoleSelector"/> is the role's AppKit action, set again after the image is cleared.</remarks>
+internal readonly record struct MacMenuItemState(bool Enabled, bool Hidden, bool Checked, string Title, string? RoleSelector)
+{
+    /// <summary>The state for <paramref name="item"/>, or null for the items Electron's NSMenuItem carries no model for
+    /// (separators, the Services submenu), which it leaves alone.</summary>
+    internal static MacMenuItemState? Of(MenuItem item)
+        => item.Type == MenuItemType.Separator || item.Role == MenuItemRole.Services ? null
+            : new(item.Enabled, !item.Visible, item.Checked, MenuLabels.WithoutMnemonics(item.Label), MenuRoles.MacSelector(item.Role));
+}
+
+/// <summary>The NSMenu calls <see cref="MacMenuController"/> makes; a seam for tests.</summary>
+internal interface IMacMenuTree
+{
+    int ItemCount(nint menu);
+
+    nint ItemAt(nint menu, int index);
+
+    /// <summary>The item's tag: the <see cref="MenuItem.CommandId"/> Oriel built it from, or 0 for AppKit's own items.</summary>
+    int Tag(nint item);
+
+    nint Submenu(nint item);
+
+    void Apply(nint item, MacMenuItemState state);
+}
+
+[SupportedOSPlatform("macos")]
+internal sealed class MacMenuTree : IMacMenuTree
+{
+    internal static readonly MacMenuTree Instance = new();
+
+    public int ItemCount(nint menu) => MacMenu.ItemCount(menu);
+
+    public nint ItemAt(nint menu, int index) => MacMenu.ItemAt(menu, index);
+
+    public int Tag(nint item) => (int)MacMenu.Tag(item);
+
+    public nint Submenu(nint item) => MacMenu.Submenu(item);
+
+    public void Apply(nint item, MacMenuItemState state)
+    {
+        MacMenu.SetEnabled(item, state.Enabled);
+        MacMenu.SetHidden(item, state.Hidden);
+        MacMenu.SetChecked(item, state.Checked);
+        MacMenu.SetTitle(item, state.Title);
+        MacMenu.ClearImage(item, state.RoleSelector);
+    }
+}
+
+/// <summary>The menu events and state refresh of Electron's <c>ElectronMenuController</c> for a menu without a popup
+/// close callback (the application menu, the Dock menu): every NSMenu that opens under <see cref="NativeMenu"/> raises
+/// <c>menu-will-show</c> on <see cref="Menu"/>, and <c>menu-will-close</c> comes when <see cref="NativeMenu"/> or one of
+/// its direct submenus closes. Main thread only.</summary>
+internal sealed class MacMenuController(Menu menu, nint nativeMenu, IMacMenuTree tree)
 {
     private bool _isMenuOpen;
 
     internal Menu Menu { get; } = menu;
 
     internal nint NativeMenu { get; } = nativeMenu;
+
+    /// <summary><c>menuNeedsUpdate:</c>, for <paramref name="menu"/> or any submenu: AppKit sends it before the menu
+    /// shows and before it matches a key equivalent in it.</summary>
+    internal void NeedsUpdate(nint menu) => RefreshTree(menu);
+
+    /// <summary>Electron's <c>refreshMenuTree</c>: re-applies each item's state from its <see cref="MenuItem"/>, depth first.</summary>
+    internal void RefreshTree(nint menu)
+    {
+        var count = tree.ItemCount(menu);
+        for (var i = 0; i < count; i++)
+        {
+            var item = tree.ItemAt(menu, i);
+            if (Menu.FindByCommandId(tree.Tag(item)) is { } model && MacMenuItemState.Of(model) is { } state) tree.Apply(item, state);
+            if (tree.Submenu(item) is var submenu && submenu != 0) RefreshTree(submenu);
+        }
+    }
 
     /// <summary><c>menuWillOpen:</c>, for <paramref name="menu"/> or any submenu.</summary>
     internal void WillOpen(nint menu, Action<nint> removeInjectedItems)
@@ -181,8 +246,10 @@ internal sealed class MacMenuController(Menu menu, nint nativeMenu)
     internal void DidClose(nint menu, nint supermenu)
     {
         if (!_isMenuOpen) return;
+        var endsMenu = menu == NativeMenu || supermenu == NativeMenu;
+        RefreshTree(menu);
         // A deeper submenu closes before the menu above it; only the top level ends the menu.
-        if (menu != NativeMenu && supermenu != NativeMenu) return;
+        if (!endsMenu) return;
         _isMenuOpen = false;
         Menu.OnMenuWillClose();
     }

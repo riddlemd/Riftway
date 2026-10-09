@@ -298,6 +298,10 @@ public sealed unsafe partial class BrowserWindow
     private nint _routedNSWindow;
     // Touched only on the UI thread.
     private readonly List<BrowserWindow> _children = [];
+    // The option until SetParentWindow changes it; UI thread.
+    private BrowserWindow? _parent;
+    // macOS: Electron's NativeWindowMac parent links, which attach this window to its parent as an AppKit child window.
+    private readonly MacParentLink? _macLink;
     // Popups allowed by on_before_popup whose view CEF has not created yet, by the client CEF will use; UI thread only.
     private static readonly Dictionary<nint, PendingPopup> s_pendingPopups = [];
     private WebContents? _opener;
@@ -326,6 +330,9 @@ public sealed unsafe partial class BrowserWindow
         _options = options ?? new BrowserWindowOptions();
         if (_options.Modal && _options.Parent is null) throw new ArgumentException("A modal window needs a Parent.", nameof(options));
         _options.WebPreferences.Validate(nameof(options));
+        _parent = _options.Parent;
+        if (OperatingSystem.IsMacOS())
+            _macLink = new MacParentLink(MacChildWindows.Instance, () => _window is null ? 0 : (nint)_window->get_window_handle(_window), _options.Modal);
 
         Id = Interlocked.Increment(ref s_nextId);
         _closable = _options.Closable;
@@ -456,7 +463,9 @@ public sealed unsafe partial class BrowserWindow
     {
         lock (s_openGate) s_open.Add(this);
         Menu.ApplicationMenuChanged += _applicationMenuChanged;
-        _options.Parent?._children.Add(this);
+        _parent?._children.Add(this);
+        // NativeWindowMac's constructor: a non-modal parent is linked, and attached when the window is shown.
+        _macLink?.SetParent(_parent?._macLink, attach: false);
         NativeObject.AddRef(_windowDelegate.Native);
         _window = CefNative.cef_window_create_top_level(_windowDelegate.Native);
     }
@@ -662,7 +671,29 @@ public sealed unsafe partial class BrowserWindow
     public static BrowserWindow? FromId(int id) => GetAllWindows().FirstOrDefault(w => w.Id == id);
 
     /// <summary>The window this one belongs to, or null. Electron's <c>win.getParentWindow()</c>.</summary>
-    public BrowserWindow? GetParentWindow() => _options.Parent;
+    public BrowserWindow? GetParentWindow() => CefThread.InvokeOnUi(() => _parent);
+
+    /// <summary>Makes <paramref name="parent"/> this window's parent, or makes it a top-level window again. macOS: an
+    /// AppKit child window of the parent (<c>addChildWindow:ordered:NSWindowAbove</c>), attached now if this window is
+    /// visible, otherwise when it is next shown; as in Electron, nothing stops a cycle. Electron's <c>win.setParentWindow()</c>.</summary>
+    /// <exception cref="PlatformNotSupportedException">Windows and Linux, on this branch.</exception>
+    /// <exception cref="InvalidOperationException">The window is modal, whose parent is fixed, or the parent is closed.</exception>
+    public void SetParentWindow(BrowserWindow? parent)
+    {
+        if (_options.Modal) throw new InvalidOperationException("Can not be called for modal window");
+        if (!OperatingSystem.IsMacOS()) throw new PlatformNotSupportedException("SetParentWindow is not supported on Windows and Linux yet.");
+        CefThread.InvokeOnUi(() =>
+        {
+            if (parent is { _window: null }) throw new InvalidOperationException("The parent window is closed.");
+            _parent?._children.Remove(this);
+            _parent = parent;
+            parent?._children.Add(this);
+            // NativeWindowMac::SetParentWindow attaches only a window that is visible by its IsVisible.
+            var attach = OperatingSystem.IsMacOS() && _window is not null && MacWindow.IsVisible((nint)_window->get_window_handle(_window));
+            _macLink?.SetParent(parent?._macLink, attach);
+            return true;
+        });
+    }
 
     /// <summary>The open windows that belong to this one. Electron's <c>win.getChildWindows()</c>.</summary>
     public IReadOnlyList<BrowserWindow> GetChildWindows() => CefThread.InvokeOnUi(() => (IReadOnlyList<BrowserWindow>)[.. _children]);
@@ -829,6 +860,7 @@ public sealed unsafe partial class BrowserWindow
     public void Show() => Command(w =>
     {
         var wasVisible = w->@base.@base.is_visible(&w->@base.@base) != 0;
+        _macLink?.Show();
         w->show(w);
         ApplySkipTaskbar(w);
         if (!wasVisible) Shown?.Invoke(this, EventArgs.Empty);
@@ -838,6 +870,7 @@ public sealed unsafe partial class BrowserWindow
     public void Hide() => Command(w =>
     {
         var wasVisible = w->@base.@base.is_visible(&w->@base.@base) != 0;
+        _macLink?.Hide();
         w->hide(w);
         if (wasVisible) Hidden?.Invoke(this, EventArgs.Empty);
     });
@@ -1545,6 +1578,7 @@ public sealed unsafe partial class BrowserWindow
         if (_options.AlwaysOnTop) window->set_always_on_top(window, 1);
         if (_options.Show)
         {
+            _macLink?.Show();
             window->show(window);
             ApplySkipTaskbar(window);
         }
@@ -1679,7 +1713,8 @@ public sealed unsafe partial class BrowserWindow
         _window = null;
 
         lock (s_openGate) s_open.Remove(this);
-        _options.Parent?._children.Remove(this);
+        _parent?._children.Remove(this);
+        _macLink?.Forget();
         // macOS closes child windows with their parent; Linux does not. Destroy, as Windows does with owned
         // windows: a child that vetoed would outlive its parent.
         foreach (var child in _children.ToArray()) child.Destroy();

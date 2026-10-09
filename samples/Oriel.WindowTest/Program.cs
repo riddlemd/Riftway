@@ -546,10 +546,48 @@ async Task ParentAndModalAsync(BrowserWindow win)
         win.SetPosition(parentBefore.X + 40, parentBefore.Y + 30);
         Check("child moves with its parent (macOS)", Eventually(() => child.GetBounds() is var c && c.X == childBefore.X + 40 && c.Y == childBefore.Y + 30, step), $"{childBefore} -> {child.GetBounds()}");
         win.SetPosition(parentBefore.X, parentBefore.Y);
+
+#pragma warning disable CA1416
+        // NativeWindowMac::SetParentWindow: an AppKit child window of the new parent, attached at once when visible.
+        var adopted = new BrowserWindow(new BrowserWindowOptions { Title = "Oriel window test: SetParentWindow", Width = 240, Height = 160 });
+        await Task.Delay(300);
+        (nint Parent, bool Listed) Links(BrowserWindow w) => Oriel.Cef.CefThread.InvokeOnUi(() =>
+        {
+            var ns = MacWindow.WindowOf(w.GetNativeWindowHandle());
+            return (MacWindow.ParentWindow(w.GetNativeWindowHandle()), MacWindow.ChildWindows(win.GetNativeWindowHandle()).Contains(ns));
+        });
+        var winNs = Oriel.Cef.CefThread.InvokeOnUi(() => MacWindow.WindowOf(win.GetNativeWindowHandle()));
+        adopted.SetParentWindow(win);
+        var linked = Links(adopted);
+        Check("SetParentWindow (macOS): [child parentWindow] is the parent and the parent's childWindows lists it",
+            linked.Parent == winNs && linked.Listed && adopted.GetParentWindow() == win && win.GetChildWindows().Contains(adopted), linked);
+        adopted.SetParentWindow(null);
+        var unlinked = Links(adopted);
+        Check("SetParentWindow(null) (macOS): removes the AppKit child window", unlinked.Parent == 0 && !unlinked.Listed
+            && adopted.GetParentWindow() is null && !win.GetChildWindows().Contains(adopted), unlinked);
+
+        // A hidden window is linked only; Show attaches it, as Electron's InternalSetParentWindow(parent(), true).
+        var hiddenChild = new BrowserWindow(new BrowserWindowOptions { Title = "Oriel window test: hidden SetParentWindow", Width = 240, Height = 160, Show = false });
+        await Task.Delay(300);
+        hiddenChild.SetParentWindow(win);
+        var whileHidden = Links(hiddenChild);
+        hiddenChild.Show();
+        Check("SetParentWindow on a hidden window attaches it when shown (macOS)", whileHidden.Parent == 0
+            && Eventually(() => Links(hiddenChild).Parent == winNs, step), $"{whileHidden} -> {Links(hiddenChild)}");
+        foreach (var extra in new[] { adopted, hiddenChild })
+        {
+            using var gone = new ManualResetEventSlim();
+            extra.Closed += (_, _) => gone.Set();
+            extra.Close();
+            gone.Wait(step);
+        }
+#pragma warning restore CA1416
     }
 
     var modal = new BrowserWindow(new BrowserWindowOptions { Title = "Oriel window test: modal", Width = 300, Height = 200, Parent = win, Modal = true });
     Check("IsModal", modal.IsModal);
+    if (OperatingSystem.IsMacOS())
+        Check("SetParentWindow on a modal window throws, as Electron's", Throws<InvalidOperationException>(() => modal.SetParentWindow(null)));
     await Task.Delay(500);
     win.Focus();
     await Task.Delay(800);
@@ -2406,6 +2444,36 @@ async Task MenuEventsAsync(BrowserWindow win)
             && MacMenu.SendToDelegate(recentNs, "menuDidClose:") && MacMenu.SendToDelegate(fileNs, "menuDidClose:"));
         Check("the application menu raises MenuWillShow for each menu opening under it, MenuWillClose once its top-level menu closes",
             sent && Log() == "show app,show app,close app", Log());
+
+        // refreshMenuTree: menuNeedsUpdate: and menuDidClose: re-apply each item's state from its MenuItem.
+        static nint Named(nint menu, string title)
+        {
+            for (var i = 0; i < MacMenu.ItemCount(menu); i++)
+                if (MacMenu.Title(MacMenu.ItemAt(menu, i)) == title) return MacMenu.ItemAt(menu, i);
+            return 0;
+        }
+        var toggled = new MenuItem { Label = "Toggled", Type = MenuItemType.Checkbox };
+        var disabled = new MenuItem { Label = "Disabled" };
+        var states = new Menu { toggled, disabled, new MenuItem { Label = "First", Type = MenuItemType.Radio }, new MenuItem { Label = "Second", Type = MenuItemType.Radio } };
+        Menu.SetApplicationMenu(new Menu { new MenuItem { Role = MenuItemRole.AppMenu }, new MenuItem { Label = "States", Submenu = states } });
+        nint statesNs = 0;
+        Eventually(() => (statesNs = Oriel.Cef.CefThread.InvokeOnUi(() => Sub(MacMenu.MainMenu(), "States"))) != 0, step);
+        var refreshed = Oriel.Cef.CefThread.InvokeOnUi(() =>
+        {
+            // One UI task: the rebuild these changes post runs after it, so AppKit still holds this NSMenu.
+            toggled.Checked = true;
+            disabled.Enabled = false;
+            var asked = MacMenu.SendToDelegate(statesNs, "menuNeedsUpdate:");
+            return (asked, Checked: MacMenu.IsChecked(Named(statesNs, "Toggled")), Enabled: MacMenu.IsEnabled(Named(statesNs, "Disabled")));
+        });
+        Check("macOS: menuNeedsUpdate: shows a MenuItem's new Checked and Enabled in its NSMenuItem", refreshed is (true, true, false), refreshed);
+        await Task.Delay(300);
+        var fixedUp = Oriel.Cef.CefThread.InvokeOnUi(() =>
+        {
+            var menu = Sub(MacMenu.MainMenu(), "States");
+            return MacMenu.SendToDelegate(menu, "menuWillOpen:") && MacMenu.SendToDelegate(menu, "menuDidClose:") && MacMenu.IsChecked(Named(menu, "First"));
+        });
+        Check("macOS: menuDidClose: shows menu-will-show's radio fix-up in the NSMenu", fixedUp);
         Menu.SetApplicationMenu(previous);
 #pragma warning restore CA1416
     }

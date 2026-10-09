@@ -14,7 +14,7 @@ Cross-platform work. Platform-specific items: [linux-todo.md](linux-todo.md), [w
   - [x] `webPreferences` batch 1 (devTools, zoomFactor, javascript, images, textarea, webgl, fonts, disableDialogs)
   - [ ] Remaining `webPreferences` (see the parity doc: process-wide switches, spellcheck, ...; session/partition done)
   - [x] `parent`/`modal`, `isModal`, `getChildWindows`, `getParentWindow`
-  - [ ] `setParentWindow` (needs OS code: CEF sets the parent only at creation)
+  - [ ] `setParentWindow`: macOS done (branch `mac-menu-parent`); merge Windows (`title-bar-2`) and Linux (`linux-parent`)
   - [ ] `titleBarStyle`, `titleBarOverlay`, `trafficLightPosition`
   - [x] Taskbar on Windows: `setProgressBar`, `flashFrame`, `setSkipTaskbar`/`skipTaskbar`, `setOverlayIcon`
   - [x] Taskbar on macOS (Dock progress and bounce) and Linux (urgency hint, skip taskbar)

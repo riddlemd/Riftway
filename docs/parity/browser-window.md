@@ -19,11 +19,11 @@ Counted from the Checklist at the end: `BaseWindow` and `BrowserWindow` are one 
 |---|---|---|---|---|---|---|---|
 | BaseWindow + BrowserWindow options | 54 | 29 | 2 | 23 | 0 | 53.7% | 55.6% |
 | webPreferences | 46 | 12 | 4 | 23 | 7 | 30.8% | 35.9% |
-| Instance methods | 143 | 73 | 8 | 56 | 6 | 53.3% | 56.2% |
+| Instance methods | 143 | 73 | 9 | 55 | 6 | 53.3% | 56.6% |
 | Instance properties | 24 | 12 | 0 | 12 | 0 | 50.0% | 50.0% |
 | Events | 35 | 15 | 4 | 16 | 0 | 42.9% | 48.6% |
 | Static methods | 6 | 4 | 0 | 1 | 1 | 80.0% | 80.0% |
-| **Total** | 308 | 145 | 18 | 131 | 14 | 49.3% | 52.4% |
+| **Total** | 308 | 145 | 19 | 130 | 14 | 49.3% | 52.6% |
 
 ## Done since the audit
 
@@ -106,9 +106,10 @@ Counted from the Checklist at the end: `BaseWindow` and `BrowserWindow` are one 
   `Menu.MenuWillShow`/`MenuWillClose` (Electron's `menu-will-show`/`menu-will-close`) come from CEF's
   `D.menu_will_show`/`D.menu_closed` per Views model on Windows and Linux (a popup or tray menu and each submenu on its own
   Menu; a bar dropdown on its submenu, never on the bar's Menu), from NSMenu delegates on the macOS application and Dock
-  menus (every menu under them reports on the top Menu), from DBusMenu `AboutToShow` (submenus only, no close) and
+  menus (every menu under them reports on the top Menu, and `menuNeedsUpdate:`/`menuDidClose:` re-apply item state as
+  Electron's `refreshMenuTree`), from DBusMenu `AboutToShow` (submenus only, no close) and
   `MenuGtk`'s build on the Linux tray. Before each show `_menuWillShow` checks the first item of a radio group with none
-  checked; radio groups follow Electron's `generateGroupId`. Gaps: DRIFT M8 (macOS popups report the top menu only), M9.
+  checked; radio groups follow Electron's `generateGroupId`. Gaps: DRIFT M8 (macOS popups report the top menu only), M9, M11.
 
 ## Next, by importance
 
@@ -123,8 +124,8 @@ Counted from the Checklist at the end: `BaseWindow` and `BrowserWindow` are one 
      `accessibleTitle`, `scrollBounce`, `imageAnimationPolicy`, `zoomMode`, `focusOnNavigation`,
      `disableHtmlFullscreenWindowResize`, `additionalArguments`.
    - `contextIsolation` is always on; `false` is not offered.
-2. `setParentWindow` — CEF Views sets the parent only at creation, so this needs OS code (`addChildWindow:`, an owner
-   `HWND`, `XSetTransientForHint`).
+2. `setParentWindow` — macOS done (`addChildWindow:`, branch `mac-menu-parent`); Windows (owner `HWND`) and Linux
+   (`WM_TRANSIENT_FOR`) are on `title-bar-2` and `linux-parent`, to merge (DRIFT W8).
 3. `titleBarStyle`, `titleBarOverlay`, `trafficLightPosition` — `D.with_standard_window_buttons`, `D.get_titlebar_height`, `W.add_overlay_view`, OS.
 4. `showInactive` — OS.
 5. Window state persistence (`windowStatePersistence`, `getNormalBounds`, `persisted-state-restored`) — Oriel.
@@ -391,7 +392,7 @@ Parameters in brackets are optional in Electron. `webContents` members are in [w
 | `isContentProtected()` | — | missing |  |
 | `setFocusable(focusable)` | — | missing |  |
 | `isFocusable()` | — | missing |  |
-| `setParentWindow(parent)` | — | missing | W8. |
+| `setParentWindow(parent)` | `SetParentWindow` | partial | macOS (`addChildWindow:`); Windows and Linux on other branches. W8. |
 | `getParentWindow()` | `GetParentWindow` | done |  |
 | `getChildWindows()` | `GetChildWindows` | done |  |
 | `setAutoHideCursor(autoHide)` | — | missing |  |
