@@ -63,6 +63,12 @@ General items: [todo.md](todo.md).
         a refused Notify as `failed`, `IsSupported`. Written, not yet run
   - [ ] Check against real servers: GNOME Shell, Plasma, dunst/mako (the default action, `image-data`, `append`)
   - [ ] The click's activation token on the patched libcef (DRIFT Q10), with the tray's
+- [ ] `desktopCapturer` on X11 (branch `desktop-capturer`): Oriel's own enumeration and capture (XQueryTree, `WM_STATE`,
+      `WM_NAME`, XRandR monitors, XComposite + `XGetImage`), separate from Chromium's capturer below. Run WindowTest
+      `DesktopCapturerChecks` under Xvfb and on a real X server; the EDID-based `display_id` needs a real monitor (Xvfb
+      has no EDID, so it falls back to the output's place). SessionTest's `chromeMediaSourceId` check is skipped under
+      ORIEL_XVFB with the other capture checks
+  - [ ] Wayland: the xdg-desktop-portal ScreenCast picker (DRIFT DC2)
 - [ ] Screen capture: Chromium's X11 desktop capturer dies with SIGILL under the Docker Xvfb (arm64) when getDisplayMedia starts; SessionTest skips the capture checks there (ORIEL_XVFB). Verify on a real X server; if it crashes there too, find the CHECK with CEF's symbols
 - [x] `Shell` (branch `linux-shell`): Electron's `platform_util_linux.cc`, checked by `samples/Oriel.ShellTest` against fake
       `xdg-open`/`xdg-email`/`gio` scripts, a fake portal `OpenDirectory` and a fake `FileManager1`, and the X bell

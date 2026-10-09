@@ -347,6 +347,7 @@ async Task RunAsync(BrowserWindow win, BrowserWindow simple)
     await WindowPolishAsync(win);
     await TitleBarAsync(win);
     await SystemPreferencesChecks.RunAsync(Check, step);
+    await DesktopCapturerChecks.RunAsync(Check);
     await StartDragTests.RunAsync(Check);
     if (OperatingSystem.IsWindows()) await SafeStorageAsync();
     if (OperatingSystem.IsWindows()) await NotificationAsync();

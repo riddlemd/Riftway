@@ -9,7 +9,7 @@ These figures are counted from the rows: after changing a row or checklist item,
 
 | Measure | Done | Partial | Not started | Total |
 |---|---|---|---|---|
-| Module rows below | 7 | 40 | 20 | 67 |
+| Module rows below | 7 | 41 | 19 | 67 |
 | M2 rows | 3 | 17 | 1 | 21 |
 
 The 67 rows include `BrowserView` (deprecated, never implemented; counted as not started).
@@ -125,7 +125,7 @@ Detailed item-by-item status, including `navigationHistory` and `WebFrameMain`: 
 | `powerSaveBlocker` | `PowerSaveBlocker` | OS | M5 | done: Windows (one process-wide power request at the highest active type, as Chromium and Electron) and Linux (Chromium's D-Bus inhibit, GNOME session manager first, then freedesktop power management or screen saver, plus the X screen saver suspension); macOS (an IOKit assertion, `NoIdleSleepAssertion` or `NoDisplaySleepAssertion`, taken and released on a power thread, the new one before the old; DRIFT U3) (branches `power-shortcuts`, `linux-power-shortcuts`, `mac-power-tray`) |
 | `safeStorage` | `SafeStorage` | OS | M5 | partial: all methods (`isEncryptionAvailable`, `encryptString`, `decryptString`, `isAsyncEncryptionAvailable`, `encryptStringAsync`, `decryptStringAsync`, `setUsePlainTextEncryption`, `getSelectedStorageBackend`) in Chromium os_crypt's formats: Windows `v10` AES-256-GCM under CEF's `Local State` key; macOS `v10` AES-128-CBC under the "`{name} Safe Storage`" Keychain item; Linux `v11` from the Secret Service (libsecret) or `v10` `basic_text`; no KWallet or Secret portal (DRIFT D1-D5) |
 | `systemPreferences` | `SystemPreferences` | OS | M5 | partial: Windows `getAccentColor`, `getColor` (all 30 Windows names), `getMediaAccessStatus`, `getAnimationSettings`, `accent-color-changed`, `color-changed`; macOS and Linux not yet (DRIFT SP1); macOS-only members not ported: notifications (`post*`/`subscribe*`/`unsubscribe*`), user defaults, `isSwipeTrackingFromScrollEventsEnabled`, `getEffectiveAppearance`/`effectiveAppearance`, `getSystemColor`, `canPromptTouchID`/`promptTouchID`, `isTrustedAccessibilityClient`, `askForMediaAccess`, `accessibilityDisplayShouldReduceTransparency` |
-| `desktopCapturer` | `DesktopCapturer` | CEF + Patch (verify) | M5 | — |
+| `desktopCapturer` | `DesktopCapturer` | OS | M5 | partial: `getSources` (`types`, `thumbnailSize`, `fetchWindowIcons`, the running-request sharing) with Chromium's `DesktopMediaID` ids, screen names, per-OS window filters, letterboxed thumbnails, `appIcon` and Electron's `display_id`, on macOS (ScreenCaptureKit from 14.4, CoreGraphics before; the screen-recording request and the style-mask restore), Linux X11 and Windows; ids work as `chromeMediaSourceId` and convert to a display media handler's video; no PipeWire (DRIFT DC1-DC5); the GUI checks are written but not yet run (branch `desktop-capturer`) |
 
 ## macOS-only
 

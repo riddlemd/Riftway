@@ -21,3 +21,7 @@ General items: [todo.md](todo.md).
       CGEvent post and the System Events read-back need Accessibility for the test process. Pass
 - [ ] Check on a MacBook that unplugging raises `OnBattery` and `IsOnBatteryPower()` flips (IOPMPowerSource interest
       notifications); and a real sleep and wake raises `Suspended`/`Resumed` once each
+- [ ] `desktopCapturer` (branch `desktop-capturer`): run WindowTest `DesktopCapturerChecks` with Screen Recording consent
+      (ScreenCaptureKit list and `SCScreenshotManager` thumbnails, own windows as `window:N:N`, `NSRunningApplication`
+      icons) and without it (`Failed to get sources.`); check a non-resizable window keeps its style mask after a
+      capture. The unit run enumerates displays and CoreGraphics windows only. The pre-14.4 CoreGraphics path is untested

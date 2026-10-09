@@ -118,6 +118,11 @@ public static unsafe class WindowsDisplay
         return [];
     }
 
+    /// <summary>The target of the active path whose source is <paramref name="device"/>, which Chromium's
+    /// <c>DisplayIdFromMonitorInfo</c> hashes; null without one.</summary>
+    public static (uint AdapterLow, int AdapterHigh, uint TargetId)? PathTarget(string device)
+        => PathFor(ActivePaths(), device) is { } p ? (p.TargetAdapterLow, p.TargetAdapterHigh, p.TargetId) : null;
+
     private static PathInfo? PathFor(PathInfo[] paths, string device)
     {
         foreach (var path in paths)

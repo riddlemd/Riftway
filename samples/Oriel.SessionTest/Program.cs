@@ -2457,6 +2457,18 @@ async Task PermissionChecks(bool mediaOnly = false)
             var loopbackKinds = OperatingSystem.IsLinux() ? "video" : "audio,video";
             Check($"a display media handler's loopback audio gives {loopbackKinds}", withAudio == loopbackKinds, withAudio);
         }
+
+        // A desktopCapturer id as chromeMediaSourceId: CEF parses it as a DesktopMediaID and captures that source.
+        var sources = await DesktopCapturer.GetSourcesAsync(new SourcesOptions { Types = ["screen", "window"], ThumbnailSize = new System.Drawing.Size(0, 0) });
+        foreach (var source in new[] { sources.FirstOrDefault(s => s.Id.StartsWith("screen:", StringComparison.Ordinal)), sources.FirstOrDefault(s => s.Id.StartsWith("window:", StringComparison.Ordinal)) })
+        {
+            if (source is null) continue;
+            streams = new() { Video = source };
+            var legacy = await Run(mediaWin, "navigator.mediaDevices.getUserMedia({ video: { mandatory: { chromeMediaSource: 'desktop', chromeMediaSourceId: "
+                + System.Text.Json.JsonSerializer.Serialize(source.Id) + " } } }).then(s => { const v = s.getVideoTracks()[0]; const surface = v.getSettings().displaySurface; s.getTracks().forEach(t => t.stop()); return surface; }, e => e.name)", gesture: true);
+            var expected = source.Id.StartsWith("screen:", StringComparison.Ordinal) ? "monitor" : "window";
+            Check($"getUserMedia with a desktopCapturer {expected} id as chromeMediaSourceId captures that kind of surface", legacy == expected, $"{source.Id} {legacy}");
+        }
     }
     streams = null;
     var refusedScreen = await Run(mediaWin, Screen, gesture: true);

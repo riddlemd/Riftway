@@ -53,6 +53,9 @@ Cross-platform work. Platform-specific items: [linux-todo.md](linux-todo.md), [w
 - [x] `OrielApp.Quit()` from any thread (was DRIFT A4)
 - [ ] `Protocol`: `AllowServiceWorkers` and `CodeCache` privileges throw `NotSupportedException`
 
+- [ ] `desktopCapturer` (branch `desktop-capturer`, DRIFT DC1-DC5): run WindowTest `DesktopCapturerChecks` (the probe window
+      by title, thumbnail size and pixels, screen `display_id`s against `Screen.GetAllDisplays`, icons, sharing a running
+      request) and SessionTest's `chromeMediaSourceId` checks on each OS; per-OS items in the platform todos
 
 ## Tests
 

@@ -89,7 +89,7 @@ public static unsafe class WindowsFileIcon
         return 0;
     }
 
-    private static (byte[] Bgra, int Width, int Height)? Pixels(nint icon)
+    internal static (byte[] Bgra, int Width, int Height)? Pixels(nint icon)
     {
         IconInfo info;
         if (GetIconInfo(icon, &info) == 0) return null;

@@ -29,3 +29,7 @@ General items: [todo.md](todo.md). Windows work runs on the Windows laptop.
 - [ ] windows-arm64: untested
 - [ ] Run the Alt-key menu checks on Windows (Alt toggles an auto-hidden bar, Alt+F opens File; pass on Linux)
 - [ ] Run the menu-event checks on Windows (WindowTest `MenuEventsAsync` popup and bar, the tray's Views menu)
+- [ ] `desktopCapturer` (branch `desktop-capturer`): written on macOS, never built for or run on Windows. Run WindowTest
+      `DesktopCapturerChecks` (webrtc's window rules with this process's windows merged by z-order, `EnumDisplayDevices`
+      screens and their hashed `display_id`, GDI thumbnails, `WM_GETICON` icons) and SessionTest's `chromeMediaSourceId`
+      checks; DXGI and WGC capture are DRIFT DC3
