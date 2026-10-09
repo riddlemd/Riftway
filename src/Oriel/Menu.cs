@@ -231,6 +231,9 @@ public sealed class MenuItem
         }
     }
 
+    /// <summary>The accelerator as set, without the role's default.</summary>
+    internal string? ExplicitAccelerator => _accelerator;
+
     /// <summary>Whether the item can be chosen. Electron's <c>enabled</c>.</summary>
     public bool Enabled
     {
@@ -285,6 +288,13 @@ public sealed class MenuItem
     internal void Activate(BrowserWindow? focusedWindow, KeyboardEvent? keys = null)
     {
         if (!Enabled) return;
+        Run(focusedWindow, keys);
+    }
+
+    /// <summary>Electron's <c>menuItem.click</c> as <c>Menu._executeCommand</c> calls it, which does not ask whether the
+    /// item is enabled: what a DBusMenu <c>Event</c> runs.</summary>
+    internal void Run(BrowserWindow? focusedWindow, KeyboardEvent? keys = null)
+    {
         if (Type == MenuItemType.Checkbox) Checked = !Checked;
         else if (Type == MenuItemType.Radio && Parent is { } parent) parent.CheckRadio(this);
         if (!MenuRoles.Execute(Role, focusedWindow)) Click?.Invoke(this, focusedWindow, keys ?? new KeyboardEvent());

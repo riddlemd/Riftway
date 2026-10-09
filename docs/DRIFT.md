@@ -175,7 +175,7 @@ Entries marked _(branch `x`)_ are on that branch and not yet in `main`.
 
 | ID | Electron | Oriel | Why | Possible resolution |
 |---|---|---|---|---|
-| M3 | Item `icon`, `sublabel`, `toolTip`, `registerAccelerator` | Missing | Todo (`icon` is Module: `NativeImage`) | `cef_menu_model` has no icon API either: Patch for Views menus |
+| M3 | Item `icon`, `sublabel`, `toolTip`, `registerAccelerator` | Missing, so the Linux tray's DBusMenu has no `icon-data` and its GTK fallback menu no images (both ported, waiting on `icon`) | Todo (`icon` is Module: `NativeImage`) | `cef_menu_model` has no icon API either: Patch for Views menus |
 | M4 | Roles `recentDocuments` and `shareMenu` build their submenus; `toggleSpellChecker` shows a check; `about` shows the about panel on Windows and Linux; `minimize`, `close` and `togglefullscreen` are enabled by the window's state | Those two submenus are empty; no check on `toggleSpellChecker` (it toggles); `about` does nothing off macOS; the three are always enabled. Every other role and label follows Electron v44's role table, macOS speech, substitution, tab and recent-document roles included | Todo: NSDocumentController's recent menu, NSSharingService items, an about panel, checked and enabled state computed when the menu opens | Todo |
 | M5 | `Command`/`Super` accelerators on Windows and Linux | Ignored | CEF: Views accelerators have no such modifier | OS key hook, or Patch |
 | M7 | `popup({ positioningItem })` (macOS) | Missing | CEF: `show_menu` takes a point only | Patch |
@@ -268,6 +268,17 @@ Entries marked _(branch `x`)_ are on that branch and not yet in `main`.
 | U1 | `powerMonitor` and `powerSaveBlocker` on macOS | Windows and Linux only: macOS throws `PlatformNotSupportedException` _(branch `power-shortcuts`)_ | OS | macOS IOKit power notifications and assertions |
 | U2 | `thermal-state-change`, `getCurrentThermalState` (macOS), `shutdown` (macOS), `user-did-become-active`/`user-did-resign-active` (macOS) | Missing; `Shutdown` is raised on Linux from logind _(branches `power-shortcuts`, `linux-power-shortcuts`)_ | OS: not emitted on Windows either (Chromium has no Windows thermal or shutdown source) | macOS IOKit and `NSProcessInfo` thermal state, `NSWorkspaceWillPowerOffNotification` |
 
+## Tray
+
+| ID | Electron | Oriel | Why | Possible resolution |
+|---|---|---|---|---|
+| T1 | `Tray` on macOS, with the macOS-only events (`mouse-up`, `mouse-down`, drop) and setters (`setPressedImage`, `setTitle`, `setIgnoreDoubleClickEvents`) | macOS throws `PlatformNotSupportedException` behind `ITrayBackend`; on Windows and Linux the macOS-only setters do nothing, as in Electron _(branches `tray`, `linux-tray`)_ | OS | macOS `NSStatusItem` |
+| T5 | Linux: the StatusNotifierItem's `ProvideXdgActivationToken` hands the host's token to Chromium (`base::nix::SetActivationToken`), which puts it on the next window it maps or activates (`_NET_STARTUP_ID` on X11, xdg-activation on Wayland), so a window the tray click opens gets focus | Answered as Chromium answers it, and the token dropped: windows a tray click opens are activated without it _(branch `linux-tray`)_ | CEF: no API reaches Chromium's `base::nix` activation token, and Chromium takes it for its own next window | Patch: a CEF call that forwards the token |
+| T6 | Linux: the StatusNotifierItem and its menu are exported on Chromium's shared session-bus connection, so the item's unique bus name is the browser process's | Exported on Oriel's own libdbus connection, so the item's unique name differs from the browser process's _(branch `linux-tray`)_ | CEF: no access to Chromium's `dbus::Bus` | Patch: expose Chromium's bus, or export through it |
+| T7 | Linux: with no StatusNotifierWatcher (or a failed registration) the tray falls back to a `GtkStatusIcon`, which always exists because Electron loads GTK | The same fallback when Chromium has loaded GTK; when it has not, no icon shows at all _(branch `linux-tray`)_ | CEF: Chromium loads GTK only for its own needs, and Oriel cannot force it | Load GTK 3 from Oriel before the first tray when Chromium has not |
+| T8 | Linux (GNOME, Pantheon): an icon PNG still being written when the tray is destroyed is announced (`NewIconThemePath`) once written | Deleted instead: nothing is announced for a destroyed tray _(branch `linux-tray`)_ | Design: Oriel's tray object is gone and its bus object unexported, so the signal would name a dead path | None needed |
+| T9 | Linux: the DBusMenu's `TextDirection` is right-to-left for a right-to-left UI locale, by Chromium's full locale match | The same rule, but checked against the locale paks by language only, so a regional RTL locale without its own pak follows its language _(branch `linux-tray`)_ | CEF: Chromium's `l10n_util` locale resolution is not exposed | Patch: expose the resolved UI locale |
+
 ## shell
 
 | ID | Electron | Oriel | Why | Possible resolution |
@@ -301,12 +312,6 @@ Entries marked _(branch `x`)_ are on that branch and not yet in `main`.
 | SP2 | `getMediaAccessStatus('camera')` returns `'granted'`; a bad media type or colour name throws an `Error` | Enums `MediaAccessType` and `MediaAccessStatus`; a bad value throws `ArgumentOutOfRangeException` ("Invalid media type"), a bad colour name `ArgumentException` ("Unknown color: …"). `GetColor` still takes Electron's names | Design | None |
 | SP3 | `getAnimationSettings()` reads values Chromium caches and refreshes when `WM_SETTINGCHANGE` arrives | Reads `SPI_GETCLIENTAREAANIMATION` on every call | Design: same value once Chromium has refreshed; only the moment between the setting change and the refresh differs | None |
 | SP4 | `systemPreferences` takes its accent baseline and starts watching when the module loads | On first use (`GetAccentColor` or subscribing to an event); a change before that is not reported. Before `Ready`, accent changes are compared on the watcher's thread instead of a UI task | Design: a static class has no load moment | None |
-
-## Tray
-
-| ID | Electron | Oriel | Why | Possible resolution |
-|---|---|---|---|---|
-| T1 | `Tray` on macOS and Linux, with the macOS-only events (`mouse-up`, `mouse-down`, drop) and setters (`setPressedImage`, `setTitle`, `setIgnoreDoubleClickEvents`) | Windows only: macOS and Linux throw `PlatformNotSupportedException` behind `ITrayBackend`; on Windows the macOS-only setters do nothing, as in Electron _(branch `tray`)_ | OS | macOS `NSStatusItem`; Linux StatusNotifierItem over D-Bus |
 
 ## net / ClientRequest / IncomingMessage _(branch `net-module`)_
 

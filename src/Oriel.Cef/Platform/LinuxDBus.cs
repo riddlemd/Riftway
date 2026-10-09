@@ -10,7 +10,8 @@ namespace Oriel.Cef.Platform;
 public sealed record LinuxDBusSignal(string Path, string Interface, string Member, object?[] Args);
 
 /// <summary>A private libdbus connection served by a thread of its own, as Chromium's D-Bus thread: work posted with
-/// <see cref="Post"/> and signals matched with <see cref="AddMatch"/> run there, so blocking calls are safe in both.</summary>
+/// <see cref="Post"/>, signals matched with <see cref="AddMatch"/> and calls to exported objects run there, so blocking
+/// calls are safe in all of them.</summary>
 [SupportedOSPlatform("linux")]
 public sealed unsafe partial class LinuxDBus
 {
@@ -27,6 +28,8 @@ public sealed unsafe partial class LinuxDBus
     private nint _connection;
     private bool _connectTried;
     private readonly bool _system;
+    private volatile bool _shutDown;
+    private GCHandle _self;
 
     /// <summary>Raised on the bus thread for every signal the match rules let through.</summary>
     public event Action<LinuxDBusSignal>? Signal;
@@ -51,6 +54,10 @@ public sealed unsafe partial class LinuxDBus
         byte b = 1;
         _ = write(_wakeWrite, &b, 1);
     }
+
+    /// <summary>Closes the connection once the work already posted has run, and ends the thread; the bus then drops
+    /// every name and object it held. Further work is not run.</summary>
+    public void Shutdown() => Post(() => _shutDown = true);
 
     /// <summary>Whether the bus was reached; bus thread only.</summary>
     public bool Connected => Connection() != 0;
@@ -134,6 +141,8 @@ public sealed unsafe partial class LinuxDBus
         dbus_error_free(error);
         if (connection == 0) return 0;
         dbus_connection_set_exit_on_disconnect(connection, 0);
+        _self = GCHandle.Alloc(this);
+        _ = dbus_connection_add_filter(connection, &OnFilter, GCHandle.ToIntPtr(_self), null);
         _connection = connection;
         return connection;
     }
@@ -151,6 +160,11 @@ public sealed unsafe partial class LinuxDBus
                     try { work(); }
                     catch (Exception e) when (e is not OutOfMemoryException) { Console.Error.WriteLine($"Oriel D-Bus: {e}"); }
                 }
+                if (_shutDown)
+                {
+                    Close();
+                    return;
+                }
                 Drain();
                 if (_work.Count > 0) continue;
                 // pollfd is { int fd; short events; short revents; }.
@@ -160,36 +174,54 @@ public sealed unsafe partial class LinuxDBus
                 fds[1] = PollIn;
                 fds[2] = busFd;
                 fds[3] = PollIn;
-                _ = poll(fds, busFd >= 0 ? 2u : 1u, -1);
+                _ = poll(fds, busFd >= 0 ? 2u : 1u, PollTimeout());
                 if ((((short*)fds)[3] & PollIn) != 0)
                     _ = read(_wakeRead, buffer, 64);
                 if (_connection != 0 && dbus_connection_read_write(_connection, 0) == 0)
                 {
                     // Disconnected: work still runs, against a bus that answers nothing.
-                    dbus_connection_close(_connection);
-                    dbus_connection_unref(_connection);
-                    _connection = 0;
+                    Close();
                 }
+                ExpirePendingCalls();
             }
         }
         catch (DllNotFoundException) { }
     }
 
+    // libdbus routes each message: signals through the filter, calls to the exported objects, and an UnknownMethod
+    // error for any call nothing takes, as it does for Chromium's bus.
     private void Drain()
     {
         if (_connection == 0) return;
-        nint message;
-        while ((message = dbus_connection_pop_message(_connection)) != 0)
+        // DBUS_DISPATCH_DATA_REMAINS.
+        while (dbus_connection_dispatch(_connection) == 0) { }
+        dbus_connection_flush(_connection);
+    }
+
+    private void Close()
+    {
+        if (_connection == 0) return;
+        AbandonPendingCalls();
+        dbus_connection_close(_connection);
+        dbus_connection_unref(_connection);
+        _connection = 0;
+        if (_self.IsAllocated) _self.Free();
+    }
+
+    [UnmanagedCallersOnly]
+    private static int OnFilter(nint connection, nint message, nint data)
+    {
+        try
         {
-            try
+            if (dbus_message_get_type(message) == MessageSignal && GCHandle.FromIntPtr(data).Target is LinuxDBus bus)
             {
-                if (dbus_message_get_type(message) != MessageSignal) continue;
                 var signal = new LinuxDBusSignal(Str(dbus_message_get_path(message)), Str(dbus_message_get_interface(message)), Str(dbus_message_get_member(message)), ReadArgs(message));
-                try { Signal?.Invoke(signal); }
-                catch (Exception e) when (e is not OutOfMemoryException) { Console.Error.WriteLine($"Oriel D-Bus: {e}"); }
+                bus.Signal?.Invoke(signal);
             }
-            finally { dbus_message_unref(message); }
         }
+        catch (Exception e) when (e is not OutOfMemoryException) { Console.Error.WriteLine($"Oriel D-Bus: {e}"); }
+        // DBUS_HANDLER_RESULT_NOT_YET_HANDLED: the exported objects and libdbus's own replies still see it.
+        return 1;
     }
 
     private static string Str(byte* s) => s == null ? "" : Marshal.PtrToStringUTF8((nint)s) ?? "";
@@ -255,7 +287,9 @@ public sealed unsafe partial class LinuxDBus
     [LibraryImport(LibDBus)] private static partial void dbus_connection_unref(nint connection);
     [LibraryImport(LibDBus)] private static partial nint dbus_connection_send_with_reply_and_block(nint connection, nint message, int timeout, void* error);
     [LibraryImport(LibDBus)] private static partial uint dbus_connection_read_write(nint connection, int timeout);
-    [LibraryImport(LibDBus)] private static partial nint dbus_connection_pop_message(nint connection);
+    [LibraryImport(LibDBus)] private static partial int dbus_connection_dispatch(nint connection);
+    [LibraryImport(LibDBus)] private static partial void dbus_connection_flush(nint connection);
+    [LibraryImport(LibDBus)] private static partial uint dbus_connection_add_filter(nint connection, delegate* unmanaged<nint, nint, nint, int> function, nint data, void* free);
     [LibraryImport(LibDBus)] private static partial nint dbus_message_new_method_call(byte* destination, byte* path, byte* iface, byte* method);
     [LibraryImport(LibDBus)] private static partial int dbus_message_get_type(nint message);
     [LibraryImport(LibDBus)] private static partial byte* dbus_message_get_path(nint message);
