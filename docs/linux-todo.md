@@ -13,6 +13,11 @@ General items: [todo.md](todo.md).
       the bug: `cpu_id.cc` enables SME without SVE on purpose. No libyuv fix found; recheck when CEF moves past 154
   - [x] `Oriel.Subprocess.Native` builds and links on linux-x64 (clang 18, GNU ld; `--export-dynamic-symbol` is accepted).
         The override is `__aarch64__`-only, so x64 exports no `getauxval` by design.
+- [ ] **CrashReporter** (branch `crash-reporter-mac-linux`; macOS passes): run CrashTest
+      `docker run --rm -v "$PWD":/src -v "$HOME/.cache/oriel/cef":/cef-cache --shm-size=1g oriel-linux-dev /src/eng/docker/test-linux.sh samples/Oriel.CrashTest Oriel.CrashTest`.
+      Expect the handler to be `Oriel.Subprocess --type=crashpad-handler --database=~/.config/<name>/Crashpad`, `platform=linux`,
+      the renderer keys set from `OnWebKitInitialized` after the zygote fork (CR11), and the browser crash reaching Crashpad's
+      signal handler ahead of .NET's
 - [ ] **Transparent windows** (DRIFT W24): CEF patch [eng/cef](../eng/cef/README.md) 0001 and Oriel's side are written,
       not yet built or run.
   - [ ] Build the patched libcef (`eng/cef/apply-patches.sh`, then `cef-build-linux/build.sh --no-update --force-build`);

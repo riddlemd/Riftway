@@ -232,7 +232,8 @@ public sealed unsafe partial class OrielApp
         NativeObject.AddRef(app.Native);
         var exitCode = CefNative.cef_execute_process((cef_main_args_t*)&args, app.Native, sandboxInfo);
         if (exitCode >= 0) return exitCode;
-        CrashReporter.OnCrashpadStarted();
+        // Windows starts Crashpad in cef_execute_process (chrome_elf); macOS and Linux only inside cef_initialize.
+        if (OperatingSystem.IsWindows()) CrashReporter.OnCrashpadStarted();
 
         // userData or sessionData set before Run moves the profile, as Electron's before ready.
         var dataDirectory = DataDirectory = GetPath("sessionData");
@@ -254,7 +255,9 @@ public sealed unsafe partial class OrielApp
         // Before Chromium starts its own portal reads, so both see the portal from the same moment.
         if (OperatingSystem.IsLinux()) LinuxPortalSettings.Start();
         NativeObject.AddRef(app.Native);
+        var crashDumps = OperatingSystem.IsWindows() ? null : CrashReporter.PrepareDatabase(GetPath("crashDumps"));
         var initialized = CefNative.cef_initialize((cef_main_args_t*)&args, &settings, app.Native, sandboxInfo) != 0;
+        crashDumps?.Dispose();
         CefString.Clear(&settings.user_agent);
         CefString.Clear(&settings.root_cache_path);
         CefString.Clear(&settings.cache_path);
@@ -266,6 +269,7 @@ public sealed unsafe partial class OrielApp
             Console.Error.WriteLine($"[Oriel] Not started: another instance is using {dataDirectory}, or CEF failed to initialise (see its log).");
             return 1;
         }
+        if (!OperatingSystem.IsWindows()) CrashReporter.OnCrashpadStarted();
 
         CefNative.cef_run_message_loop();
         Exited?.Invoke(this, new ExitedEventArgs(_exitCode));

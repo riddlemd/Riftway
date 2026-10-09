@@ -109,7 +109,9 @@ internal static unsafe class CrashReporterNative
                 file.ReadExactly(header);
                 if (!IsSettingsHeader(header)) return false;
                 // Crashpad locks the whole file while it reads or writes settings; wait our turn rather than tear its write.
-                if (OperatingSystem.IsWindows() || OperatingSystem.IsLinux()) file.Lock(0, 12);
+                // POSIX Crashpad uses flock, which .NET's Lock (fcntl; unsupported on macOS) never meets.
+                if (OperatingSystem.IsWindows()) file.Lock(0, 12);
+                else if (flock((int)file.SafeFileHandle.DangerousGetHandle(), LockExclusive) != 0) throw new IOException("settings.dat is locked");
                 var options = BinaryPrimitives.ReadUInt32LittleEndian(header[8..]);
                 if (((options & UploadsEnabledOption) != 0) == enabled) return true;
                 options = enabled ? options | UploadsEnabledOption : options & ~UploadsEnabledOption;
@@ -174,8 +176,40 @@ internal static unsafe class CrashReporterNative
         return true;
     }
 
+    private const int LockExclusive = 2;
+
+    [DllImport("libc", SetLastError = true)]
+    private static extern int flock(int fd, int operation);
+
     [DllImport("kernel32.dll")]
     private static extern nint SetUnhandledExceptionFilter(nint filter);
+
+    /// <summary>macOS: drops .NET's EXC_BREAKPOINT port from the calling (UI) thread, so Chromium's CHECK and
+    /// IMMEDIATE_CRASH traps reach Crashpad's task-level port.</summary>
+    /// <remarks>.NET's PAL hooks breakpoints on every thread it knows for its debugger; a trap outside managed code is
+    /// then dispatched back to the same instruction forever, and the browser hangs instead of crashing
+    /// (PAL_MachExceptionMode=2 does the same for a whole process, but only when set before the runtime starts).</remarks>
+    public static bool LeaveBreakpointsToCrashpad()
+    {
+        const uint breakpointMask = 1u << 6; // EXC_MASK_BREAKPOINT
+        const int exceptionDefault = 1;
+        // ARM_THREAD_STATE64 / x86_THREAD_STATE64: the kernel checks the flavour even for a null port.
+        var flavor = RuntimeInformation.ProcessArchitecture == Architecture.Arm64 ? 6 : 4;
+        var thread = mach_thread_self();
+        var result = thread_set_exception_ports(thread, breakpointMask, 0, exceptionDefault, flavor);
+        if (NativeLibrary.TryGetExport(NativeLibrary.Load("/usr/lib/libSystem.dylib"), "mach_task_self_", out var task))
+            _ = mach_port_deallocate(*(uint*)task, thread);
+        return result == 0;
+    }
+
+    [DllImport("/usr/lib/libSystem.dylib")]
+    private static extern uint mach_thread_self();
+
+    [DllImport("/usr/lib/libSystem.dylib")]
+    private static extern int thread_set_exception_ports(uint thread, uint mask, uint port, int behavior, int flavor);
+
+    [DllImport("/usr/lib/libSystem.dylib")]
+    private static extern int mach_port_deallocate(uint task, uint name);
     private static nint? Export(string name)
     {
         if (!OperatingSystem.IsWindows()) return null;

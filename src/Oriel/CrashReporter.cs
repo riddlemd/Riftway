@@ -1,4 +1,5 @@
 using System.Reflection;
+using System.Runtime.InteropServices;
 using System.Text;
 
 namespace Oriel;
@@ -18,7 +19,7 @@ public sealed record CrashReporterStartOptions
     /// <summary>Whether reports are sent to <see cref="SubmitURL"/>; when false they stay in the local database. Default true.</summary>
     public bool UploadToServer { get; init; } = true;
 
-    /// <summary>macOS: keeps browser-process crashes away from the system crash reporter. No effect on Windows.</summary>
+    /// <summary>macOS: keeps browser-process crashes away from the system crash reporter. No effect on Windows or Linux.</summary>
     public bool IgnoreSystemCrashHandler { get; init; }
 
     /// <summary>Limits uploads (Electron: one per hour). Default false.</summary>
@@ -40,7 +41,8 @@ public sealed record CrashReporterStartOptions
 public sealed record CrashReport(DateTimeOffset Date, string Id);
 
 /// <summary>Submits crash reports to a server; Electron's <c>crashReporter</c>, over CEF's Crashpad.</summary>
-/// <remarks>CEF configures Crashpad from <c>crash_reporter.cfg</c> beside the executable: the main process reads it inside
+/// <remarks>CEF configures Crashpad from <c>crash_reporter.cfg</c> beside the executable (in the app bundle's Resources on
+/// macOS): the main process reads it inside
 /// <see cref="OrielApp.Run"/>, each child process as it starts. <see cref="Start"/> writes that file, so call it before
 /// <see cref="OrielApp.Run"/>; started later, it takes effect from the next launch. The file stays, so later launches
 /// report crashes until it is deleted.</remarks>
@@ -55,6 +57,7 @@ public static class CrashReporter
     private static Dictionary<string, string> s_global = new(StringComparer.Ordinal);
     private static Dictionary<string, CrashKeySlot> s_liveSlots = new(StringComparer.Ordinal);
     private static string? s_configPath;
+    private static string? s_databasePath;
     private static bool s_started;
     private static bool s_uploadToServer;
     private static bool s_crashpadStarted;
@@ -108,9 +111,11 @@ public static class CrashReporter
     internal static CrashReport? Latest(IEnumerable<CrashReport> reports) => reports.OrderByDescending(r => r.Date).FirstOrDefault();
 
     /// <summary>Every report in the crash database, newest first, uploaded or not; Electron's <c>getUploadedReports()</c>.</summary>
-    /// <remarks>Empty until the application runs: the database is Crashpad's, reached through CEF's chrome_elf.</remarks>
+    /// <remarks>Empty until the application runs: the database is Crashpad's, reached through CEF's chrome_elf on Windows
+    /// and read from its files on macOS and Linux.</remarks>
     public static IReadOnlyList<CrashReport> GetUploadedReports()
-        => s_started && s_crashpadStarted ? CrashReporterNative.GetReports() : [];
+        => !s_started || !s_crashpadStarted ? []
+            : OperatingSystem.IsWindows() ? CrashReporterNative.GetReports() : CrashpadDatabase.Read(s_databasePath);
 
     /// <summary>Whether reports are uploaded; Electron's <c>getUploadToServer()</c>. False before <see cref="Start"/>.</summary>
     public static bool GetUploadToServer()
@@ -177,9 +182,58 @@ public static class CrashReporter
             ReadLiveSlots();
             s_crashpadStarted = true;
             if (OperatingSystem.IsWindows() && Cef.Platform.BootstrapHost.IsHosted) CrashReporterNative.RestoreCrashpadExceptionFilter();
+            // A managed debugger needs .NET's breakpoint hook, so a debugged run keeps it and hangs on a browser crash instead.
+            if (OperatingSystem.IsMacOS() && File.Exists(s_configPath) && !System.Diagnostics.Debugger.IsAttached)
+                CrashReporterNative.LeaveBreakpointsToCrashpad();
             if (s_started) ApplyToBrowserProcess();
         }
     }
+
+    /// <summary>macOS and Linux: points CEF's Crashpad at <paramref name="crashDumps"/> (Electron's
+    /// <c>app.getPath('crashDumps')</c>) for the <c>cef_initialize</c> that starts it; dispose afterwards.</summary>
+    /// <remarks>CEF's own default is the profile directory itself (DIR_CRASH_DUMPS = root_cache_path); both CEF and Electron
+    /// take <c>BREAKPAD_DUMP_LOCATION</c> over it, so a value the user already set wins here too.</remarks>
+    internal static IDisposable? PrepareDatabase(string crashDumps)
+    {
+        lock (s_lock)
+        {
+            s_configPath ??= CrashReporterConfig.PathFor(AppContext.BaseDirectory);
+            // Without a cfg CEF starts no Crashpad, and Electron creates no crashDumps folder before start().
+            if (!File.Exists(s_configPath)) return null;
+            if (Environment.GetEnvironmentVariable(DumpLocationVariable) is { Length: > 0 } preset)
+            {
+                s_databasePath = preset;
+                return null;
+            }
+            s_databasePath = crashDumps;
+            // Electron creates it too: Crashpad makes only the last folder, and userData may not exist yet.
+            try { Directory.CreateDirectory(crashDumps); }
+            catch (Exception e) when (e is IOException or UnauthorizedAccessException) { }
+            // Environment.SetEnvironmentVariable does not reach native getenv on Unix.
+            _ = setenv(DumpLocationVariable, crashDumps, 1);
+            return new DumpLocationScope();
+        }
+    }
+
+    private const string DumpLocationVariable = "BREAKPAD_DUMP_LOCATION";
+
+    // Unset again so processes the app launches later do not inherit it.
+    private sealed class DumpLocationScope : IDisposable
+    {
+        public void Dispose() => _ = unsetenv(DumpLocationVariable);
+    }
+
+    [DllImport("libc", BestFitMapping = false)]
+    private static extern int setenv([MarshalAs(UnmanagedType.LPUTF8Str)] string name,
+        [MarshalAs(UnmanagedType.LPUTF8Str)] string value, int overwrite);
+
+    [DllImport("libc", BestFitMapping = false)]
+    private static extern int unsetenv([MarshalAs(UnmanagedType.LPUTF8Str)] string name);
+
+    /// <summary>settings.dat of this launch's database, or null before Crashpad has one.</summary>
+    private static string? SettingsPath()
+        => OperatingSystem.IsWindows() ? CrashReporterNative.SettingsPath()
+            : s_databasePath is null ? null : Path.Combine(s_databasePath, "settings.dat");
 
     /// <summary>Takes the cfg on disk as the one this launch's processes read: only its [CrashKeys] are recorded.</summary>
     internal static void ReadLiveSlots()
@@ -195,7 +249,7 @@ public static class CrashReporter
     // so a cleared flag is re-cleared each time settings.dat changes.
     private static void EnforceUploadFlag()
     {
-        if (CrashReporterNative.SettingsPath() is not { } path) return;
+        if (SettingsPath() is not { } path) return;
         CrashReporterNative.WriteUploadsEnabled(path, s_uploadToServer);
         if (s_uploadToServer || s_settingsWatcher is not null) return;
         s_settingsWatcher = new FileSystemWatcher(Path.GetDirectoryName(path)!, Path.GetFileName(path))
@@ -256,6 +310,7 @@ public static class CrashReporter
             s_liveSlots = new(StringComparer.Ordinal);
             s_crashpadStarted = false;
             s_configPath = configPath;
+            s_databasePath = null;
         }
     }
 

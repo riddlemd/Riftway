@@ -1,4 +1,6 @@
 using System.Buffers.Binary;
+using System.Runtime.InteropServices;
+using System.Text;
 
 namespace Oriel.Tests;
 
@@ -137,10 +139,110 @@ public sealed class CrashReporterConfigTests
         => Assert.Equal("6B007600", CrashReporterConfig.EncodePairs([new("k", "v"), new("k2", "v2")], maxChars));
 
     [Fact]
-    public void PathFor_IsBesideTheExecutable()
+    public void PathFor_IsBesideTheExecutable_OffMacOS()
+        => Assert.Equal(Path.Combine("/x/A.app/Contents/MacOS", "crash_reporter.cfg"), CrashReporterConfig.PathFor("/x/A.app/Contents/MacOS", mac: false));
+
+    [Theory]
+    [InlineData("/x/A.app/Contents/MacOS")]
+    [InlineData("/x/A.app/Contents/Frameworks/A Helper.app/Contents/MacOS")]
+    public void PathFor_OnMacOS_IsTheOutermostBundlesResources(string exeDirectory)
+        => Assert.Equal("/x/A.app/Contents/Resources/crash_reporter.cfg", CrashReporterConfig.PathFor(exeDirectory, mac: true));
+
+    [Fact]
+    public void PathFor_OnMacOS_Unbundled_IsBesideTheExecutable()
+        => Assert.Equal("/x/bin/crash_reporter.cfg", CrashReporterConfig.PathFor("/x/bin", mac: true));
+}
+
+public sealed class CrashpadDatabaseTests
+{
+    // crash_report_database_generic.cc's ReportMetadata on 64-bit Linux, then the server's id.
+    private static byte[] Meta(long created, long lastAttempt, byte attributes, string id = "", int version = 1)
     {
-        if (OperatingSystem.IsMacOS()) return;
-        Assert.Equal(Path.Combine("dir", "crash_reporter.cfg"), CrashReporterConfig.PathFor("dir"));
+        var bytes = new byte[CrashpadDatabase.GenericMetadataSize + Encoding.UTF8.GetByteCount(id)];
+        BinaryPrimitives.WriteInt32LittleEndian(bytes, version);
+        BinaryPrimitives.WriteInt32LittleEndian(bytes.AsSpan(4), 1);
+        BinaryPrimitives.WriteInt64LittleEndian(bytes.AsSpan(8), lastAttempt);
+        BinaryPrimitives.WriteInt64LittleEndian(bytes.AsSpan(16), created);
+        bytes[24] = attributes;
+        Encoding.UTF8.GetBytes(id, bytes.AsSpan(CrashpadDatabase.GenericMetadataSize));
+        return bytes;
+    }
+
+    [Fact]
+    public void ParseGenericMetadata_ReadsTimesUploadedBitAndId()
+        => Assert.Equal(new CrashpadDatabase.Entry(100, 200, true, "server-id"), CrashpadDatabase.ParseGenericMetadata(Meta(100, 200, 1, "server-id")));
+
+    [Fact]
+    public void ParseGenericMetadata_OtherAttributesAreNotUploaded()
+        => Assert.False(CrashpadDatabase.ParseGenericMetadata(Meta(100, 200, 2))!.Value.Uploaded);
+
+    [Fact]
+    public void ParseGenericMetadata_RejectsOtherVersionsAndShortFiles()
+    {
+        Assert.Null(CrashpadDatabase.ParseGenericMetadata(Meta(1, 2, 1, version: 2)));
+        Assert.Null(CrashpadDatabase.ParseGenericMetadata(Meta(1, 2, 1).AsSpan(0, CrashpadDatabase.GenericMetadataSize - 1)));
+    }
+
+    private static Func<string, string?> Xattrs(Dictionary<string, string> values) => name => values.GetValueOrDefault(name);
+
+    [Fact]
+    public void ParseXattrs_ReadsCrashpadsMacAttributes()
+        => Assert.Equal(new CrashpadDatabase.Entry(100, 200, true, "server-id"), CrashpadDatabase.ParseXattrs(Xattrs(new()
+        {
+            ["uuid"] = "u", ["creation_time"] = "100", ["last_upload_time"] = "200", ["uploaded"] = "1", ["id"] = "server-id",
+        })));
+
+    [Fact]
+    public void ParseXattrs_WithoutUploadAttributes_IsNotUploaded()
+        => Assert.Equal(new CrashpadDatabase.Entry(100, 0, false, ""), CrashpadDatabase.ParseXattrs(Xattrs(new() { ["uuid"] = "u", ["creation_time"] = "100" })));
+
+    [Fact]
+    public void ParseXattrs_RequiresUuidAndCreationTime()
+    {
+        Assert.Null(CrashpadDatabase.ParseXattrs(Xattrs(new() { ["creation_time"] = "100" })));
+        Assert.Null(CrashpadDatabase.ParseXattrs(Xattrs(new() { ["uuid"] = "u" })));
+    }
+
+    [Fact]
+    public void XattrPrefix_FollowsTheDatabasesInitializedMarker()
+    {
+        Assert.Equal("org.chromium.crashpad.database.", CrashpadDatabase.XattrPrefix(Xattrs(new() { ["org.chromium.crashpad.database.initialized"] = "1" })));
+        Assert.Equal("com.googlecode.crashpad.", CrashpadDatabase.XattrPrefix(Xattrs(new())));
+    }
+
+    [Fact]
+    public void ToReports_NewestCaptureFirst_UnuploadedAsTheEpochWithNoId()
+        => Assert.Equal(
+            [new CrashReport(DateTimeOffset.UnixEpoch, ""), new CrashReport(DateTimeOffset.FromUnixTimeSeconds(150), "old")],
+            CrashpadDatabase.ToReports([new(100, 150, true, "old"), new(300, 400, false, "stale")]));
+
+    [Fact]
+    public void Read_WithoutADatabase_IsEmpty()
+    {
+        Assert.Empty(CrashpadDatabase.Read(null));
+        Assert.Empty(CrashpadDatabase.Read(Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString())));
+    }
+
+    [Fact]
+    public void Read_OnLinux_ListsCompletedAndPendingReports()
+    {
+        if (!OperatingSystem.IsLinux()) return;
+        var database = Directory.CreateTempSubdirectory("oriel-crashpad-").FullName;
+        try
+        {
+            void Report(string state, string uuid, byte[] meta)
+            {
+                Directory.CreateDirectory(Path.Combine(database, state));
+                File.WriteAllBytes(Path.Combine(database, state, uuid + ".dmp"), [0]);
+                File.WriteAllBytes(Path.Combine(database, state, uuid + ".meta"), meta);
+            }
+            Report("completed", "a", Meta(100, 150, 1, "uploaded-id"));
+            Report("pending", "b", Meta(200, 0, 1, "ignored"));
+
+            Assert.Equal([new CrashReport(DateTimeOffset.UnixEpoch, ""), new CrashReport(DateTimeOffset.FromUnixTimeSeconds(150), "uploaded-id")],
+                CrashpadDatabase.Read(database));
+        }
+        finally { Directory.Delete(database, recursive: true); }
     }
 }
 
@@ -332,6 +434,47 @@ public sealed class CrashReporterTests : IDisposable
         Assert.Empty(CrashReporter.GetUploadedReports());
         Assert.Null(CrashReporter.GetLastCrashReport());
     }
+
+    [Fact]
+    public void PrepareDatabase_WithoutACfg_LeavesCrashpadAlone()
+    {
+        var dumps = Path.Combine(_directory, "Crashpad");
+
+        Assert.Null(CrashReporter.PrepareDatabase(dumps));
+        Assert.False(Directory.Exists(dumps));
+    }
+
+    [Fact]
+    public void PrepareDatabase_PointsCrashpadAtCrashDumpsUntilDisposed()
+    {
+        if (OperatingSystem.IsWindows()) return;
+        File.WriteAllText(Cfg, "");
+        var dumps = Path.Combine(_directory, "user", "Crashpad");
+
+        var scope = CrashReporter.PrepareDatabase(dumps);
+        Assert.True(Directory.Exists(dumps));
+        Assert.Equal(dumps, Marshal.PtrToStringUTF8(getenv("BREAKPAD_DUMP_LOCATION")));
+
+        scope!.Dispose();
+        Assert.Equal(0, getenv("BREAKPAD_DUMP_LOCATION"));
+    }
+
+    [Fact]
+    public void PrepareDatabase_KeepsAUsersDumpLocation()
+    {
+        if (OperatingSystem.IsWindows()) return;
+        File.WriteAllText(Cfg, "");
+        Environment.SetEnvironmentVariable("BREAKPAD_DUMP_LOCATION", _directory);
+        try
+        {
+            Assert.Null(CrashReporter.PrepareDatabase(Path.Combine(_directory, "Crashpad")));
+            Assert.False(Directory.Exists(Path.Combine(_directory, "Crashpad")));
+        }
+        finally { Environment.SetEnvironmentVariable("BREAKPAD_DUMP_LOCATION", null); }
+    }
+
+    [DllImport("libc")]
+    private static extern nint getenv(string name);
 
     [Fact]
     public void ChildSwitchValue_BeforeStart_IsNull() => Assert.Null(CrashReporter.ChildSwitchValue("renderer"));

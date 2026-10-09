@@ -12,7 +12,7 @@ internal readonly record struct CrashKeySlot(string Name, string Size)
 /// <summary>Builds and reads CEF's <c>crash_reporter.cfg</c> (see include/cef_crash_util.h) for <see cref="CrashReporter"/>.</summary>
 internal static class CrashReporterConfig
 {
-    /// <summary>The file CEF looks for beside the executable (Windows, Linux) or in the bundle's Resources (macOS).</summary>
+    /// <summary>The file CEF looks for beside the executable (Windows, Linux) or in the app bundle's Resources (macOS).</summary>
     public const string FileName = "crash_reporter.cfg";
 
     /// <summary>First line of a cfg Oriel wrote; a cfg without it belongs to the app's packaging and is left alone.</summary>
@@ -40,9 +40,21 @@ internal static class CrashReporterConfig
     public static string Platform => OperatingSystem.IsWindows() ? "win32" : OperatingSystem.IsMacOS() ? "darwin" : "linux";
 
     /// <summary>Where CEF reads the cfg for an app whose executable is in <paramref name="exeDirectory"/>.</summary>
-    public static string PathFor(string exeDirectory) => OperatingSystem.IsMacOS()
-        ? Path.GetFullPath(Path.Combine(exeDirectory, "..", "Resources", FileName))
-        : Path.Combine(exeDirectory, FileName);
+    public static string PathFor(string exeDirectory) => PathFor(exeDirectory, OperatingSystem.IsMacOS());
+
+    /// <summary>CEF's GetCrashConfigPath: on macOS the Resources of the outermost <c>.app</c> in the path (so a helper finds
+    /// the main app's), else beside the executable; an unbundled macOS executable also reads it beside itself.</summary>
+    internal static string PathFor(string exeDirectory, bool mac)
+    {
+        if (mac)
+        {
+            var full = Path.GetFullPath(exeDirectory);
+            var parts = full.Split(Path.DirectorySeparatorChar);
+            var app = Array.FindIndex(parts, p => p.Length > 4 && p.EndsWith(".app", StringComparison.Ordinal));
+            if (app >= 0) return Path.Combine(string.Join(Path.DirectorySeparatorChar, parts[..(app + 1)]), "Contents", "Resources", FileName);
+        }
+        return Path.Combine(exeDirectory, FileName);
+    }
 
     /// <summary>Whether CEF's line-based parser keeps <paramref name="key"/> intact as a [CrashKeys] name.</summary>
     public static bool IsDeclarable(string key)
