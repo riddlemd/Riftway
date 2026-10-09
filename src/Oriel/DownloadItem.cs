@@ -26,13 +26,17 @@ public sealed class DownloadStateEventArgs(DownloadState state) : EventArgs
 
 /// <summary>Arguments for <see cref="Session.WillDownload"/>; set <see cref="CancelEventArgs.Cancel"/> to cancel the
 /// download, Electron's <c>event.preventDefault()</c>.</summary>
-public sealed class WillDownloadEventArgs(DownloadItem item, WebContents? webContents) : CancelEventArgs
+public sealed class WillDownloadEventArgs(DownloadItem item, WebContents? webContents, WebFrameMain? frame = null) : CancelEventArgs
 {
     /// <summary>The download.</summary>
     public DownloadItem Item { get; } = item;
 
     /// <summary>The page that started it; null for <see cref="Session.DownloadUrl"/>.</summary>
     public WebContents? WebContents { get; } = webContents;
+
+    /// <summary>The frame that started it; null when it is unknown or gone, and always with stock CEF (DRIFT E40).
+    /// Electron's <c>will-download</c> <c>frame</c>.</summary>
+    public WebFrameMain? Frame { get; } = frame;
 }
 
 /// <summary>A download; Electron's <c>DownloadItem</c>. Its events are raised on the UI thread.</summary>
@@ -135,14 +139,20 @@ public sealed class DownloadItem
     /// dialog does not change it. Electron's <c>downloadItem.getFilename()</c>.</summary>
     public string GetFilename() => _filename;
 
-    /// <summary>Always false: CEF's item has no gesture (DRIFT E13). Electron's <c>downloadItem.hasUserGesture()</c>.</summary>
-    public bool HasUserGesture() => false;
+    /// <summary>Whether a user gesture started the download; always false with stock CEF (DRIFT E13). Electron's
+    /// <c>downloadItem.hasUserGesture()</c>.</summary>
+    public bool HasUserGesture() => _snapshot.Extras?.HasUserGesture ?? false;
 
-    /// <summary>Always empty: CEF's item has no Last-Modified (DRIFT E13). Electron's <c>downloadItem.getLastModifiedTime()</c>.</summary>
-    public string GetLastModifiedTime() => "";
+    /// <summary>The response's Last-Modified; always empty with stock CEF (DRIFT E13). Electron's
+    /// <c>downloadItem.getLastModifiedTime()</c>.</summary>
+    public string GetLastModifiedTime() => _snapshot.Extras?.LastModifiedTime ?? "";
 
-    /// <summary>Always empty: CEF's item has no ETag (DRIFT E13). Electron's <c>downloadItem.getETag()</c>.</summary>
-    public string GetETag() => "";
+    /// <summary>The response's ETag; always empty with stock CEF (DRIFT E13). Electron's <c>downloadItem.getETag()</c>.</summary>
+    public string GetETag() => _snapshot.Extras?.ETag ?? "";
+
+    /// <summary>The origin that started the download, <c>null</c> for an opaque one, empty for none; always empty with
+    /// stock CEF (DRIFT E40). Electron's <c>downloadItem.getInitiatorOrigin()</c>.</summary>
+    public string GetInitiatorOrigin() => _snapshot.Extras?.InitiatorOrigin ?? "";
 
     /// <summary>Electron's <c>downloadItem.getContentDisposition()</c>.</summary>
     public string GetContentDisposition() => _snapshot.ContentDisposition;

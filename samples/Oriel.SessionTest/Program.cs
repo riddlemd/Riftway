@@ -43,6 +43,43 @@ static async Task<Exception?> Throws(Func<Task> act)
 static string Names(IEnumerable<Cookie> cookies) => string.Join(",", cookies.Select(c => c.Name).Order());
 
 const string Site = "https://oriel.test/";
+
+// netLog (patch 0006): Electron's session.netLog over the profile's NetLogExporter.
+async Task NetLogChecks(BrowserWindow window, string directory)
+{
+    var netLog = window.WebContents.Session.NetLog;
+    var logPath = Path.Combine(directory, "net-log.json");
+    if (!Oriel.Cef.CefRuntime.IsPatched)
+    {
+        var stock = await Throws(() => netLog.StartLoggingAsync(logPath));
+        Check("stock CEF: netLog.startLogging throws PlatformNotSupportedException (DRIFT E42)",
+            stock is PlatformNotSupportedException && !netLog.CurrentlyLogging, stock?.GetType().Name);
+        return;
+    }
+    Directory.CreateDirectory(directory);
+    var start = netLog.StartLoggingAsync(logPath, new NetLogOptions { CaptureMode = NetLogCaptureMode.IncludeSensitive });
+    Check("patched (0006): currentlyLogging is true as soon as startLogging returns", netLog.CurrentlyLogging);
+    var twice = await Throws(() => netLog.StartLoggingAsync(logPath));
+    Check("patched (0006): a second startLogging throws Electron's text", twice?.Message == "There is already a net log running", twice?.Message);
+    var started = await Throws(() => start);
+    await window.LoadUrl(Site);
+    var stopped = await Throws(() => netLog.StopLoggingAsync());
+    var text = File.Exists(logPath) ? File.ReadAllText(logPath) : "";
+    Check("patched (0006): stopLogging completes a JSON net log with constants and events",
+        started is null && stopped is null && !netLog.CurrentlyLogging && text.Contains("\"constants\"") && text.TrimEnd().EndsWith('}'),
+        $"{started?.Message} {stopped?.Message} {text.Length}");
+    var again = await Throws(() => netLog.StopLoggingAsync());
+    Check("patched (0006): stopLogging with none running faults with Electron's text", again?.Message == "No net log in progress", again?.Message);
+    var badPath = await Throws(() => netLog.StartLoggingAsync(Path.Combine(directory, "missing", "dir", "net.json")));
+    Check("patched (0006): an unopenable path faults with base::File's text and stops logging",
+        badPath?.Message.StartsWith("FILE_ERROR_", StringComparison.Ordinal) == true && !netLog.CurrentlyLogging, badPath?.Message);
+    var limited = Path.Combine(directory, "net-log-limited.json");
+    await netLog.StartLoggingAsync(limited, new NetLogOptions { MaxFileSize = 64 * 1024 });
+    await window.LoadUrl(Site);
+    await netLog.StopLoggingAsync();
+    Check("patched (0006): a log with maxFileSize starts, stops and leaves its file", File.Exists(limited),
+        File.Exists(limited) ? new FileInfo(limited).Length : -1);
+}
 const string CustomScheme = "x-webrequest";
 const string Page = "<!doctype html><title>session</title><p>session test</p>";
 
@@ -363,10 +400,26 @@ async Task RunAsync()
         $"{item?.GetStartTime()} {item?.GetEndTime()} now {now}");
     Check("Done is raised once", saved.DoneCount == 1, saved.DoneCount);
 
+    WebFrameMain? linkedFrame = null;
     var linked = await Download(() => _ = downloadWin.WebContents.ExecuteJavaScriptAsync(
         "const a = document.createElement('a'); a.href = '/report.txt'; a.download = ''; document.body.append(a); a.click(); 1", userGesture: true),
-        e => e.Item.SetSavePath(Path.Combine(downloadDir, "linked.txt")));
+        e =>
+        {
+            linkedFrame = e.Frame;
+            e.Item.SetSavePath(Path.Combine(downloadDir, "linked.txt"));
+        });
     Check("a download link raises WillDownload", linked.Item?.GetUrl() == Site + "report.txt" && linked.State == DownloadState.Completed, $"{linked.Item?.GetUrl()} {linked.State}");
+    if (Oriel.Cef.CefRuntime.IsPatched)
+    {
+        Check("patched (0005): a link clicked with a gesture reports hasUserGesture and the page's initiator origin",
+            linked.Item?.HasUserGesture() == true && linked.Item.GetInitiatorOrigin() == "https://oriel.test",
+            $"{linked.Item?.HasUserGesture()} {linked.Item?.GetInitiatorOrigin()}");
+        Check("patched (0005): will-download's frame is the page's main frame",
+            linkedFrame is not null && ReferenceEquals(linkedFrame, downloadWin.WebContents.MainFrame), linkedFrame?.Url);
+    }
+    else
+        Check("stock CEF: no gesture, initiator or frame (DRIFT E13, E40)",
+            linked.Item?.HasUserGesture() == false && linked.Item.GetInitiatorOrigin() == "" && linkedFrame is null);
     var prevented = await Download(() => _ = downloadWin.WebContents.ExecuteJavaScriptAsync("location.href = '/report.txt'; 1", userGesture: true), e => e.Cancel = true);
     Check("a navigation to an attachment raises WillDownload", prevented.Item?.GetUrl() == Site + "report.txt", prevented.Item?.GetUrl());
     Check("cancelling WillDownload cancels the download, once", prevented.State == DownloadState.Cancelled && prevented.DoneCount == 1
@@ -413,6 +466,8 @@ async Task RunAsync()
     });
     Check("Cancel during the download: Done says cancelled", midway.State == DownloadState.Cancelled && midway.DoneCount == 1, $"{midway.State} {midway.DoneCount}");
 
+    await NetLogChecks(downloadWin, downloadDir);
+
     // A real HTTP server: Content-Disposition, ETag and Last-Modified, a redirect, range requests, and a reset mid-body.
     var served = new DownloadServer();
     var downloadListener = new TcpListener(IPAddress.Loopback, 0);
@@ -440,8 +495,13 @@ async Task RunAsync()
         $"{viaRedirect.Filename} {viaRedirectItem?.GetFilename()}");
     Check("HTTP: getSavePath is empty in will-download until set, then the path set", savePathAtStart == "" && viaRedirectItem?.GetSavePath() == renamedPath,
         $"'{savePathAtStart}' {viaRedirectItem?.GetSavePath()}");
-    Check("HTTP: getETag, getLastModifiedTime and hasUserGesture are CEF's blanks (DRIFT E13)",
-        viaRedirectItem?.GetETag() == "" && viaRedirectItem.GetLastModifiedTime() == "" && !viaRedirectItem.HasUserGesture());
+    if (Oriel.Cef.CefRuntime.IsPatched)
+        Check("patched (0005): getETag and getLastModifiedTime are the response's validators",
+            viaRedirectItem?.GetETag() == "\"oriel-v1\"" && viaRedirectItem.GetLastModifiedTime() == "Tue, 06 Oct 2026 12:00:00 GMT",
+            $"{viaRedirectItem?.GetETag()} | {viaRedirectItem?.GetLastModifiedTime()}");
+    else
+        Check("HTTP: getETag, getLastModifiedTime and hasUserGesture are CEF's blanks (DRIFT E13)",
+            viaRedirectItem?.GetETag() == "" && viaRedirectItem.GetLastModifiedTime() == "" && !viaRedirectItem.HasUserGesture());
     Check("HTTP: the file arrives whole, with its total and received bytes", viaRedirect.State == DownloadState.Completed && File.Exists(renamedPath)
         && File.ReadAllBytes(renamedPath).SequenceEqual(DownloadServer.Body) && viaRedirectItem?.GetTotalBytes() == DownloadServer.Body.Length
         && viaRedirectItem.GetReceivedBytes() == DownloadServer.Body.Length && viaRedirectItem.GetPercentComplete() == 100,

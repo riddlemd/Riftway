@@ -10,6 +10,9 @@ public sealed record DownloadSnapshot(uint Id, string Url, string OriginalUrl, s
     long StartTime, long EndTime, bool IsInProgress, bool IsComplete, bool IsCanceled, bool IsInterrupted, bool IsPaused,
     cef_download_interrupt_reason_t InterruptReason)
 {
+    /// <summary>The fields Oriel's CEF patch 0005 adds; null with stock CEF.</summary>
+    public DownloadItemExtras? Extras { get; init; }
+
     internal static unsafe DownloadSnapshot Read(cef_download_item_t* item) => new(
         item->get_id(item),
         CefString.ReadUserFree(item->get_url(item)),
@@ -29,7 +32,10 @@ public sealed record DownloadSnapshot(uint Id, string Url, string OriginalUrl, s
         item->is_canceled(item) != 0,
         item->is_interrupted(item) != 0,
         item->is_paused(item) != 0,
-        item->get_interrupt_reason(item));
+        item->get_interrupt_reason(item))
+    {
+        Extras = CefPatchedApi.ReadDownloadExtras(item),
+    };
 }
 
 /// <summary>Continues or cancels a download CEF is about to start. Dropping it unanswered cancels the download.</summary>

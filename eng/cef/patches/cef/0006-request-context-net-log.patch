@@ -1,0 +1,344 @@
+Oriel CEF patch 0006: CefRequestContext net log.
+
+Adds StartNetLog, StopNetLog and IsNetLogging to CefRequestContext, with the
+client callback CefNetLogCallback, as Electron's session.netLog
+(shell/browser/api/electron_api_net_log.cc) does: the profile's network
+context creates a network::mojom::NetLogExporter, the file is opened off the
+UI thread, and the export starts with the content client's net log constants
+in JSON. One export per profile, kept as profile user data. Failures carry
+Electron's texts (net::ErrorToString, base::File::ErrorToString, "There is
+already a net log running", "No net log in progress", "Failed to start net
+log exporter"). API at CEF_NEXT (999998): API version 15400 and its hash are
+unchanged.
+
+Resolves: Oriel docs/DRIFT.md E42 (netLog).
+Base: CEF a03e714 (branch 8037, CEF 154) with 0001-0005. Applies in chromium/src/cef.
+
+diff --git a/include/cef_request_context.h b/include/cef_request_context.h
+index 77a1c02..fadeb74 100644
+--- a/include/cef_request_context.h
++++ b/include/cef_request_context.h
+@@ -88,6 +88,23 @@ class CefSettingObserver : public virtual CefBaseRefCounted {
+ };
+ #endif
+ 
++#if CEF_API_ADDED(CEF_NEXT)
++///
++/// Callback interface for CefRequestContext::StartNetLog and
++/// CefRequestContext::StopNetLog.
++///
++/*--cef(source=client,added=next)--*/
++class CefNetLogCallback : public virtual CefBaseRefCounted {
++ public:
++  ///
++  /// Called on the UI thread when the operation has completed. |error| is
++  /// empty on success, otherwise it describes the failure.
++  ///
++  /*--cef(optional_param=error)--*/
++  virtual void OnNetLogComplete(const CefString& error) = 0;
++};
++#endif
++
+ ///
+ /// A request context provides request handling for a set of related browser
+ /// or URL request objects. A request context can be specified when creating a
+@@ -365,6 +382,39 @@ class CefRequestContext : public CefPreferenceManager {
+   ///
+   /*--cef(default_retval=CEF_COLOR_VARIANT_SYSTEM)--*/
+   virtual cef_color_variant_t GetChromeColorSchemeVariant() = 0;
++
++#if CEF_API_ADDED(CEF_NEXT)
++  ///
++  /// Start writing this context's network events to |path| as a JSON net log,
++  /// through the network context's NetLogExporter. |capture_mode| is 0 for
++  /// request metadata only, 1 to also include cookies and credentials, or 2
++  /// to also include all bytes sent and received. Logging stops by itself once
++  /// the file reaches |max_file_size| bytes; pass a negative value for no
++  /// limit. |callback| is called when logging has started or failed to start;
++  /// it fails if this context's network events are already being logged.
++  ///
++  /*--cef(added=next)--*/
++  virtual void StartNetLog(const CefString& path,
++                           int capture_mode,
++                           int64_t max_file_size,
++                           CefRefPtr<CefNetLogCallback> callback) = 0;
++
++  ///
++  /// Stop the net log started with StartNetLog. |callback| is called once the
++  /// file has been completed and closed, or with an error if no net log is in
++  /// progress.
++  ///
++  /*--cef(added=next)--*/
++  virtual void StopNetLog(CefRefPtr<CefNetLogCallback> callback) = 0;
++
++  ///
++  /// Returns true from the time StartNetLog is called until StopNetLog is
++  /// called or the network service goes away. Must be called on the browser
++  /// process UI thread.
++  ///
++  /*--cef(added=next)--*/
++  virtual bool IsNetLogging() = 0;
++#endif
+ };
+ 
+ #endif  // CEF_INCLUDE_CEF_REQUEST_CONTEXT_H_
+diff --git a/libcef/browser/request_context_impl.cc b/libcef/browser/request_context_impl.cc
+index 40dc090..4037028 100644
+--- a/libcef/browser/request_context_impl.cc
++++ b/libcef/browser/request_context_impl.cc
+@@ -5,8 +5,14 @@
+ #include "cef/libcef/browser/request_context_impl.h"
+ 
+ #include "base/atomic_sequence_num.h"
++#include "base/files/file.h"
++#include "base/files/file_path.h"
++#include "base/functional/callback_helpers.h"
+ #include "base/logging.h"
++#include "base/memory/weak_ptr.h"
+ #include "base/strings/stringprintf.h"
++#include "base/supports_user_data.h"
++#include "base/task/thread_pool.h"
+ #include "cef/libcef/browser/browser_context.h"
+ #include "cef/libcef/browser/context.h"
+ #include "cef/libcef/browser/prefs/pref_helper.h"
+@@ -22,14 +28,21 @@
+ #include "chrome/browser/themes/theme_service_factory.h"
+ #include "components/content_settings/core/browser/host_content_settings_map.h"
+ #include "components/prefs/pref_service.h"
++#include "content/public/browser/browser_context.h"
+ #include "content/public/browser/browser_task_traits.h"
+ #include "content/public/browser/child_process_host.h"
++#include "content/public/browser/content_browser_client.h"
+ #include "content/public/browser/ssl_host_state_delegate.h"
++#include "content/public/common/content_client.h"
++#include "mojo/public/cpp/bindings/callback_helpers.h"
+ #include "mojo/public/cpp/bindings/receiver.h"
+ #include "mojo/public/cpp/bindings/remote.h"
++#include "net/base/net_errors.h"
+ #include "net/dns/host_resolver.h"
++#include "net/log/net_log_capture_mode.h"
+ #include "services/network/public/cpp/resolve_host_client_base.h"
+ #include "services/network/public/mojom/clear_data_filter.mojom.h"
++#include "services/network/public/mojom/net_log.mojom.h"
+ #include "services/network/public/mojom/network_context.mojom.h"
+ 
+ using content::BrowserThread;
+@@ -95,6 +108,160 @@ class ResolveHostHelper : public network::ResolveHostClientBase {
+   mojo::Receiver<network::mojom::ResolveHostClient> receiver_{this};
+ };
+ 
++const char kNetLogKey[] = "cef_net_log";
++
++// The profile's net log, as Electron's NetLog is one per session. Owned by the
++// profile, so an export never stopped ends with it.
++class NetLogExport : public base::SupportsUserData::Data {
++ public:
++  static NetLogExport* Get(content::BrowserContext* context) {
++    return static_cast<NetLogExport*>(context->GetUserData(kNetLogKey));
++  }
++
++  static NetLogExport* GetOrCreate(content::BrowserContext* context) {
++    auto* net_log = Get(context);
++    if (!net_log) {
++      auto owned = std::make_unique<NetLogExport>();
++      net_log = owned.get();
++      context->SetUserData(kNetLogKey, std::move(owned));
++    }
++    return net_log;
++  }
++
++  bool IsLogging() const { return exporter_.is_bound(); }
++
++  void Start(network::mojom::NetworkContext* network_context,
++             const base::FilePath& path,
++             net::NetLogCaptureMode capture_mode,
++             uint64_t max_file_size,
++             CefRefPtr<CefNetLogCallback> callback) {
++    if (exporter_.is_bound()) {
++      callback->OnNetLogComplete("There is already a net log running");
++      return;
++    }
++    network_context->CreateNetLogExporter(
++        exporter_.BindNewPipeAndPassReceiver());
++    exporter_.set_disconnect_handler(
++        base::BindOnce(&NetLogExport::OnDisconnect, base::Unretained(this)));
++    pending_start_ = callback;
++    base::ThreadPool::PostTaskAndReplyWithResult(
++        FROM_HERE,
++        {base::MayBlock(), base::TaskPriority::USER_VISIBLE,
++         base::TaskShutdownBehavior::SKIP_ON_SHUTDOWN},
++        base::BindOnce(
++            [](const base::FilePath& path) {
++              return base::File(
++                  path, base::File::FLAG_CREATE_ALWAYS | base::File::FLAG_WRITE);
++            },
++            path),
++        base::BindOnce(&NetLogExport::OnFileOpened, weak_factory_.GetWeakPtr(),
++                       capture_mode, max_file_size));
++  }
++
++  void Stop(CefRefPtr<CefNetLogCallback> callback) {
++    if (!exporter_.is_bound()) {
++      callback->OnNetLogComplete("No net log in progress");
++      return;
++    }
++    // The reply keeps the pipe open until the file is complete; a dropped
++    // reply still answers, with ERR_FAILED, as Electron's stopLogging.
++    mojo::Remote<network::mojom::NetLogExporter> exporter =
++        std::move(exporter_);
++    exporter.set_disconnect_handler(base::DoNothing());
++    auto* proxy = exporter.get();
++    proxy->Stop(base::DictValue(),
++                mojo::WrapCallbackWithDefaultInvokeIfNotRun(
++                    base::BindOnce(
++                        [](mojo::Remote<network::mojom::NetLogExporter>,
++                           CefRefPtr<CefNetLogCallback> callback,
++                           int32_t error) {
++                          callback->OnNetLogComplete(ErrorText(error));
++                        },
++                        std::move(exporter), callback),
++                    static_cast<int32_t>(net::ERR_FAILED)));
++  }
++
++ private:
++  CefRefPtr<CefNetLogCallback> TakePendingStart() {
++    return std::move(pending_start_);
++  }
++
++  static std::string ErrorText(int32_t error) {
++    return error == net::OK ? std::string() : net::ErrorToString(error);
++  }
++
++  void OnFileOpened(net::NetLogCaptureMode capture_mode,
++                    uint64_t max_file_size,
++                    base::File file) {
++    if (!pending_start_) {
++      return;
++    }
++    if (!exporter_.is_bound()) {
++      TakePendingStart()->OnNetLogComplete("Failed to start net log exporter");
++      return;
++    }
++    if (!file.IsValid()) {
++      exporter_.reset();
++      TakePendingStart()->OnNetLogComplete(
++          base::File::ErrorToString(file.error_details()));
++      return;
++    }
++    exporter_->Start(std::move(file),
++                     CefAppManager::Get()
++                         ->GetContentClient()
++                         ->browser()
++                         ->GetNetLogConstants(),
++                     capture_mode, net::NetLogFileFormat::kJson, max_file_size,
++                     base::BindOnce(&NetLogExport::OnStarted,
++                                    weak_factory_.GetWeakPtr()));
++  }
++
++  void OnStarted(int32_t error) {
++    if (pending_start_) {
++      TakePendingStart()->OnNetLogComplete(ErrorText(error));
++    }
++  }
++
++  void OnDisconnect() {
++    exporter_.reset();
++    if (pending_start_) {
++      TakePendingStart()->OnNetLogComplete("Failed to start net log exporter");
++    }
++  }
++
++  mojo::Remote<network::mojom::NetLogExporter> exporter_;
++  CefRefPtr<CefNetLogCallback> pending_start_;
++  base::WeakPtrFactory<NetLogExport> weak_factory_{this};
++};
++
++void StartNetLogInternal(const base::FilePath& path,
++                         net::NetLogCaptureMode capture_mode,
++                         uint64_t max_file_size,
++                         CefRefPtr<CefNetLogCallback> callback,
++                         CefBrowserContext::Getter browser_context_getter) {
++  auto browser_context = browser_context_getter.Run();
++  if (!browser_context) {
++    callback->OnNetLogComplete("Failed to start net log exporter");
++    return;
++  }
++  NetLogExport::GetOrCreate(browser_context->AsBrowserContext())
++      ->Start(browser_context->GetNetworkContext(), path, capture_mode,
++              max_file_size, callback);
++}
++
++void StopNetLogInternal(CefRefPtr<CefNetLogCallback> callback,
++                        CefBrowserContext::Getter browser_context_getter) {
++  auto browser_context = browser_context_getter.Run();
++  auto* net_log = browser_context
++                      ? NetLogExport::Get(browser_context->AsBrowserContext())
++                      : nullptr;
++  if (!net_log) {
++    callback->OnNetLogComplete("No net log in progress");
++    return;
++  }
++  net_log->Stop(callback);
++}
++
+ CefBrowserContext* GetCefBrowserContext(
+     CefRefPtr<CefRequestContext> request_context) {
+   CEF_REQUIRE_UIT();
+@@ -518,6 +685,40 @@ void CefRequestContextImpl::ResolveHost(
+                                    this, origin, callback));
+ }
+ 
++void CefRequestContextImpl::StartNetLog(
++    const CefString& path,
++    int capture_mode,
++    int64_t max_file_size,
++    CefRefPtr<CefNetLogCallback> callback) {
++  net::NetLogCaptureMode mode = net::NetLogCaptureMode::kDefault;
++  if (capture_mode == 1) {
++    mode = net::NetLogCaptureMode::kIncludeSensitive;
++  } else if (capture_mode == 2) {
++    mode = net::NetLogCaptureMode::kEverything;
++  }
++  const uint64_t max_size =
++      max_file_size < 0 ? network::mojom::NetLogExporter::kUnlimitedFileSize
++                        : static_cast<uint64_t>(max_file_size);
++  GetBrowserContext(
++      content::GetUIThreadTaskRunner({}),
++      base::BindOnce(&StartNetLogInternal, base::FilePath(path), mode,
++                     max_size, callback));
++}
++
++void CefRequestContextImpl::StopNetLog(
++    CefRefPtr<CefNetLogCallback> callback) {
++  GetBrowserContext(content::GetUIThreadTaskRunner({}),
++                    base::BindOnce(&StopNetLogInternal, callback));
++}
++
++bool CefRequestContextImpl::IsNetLogging() {
++  if (!VerifyBrowserContext()) {
++    return false;
++  }
++  auto* net_log = NetLogExport::Get(browser_context()->AsBrowserContext());
++  return net_log && net_log->IsLogging();
++}
++
+ CefRefPtr<CefMediaRouter> CefRequestContextImpl::GetMediaRouter(
+     CefRefPtr<CefCompletionCallback> callback) {
+   CefRefPtr<CefMediaRouterImpl> media_router = new CefMediaRouterImpl();
+diff --git a/libcef/browser/request_context_impl.h b/libcef/browser/request_context_impl.h
+index 7a61f4a..e7158fa 100644
+--- a/libcef/browser/request_context_impl.h
++++ b/libcef/browser/request_context_impl.h
+@@ -147,6 +147,12 @@ class CefRequestContextImpl : public CefRequestContext {
+   cef_color_variant_t GetChromeColorSchemeMode() override;
+   cef_color_t GetChromeColorSchemeColor() override;
+   cef_color_variant_t GetChromeColorSchemeVariant() override;
++  void StartNetLog(const CefString& path,
++                   int capture_mode,
++                   int64_t max_file_size,
++                   CefRefPtr<CefNetLogCallback> callback) override;
++  void StopNetLog(CefRefPtr<CefNetLogCallback> callback) override;
++  bool IsNetLogging() override;
+ 
+   const CefRequestContextSettings& settings() const { return config_.settings; }
+ 

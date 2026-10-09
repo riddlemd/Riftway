@@ -29,6 +29,7 @@ public sealed unsafe partial class Session
         _handler = handler;
         Cookies = new Cookies(this);
         Protocol = new SessionProtocol(this);
+        NetLog = new SessionNetLog(this);
         _downloadsAtCreation = OrielApp.CurrentOrNull?.GetPath("downloads");
         s_justCreated.Add(this);
     }
@@ -110,6 +111,9 @@ public sealed unsafe partial class Session
     /// <summary>Custom scheme handlers for this session's pages. Electron's <c>ses.protocol</c>.</summary>
     /// <remarks>The static <see cref="Oriel.Protocol"/> serves <see cref="DefaultSession"/>, as in Electron.</remarks>
     public SessionProtocol Protocol { get; }
+
+    /// <summary>Records the session's network events. Electron's <c>ses.netLog</c>.</summary>
+    public SessionNetLog NetLog { get; }
 
     internal bool IsDefault => _handler is null;
 

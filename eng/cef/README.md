@@ -13,6 +13,8 @@ Base: CEF `a03e714` (branch 8037, CEF 154, Chromium 154.0.8037.94), the version 
 | [`cef/0002-window-set-event-listening-enabled.patch`](patches/cef/0002-window-set-event-listening-enabled.patch) | `chromium/src/cef` | Adds `CefWindow::SetEventListeningEnabled`. On Linux `CefWindowImpl` calls `DesktopWindowTreeHostLinux::DisableEventListening` (a null event targeter) and keeps the closure that undoes it, as Electron's `NativeWindowViews::SetEnabledInternal` does for `setEnabled(false)` and a shown modal's parent: no mouse, key, touch or pointer crossing event reaches the window, and activation is untouched. Does nothing elsewhere. | W5 |
 | [`chromium/0003-gtk-clear-style-color-cache-on-theme-change.patch`](patches/chromium/0003-gtk-clear-style-color-cache-on-theme-change.patch) | `chromium/src` | `OsSettingsProviderGtk::OnSignal` clears GTK's style colour cache (`gtk::ClearStyleColorCache`) before it notifies. CEF's `linux_gtk_theme_3610.patch` disconnects `GtkUi::OnThemeChanged`, which clears it in Electron, so with no portal colour scheme `PreferredColorScheme()` kept reading the startup theme's window background. No API change. | Y2 |
 | [`cef/0004-window-set-xdg-activation-token.patch`](patches/cef/0004-window-set-xdg-activation-token.patch) | `chromium/src/cef` | Adds the static `CefWindow::SetXdgActivationToken` (`cef_window_set_xdg_activation_token`), which calls `base::nix::SetActivationToken` as Chromium's `StatusIconLinuxDbus::OnProvideXdgActivationToken` does; Chromium puts the token on the next window it maps or activates (`_NET_STARTUP_ID` on X11, xdg-activation on Wayland). Does nothing off Linux. | T5 (branch `linux-tray`) |
+| [`cef/0005-download-item-gesture-validators-initiator-frame.patch`](patches/cef/0005-download-item-gesture-validators-initiator-frame.patch) | `chromium/src/cef` | Adds `CefDownloadItem::HasUserGesture`, `GetLastModifiedTime`, `GetETag`, `GetRequestInitiator` (the initiator's `url::Origin::Serialize`) and `GetFrameIdentifier` (the `CefFrame` identifier of `content::DownloadItemUtils::GetRenderFrameHost`, empty once the frame is gone), all read from the `download::DownloadItem` that `CefDownloadItemImpl` wraps, as Electron's `DownloadItem` and `will-download` read them. | E13, E40 |
+| [`cef/0006-request-context-net-log.patch`](patches/cef/0006-request-context-net-log.patch) | `chromium/src/cef` | Adds `CefRequestContext::StartNetLog`, `StopNetLog` and `IsNetLogging`, with the client callback `CefNetLogCallback`, as Electron's `electron_api_net_log.cc`: the profile's network context creates a `network::mojom::NetLogExporter`, the file is opened off the UI thread, and the JSON export starts with the content client's net log constants. One export per profile, kept as its user data; failures carry Electron's texts. | E42 |
 
 CEF patches apply first, then Chromium patches (`patches/chromium/`, in `chromium/src`), each set in name order; the
 numbers are shared, so their order is the order they were written in.
@@ -49,7 +51,11 @@ configured the next version (`CEF_API_IS_ADDED(CEF_NEXT)`), because an older cli
   `is_translucent`), since CEF refuses a `base.size` that is not the configured version's. The `cef_window_t` libcef
   hands out is then its next-version struct, `cef_window_next_t` (plus `set_event_listening_enabled`), and
   `cef_window_set_xdg_activation_token` is exported; `CefPatchedApi.SetEventListeningEnabled` and
-  `SetXdgActivationToken` call them only then, and return false otherwise;
+  `SetXdgActivationToken` call them only then, and return false otherwise. Likewise the `cef_download_item_t` and
+  `cef_request_context_t` it hands out are `cef_download_item_next_t` (0005's five getters appended) and
+  `cef_request_context_next_t` (0006's `start_net_log`, `stop_net_log`, `is_net_logging`), and the client's
+  `cef_net_log_callback_t` is hand-written too; `CefPatchedApi.ReadDownloadExtras` returns null and the net log calls
+  return false (releasing the callback) without the patches;
 - any other hash: Oriel refuses to start, as for any API mismatch.
 
 The generated bindings (`tools/cef-interop/generate.sh`) stay at 15400 and need no regenerating: the new member is
@@ -107,7 +113,9 @@ docker run --rm -v "$PWD":/src -v "$HOME/.cache/oriel/cef":/cef-cache -v <unpack
 WindowTest's `LinuxTransparencyAsync` runs its transparency checks only when `CefRuntime.IsPatched`; with stock CEF it
 checks that `Transparent` is still ignored (W24). It starts `xcompmgr` itself after checking the fallback without one.
 The same goes for `LinuxPatchedInputAsync` (0002, real X input through xdotool), `ThemeAsync`'s page checks after a
-GTK theme change (0003) and `LinuxActivationTokenAsync` (0004, the next window's `_NET_STARTUP_ID`). None has run yet.
+GTK theme change (0003) and `LinuxActivationTokenAsync` (0004, the next window's `_NET_STARTUP_ID`), and SessionTest's
+`patched (0005)` download checks (gesture, initiator, `will-download` frame, ETag and Last-Modified) and `NetLogChecks`
+(0006); with stock CEF SessionTest checks the blanks and the `PlatformNotSupportedException` instead. None has run yet.
 
 ### Wiring
 
@@ -115,6 +123,13 @@ GTK theme change (0003) and `LinuxActivationTokenAsync` (0004, the next window's
   and returns when it is true: a patched libcef blocks input in Views (crossing events and keys included) and Oriel
   adds neither the X11 input cover nor its key filter, as Electron relies on `DisableEventListening` alone. With stock
   CEF the cover and the dropped keys stay.
+- `DownloadSnapshot.Read` adds 0005's fields as `Extras`; `DownloadItem` answers `HasUserGesture`, `GetLastModifiedTime`,
+  `GetETag` and `GetInitiatorOrigin` from them (false or empty with stock CEF), and `Session.OnBeforeDownload` turns the
+  frame identifier into `WillDownloadEventArgs.Frame` through `WebContents.FromFrameToken`.
+- `Session.NetLog` (`SessionNetLog`) and the static `NetLog` call 0006 on the UI thread; with stock CEF they throw
+  `PlatformNotSupportedException` (Electron's own errors are kept for the patched path). Stock CEF's only net log is
+  Chromium's `--log-net-log=<path>` switch, read when the network service starts: every profile, the whole run, with
+  `--net-log-capture-mode` and `--net-log-max-size-mb`; CEF passes it through.
 - `Tray.Linux.cs` `HandleItemCall` passes `ProvideXdgActivationToken`'s token to `LinuxCefPatches.ProvideActivationToken`
   (on the UI thread) and replies as before.
 

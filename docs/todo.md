@@ -86,7 +86,7 @@ Cross-platform work. Platform-specific items: [linux-todo.md](linux-todo.md), [w
       rules, the save dialog's URL title and Windows filters, `savePath`, `hasUserGesture`/`getETag`/`getLastModifiedTime`
       (DRIFT E13), pause/cancel before CEF hands a control. Unit tests pass; run the new SessionTest `HTTP:` download checks
       (local server: redirect, Content-Disposition, ETag, pause/resume, reset and Range resume, 403) on Linux and macOS.
-      CEF patches for E13-E16, E39-E41
+      CEF patch 0005 (in [eng/cef](../eng/cef/README.md)) covers E13 and E40; E14-E16, E39 and E41 still need patches
 - [ ] `Notification`: Windows (branch `notify-storage`) and Linux (branch `linux-notification`, WindowTest checks written,
       not run: [linux-todo.md](linux-todo.md)); macOS not started (DRIFT Q3)
 - [ ] `session.serviceWorkers` / `ServiceWorkerMain` (branch `service-workers`): done over DevTools (DRIFT SW1-SW8); run
@@ -99,6 +99,8 @@ Cross-platform work. Platform-specific items: [linux-todo.md](linux-todo.md), [w
       (see [PLAN.md](PLAN.md#milestones))
 - [ ] M7: CEF patches in [eng/cef](../eng/cef/README.md): 0001 `CefWindowDelegate::IsTranslucent` (W24), 0002
       `CefWindow::SetEventListeningEnabled` (W5), 0003 GTK style colour cache, a Chromium patch (Y2), 0004
-      `CefWindow::SetXdgActivationToken` (linux-tray's T5). Oriel detects a patched libcef by its next-version API
-      hash (`CefRuntime.IsPatched`) and runs unchanged on stock CEF. None is built yet: build, check the hashes, run
-      WindowTest on Linux ([linux-todo.md](linux-todo.md))
+      `CefWindow::SetXdgActivationToken` (linux-tray's T5), 0005 `CefDownloadItem` gesture, validators, initiator
+      and frame (E13, E40), 0006 `CefRequestContext::StartNetLog`/`StopNetLog`/`IsNetLogging` for `netLog` (E42).
+      Oriel detects a patched libcef by its next-version API hash (`CefRuntime.IsPatched`) and runs unchanged on stock
+      CEF. None is built yet: build, check the hashes, run WindowTest on Linux ([linux-todo.md](linux-todo.md)) and
+      SessionTest's `patched (0005)` and `patched (0006)` checks

@@ -80,6 +80,28 @@ public sealed unsafe class CompletionCallback : IReleaseObserver
     private static void OnComplete(cef_completion_callback_t* self) => NativeObject.Owner<CompletionCallback>(self)._done.TrySetResult();
 }
 
+/// <summary><c>cef_net_log_callback_t</c> (patch 0006): completes with the error text, empty on success.</summary>
+public sealed unsafe class NetLogCallback : IReleaseObserver
+{
+    private readonly TaskCompletionSource<string> _done = new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+    public NetLogCallback()
+    {
+        Native = NativeObject.Create<cef_net_log_callback_t>(this);
+        Native->on_net_log_complete = &OnComplete;
+    }
+
+    public cef_net_log_callback_t* Native { get; }
+
+    public Task<string> Task => _done.Task;
+
+    void IReleaseObserver.Released() => _done.TrySetException(new InvalidOperationException("CEF dropped the operation."));
+
+    [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])]
+    private static void OnComplete(cef_net_log_callback_t* self, cef_string_utf16_t* error)
+        => NativeObject.Owner<NetLogCallback>(self)._done.TrySetResult(CefString.Read(error));
+}
+
 /// <summary><c>cef_cookie_visitor_t</c>: collects every cookie, then completes.</summary>
 public sealed unsafe class CookieVisitor : IReleaseObserver
 {

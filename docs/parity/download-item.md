@@ -13,10 +13,10 @@ Percentages are over the non-n/a items; the second counts a partial item as half
 | Area | Items | Done | Partial | Missing | n/a | % done | % done + partial/2 |
 |---|---|---|---|---|---|---|---|
 | Instance events | 2 | 2 | 0 | 0 | 0 | 100.0% | 100.0% |
-| Instance methods | 25 | 17 | 7 | 1 | 0 | 68.0% | 82.0% |
+| Instance methods | 25 | 17 | 8 | 0 | 0 | 68.0% | 84.0% |
 | Instance properties | 1 | 1 | 0 | 0 | 0 | 100.0% | 100.0% |
 | Session download API | 3 | 0 | 2 | 1 | 0 | 0.0% | 33.3% |
-| **Total** | 31 | 20 | 9 | 2 | 0 | 64.5% | 79.0% |
+| **Total** | 31 | 20 | 10 | 1 | 0 | 64.5% | 80.6% |
 
 ## Checklist
 
@@ -42,8 +42,8 @@ Percentages are over the non-n/a items; the second counts a partial item as half
 | `cancel()` | `Cancel` | partial | An interrupted download cannot be cancelled (E39). |
 | `getURL()` | `GetUrl` | done |  |
 | `getMimeType()` | `GetMimeType` | done |  |
-| `hasUserGesture()` | `HasUserGesture` | partial | Always false (E13). |
-| `getInitiatorOrigin()` | — | missing | E40. |
+| `hasUserGesture()` | `HasUserGesture` | partial | Chromium's with Oriel's CEF patch 0005; always false with stock CEF (E13). |
+| `getInitiatorOrigin()` | `GetInitiatorOrigin` | partial | `url::Origin::Serialize` with Oriel's CEF patch 0005; always empty with stock CEF (E40). |
 | `getFilename()` | `GetFilename` | partial | The generated name, which the dialog's choice does not change, as Electron; charset fallback differs (E41). |
 | `getCurrentBytesPerSecond()` | `GetCurrentBytesPerSecond` | done |  |
 | `getTotalBytes()` | `GetTotalBytes` | done | 0 when unknown. |
@@ -52,8 +52,8 @@ Percentages are over the non-n/a items; the second counts a partial item as half
 | `getContentDisposition()` | `GetContentDisposition` | done |  |
 | `getState()` | `GetState` | done | `DownloadState`. |
 | `getURLChain()` | `GetUrlChain` | partial | Original and final URLs only (E15). |
-| `getLastModifiedTime()` | `GetLastModifiedTime` | partial | Always empty (E13). |
-| `getETag()` | `GetETag` | partial | Always empty (E13). |
+| `getLastModifiedTime()` | `GetLastModifiedTime` | partial | The response's with Oriel's CEF patch 0005; always empty with stock CEF (E13). |
+| `getETag()` | `GetETag` | partial | The response's with Oriel's CEF patch 0005; always empty with stock CEF (E13). |
 | `getStartTime()` | `GetStartTime` | done | Unix seconds. |
 | `getEndTime()` | `GetEndTime` | done | 0 until the download ends. |
 
@@ -67,6 +67,6 @@ Percentages are over the non-n/a items; the second counts a partial item as half
 
 | Electron | Oriel | Status | Note |
 |---|---|---|---|
-| `will-download` | `Session.WillDownload` | partial | `Cancel` is `preventDefault()` and the item reports `cancelled`; `WebContents` is null for `Session.DownloadUrl`; no `frame` (E40). |
+| `will-download` | `Session.WillDownload` | partial | `Cancel` is `preventDefault()` and the item reports `cancelled`; `WebContents` is null for `Session.DownloadUrl`; `Frame` with Oriel's CEF patch 0005, null with stock CEF (E40). |
 | `ses.downloadURL(url[, options])` | `Session.DownloadUrl` | partial | `headers` honoured; started from a hidden page (E37). |
 | `ses.createInterruptedDownload(options)` | — | missing | E16. |

@@ -251,12 +251,59 @@ public sealed unsafe class DownloadItemTests
     }
 
     [Fact]
-    public void ValidatorsAndGesture_AreCefsBlanks()
+    public void ValidatorsGestureAndInitiator_AreBlankWithStockCef()
     {
         var (item, _) = Item();
         Assert.False(item.HasUserGesture());
         Assert.Equal("", item.GetLastModifiedTime());
         Assert.Equal("", item.GetETag());
+        Assert.Equal("", item.GetInitiatorOrigin());
+    }
+
+    [Fact]
+    public void ValidatorsGestureAndInitiator_ComeFromThePatchedFields()
+    {
+        var extras = new DownloadItemExtras(true, "Wed, 21 Oct 2015 07:28:00 GMT", "\"33a64df5\"", "https://oriel.test", null);
+        var (item, _) = Item(Snapshot() with { Extras = extras });
+        Assert.True(item.HasUserGesture());
+        Assert.Equal("Wed, 21 Oct 2015 07:28:00 GMT", item.GetLastModifiedTime());
+        Assert.Equal("\"33a64df5\"", item.GetETag());
+        Assert.Equal("https://oriel.test", item.GetInitiatorOrigin());
+    }
+
+    [Fact]
+    public void Validators_FollowTheLatestReport()
+    {
+        var (item, _) = Item();
+        item.OnUpdated(Snapshot() with { Extras = new DownloadItemExtras(false, "", "\"v2\"", "", null) }, Control(new Calls()));
+        Assert.Equal("\"v2\"", item.GetETag());
+    }
+
+    private static readonly List<(int Process, string Token)> s_lookups = [];
+
+    private static WebFrameMain? RecordLookup(int process, string token)
+    {
+        s_lookups.Add((process, token));
+        return null;
+    }
+
+    [Theory]
+    [InlineData(null)]
+    [InlineData("")]
+    [InlineData("A-0123456789abcdef0123456789ABCDEF")]
+    public void DownloadFrame_LooksNothingUpWithoutAFrameIdentifier(string? identifier)
+    {
+        s_lookups.Clear();
+        Assert.Null(Session.DownloadFrame(identifier, RecordLookup));
+        Assert.Empty(s_lookups);
+    }
+
+    [Fact]
+    public void DownloadFrame_LooksUpTheIdentifiersProcessAndToken()
+    {
+        s_lookups.Clear();
+        Session.DownloadFrame("1F-0123456789ABCDEF0123456789ABCDEF", RecordLookup);
+        Assert.Equal([(31, "0123456789ABCDEF0123456789ABCDEF")], s_lookups);
     }
 
     [Fact]

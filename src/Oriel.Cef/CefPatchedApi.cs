@@ -12,9 +12,9 @@ public static unsafe class CefPatchedApi
     /// <summary>CEF's <c>CEF_API_VERSION_NEXT</c>.</summary>
     public const int Version = 999998;
 
-    public const string HashWindows = "2a33e58413e982d6979304c0de20e59fca1baf21";
-    public const string HashMac = "fb4c2b3be1c83fafb8e5674aeb2917eb22a6a797";
-    public const string HashLinux = "2d137e8cc7d079f5f2b310a17f487df99370c039";
+    public const string HashWindows = "30e79e5a6e1db4db305b80188052d76b46bdfd37";
+    public const string HashMac = "651a9644980c8e4cec5c8b2123084229bef13d54";
+    public const string HashLinux = "1d9b34f5f12ecd861e292da95c07d5a829fe490d";
 
     /// <summary>What a libcef's hash for the next version says about it.</summary>
     internal enum Kind
@@ -84,6 +84,113 @@ public static unsafe class CefPatchedApi
 
     [DllImport("libcef", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
     private static extern void cef_window_set_xdg_activation_token(cef_string_utf16_t* token);
+
+    /// <summary>What patch 0005 adds to <c>cef_download_item_t</c>. CEF's item; the callback's thread.</summary>
+    /// <returns>Null, without a call, when the loaded libcef lacks the patches.</returns>
+    public static DownloadItemExtras? ReadDownloadExtras(cef_download_item_t* item)
+        => ReadDownloadExtras(item, CefRuntime.IsPatched, &CefString.ReadUserFree);
+
+    internal static DownloadItemExtras? ReadDownloadExtras(cef_download_item_t* item, bool patched,
+        delegate*<cef_string_utf16_t*, string> readUserFree)
+    {
+        // A stock item's struct ends before these slots.
+        if (!patched || item == null) return null;
+        var next = (cef_download_item_next_t*)item;
+        var frame = readUserFree(next->get_frame_identifier(item));
+        return new DownloadItemExtras(
+            next->has_user_gesture(item) != 0,
+            readUserFree(next->get_last_modified_time(item)),
+            readUserFree(next->get_etag(item)),
+            readUserFree(next->get_request_initiator(item)),
+            frame.Length == 0 ? null : frame);
+    }
+
+    /// <summary><c>CefRequestContext::StartNetLog</c> (patch 0006): starts writing the context's network events to
+    /// <paramref name="path"/>. <paramref name="captureMode"/> is 0 (metadata), 1 (with cookies and credentials) or 2
+    /// (with all bytes); a negative <paramref name="maxFileSize"/> is no limit. Takes the callback's reference.</summary>
+    /// <returns>False, without a call, when the loaded libcef lacks the patches; the callback is then released.</returns>
+    public static bool StartNetLog(cef_request_context_t* context, string path, int captureMode, long maxFileSize,
+        cef_net_log_callback_t* callback)
+        => StartNetLog(context, path, captureMode, maxFileSize, callback, CefRuntime.IsPatched);
+
+    internal static bool StartNetLog(cef_request_context_t* context, string path, int captureMode, long maxFileSize,
+        cef_net_log_callback_t* callback, bool patched)
+    {
+        ArgumentNullException.ThrowIfNull(path);
+        if (!patched || context == null)
+        {
+            NativeObject.Release(callback);
+            return false;
+        }
+        fixed (char* chars = path)
+        {
+            // libcef turns the path into a FilePath before the call returns.
+            var value = new cef_string_utf16_t { str = chars, length = (nuint)path.Length };
+            ((cef_request_context_next_t*)context)->start_net_log(context, &value, captureMode, maxFileSize, callback);
+        }
+        return true;
+    }
+
+    /// <summary><c>CefRequestContext::StopNetLog</c> (patch 0006). Takes the callback's reference.</summary>
+    /// <returns>False, without a call, when the loaded libcef lacks the patches; the callback is then released.</returns>
+    public static bool StopNetLog(cef_request_context_t* context, cef_net_log_callback_t* callback)
+        => StopNetLog(context, callback, CefRuntime.IsPatched);
+
+    internal static bool StopNetLog(cef_request_context_t* context, cef_net_log_callback_t* callback, bool patched)
+    {
+        if (!patched || context == null)
+        {
+            NativeObject.Release(callback);
+            return false;
+        }
+        ((cef_request_context_next_t*)context)->stop_net_log(context, callback);
+        return true;
+    }
+
+    /// <summary><c>CefRequestContext::IsNetLogging</c> (patch 0006). Browser UI thread.</summary>
+    /// <returns>False, without a call, when the loaded libcef lacks the patches.</returns>
+    public static bool IsNetLogging(cef_request_context_t* context) => IsNetLogging(context, CefRuntime.IsPatched);
+
+    internal static bool IsNetLogging(cef_request_context_t* context, bool patched)
+        => patched && context != null && ((cef_request_context_next_t*)context)->is_net_logging(context) != 0;
+}
+
+/// <summary>A download's fields from patch 0005: Electron's <c>hasUserGesture</c>, <c>getLastModifiedTime</c>,
+/// <c>getETag</c> and <c>getInitiatorOrigin</c>, and the CEF identifier of the frame that started it.</summary>
+public sealed record DownloadItemExtras(bool HasUserGesture, string LastModifiedTime, string ETag, string InitiatorOrigin,
+    string? FrameIdentifier);
+
+/// <summary><c>cef_download_item_t</c> at the next API version of a patched libcef.</summary>
+public unsafe struct cef_download_item_next_t
+{
+    public cef_download_item_t @base;
+
+    /// <summary>Patch 0005, in declaration order.</summary>
+    public delegate* unmanaged[Cdecl]<cef_download_item_t*, int> has_user_gesture;
+    public delegate* unmanaged[Cdecl]<cef_download_item_t*, cef_string_utf16_t*> get_last_modified_time;
+    public delegate* unmanaged[Cdecl]<cef_download_item_t*, cef_string_utf16_t*> get_etag;
+    public delegate* unmanaged[Cdecl]<cef_download_item_t*, cef_string_utf16_t*> get_request_initiator;
+    public delegate* unmanaged[Cdecl]<cef_download_item_t*, cef_string_utf16_t*> get_frame_identifier;
+}
+
+/// <summary><c>cef_request_context_t</c> at the next API version of a patched libcef.</summary>
+public unsafe struct cef_request_context_next_t
+{
+    public cef_request_context_t @base;
+
+    /// <summary>Patch 0006, in declaration order.</summary>
+    public delegate* unmanaged[Cdecl]<cef_request_context_t*, cef_string_utf16_t*, int, long, cef_net_log_callback_t*, void> start_net_log;
+    public delegate* unmanaged[Cdecl]<cef_request_context_t*, cef_net_log_callback_t*, void> stop_net_log;
+    public delegate* unmanaged[Cdecl]<cef_request_context_t*, int> is_net_logging;
+}
+
+/// <summary><c>cef_net_log_callback_t</c> (patch 0006), implemented by the client.</summary>
+public unsafe struct cef_net_log_callback_t
+{
+    public cef_base_ref_counted_t @base;
+
+    /// <summary>UI thread: <c>error</c> is empty on success, else Electron's rejection text.</summary>
+    public delegate* unmanaged[Cdecl]<cef_net_log_callback_t*, cef_string_utf16_t*, void> on_net_log_complete;
 }
 
 /// <summary><c>cef_window_delegate_t</c> at the next API version of a patched libcef: CEF appends API added after a

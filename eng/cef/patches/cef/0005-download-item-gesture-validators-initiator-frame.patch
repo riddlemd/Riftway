@@ -1,0 +1,129 @@
+Oriel CEF patch 0005: CefDownloadItem gesture, validators, initiator and frame.
+
+Adds what Electron's DownloadItem and will-download read from
+download::DownloadItem and CEF's item does not expose: HasUserGesture,
+GetLastModifiedTime and GetETag (hasUserGesture, getLastModifiedTime,
+getETag), GetRequestInitiator (getInitiatorOrigin, url::Origin::Serialize)
+and GetFrameIdentifier, the CefFrame identifier of
+content::DownloadItemUtils::GetRenderFrameHost (will-download's `frame`).
+The methods are API at CEF_NEXT (999998): API version 15400 and its hash are
+unchanged.
+
+Resolves: Oriel docs/DRIFT.md E13, E40.
+Base: CEF a03e714 (branch 8037, CEF 154) with 0001-0004. Applies in chromium/src/cef.
+
+diff --git a/include/cef_download_item.h b/include/cef_download_item.h
+index 04b7ebd..d51aaba 100644
+--- a/include/cef_download_item.h
++++ b/include/cef_download_item.h
+@@ -169,6 +169,41 @@ class CefDownloadItem : public virtual CefBaseRefCounted {
+   ///
+   /*--cef()--*/
+   virtual CefString GetMimeType() = 0;
++
++#if CEF_API_ADDED(CEF_NEXT)
++  ///
++  /// Returns true if the download was started by a user gesture.
++  ///
++  /*--cef(added=next)--*/
++  virtual bool HasUserGesture() = 0;
++
++  ///
++  /// Returns the response's Last-Modified header value, or empty.
++  ///
++  /*--cef(added=next)--*/
++  virtual CefString GetLastModifiedTime() = 0;
++
++  ///
++  /// Returns the response's ETag header value, or empty.
++  ///
++  /*--cef(added=next)--*/
++  virtual CefString GetETag() = 0;
++
++  ///
++  /// Returns the serialized origin that initiated the download request, or
++  /// empty if there is none. An opaque origin is "null".
++  ///
++  /*--cef(added=next)--*/
++  virtual CefString GetRequestInitiator() = 0;
++
++  ///
++  /// Returns the identifier of the frame that started the download, in the
++  /// format of CefFrame::GetIdentifier, or empty if the frame is unknown or
++  /// no longer exists.
++  ///
++  /*--cef(added=next)--*/
++  virtual CefString GetFrameIdentifier() = 0;
++#endif
+ };
+ 
+ #endif  // CEF_INCLUDE_CEF_DOWNLOAD_ITEM_H_
+diff --git a/libcef/browser/download_item_impl.cc b/libcef/browser/download_item_impl.cc
+index a8655d4..ddf297f 100644
+--- a/libcef/browser/download_item_impl.cc
++++ b/libcef/browser/download_item_impl.cc
+@@ -4,9 +4,13 @@
+ 
+ #include "cef/libcef/browser/download_item_impl.h"
+ 
++#include "cef/libcef/common/frame_util.h"
+ #include "cef/libcef/common/time_util.h"
+ #include "components/download/public/common/download_item.h"
++#include "content/public/browser/download_item_utils.h"
++#include "content/public/browser/render_frame_host.h"
+ #include "url/gurl.h"
++#include "url/origin.h"
+ 
+ CefDownloadItemImpl::CefDownloadItemImpl(download::DownloadItem* value)
+     : CefValueBase<CefDownloadItem, download::DownloadItem>(
+@@ -118,3 +122,34 @@ CefString CefDownloadItemImpl::GetMimeType() {
+   CEF_VALUE_VERIFY_RETURN(false, CefString());
+   return const_value().GetMimeType();
+ }
++
++bool CefDownloadItemImpl::HasUserGesture() {
++  CEF_VALUE_VERIFY_RETURN(false, false);
++  return const_value().HasUserGesture();
++}
++
++CefString CefDownloadItemImpl::GetLastModifiedTime() {
++  CEF_VALUE_VERIFY_RETURN(false, CefString());
++  return const_value().GetLastModifiedTime();
++}
++
++CefString CefDownloadItemImpl::GetETag() {
++  CEF_VALUE_VERIFY_RETURN(false, CefString());
++  return const_value().GetETag();
++}
++
++CefString CefDownloadItemImpl::GetRequestInitiator() {
++  CEF_VALUE_VERIFY_RETURN(false, CefString());
++  const auto& initiator = const_value().GetRequestInitiator();
++  return initiator ? initiator->Serialize() : std::string();
++}
++
++CefString CefDownloadItemImpl::GetFrameIdentifier() {
++  CEF_VALUE_VERIFY_RETURN(false, CefString());
++  // As Electron's will-download frame: null once the frame is gone.
++  auto* rfh = content::DownloadItemUtils::GetRenderFrameHost(&const_value());
++  if (!rfh) {
++    return CefString();
++  }
++  return frame_util::MakeFrameIdentifier(rfh->GetGlobalFrameToken());
++}
+diff --git a/libcef/browser/download_item_impl.h b/libcef/browser/download_item_impl.h
+index 70338ea..5fc09ed 100644
+--- a/libcef/browser/download_item_impl.h
++++ b/libcef/browser/download_item_impl.h
+@@ -43,6 +43,11 @@ class CefDownloadItemImpl
+   CefString GetSuggestedFileName() override;
+   CefString GetContentDisposition() override;
+   CefString GetMimeType() override;
++  bool HasUserGesture() override;
++  CefString GetLastModifiedTime() override;
++  CefString GetETag() override;
++  CefString GetRequestInitiator() override;
++  CefString GetFrameIdentifier() override;
+ };
+ 
+ #endif  // CEF_LIBCEF_BROWSER_DOWNLOAD_ITEM_IMPL_H_
