@@ -24,6 +24,13 @@ public sealed class AcceleratorTests
     [InlineData("Escape", false, 0x1B, "\u001B", (int)(M.None))]
     [InlineData("Ctrl+Up", false, 0x26, "\uF700", (int)(M.Control))]
     [InlineData("Return", false, 0x0D, "\r", (int)(M.None))]
+    [InlineData("MediaPlayPause", true, 0xB3, "", (int)(M.None))]
+    [InlineData("medianexttrack", false, 0xB0, "", (int)(M.None))]
+    [InlineData("MediaPreviousTrack", true, 0xB1, "", (int)(M.None))]
+    [InlineData("Shift+MediaStop", true, 0xB2, "", (int)(M.Shift))]
+    [InlineData("VolumeMute", false, 0xAD, "", (int)(M.None))]
+    [InlineData("VolumeDown", true, 0xAE, "", (int)(M.None))]
+    [InlineData("VolumeUp", true, 0xAF, "", (int)(M.None))]
     public void Parse_ResolvesKeyAndModifiers(string text, bool macOS, int keyCode, string macKey, int modifiers)
         => Assert.Equal(new Accelerator(keyCode, macKey, (M)modifiers), Accelerator.Parse(text, macOS));
 

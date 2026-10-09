@@ -4,18 +4,21 @@ using Oriel.Cef.Platform;
 namespace Oriel;
 
 /// <summary>Keyboard shortcuts that work while the app is in the background. Electron's <c>globalShortcut</c>.</summary>
-/// <remarks>Windows and Linux (X11 key grabs) for now: macOS throws <see cref="PlatformNotSupportedException"/>. Use it once
-/// the app is ready; callbacks run on the UI thread.</remarks>
+/// <remarks>Windows, Linux (X11 key grabs) and macOS (Carbon hot keys, and an event tap for media keys). Use it once the
+/// app is ready; callbacks run on the UI thread.</remarks>
 public static class GlobalShortcut
 {
     private static readonly IGlobalShortcutBackend s_backend = OperatingSystem.IsWindows() ? new WindowsGlobalShortcutBackend()
-        : OperatingSystem.IsLinux() ? new LinuxGlobalShortcutBackend() : new UnsupportedGlobalShortcutBackend();
+        : OperatingSystem.IsLinux() ? new LinuxGlobalShortcutBackend()
+        : OperatingSystem.IsMacOS() ? new MacGlobalShortcutBackend() : new UnsupportedGlobalShortcutBackend();
 
     /// <summary>Calls <paramref name="callback"/> whenever <paramref name="accelerator"/> is pressed, in any app. False if the
     /// shortcut is taken, by another app or already by this one, or while shortcuts are suspended. Electron's
     /// <c>globalShortcut.register()</c>.</summary>
-    /// <remarks>An <c>AltGr</c> shortcut is registered without AltGr and never runs its callback, as in Chromium
-    /// (DRIFT J5).</remarks>
+    /// <remarks>An <c>AltGr</c> shortcut is registered without AltGr; on Windows and Linux it never runs its callback, as
+    /// in Chromium (DRIFT J5), while on macOS it runs it, as Chromium's Mac listener does. On macOS a bare media key
+    /// (<c>MediaPlayPause</c>, <c>MediaNextTrack</c>, <c>MediaPreviousTrack</c>, <c>MediaStop</c>) registers only while the
+    /// app is a trusted accessibility client, as in Electron.</remarks>
     /// <exception cref="ArgumentException">Not a valid accelerator.</exception>
     public static bool Register(string accelerator, Action callback)
     {
@@ -73,6 +76,15 @@ internal static class GlobalShortcuts
         => (m.HasFlag(AcceleratorModifiers.Alt) ? 0x1u : 0) | (m.HasFlag(AcceleratorModifiers.Control) ? 0x2u : 0)
             | (m.HasFlag(AcceleratorModifiers.Shift) ? 0x4u : 0) | (m.HasFlag(AcceleratorModifiers.Command) ? 0x8u : 0);
 
+    /// <summary>Carbon's <c>shiftKey</c>, <c>controlKey</c>, <c>optionKey</c> and <c>cmdKey</c> for a hotkey's <c>MOD_</c>
+    /// flags, as <c>GlobalAcceleratorListenerMac::RegisterHotKey</c> maps the accelerator's modifiers.</summary>
+    internal static uint CarbonModifiers(uint mod)
+        => ((mod & 0x4) != 0 ? 0x200u : 0) | ((mod & 0x2) != 0 ? 0x1000u : 0) | ((mod & 0x1) != 0 ? 0x800u : 0) | ((mod & 0x8) != 0 ? 0x100u : 0);
+
+    /// <summary><c>ui::Accelerator::IsMediaKey</c>: play/pause, stop, previous or next track with no modifier at all
+    /// (AltGr included).</summary>
+    internal static bool IsMediaKey(HotKey key) => key.Modifiers == 0 && !key.AltGr && key.VirtualKey is >= 0xB0 and <= 0xB3;
+
     /// <summary>The X modifier mask for a hotkey's <c>MOD_</c> flags: Shift, Control, Alt as Mod1, and the Windows key as
     /// Mod4, which Chromium leaves out (DRIFT J3).</summary>
     internal static ushort X11Modifiers(uint mod)
@@ -123,9 +135,12 @@ internal abstract class HotKeyListener : IGlobalShortcutBackend
 
     protected virtual T OnUi<T>(Func<T> func) => CefThread.InvokeOnUi(func);
 
+    /// <summary>A check Electron makes before the listener sees the shortcut; false fails <see cref="Register"/>.</summary>
+    protected virtual bool CanRegister(HotKey key) => true;
+
     public bool Register(HotKey key, Action callback) => OnUi(() =>
     {
-        if (_suspended || _callbacks.ContainsKey(key) || !StartListening(key)) return false;
+        if (!CanRegister(key) || _suspended || _callbacks.ContainsKey(key) || !StartListening(key)) return false;
         _callbacks[key] = callback;
         return true;
     });
@@ -168,6 +183,12 @@ internal abstract class HotKeyListener : IGlobalShortcutBackend
     protected void Pressed(HotKey reported)
     {
         if (_callbacks.TryGetValue(reported with { AltGr = false }, out var callback)) callback();
+    }
+
+    /// <summary><c>NotifyKeyPressed</c> with the shortcut as registered, AltGr and all, on the UI thread.</summary>
+    protected void PressedAsRegistered(HotKey key)
+    {
+        if (_callbacks.TryGetValue(key, out var callback)) callback();
     }
 }
 
@@ -250,6 +271,100 @@ internal sealed class LinuxGlobalShortcutBackend : HotKeyListener
         }
         // CEF is shutting down.
         catch (InvalidOperationException) { }
+    }
+}
+
+/// <summary>Chromium's <c>GlobalAcceleratorListenerMac</c> under Electron: Carbon <c>RegisterEventHotKey</c> with one
+/// application handler while any hot key is held, layout-aware key codes re-registered when the keyboard layout
+/// changes, and bare media keys through a session event tap (<c>MediaKeysListenerImpl</c>), which needs the
+/// accessibility permission.</summary>
+[System.Runtime.Versioning.SupportedOSPlatform("macos")]
+internal sealed class MacGlobalShortcutBackend : HotKeyListener
+{
+    // UI (main) thread only: accelerator_ids_, id_accelerators_, id_hot_key_refs_ and the media keys watched.
+    private readonly Dictionary<HotKey, uint> _ids = [];
+    private readonly Dictionary<uint, HotKey> _keys = [];
+    private readonly Dictionary<uint, nint> _refs = [];
+    private readonly HashSet<int> _mediaKeys = [];
+    private uint _nextId;
+    private bool _watchingLayout;
+
+    // Electron's RegisteringMediaKeyForUntrustedClient.
+    protected override bool CanRegister(HotKey key) => !GlobalShortcuts.IsMediaKey(key) || MacHotKeys.IsTrustedAccessibilityClient();
+
+    protected override bool StartListening(HotKey key)
+    {
+        if (!_watchingLayout)
+        {
+            _watchingLayout = true;
+            MacHotKeys.WatchLayoutChanges(ReregisterAll);
+        }
+        if (GlobalShortcuts.IsMediaKey(key))
+        {
+            _mediaKeys.Add((int)key.VirtualKey);
+            MacHotKeys.StartMediaTap(OnMediaKey);
+        }
+        else
+        {
+            if (!RegisterHotKey(key, _nextId)) return false;
+            if (!AnyHotKey()) MacHotKeys.StartWatching(OnHotKey);
+        }
+        _keys[_nextId] = key;
+        _ids[key] = _nextId;
+        _nextId++;
+        return true;
+    }
+
+    protected override void StopListening(HotKey key)
+    {
+        if (!_ids.Remove(key, out var id)) return;
+        _keys.Remove(id);
+        if (GlobalShortcuts.IsMediaKey(key))
+        {
+            _mediaKeys.Remove((int)key.VirtualKey);
+            if (_mediaKeys.Count == 0) MacHotKeys.StopMediaTap();
+            return;
+        }
+        if (_refs.Remove(id, out var hotKey)) MacHotKeys.Unregister(hotKey);
+        if (!AnyHotKey()) MacHotKeys.StopWatching();
+    }
+
+    private bool AnyHotKey() => _ids.Keys.Any(k => !GlobalShortcuts.IsMediaKey(k));
+
+    private bool RegisterHotKey(HotKey key, uint id)
+    {
+        int keyCode;
+        using (var layout = MacHotKeys.CurrentLayout()) keyCode = MacKeyCodes.ForHotKey((int)key.VirtualKey, layout.Translate);
+        var hotKey = MacHotKeys.Register(keyCode, GlobalShortcuts.CarbonModifiers(key.Modifiers), MacHotKeys.CreatorCode(), id);
+        if (hotKey == 0) return false;
+        _refs[id] = hotKey;
+        return true;
+    }
+
+    // ReregisterAllHotKeys, for the new layout's key codes. Chromium also hands media keys to RegisterHotKey here, which
+    // registers key code -1; Oriel leaves them to the tap (DRIFT J7).
+    private void ReregisterAll()
+    {
+        foreach (var (key, id) in _ids.ToList())
+        {
+            if (GlobalShortcuts.IsMediaKey(key)) continue;
+            if (_refs.Remove(id, out var hotKey)) MacHotKeys.Unregister(hotKey);
+            _ = RegisterHotKey(key, id);
+        }
+    }
+
+    private void OnHotKey(uint id)
+    {
+        if (_keys.TryGetValue(id, out var key)) PressedAsRegistered(key);
+    }
+
+    // The tap swallows a key it watches; the callback runs only while that bare key is registered.
+    private bool OnMediaKey(int virtualKey)
+    {
+        if (!_mediaKeys.Contains(virtualKey)) return false;
+        var key = new HotKey(0, (uint)virtualKey);
+        if (_ids.ContainsKey(key)) PressedAsRegistered(key);
+        return true;
     }
 }
 

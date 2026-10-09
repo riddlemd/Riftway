@@ -3792,8 +3792,9 @@ async Task PowerAndShortcutsAsync()
 {
     if (OperatingSystem.IsMacOS())
     {
-        Check("globalShortcut, powerMonitor and powerSaveBlocker throw on macOS", Throws<PlatformNotSupportedException>(() => GlobalShortcut.IsRegistered("Ctrl+A"))
-            && Throws<PlatformNotSupportedException>(() => PowerMonitor.GetSystemIdleTime()) && Throws<PlatformNotSupportedException>(() => PowerSaveBlocker.Start(PowerSaveBlockerType.PreventAppSuspension)));
+        Check("powerMonitor and powerSaveBlocker throw on macOS", Throws<PlatformNotSupportedException>(() => PowerMonitor.GetSystemIdleTime())
+            && Throws<PlatformNotSupportedException>(() => PowerSaveBlocker.Start(PowerSaveBlockerType.PreventAppSuspension)));
+        await MacGlobalShortcutTest.RunAsync(Check, step);
         return;
     }
     if (OperatingSystem.IsLinux())
@@ -4341,11 +4342,12 @@ async Task ShellAsync()
         Check("Shell's shortcut links throw PlatformNotSupportedException on Linux", Throws<PlatformNotSupportedException>(() => Shell.ReadShortcutLink("/nonexistent.lnk")));
         return;
     }
-    if (!OperatingSystem.IsWindows())
+    if (OperatingSystem.IsMacOS())
     {
-        Check("Shell throws PlatformNotSupportedException on macOS", Throws<PlatformNotSupportedException>(Shell.Beep));
+        await MacShellTest.RunAsync(Check, step);
         return;
     }
+    if (!OperatingSystem.IsWindows()) return;
 
     var dir = Path.Combine(Path.GetTempPath(), "oriel-shell-" + Path.GetRandomFileName());
     Directory.CreateDirectory(dir);

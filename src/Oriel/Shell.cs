@@ -66,20 +66,22 @@ public sealed record ShortcutDetails
 }
 
 /// <summary>The desktop's own handling of files and URLs. Electron's <c>shell</c>.</summary>
-/// <remarks>Windows and Linux for now: macOS throws <see cref="PlatformNotSupportedException"/>.</remarks>
 public static class Shell
 {
     private static readonly IShellBackend s_backend = OperatingSystem.IsWindows() ? new WindowsShellBackend()
         : OperatingSystem.IsLinux() ? new LinuxShellBackend()
+        : OperatingSystem.IsMacOS() ? new MacShellBackend()
         : new UnsupportedShellBackend();
 
     /// <summary>Opens <paramref name="url"/> with the desktop's handler for its scheme. Electron's <c>shell.openExternal()</c>.</summary>
     /// <remarks>As in Electron, the URL is canonicalized and handed on with no scheme check. Windows escapes and quotes it
     /// for the shell, and a string that is not a URL goes as an empty one, which the shell refuses. Linux starts
     /// <c>xdg-email</c> for <c>mailto:</c>, else <c>xdg-open</c>, and does not wait for it, so only a failure to start
-    /// rejects; <paramref name="options"/> do nothing there.</remarks>
+    /// rejects; <paramref name="options"/> do nothing there. macOS escapes what NSURL refuses and asks NSWorkspace, with
+    /// <see cref="OpenExternalOptions.Activate"/>, and resolves once it has opened the URL.</remarks>
     /// <exception cref="InvalidOperationException">Windows: the shell refused, <c>Failed to open: </c> and the system's
-    /// message. Linux: the handler could not be started, <c>Failed to open path</c>. Electron's rejections.</exception>
+    /// message. Linux: the handler could not be started, <c>Failed to open path</c>. macOS: <c>Invalid URL</c>, <c>No
+    /// application found to open URL</c> or <c>Failed to open URL</c>. Electron's rejections.</exception>
     public static Task OpenExternalAsync(string url, OpenExternalOptions? options = null)
     {
         ArgumentNullException.ThrowIfNull(url);
@@ -87,7 +89,8 @@ public static class Shell
     }
 
     /// <summary>Opens a file or folder the way the desktop does; an empty string, or Electron's error text: Windows'
-    /// <c>Failed to open path</c>, or Linux's <c>Failed to launch xdg-open</c>. Electron's <c>shell.openPath()</c>.</summary>
+    /// <c>Failed to open path</c>, Linux's <c>Failed to launch xdg-open</c>, or macOS's <c>Failed to open path</c> (and
+    /// <c>Invalid path</c> for ""). Electron's <c>shell.openPath()</c>.</summary>
     /// <remarks>On Linux <c>xdg-open</c> is not waited for, so a path it cannot open still gives "".</remarks>
     public static Task<string> OpenPathAsync(string path)
     {
@@ -104,10 +107,11 @@ public static class Shell
 
     /// <summary>Moves a file or folder to the trash. Electron's <c>shell.trashItem()</c>.</summary>
     /// <remarks>On Linux this runs the tool Electron picks: <c>ELECTRON_TRASH</c>, <c>kioclient5</c> or <c>kioclient</c>
-    /// under KDE, else <c>gio trash</c>.</remarks>
+    /// under KDE, else <c>gio trash</c>. On macOS it is NSFileManager's <c>trashItemAtURL:</c>.</remarks>
     /// <exception cref="IOException">It could not be moved, with Electron's rejection message; on Windows that includes an
     /// item too big for the Recycle Bin (<c>Operation was aborted</c>), which is left in place rather than deleted; on
-    /// Linux any failure of the tool is <c>Failed to move item to trash</c>.</exception>
+    /// Linux any failure of the tool is <c>Failed to move item to trash</c>; on macOS the message is the system's
+    /// <c>localizedDescription</c>, or <c>Invalid file path: </c> for "".</exception>
     public static Task TrashItemAsync(string path)
     {
         ArgumentNullException.ThrowIfNull(path);
@@ -256,9 +260,125 @@ internal sealed class LinuxShellBackend : IShellBackend
     private static PlatformNotSupportedException WindowsOnly() => new("Shortcut links are Windows only, as in Electron.");
 }
 
+/// <summary>Electron's <c>platform_util_mac.mm</c>. The NSWorkspace calls run on the main thread, which is CEF's UI
+/// thread; before the app is ready they run on the caller's thread (DRIFT H9).</summary>
+[System.Runtime.Versioning.SupportedOSPlatform("macos")]
+internal sealed class MacShellBackend : IShellBackend
+{
+    public Task OpenExternalAsync(string url, OpenExternalOptions options)
+    {
+        var done = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        void Finish(string error)
+        {
+            if (error.Length == 0) done.TrySetResult();
+            else done.TrySetException(new InvalidOperationException(error));
+        }
+        if (ShellRules.NSURLString(Gurl.Spec(url)) is not { } escaped) Finish("Invalid URL");
+        else OnMain(() => MacShellOps.OpenExternal(escaped, options.Activate, Finish), done);
+        return done.Task;
+    }
+
+    public Task<string> OpenPathAsync(string path)
+    {
+        var done = new TaskCompletionSource<string>(TaskCreationOptions.RunContinuationsAsynchronously);
+        OnMain(() => done.TrySetResult(MacShellOps.OpenPath(path)), done);
+        return done.Task;
+    }
+
+    public void ShowItemInFolder(string fullPath)
+    {
+        var path = ShellRules.MacAbsolutePath(fullPath, MacShellOps.RealPath);
+        OnMain(() =>
+        {
+            if (!MacShellOps.ShowItemInFolder(path)) Console.Error.WriteLine($"[Oriel] NSWorkspace failed to select file {path}");
+        }, null);
+    }
+
+    // Electron trashes on a thread-pool thread too.
+    public Task TrashItemAsync(string path) => Task.Run(() =>
+    {
+        if (MacShellOps.Trash(path) is { } error) throw new IOException(error);
+    });
+
+    public void Beep() => OnMain(MacShellOps.Beep, null);
+
+    public bool WriteShortcutLink(string shortcutPath, ShortcutLinkOperation operation, ShortcutDetails options) => throw WindowsOnly();
+
+    public ShortcutDetails ReadShortcutLink(string shortcutPath) => throw WindowsOnly();
+
+    private static PlatformNotSupportedException WindowsOnly() => new("Shortcut links are Windows only, as in Electron.");
+
+    private static void OnMain(Action action, object? completion)
+    {
+        void Run()
+        {
+            try { action(); }
+            catch (Exception e) when (completion is not null)
+            {
+                switch (completion)
+                {
+                    case TaskCompletionSource t: t.TrySetException(e); break;
+                    case TaskCompletionSource<string> t: t.TrySetException(e); break;
+                }
+            }
+        }
+        if (OrielApp.CurrentOrNull is { IsReady: true }) CefThread.RunOnUi(Run);
+        else Run();
+    }
+}
+
 /// <summary>Electron's string handling around the shell calls: pure code.</summary>
 internal static class ShellRules
 {
+    /// <summary>The string Chromium's <c>net::NSURLWithGURL</c> hands <c>URLWithString:</c> for a canonical
+    /// <paramref name="spec"/>: path, query and ref escaped by <c>base::EscapeNSURLPrecursor</c>; null for "", an invalid
+    /// GURL.</summary>
+    internal static string? NSURLString(string spec)
+    {
+        if (spec.Length == 0) return null;
+        var hash = spec.IndexOf('#');
+        var beforeRef = hash < 0 ? spec : spec[..hash];
+        var question = beforeRef.IndexOf('?');
+        var beforeQuery = question < 0 ? beforeRef : beforeRef[..question];
+        var colon = beforeQuery.IndexOf(':');
+        var pathStart = colon + 1;
+        // An authority is never part of the path; GURL parses one after "//" for every scheme.
+        if (string.CompareOrdinal(beforeQuery, pathStart, "//", 0, 2) == 0)
+        {
+            var slash = beforeQuery.IndexOf('/', pathStart + 2);
+            pathStart = slash < 0 ? beforeQuery.Length : slash;
+        }
+        var escaped = new StringBuilder(beforeQuery[..pathStart]).Append(EscapeNSURLPrecursor(beforeQuery[pathStart..]));
+        if (question >= 0) escaped.Append('?').Append(EscapeNSURLPrecursor(beforeRef[(question + 1)..]));
+        if (hash >= 0) escaped.Append('#').Append(EscapeNSURLPrecursor(spec[(hash + 1)..]));
+        return escaped.ToString();
+    }
+
+    /// <summary>Chromium's <c>EscapeNSURLPrecursor</c>: UTF-8 bytes percent-encoded in upper-case hex when they are
+    /// controls, space, non-ASCII or one of <c>"#%&lt;&gt;[\]^`{|}</c> and DEL, except an existing valid <c>%XX</c>.</summary>
+    internal static string EscapeNSURLPrecursor(string text)
+    {
+        const string Escaped = "\"#%<>[\\]^`{|}";
+        var bytes = Encoding.UTF8.GetBytes(text);
+        var result = new StringBuilder();
+        for (var i = 0; i < bytes.Length; i++)
+        {
+            var b = bytes[i];
+            if (b == '%' && i + 2 < bytes.Length && char.IsAsciiHexDigit((char)bytes[i + 1]) && char.IsAsciiHexDigit((char)bytes[i + 2]))
+                result.Append('%');
+            else if (b <= 0x20 || b >= 0x7F || Escaped.Contains((char)b))
+                result.Append('%').Append(b.ToString("X2"));
+            else
+                result.Append((char)b);
+        }
+        return result.ToString();
+    }
+
+    /// <summary>The path Electron's Mac <c>ShowItemInFolder</c> selects: <paramref name="path"/> when absolute, else
+    /// <c>base::MakeAbsoluteFilePath</c> (<paramref name="realPath"/>), which is "" when the path does not resolve.</summary>
+    internal static string MacAbsolutePath(string path, Func<string, string?> realPath)
+        => path.StartsWith('/') ? path : realPath(path) ?? "";
+
     /// <summary>What Electron hands <c>ShellExecuteEx</c> for <c>openExternal</c>: the URL's canonical spec, escaped by
     /// <c>base::EscapeExternalHandlerValue</c>, in double quotes.</summary>
     internal static string ExternalFile(string url) => "\"" + EscapeExternalHandlerValue(Gurl.Spec(url)) + "\"";

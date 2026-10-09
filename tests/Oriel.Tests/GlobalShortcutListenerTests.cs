@@ -8,8 +8,11 @@ public sealed class GlobalShortcutListenerTests
         public readonly HashSet<HotKey> Held = [];
         public readonly List<string> Log = [];
         public readonly HashSet<HotKey> Refused = [];
+        public readonly HashSet<HotKey> Vetoed = [];
 
         protected override T OnUi<T>(Func<T> func) => func();
+
+        protected override bool CanRegister(HotKey key) => !Vetoed.Contains(key);
 
         protected override bool StartListening(HotKey key)
         {
@@ -26,6 +29,8 @@ public sealed class GlobalShortcutListenerTests
         }
 
         public void Press(HotKey reported) => Pressed(reported);
+
+        public void PressAsRegistered(HotKey key) => PressedAsRegistered(key);
     }
 
     private static HotKey K(string accelerator) => GlobalShortcuts.Key(accelerator);
@@ -154,5 +159,28 @@ public sealed class GlobalShortcutListenerTests
         l.Press(K("AltGr+K"));
         l.Press(K("K"));
         Assert.Equal(["plain", "plain"], fired);
+    }
+
+    [Fact]
+    public void PressedAsRegistered_FiresTheAltGrShortcutItself_AsChromiumsMacListener()
+    {
+        var l = new FakeListener();
+        var fired = new List<string>();
+        l.Register(K("AltGr+K"), () => fired.Add("altgr"));
+        l.PressAsRegistered(K("K"));
+        Assert.Empty(fired);
+        l.PressAsRegistered(K("AltGr+K"));
+        Assert.Equal(["altgr"], fired);
+    }
+
+    [Fact]
+    public void CanRegister_False_FailsBeforeTheOsIsAsked()
+    {
+        var l = new FakeListener();
+        l.Vetoed.Add(K("MediaPlayPause"));
+        Assert.False(l.Register(K("MediaPlayPause"), () => { }));
+        Assert.Empty(l.Log);
+        Assert.False(l.IsRegistered(K("MediaPlayPause")));
+        Assert.True(l.Register(K("Shift+MediaPlayPause"), () => { }));
     }
 }
