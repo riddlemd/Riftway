@@ -2706,7 +2706,8 @@ app.Ready += (_, _) => _ = Task.Run(async () =>
     app.Quit();
 });
 
-_ = Task.Delay(TimeSpan.FromSeconds(int.Parse(Environment.GetEnvironmentVariable("ORIEL_TEST_TIMEOUT") ?? "90"))).ContinueWith(_ =>
+// The download and service-worker sections took a full run past 90 s on macOS.
+_ = Task.Delay(TimeSpan.FromSeconds(int.Parse(Environment.GetEnvironmentVariable("ORIEL_TEST_TIMEOUT") ?? "180"))).ContinueWith(_ =>
 {
     Console.WriteLine("FAIL  run did not finish in time");
     Environment.Exit(-1);
