@@ -67,9 +67,10 @@ public sealed record AddRepresentationOptions
 /// Electron's <c>nativeImage</c>.</summary>
 /// <remarks>Pixels are 32-bit BGRA with premultiplied alpha, top row first, as Electron's <c>toBitmap</c> returns them.
 /// Decoding and encoding PNG and JPEG need CEF, so make those calls after <see cref="OrielApp.Create"/>.</remarks>
-public sealed unsafe class NativeImage
+public sealed unsafe partial class NativeImage
 {
     private readonly List<(float Scale, ImageBitmap Bitmap)> _representations = [];
+    private volatile bool _template;
 
     private NativeImage() { }
 
@@ -77,7 +78,8 @@ public sealed unsafe class NativeImage
     public static NativeImage CreateEmpty() => new();
 
     /// <summary>Loads a PNG or JPEG file (on Windows also an <c>.ico</c>, as its 256x256 icon), and its <c>@2x</c>-style siblings as further scale factors; empty if the file
-    /// cannot be read or decoded. Electron's <c>nativeImage.createFromPath()</c>.</summary>
+    /// cannot be read or decoded. On macOS a path matching <c>*Template.*</c> or <c>*Template@*x.*</c> makes a template
+    /// image. Electron's <c>nativeImage.createFromPath()</c>.</summary>
     public static NativeImage CreateFromPath(string path) => CreateFromPath(path, OperatingSystem.IsWindows());
 
     // Electron reads .ico only on Windows, where it keeps the 256x256 icon as the single 1x representation and skips the
@@ -110,6 +112,7 @@ public sealed unsafe class NativeImage
             catch (UnauthorizedAccessException) { continue; }
             if (ImageCodec.Decode(bytes) is { } bitmap) image.Add(scale, bitmap);
         }
+        if (OperatingSystem.IsMacOS() && path.Length > 0 && NativeImageRules.IsTemplateFilename(Path.GetFullPath(path))) image.SetTemplateImage(true);
         return image;
     }
 
@@ -237,15 +240,28 @@ public sealed unsafe class NativeImage
         Add((float)options.ScaleFactor, bitmap ?? throw new ArgumentException("The representation is not a PNG, a JPEG, a bitmap of the given size, or an image data URL.", nameof(options)));
     }
 
-    /// <summary>Whether the image is marked as a macOS template image. Electron's <c>image.isTemplateImage()</c>.</summary>
-    public bool IsTemplateImage() => IsMacTemplateImage;
+    /// <summary>Whether the image is a macOS template image: always false elsewhere and for an empty image. Electron's
+    /// <c>image.isTemplateImage()</c>.</summary>
+    public bool IsTemplateImage() => OperatingSystem.IsMacOS() && TemplateFlag();
 
-    /// <summary>Marks the image as a macOS template image. Stored only: nothing in Oriel draws template images yet.
-    /// Electron's <c>image.setTemplateImage()</c>.</summary>
-    public void SetTemplateImage(bool option) => IsMacTemplateImage = option;
+    /// <summary>Marks the image as a macOS template image, which the tray and the Dock icon then draw tinted for the
+    /// menu bar's appearance. Does nothing off macOS or on an empty image. Electron's <c>image.setTemplateImage()</c>.</summary>
+    public void SetTemplateImage(bool option) => SetTemplateImage(option, OperatingSystem.IsMacOS());
 
-    /// <summary>Electron's <c>image.isMacTemplateImage</c>.</summary>
-    public bool IsMacTemplateImage { get; set; }
+    /// <summary>Electron's <c>image.isMacTemplateImage</c>, the same flag as <see cref="IsTemplateImage"/>.</summary>
+    public bool IsMacTemplateImage
+    {
+        get => IsTemplateImage();
+        set => SetTemplateImage(value);
+    }
+
+    // Electron keeps the flag on the image's cached NSImage, which an empty image (nil) or another OS lacks.
+    internal void SetTemplateImage(bool option, bool isMac)
+    {
+        if (isMac && !IsEmpty()) _template = option;
+    }
+
+    internal bool TemplateFlag() => _template;
 
     /// <summary>The representation closest to <paramref name="scaleFactor"/>, shared, not copied.</summary>
     internal ImageBitmap BitmapAt(double scaleFactor) => Closest(scaleFactor).Bitmap;

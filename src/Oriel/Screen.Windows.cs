@@ -28,9 +28,10 @@ public static unsafe partial class Screen
         _ => false,
     };
 
-    // StartPolling's hook: true when window messages replace the poll.
+    // StartWatching's hook: true when window messages (Windows) or XRandR events (Linux) replace the poll.
     private static bool ObservesNatively()
     {
+        if (OperatingSystem.IsLinux()) return ObservesXRandR();
         if (!OperatingSystem.IsWindows()) return false;
         EnsureObserver();
         return true;

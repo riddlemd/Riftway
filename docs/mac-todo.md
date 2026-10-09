@@ -27,6 +27,8 @@ General items: [todo.md](todo.md).
       `isTrustedAccessibilityClient(true)` showing the prompt
 - [ ] Check on a MacBook that unplugging raises `OnBattery` and `IsOnBatteryPower()` flips (IOPMPowerSource interest
       notifications); and a real sleep and wake raises `Suspended`/`Resumed` once each
+- [ ] Run WindowTest `NativeImageAsync`'s macOS checks (branch `image-screen`): `createThumbnailFromPath` of a text file
+      at 128x96 with 1x and 2x representations, its missing-file rejection, `*Template.png` and the Dock icon's template flag
 - [ ] `desktopCapturer` (branch `desktop-capturer`): run WindowTest `DesktopCapturerChecks` with Screen Recording consent
       (ScreenCaptureKit list and `SCScreenshotManager` thumbnails, own windows as `window:N:N`, `NSRunningApplication`
       icons) and without it (`Failed to get sources.`); check a non-resizable window keeps its style mask after a

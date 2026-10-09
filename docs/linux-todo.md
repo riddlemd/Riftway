@@ -25,6 +25,10 @@ General items: [todo.md](todo.md).
         (`ElectronFrameViewLinux`); Oriel only transparent ones. Check whether anything visible depends on it
 - [ ] Run the systemPreferences checks in WindowTest's `LinuxThemeAsync` (portal accent and `accent-color-changed`,
       `gtk-enable-animations`, the members Electron lacks on Linux); branch `system-preferences`
+- [ ] Run WindowTest `LinuxDisplayEventsAsync` under Xvfb (branch `image-screen`): a `_NET_WORKAREA` change and an
+      `xrandr` mode change each raise `display-metrics-changed` within 250 ms, and no poll runs (DRIFT R1). If Xvfb
+      refuses `--newmode`/`--addmode`, use another CRTC change; `xrandr --fb` alone changes no CRTC, so no display
+- [ ] Listen for the GTK scale change Chromium's `X11ScreenOzone::OnDeviceScaleFactorChanged` hears (DRIFT R1)
 - [ ] Linux sandbox on Ubuntu 24.04+: AppArmor profile, or documented `--no-sandbox` (M4)
 - [ ] Wayland: CEF Views on Wayland is still being fixed upstream; Oriel targets X11/XWayland for now
 - [ ] Clipboard: the Wayland data device with Wayland, and the XDG portal file targets (DRIFT K1)

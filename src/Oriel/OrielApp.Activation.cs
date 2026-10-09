@@ -103,7 +103,8 @@ public sealed class AppDock
         ArgumentNullException.ThrowIfNull(image);
         if (!OperatingSystem.IsMacOS()) return;
         var representations = image.GetScaleFactors().Select(scale => (image.ToPng(scale), scale)).ToList();
-        CefThread.RunOnUi(() => MacActivation.SetIcon(representations));
+        var template = image.IsTemplateImage();
+        CefThread.RunOnUi(() => MacActivation.SetIcon(representations, template));
     }
 
     /// <summary>Electron's <c>dock.setIcon()</c> with a path.</summary>

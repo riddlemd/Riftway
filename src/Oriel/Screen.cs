@@ -274,7 +274,8 @@ public static unsafe partial class Screen
     }
 
     // CEF reports no display changes. On macOS they follow the notifications Chromium's ScreenMac observes, on Windows the
-    // window messages ScreenWin hears; Linux polls while anyone listens. UI thread only past the gate.
+    // window messages ScreenWin hears, on Linux the X events XDisplayManager hears; Linux without XRandR 1.3 polls while
+    // anyone listens. UI thread only past the gate.
     private static readonly TimeSpan s_pollInterval = TimeSpan.FromSeconds(1);
     // ScreenMac's kMinimumHdrHeadroomUpdateInterval.
     private static readonly TimeSpan s_headroomInterval = TimeSpan.FromSeconds(
@@ -292,8 +293,9 @@ public static unsafe partial class Screen
 
     /// <summary>A display was attached. Electron's <c>display-added</c>.</summary>
     /// <remarks>On macOS this follows <c>NSApplicationDidChangeScreenParametersNotification</c>, as in Electron; Windows
-    /// reports changes as Chromium hears them, from display and work-area messages. On Linux displays are compared once a
-    /// second while a handler is attached, so events come up to a second late.</remarks>
+    /// reports changes as Chromium hears them, from display and work-area messages; Linux from XRandR <c>RRNotify</c> and
+    /// <c>_NET_WORKAREA</c> events. Without an X display or XRandR 1.3, Linux compares displays once a second while a
+    /// handler is attached, so events come up to a second late.</remarks>
     public static event EventHandler<DisplayEventArgs>? DisplayAdded
     {
         add { lock (s_gate) s_added += value; StartWatching(); }

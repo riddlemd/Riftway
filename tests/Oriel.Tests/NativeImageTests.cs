@@ -122,13 +122,103 @@ public sealed class NativeImageTests
     }
 
     [Fact]
-    public void TemplateImage_IsStored()
+    public void TemplateImage_OnMac_IsKeptOnANonEmptyImageAndCanBeCleared()
+    {
+        var image = Bitmap(2, 2);
+        Assert.False(image.TemplateFlag());
+        image.SetTemplateImage(true, isMac: true);
+        Assert.True(image.TemplateFlag());
+        image.SetTemplateImage(false, isMac: true);
+        Assert.False(image.TemplateFlag());
+    }
+
+    [Fact]
+    public void TemplateImage_OnAnEmptyImage_IsIgnored_AsSettingItOnANilNSImage()
     {
         var image = NativeImage.CreateEmpty();
-        Assert.False(image.IsTemplateImage());
-        image.SetTemplateImage(true);
-        Assert.True(image.IsTemplateImage());
-        Assert.True(image.IsMacTemplateImage);
+        image.SetTemplateImage(true, isMac: true);
+        Assert.False(image.TemplateFlag());
+    }
+
+    [Fact]
+    public void TemplateImage_OffMac_IsIgnored()
+    {
+        var image = Bitmap(2, 2);
+        image.SetTemplateImage(true, isMac: false);
+        Assert.False(image.TemplateFlag());
+    }
+
+    [Fact]
+    public void TemplateImage_PublicApi_FollowsTheCurrentOs()
+    {
+        var image = Bitmap(2, 2);
+        image.IsMacTemplateImage = true;
+        Assert.Equal(OperatingSystem.IsMacOS(), image.IsTemplateImage());
+        Assert.Equal(OperatingSystem.IsMacOS(), image.IsMacTemplateImage);
+    }
+
+    [Theory]
+    [InlineData("/icons/trayTemplate.png", true)]
+    [InlineData("/icons/trayTemplate@2x.png", true)]
+    [InlineData("/icons/trayTemplate@x.png", true)]
+    [InlineData("/icons/Template.d/tray.png", true)]
+    [InlineData("/icons/traytemplate.png", false)]
+    [InlineData("/icons/trayTemplate@2.png", false)]
+    [InlineData("/icons/trayTemplate", false)]
+    [InlineData("/icons/tray.png", false)]
+    public void IsTemplateFilename_MatchesElectronsPatternsOnTheWholePath(string path, bool expected)
+        => Assert.Equal(expected, NativeImageRules.IsTemplateFilename(path));
+
+    [Theory]
+    [InlineData(1, 1, false)]
+    [InlineData(200, 100, false)]
+    [InlineData(0, 100, true)]
+    [InlineData(100, 0, true)]
+    [InlineData(-5, 100, true)]
+    [InlineData(100, -1, true)]
+    public void IsEmptySize_ClampsNegativeSidesToZero_AsGfxSize(int width, int height, bool empty)
+        => Assert.Equal(empty, NativeImageRules.IsEmptySize((width, height)));
+
+    [Fact]
+    public void MacFailure_AppendsTheErrorsDescription()
+        => Assert.Equal("unable to retrieve thumbnail preview image for the given path: The file is not readable.", NativeImageRules.MacFailure("The file is not readable."));
+
+    [Fact]
+    public void MacFailure_WithoutAnError_EndsWithAnEmptyDescription()
+        => Assert.Equal("unable to retrieve thumbnail preview image for the given path: ", NativeImageRules.MacFailure(null));
+
+    [Theory]
+    [InlineData(Oriel.Cef.Platform.WindowsThumbnailFailure.CreateItem, "Failed to create IShellItem from the given path")]
+    [InlineData(Oriel.Cef.Platform.WindowsThumbnailFailure.ThumbnailCache, "Failed to acquire local thumbnail cache reference")]
+    [InlineData(Oriel.Cef.Platform.WindowsThumbnailFailure.GetThumbnail, "Failed to get thumbnail from local thumbnail cache reference")]
+    [InlineData(Oriel.Cef.Platform.WindowsThumbnailFailure.SharedBitmap, "Failed to extract bitmap from thumbnail")]
+    [InlineData(Oriel.Cef.Platform.WindowsThumbnailFailure.BitmapInfo, "Could not convert HBITMAP to BITMAP")]
+    public void WindowsFailure_IsElectronsMessageForTheStep(Oriel.Cef.Platform.WindowsThumbnailFailure step, string message)
+        => Assert.Equal(message, NativeImageRules.WindowsFailure(step));
+
+    [Theory]
+    [InlineData(0, 64)]
+    [InlineData(64, -1)]
+    public async Task CreateThumbnailFromPath_EmptySize_Rejects(int width, int height)
+    {
+        if (OperatingSystem.IsLinux())
+        {
+            // Thrown by the call itself, as calling a method Electron does not define.
+            Assert.Throws<PlatformNotSupportedException>(() => { _ = NativeImage.CreateThumbnailFromPathAsync(typeof(NativeImageTests).Assembly.Location, (width, height)); });
+            return;
+        }
+        var error = await Assert.ThrowsAsync<InvalidOperationException>(() => NativeImage.CreateThumbnailFromPathAsync(typeof(NativeImageTests).Assembly.Location, (width, height)));
+        Assert.Equal("size must not be empty", error.Message);
+    }
+
+    [Theory]
+    [InlineData("")]
+    [InlineData("no-such-file-for-a-thumbnail.png")]
+    public async Task CreateThumbnailFromPath_MissingFileOnMac_RejectsBeforeQuickLook(string path)
+    {
+        if (!OperatingSystem.IsMacOS()) return;
+        var error = await Assert.ThrowsAsync<InvalidOperationException>(() => NativeImage.CreateThumbnailFromPathAsync(path, (64, 64)));
+        Assert.Equal("unable to retrieve thumbnail preview image for the given path", error.Message);
     }
 
     [Fact]

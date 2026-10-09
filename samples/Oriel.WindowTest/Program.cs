@@ -834,6 +834,8 @@ async Task ScreenAsync(BrowserWindow win)
     await Task.Delay(2500);
     if (OperatingSystem.IsMacOS())
         Check("macOS: displays are not polled", Screen.ChecksRun == checksBefore, Screen.ChecksRun - checksBefore);
+    if (OperatingSystem.IsLinux())
+        Check("Linux: with XRandR, displays are not polled", Screen.UsesXRandR && Screen.ChecksRun == checksBefore, $"{Screen.UsesXRandR} {Screen.ChecksRun - checksBefore}");
     Screen.DisplayMetricsChanged -= onChanged;
     Screen.DisplayAdded -= onAdded;
     Check("no display events while nothing changes", raised == 0, raised);
@@ -844,6 +846,63 @@ async Task ScreenAsync(BrowserWindow win)
         MacDisplayEvents(primary);
     }
     if (OperatingSystem.IsWindows()) await WindowsDisplayAsync(win);
+    if (OperatingSystem.IsLinux()) await LinuxDisplayEventsAsync(primary);
+}
+
+// Real X changes under Xvfb: _NET_WORKAREA on the root (xprop), then the output's mode (xrandr), each timed from the
+// command to the event; a poll would take up to a second.
+async Task LinuxDisplayEventsAsync(Display primary)
+{
+    static string Tool(string file, string args)
+    {
+        using var p = System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo(file, args) { RedirectStandardOutput = true, RedirectStandardError = true })!;
+        var output = p.StandardOutput.ReadToEnd() + p.StandardError.ReadToEnd();
+        p.WaitForExit();
+        return output;
+    }
+    var events = new List<(string Name, Display Display, long Ms)>();
+    var clock = System.Diagnostics.Stopwatch.StartNew();
+    EventHandler<DisplayMetricsChangedEventArgs> onChanged = (_, e) => { lock (events) events.Add(($"metrics:{e.ChangedMetrics}", e.Display, clock.ElapsedMilliseconds)); };
+    EventHandler<DisplayEventArgs> onAdded = (_, e) => { lock (events) events.Add(("added", e.Display, clock.ElapsedMilliseconds)); };
+    EventHandler<DisplayEventArgs> onRemoved = (_, e) => { lock (events) events.Add(("removed", e.Display, clock.ElapsedMilliseconds)); };
+    (string Name, Display Display, long Ms)[] Seen() { lock (events) return [.. events]; }
+    string Show(long start) => string.Join(" ", Seen().Select(e => $"{e.Name}:{e.Display.Bounds}/{e.Display.WorkArea}@{e.Ms - start}ms"));
+    Screen.DisplayMetricsChanged += onChanged; Screen.DisplayAdded += onAdded; Screen.DisplayRemoved += onRemoved;
+    var original = Tool("xprop", "-root -notype _NET_WORKAREA");
+    var output = Tool("xrandr", "--query").Split('\n').FirstOrDefault(l => l.Contains(" connected", StringComparison.Ordinal))?.Split(' ')[0] ?? "";
+    try
+    {
+        var start = clock.ElapsedMilliseconds;
+        Tool("xprop", $"-root -f _NET_WORKAREA 32c -set _NET_WORKAREA 0,30,{primary.Bounds.Width},{primary.Bounds.Height - 30}");
+        Eventually(() => Seen().Length > 0, step);
+        await Task.Delay(400);
+        var seen = Seen();
+        Check("Linux: a _NET_WORKAREA change raises display-metrics-changed ['workArea'] for the primary", seen is [{ Name: "metrics:WorkArea" } e] && e.Display.WorkArea.Y == 30 && e.Display.Id == primary.Id, Show(start));
+        Check("Linux: it comes from the PropertyNotify, well inside the old one-second poll (under 250 ms)", seen.Length > 0 && seen[0].Ms - start < 250, Show(start));
+
+        lock (events) events.Clear();
+        // A CRTC change: Xvfb's output gets a smaller mode, which XRandR reports with RRNotify.
+        Tool("xrandr", "--newmode oriel1280 83.5 1280 1352 1480 1680 800 803 809 831 -hsync +vsync");
+        Tool("xrandr", $"--addmode {output} oriel1280");
+        start = clock.ElapsedMilliseconds;
+        var result = Tool("xrandr", $"--output {output} --mode oriel1280");
+        Eventually(() => Seen().Any(x => x.Name.StartsWith("metrics:", StringComparison.Ordinal) && x.Display.Bounds.Width == 1280), step);
+        seen = Seen();
+        var resized = seen.FirstOrDefault(x => x.Display.Bounds.Width == 1280);
+        Check("Linux: an xrandr mode change raises display-metrics-changed with 'bounds' for the display", resized.Name is { } n && n.Contains("Bounds", StringComparison.Ordinal) && resized.Display.Bounds.Height == 800,
+            $"{output} {result.Trim()} {Show(start)}");
+        Check("Linux: the mode change arrives from RRNotify without polling delay (under 250 ms)", resized.Name is not null && resized.Ms - start < 250, Show(start));
+    }
+    finally
+    {
+        Tool("xrandr", $"--output {output} --mode {primary.Bounds.Width}x{primary.Bounds.Height}");
+        Tool("xrandr", $"--delmode {output} oriel1280");
+        Tool("xrandr", "--rmmode oriel1280");
+        if (original.Contains('=')) Tool("xprop", $"-root -f _NET_WORKAREA 32c -set _NET_WORKAREA {original[(original.IndexOf('=') + 1)..].Trim().Replace(" ", "")}");
+        else Tool("xprop", "-root -remove _NET_WORKAREA");
+        await Task.Delay(400);
+        Screen.DisplayMetricsChanged -= onChanged; Screen.DisplayAdded -= onAdded; Screen.DisplayRemoved -= onRemoved;
+    }
 }
 
 // The Display fields Chromium's BuildDisplayForScreen fills, against system_profiler, AppKit and Chromium's own chrome://gpu.
@@ -5383,6 +5442,38 @@ async Task NativeImageAsync()
     added.AddRepresentation(new AddRepresentationOptions { ScaleFactor = 1, Buffer = png });
     added.AddRepresentation(new AddRepresentationOptions { ScaleFactor = 2, DataUrl = NativeImage.CreateFromBitmap(Solid(8, 1, 2, 3), new NativeImageBitmapOptions { Width = 8, Height = 8 }).ToDataUrl() });
     Check("AddRepresentation takes a PNG buffer and a data URL", added.GetScaleFactors().SequenceEqual([1.0, 2.0]) && added.GetSize(2) == (4, 4), string.Join(",", added.GetScaleFactors()));
+
+    if (OperatingSystem.IsMacOS())
+    {
+        // A text file has a Quick Look preview whatever apps are installed.
+        var doc = Path.Combine(dir, "thumbnail.txt");
+        File.WriteAllText(doc, string.Join("\n", Enumerable.Repeat("Oriel createThumbnailFromPath", 40)));
+        var thumb = await NativeImage.CreateThumbnailFromPathAsync(doc, (128, 96));
+        var tb = thumb.ToBitmap();
+        var opaque = Enumerable.Range(0, tb.Length / 4).Count(i => tb[i * 4 + 3] != 0);
+        Check("macOS: createThumbnailFromPath of a text file is the requested size, with 1x and 2x representations, and not blank",
+            thumb.GetSize() == (128, 96) && thumb.GetScaleFactors().SequenceEqual([1.0, 2.0]) && thumb.ToBitmap(2).Length == 256 * 192 * 4 && opaque > 0,
+            $"{thumb.GetSize()} [{string.Join(",", thumb.GetScaleFactors())}] {opaque} opaque px");
+        var missing = await Task.Run(async () => { try { await NativeImage.CreateThumbnailFromPathAsync(Path.Combine(dir, "missing.txt"), (64, 64)); return ""; } catch (InvalidOperationException e) { return e.Message; } });
+        Check("macOS: createThumbnailFromPath of a missing file rejects with Electron's message", missing == "unable to retrieve thumbnail preview image for the given path", missing);
+
+        var templatePath = Path.Combine(dir, "trayTemplate.png");
+        File.Copy(red, templatePath);
+        var template = NativeImage.CreateFromPath(templatePath);
+        Check("macOS: CreateFromPath marks *Template.png a template image, as Electron", template.IsTemplateImage() && !fromPath.IsTemplateImage());
+        app.Dock.SetIcon(template);
+        Check("macOS: Dock.SetIcon carries the template flag to the NSImage, as Electron's AsNSImage", Eventually(() => OperatingSystem.IsMacOS() && Oriel.Cef.CefThread.InvokeOnUi(Oriel.Cef.Platform.MacActivation.IconIsTemplate), step));
+        app.Dock.SetIcon(NativeImage.CreateEmpty());
+        Check("macOS: an empty Dock icon restores the bundle's, not a template", !Oriel.Cef.CefThread.InvokeOnUi(Oriel.Cef.Platform.MacActivation.IconIsTemplate));
+    }
+    if (OperatingSystem.IsWindows())
+    {
+        var thumb = await NativeImage.CreateThumbnailFromPathAsync(red, (64, 64));
+        Check("Windows: createThumbnailFromPath of a PNG is one 1x bitmap from the thumbnail cache", !thumb.IsEmpty() && thumb.GetScaleFactors().SequenceEqual([1.0]), $"{thumb.GetSize()}");
+    }
+    if (OperatingSystem.IsLinux())
+        Check("Linux: createThumbnailFromPath throws, as the method Electron does not define there",
+            Throws<PlatformNotSupportedException>(() => { _ = NativeImage.CreateThumbnailFromPathAsync(red, (64, 64)); }));
 
     // .ico is read on Windows only; Windows' own LoadImage of the same file at 256x256 is the reference.
     if (OperatingSystem.IsWindows())

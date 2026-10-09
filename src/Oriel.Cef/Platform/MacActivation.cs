@@ -100,8 +100,8 @@ public static unsafe class MacActivation
     public static void ActivateSelf() => Send(Current(), Sel("activateWithOptions:"u8), ActivateIgnoringOtherApps);
 
     /// <summary>[NSApp setApplicationIconImage:] with one representation per (PNG, scale) pair, each sized in points as
-    /// NativeImage's AsNSImage does; none restores the bundle's icon.</summary>
-    public static void SetIcon(IReadOnlyList<(byte[] Png, double Scale)> representations)
+    /// NativeImage's AsNSImage does, and marked a template as that NSImage would be; none restores the bundle's icon.</summary>
+    public static void SetIcon(IReadOnlyList<(byte[] Png, double Scale)> representations, bool template = false)
     {
         if (representations.Count == 0)
         {
@@ -119,9 +119,13 @@ public static unsafe class MacActivation
             ((delegate* unmanaged<nint, nint, NSSize, void>)s_msgSend)(rep, Sel("setSize:"u8), points);
             Send(image, Sel("addRepresentation:"u8), rep);
         }
+        if (template) ((delegate* unmanaged<nint, nint, byte, void>)s_msgSend)(image, Sel("setTemplate:"u8), 1);
         Send(App(), Sel("setApplicationIconImage:"u8), image);
         Send(image, Sel("release"u8));
     }
+
+    /// <summary>Whether [NSApp applicationIconImage] is a template image; for tests.</summary>
+    public static bool IconIsTemplate() => ((delegate* unmanaged<nint, nint, byte>)s_msgSend)(Send(App(), Sel("applicationIconImage"u8)), Sel("isTemplate"u8)) != 0;
 
     /// <summary>The size of [NSApp applicationIconImage], in points.</summary>
     public static (double Width, double Height) IconSize()

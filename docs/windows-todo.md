@@ -26,6 +26,8 @@ General items: [todo.md](todo.md). Windows work runs on the Windows laptop.
       SetForegroundWindow on a disabled window). Fix: focus the innermost visible modal child instead; merged
       (d5e0b6b). Its `is_visible` filter has no covering check.
 - [x] Run the window-menu and context-menu checks on Windows (pass, after the menu-bar reference fix)
+- [ ] Run WindowTest `NativeImageAsync`'s `createThumbnailFromPath` check (branch `image-screen`; never built for or run
+      on Windows): the thumbnail cache, `IconUtil`'s conversion and the per-step rejections
 - [ ] windows-arm64: untested
 - [ ] Run the Alt-key menu checks on Windows (Alt toggles an auto-hidden bar, Alt+F opens File; pass on Linux)
 - [ ] Run the menu-event checks on Windows (WindowTest `MenuEventsAsync` popup and bar, the tray's Views menu)

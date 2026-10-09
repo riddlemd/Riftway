@@ -109,6 +109,37 @@ public sealed class ScreenTests
         Assert.Equal(reported ? [new(DisplayChangeKind.MetricsChanged, s_main with { DisplayFrequency = rate }, DisplayMetrics.None)] : [], events);
     }
 
+    // XRandR's first event code on a typical server; RRNotify is one past it.
+    private const int RandRBase = 89;
+    private const nint WorkArea = 300;
+
+    [Theory]
+    [InlineData(RandRBase + 1, 0, true)]   // RRNotify: a CRTC, output or output property change
+    [InlineData(RandRBase, 0, false)]      // RRScreenChangeNotify alone, which XDisplayManager::OnEvent passes over
+    [InlineData(28, 300, true)]            // PropertyNotify for _NET_WORKAREA
+    [InlineData(28, 301, false)]           // PropertyNotify for another root property
+    [InlineData(22, 300, false)]           // ConfigureNotify, even with a matching atom field
+    [InlineData(RandRBase + 2, 0, false)]  // past the RandR events
+    public void UpdatesDisplays_TheEventsXDisplayManagerUpdatesOn(int type, int atom, bool expected)
+        => Assert.Equal(expected, Oriel.Cef.Platform.X11DisplayRules.UpdatesDisplays(type, atom, RandRBase, WorkArea));
+
+    [Theory]
+    [InlineData(1, 3, true)]
+    [InlineData(1, 6, true)]
+    [InlineData(2, 0, true)]
+    [InlineData(1, 2, false)]
+    [InlineData(0, 9, false)]
+    public void RandRUsable_FromVersion13(int major, int minor, bool expected)
+        => Assert.Equal(expected, Oriel.Cef.Platform.X11DisplayRules.RandRUsable(major, minor));
+
+    [Fact]
+    public void Between_OffMac_ARefreshRateChangeAloneRaisesNothing_ButAColourSpaceChangeStillDoes()
+    {
+        Assert.Empty(DisplayChanges.Between([s_side], [s_side with { DisplayFrequency = 75 }]));
+        var recoloured = s_side with { ColorSpace = DisplayMapping.HdrRaster, DisplayFrequency = 75 };
+        Assert.Equal([new(DisplayChangeKind.MetricsChanged, recoloured, DisplayMetrics.None)], DisplayChanges.Between([s_side], [recoloured]));
+    }
+
     [Fact]
     public void OnlyHeadroomDiffers_WhenHeadroomAloneChanged()
         => Assert.True(Screen.OnlyHeadroomDiffers([s_main, s_side], [s_main with { HdrMaxLuminanceRelative = 1.5f }, s_side]));

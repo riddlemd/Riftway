@@ -19,6 +19,42 @@ public static unsafe class WindowsIcon
         finally { _ = DestroyIcon(icon); }
     }
 
+    /// <summary>Chromium's <c>IconUtil::CreateSkBitmapFromHICON(HICON)</c>: the icon at its mask's size (half the mask's
+    /// height for a monochrome icon), as premultiplied BGRA; null if Windows cannot describe or draw it.</summary>
+    public static (int Width, int Height, byte[] Bgra)? FromIcon(nint icon)
+    {
+        IconInfo info;
+        if (icon == 0 || GetIconInfo(icon, &info) == 0) return null;
+        try
+        {
+            BitmapInfo mask;
+            if (GetObjectW(info.Mask, sizeof(BitmapInfo), &mask) == 0) return null;
+            var height = mask.Height / (info.Color != 0 ? 1 : 2);
+            return mask.Width > 0 && height > 0 ? Pixels(icon, mask.Width, height) : null;
+        }
+        finally
+        {
+            if (info.Mask != 0) _ = DeleteObject(info.Mask);
+            if (info.Color != 0) _ = DeleteObject(info.Color);
+        }
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct IconInfo
+    {
+        public int IsIcon;
+        public uint HotspotX, HotspotY;
+        public nint Mask, Color;
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct BitmapInfo
+    {
+        public int Type, Width, Height, WidthBytes;
+        public ushort Planes, BitsPixel;
+        public nint Bits;
+    }
+
     // IconUtil::CreateSkBitmapFromHICON: the AND mask drawn first gives opacity, used only when the image has no alpha.
     private static (int, int, byte[])? Pixels(nint icon, int width, int height)
     {
@@ -65,6 +101,8 @@ public static unsafe class WindowsIcon
 
     [DllImport("user32.dll")] private static extern nint LoadImageW(nint instance, char* name, uint type, int cx, int cy, uint flags);
     [DllImport("user32.dll")] private static extern int DestroyIcon(nint icon);
+    [DllImport("user32.dll")] private static extern int GetIconInfo(nint icon, IconInfo* info);
+    [DllImport("gdi32.dll")] private static extern int GetObjectW(nint obj, int size, void* buffer);
     [DllImport("user32.dll")] private static extern int DrawIconEx(nint dc, int x, int y, nint icon, int cx, int cy, uint step, nint brush, uint flags);
     [DllImport("user32.dll")] private static extern nint GetDC(nint hwnd);
     [DllImport("user32.dll")] private static extern int ReleaseDC(nint hwnd, nint dc);
