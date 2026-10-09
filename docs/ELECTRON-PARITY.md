@@ -19,6 +19,7 @@ The 67 rows include `BrowserView` (deprecated, never implemented; counted as not
 | [BrowserWindow](parity/browser-window.md) (with `BaseWindow`) | 294 | 168 | 55 | 71 | 57.1% | 66.5% |
 | [webContents](parity/web-contents.md) (with `navigationHistory`, `WebFrameMain`) | 230 | 106 | 55 | 69 | 46.1% | 58.0% |
 | [DownloadItem](parity/download-item.md) (with the session's download API) | 31 | 20 | 10 | 1 | 64.5% | 80.6% |
+| [app](parity/app.md) (with `app.dock` as one item) | 114 | 64 | 28 | 22 | 56.1% | 68.4% |
 
 **Source** — where the implementation comes from:
 
@@ -36,7 +37,7 @@ Where an implemented module differs from Electron, the difference and its reason
 
 | Electron | Oriel | Source | Wave | Status |
 |---|---|---|---|---|
-| `app` | `OrielApp` | CEF + OS | M2 | partial: `ready`, `window-all-closed`, `second-instance`, `before-quit`, `will-quit`, `quit()`, `exit()`, `enableSandbox` (A1; renderers sandboxed by default in the Windows bootstrap layout), `isReady`, `name`, `setAppUserModelId`, `setToastActivatorCLSID`/`toastActivatorCLSID`, `quit` (as `Exited`), `userAgentFallback`, `browser-window-created`, `web-contents-created`, `session-created`, `browser-window-focus`, `browser-window-blur`, `getVersion` (as `Version`), `hide`, `show`, `isHidden`, `focus`, `setBadgeCount` and `getBadgeCount` (macOS Dock, Windows taskbar overlay, Linux launcher entry; A17, A20), `setDesktopName`, `getAppMetrics` (A18), `getPath`, `setPath`, `getPreferredSystemLanguages`, `getSystemLocale`, `getLocaleCountryCode`, `certificate-error`, `login`, `select-client-certificate`; Windows: protocol client (`setAsDefaultProtocolClient`, `removeAsDefaultProtocolClient`, `isDefaultProtocolClient`, `getApplicationNameForProtocol`, `getApplicationInfoForProtocol`), login items, `setUserTasks`/`setJumpList`/`getJumpListSettings`, recent documents (`addRecentDocument`, `clearRecentDocuments`, `getRecentDocuments`), `getFileIcon` (see DRIFT.md) |
+| `app` | `OrielApp` | CEF + OS | M2 | partial: 64 of 114 applicable items done (56.1%), see parity/app.md; lifecycle, paths, locale, protocol client, login items and recent documents (Windows, macOS; protocol client on Linux), the macOS app delegate's events, badge, jump list, metrics, single-instance lock over CEF's profile lock (A2), GPU status through DevTools (A27); no Handoff, `child-process-gone`, `setProxy`, NSS imports (see DRIFT.md) |
 | `process` | `OrielProcess` | .NET + CEF | M2 | partial: `type`, `versions` (`chrome`, `oriel`), `getCreationTime`, `getCPUUsage`, `getSystemMemoryInfo`, `getSystemVersion`, `setFdLimit`, `getProcessMemoryInfo` (`shared` is 0, P8), `windowsStore` (P10), `resourcesPath` (P17), `crash`, `hang` (P18); no `mas`; V8/Blink-only members are P7 |
 | `CommandLine` (`app.commandLine`) | `OrielApp.CommandLine` | CEF | M2 | done: `appendSwitch`, `appendArgument`, `hasSwitch`, `getSwitchValue`, `removeSwitch`, in Chromium's switch syntax, applied before Chromium starts (DRIFT A19) |
 | Command-line switches | same switches | CEF | M2 | partial: Chromium's switches pass through from the process's arguments and `CommandLine`; `--enable-logging`, `--log-file`, `--log-level` work (DRIFT A6); Node's (`--inspect`, ...) do not apply; the rest not checked one by one |

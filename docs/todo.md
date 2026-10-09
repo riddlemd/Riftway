@@ -57,6 +57,10 @@ Cross-platform work. Platform-specific items: [linux-todo.md](linux-todo.md), [w
       by title, thumbnail size and pixels, screen `display_id`s against `Screen.GetAllDisplays`, icons, sharing a running
       request) and SessionTest's `chromeMediaSourceId` checks on each OS; per-OS items in the platform todos
 
+- [ ] `app` ([parity/app.md](parity/app.md)): CEF patches for A23 (context initialised after AppKit's launch),
+      A24, A27 (GPU info observer), A28 (accessibility state), A31 (`child-process-gone`), A35 (system proxy); choose
+      the app locale as Electron does and pass it as `CefSettings.locale` (A30); a relauncher mode (A21)
+
 ## Tests
 
 - [x] Screen checks at 125% scaling (Windows): Chromium floors when converting, so the checks tolerate one pixel

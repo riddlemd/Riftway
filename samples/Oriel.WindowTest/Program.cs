@@ -4415,6 +4415,7 @@ async Task ShellAsync()
     if (OperatingSystem.IsMacOS())
     {
         await MacShellTest.RunAsync(Check, step);
+        await MacAppEventsTest.RunAsync(Check, step);
         return;
     }
     if (!OperatingSystem.IsWindows()) return;

@@ -12,7 +12,7 @@ public sealed unsafe partial class OrielApp
 {
     private static OrielApp? s_current;
 
-    private OrielApp(string name) => Name = name;
+    private OrielApp(string name) => _name = name;
 
     /// <summary>The application created by <see cref="Create"/>.</summary>
     /// <exception cref="InvalidOperationException">No application has been created.</exception>
@@ -28,11 +28,22 @@ public sealed unsafe partial class OrielApp
     /// after. Electron's <c>app.userAgentFallback</c>.</summary>
     public string UserAgentFallback
     {
-        get => _userAgentFallback ??= BuildUserAgent(Name, AppVersion(), ChromeVersion(), OrielVersion());
+        get => _userAgentFallback ?? DefaultUserAgent();
         set => _userAgentFallback = value ?? throw new ArgumentNullException(nameof(value));
     }
 
     private string? _userAgentFallback;
+    private (string Name, string UserAgent)? _defaultUserAgent;
+
+    // Electron's GetApplicationUserAgent, which a new name invalidates.
+    private string DefaultUserAgent()
+    {
+        var name = Name;
+        if (_defaultUserAgent is { } cached && cached.Name == name) return cached.UserAgent;
+        var userAgent = BuildUserAgent(name, AppVersion(), ChromeVersion(), OrielVersion());
+        _defaultUserAgent = (name, userAgent);
+        return userAgent;
+    }
 
     /// <summary>The user agent CEF was started with: every page's unless overridden.</summary>
     internal static string? ProcessUserAgent { get; private set; }
@@ -70,8 +81,16 @@ public sealed unsafe partial class OrielApp
         return string.Join('.', Enumerable.Range(4, 4).Select(CefNative.cef_version_info));
     }
 
-    /// <summary>The application's name; also names its data directory.</summary>
-    public string Name { get; }
+    /// <summary>The application's name: <see cref="Create"/>'s, until set. It names <c>userData</c> while that path has
+    /// not been read yet, and the default <see cref="UserAgentFallback"/>. Electron's <c>app.name</c>,
+    /// <c>getName()</c> and <c>setName()</c>.</summary>
+    public string Name
+    {
+        get => _name;
+        set => _name = value ?? throw new ArgumentNullException(nameof(value));
+    }
+
+    private string _name;
 
     /// <summary>Whether Chromium's sandbox is on for child processes. Before <see cref="Run"/>, whether
     /// <see cref="EnableSandbox"/> was called; from <see cref="Run"/> on, the outcome: always on in the Windows bootstrap
@@ -208,6 +227,7 @@ public sealed unsafe partial class OrielApp
             MacApplication.Install();
             // Electron's ui::InitIdleMonitor runs before ready, so a lock begun before the first idle query still counts.
             MacPower.InstallScreenMonitor();
+            InstallMacDelegate();
         }
 
         var schemes = Protocol.TakePrivilegedSchemes();
@@ -275,6 +295,8 @@ public sealed unsafe partial class OrielApp
         Exited?.Invoke(this, new ExitedEventArgs(_exitCode));
         UtilityProcess.TerminateAll();
         CefNative.cef_shutdown();
+        // After shutdown, which releases the data directory a relaunched instance would otherwise find locked.
+        StartRelaunches();
         return _exitCode;
     }
 
@@ -374,7 +396,8 @@ public sealed unsafe partial class OrielApp
 
     private void OnSecondInstance(string commandLine, string workingDirectory)
     {
-        if (SecondInstance is { } handler) handler(this, new SecondInstanceEventArgs(commandLine, workingDirectory));
+        var (line, data) = TakeAdditionalData(commandLine);
+        if (SecondInstance is { } handler) handler(this, new SecondInstanceEventArgs(line, workingDirectory, data));
         else BrowserWindow.FocusAll();
     }
 
@@ -388,8 +411,11 @@ public sealed unsafe partial class OrielApp
         Protocol.OnContextInitialized();
         // Electron's terminate: runs Browser::Quit.
         if (OperatingSystem.IsMacOS()) MacApplication.Quit = Quit;
+        // macOS raises it from the app delegate, as Electron's does.
+        if (!OperatingSystem.IsMacOS()) RaiseWillFinishLaunching();
         IsReady = true;
         Ready?.Invoke(this, EventArgs.Empty);
+        _whenReady.TrySetResult();
         // After Ready, so an app that sets its own menu there never shows the default (Electron sets it just before
         // ready and lets the app replace it, which ends the same way).
         Menu.SetDefaultApplicationMenuIfUnset();
@@ -404,4 +430,5 @@ public sealed record ExitedEventArgs(int ExitCode);
 /// <summary>A relaunch handed to the running instance; Electron's <c>second-instance</c> arguments.</summary>
 /// <param name="CommandLine">The new launch's full command line.</param>
 /// <param name="WorkingDirectory">The new launch's working directory.</param>
-public sealed record SecondInstanceEventArgs(string CommandLine, string WorkingDirectory);
+/// <param name="AdditionalData">What the new launch passed to <see cref="OrielApp.RequestSingleInstanceLock"/>, or null.</param>
+public sealed record SecondInstanceEventArgs(string CommandLine, string WorkingDirectory, System.Text.Json.Nodes.JsonNode? AdditionalData = null);

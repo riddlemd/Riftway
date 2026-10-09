@@ -19,6 +19,17 @@ public sealed partial class Session
         }
     }
 
+    /// <summary>Sends <paramref name="method"/> to the browser target (Chromium's, not this session's page), through a
+    /// flattened session the hidden page attaches and detaches around it.</summary>
+    internal async Task<JsonElement> BrowserTargetAsync(string method, Action<Utf8JsonWriter>? writeParams = null)
+    {
+        var helper = await Helper().ConfigureAwait(false);
+        var attached = await helper.SendAsync("Target.attachToBrowserTarget").ConfigureAwait(false);
+        var sessionId = attached.GetProperty("sessionId").GetString();
+        try { return await helper.SendAsync(method, writeParams, sessionId).ConfigureAwait(false); }
+        finally { _ = helper.SendAsync("Target.detachFromTarget", w => w.WriteString("sessionId", sessionId)); }
+    }
+
     private async Task<JsonElement> DevToolsAsync(string method, Action<Utf8JsonWriter>? writeParams = null)
     {
         var helper = await Helper().ConfigureAwait(false);

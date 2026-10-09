@@ -35,3 +35,6 @@ General items: [todo.md](todo.md). Windows work runs on the Windows laptop.
       `DesktopCapturerChecks` (webrtc's window rules with this process's windows merged by z-order, `EnumDisplayDevices`
       screens and their hashed `display_id`, GDI thumbnails, `WM_GETICON` icons) and SessionTest's `chromeMediaSourceId`
       checks; DXGI and WGC capture are DRIFT DC3
+- [ ] `app` audit (branch `app-audit`): port `showEmojiPanel` (Win+. through `SendInput`, DRIFT A25) and the
+      singleton's WM_COPYDATA client for `requestSingleInstanceLock` data (A29); run SessionTest `AppAuditChecks`, the
+      about panel's message box and `runningUnderARM64Translation` (`IsWow64Process2`)

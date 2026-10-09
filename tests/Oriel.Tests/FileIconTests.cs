@@ -151,7 +151,7 @@ public sealed class GetFileIconTests : IDisposable
         Assert.Equal(2, _backend.Calls.Count);
     }
 
-    // getApplicationInfoForProtocol is Windows-only (DRIFT A12), with Windows path normalization.
+    // The Windows getApplicationInfoForProtocol path, with Windows path normalization.
     [WindowsOnlyFact]
     public async Task ApplicationInfoUsesTheLargeIconOfTheNormalizedPath()
     {

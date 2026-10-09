@@ -99,3 +99,6 @@ General items: [todo.md](todo.md).
       (`CefWindow::SetXdgActivationToken`) and `LinuxCefPatches.ProvideActivationToken`; written, not built; called
       from `Tray.Linux.cs` `HandleItemCall` for `ProvideXdgActivationToken`. Run
       WindowTest's `LinuxActivationTokenAsync`. T6 (Chromium's `dbus::Bus`) is not patched: see the eng/cef README
+- [ ] `app` audit (branch `app-audit`): build and run SessionTest `AppAuditChecks`, and check by hand the GIO
+      protocol client (`SetAsDefaultProtocolClient` with an installed desktop file, `GetApplicationInfoForProtocol`'s GTK 3
+      icon) and `ShowAboutPanel`'s GtkAboutDialog (DRIFT A12); A14's `assets` check
