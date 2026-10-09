@@ -1,0 +1,26 @@
+Oriel Chromium patch 0003: clear GTK's style colour cache on settings notifications.
+
+CEF's linux_gtk_theme_3610.patch disconnects GtkUi::OnThemeChanged, the only
+caller of gtk::ClearStyleColorCache. OsSettingsProviderGtk still hears
+gtk-theme-name and gtk-application-prefer-dark-theme, but with no portal
+colour-scheme its PreferredColorScheme() reads the window background through
+that cache, so pages kept the scheme of the GTK theme at startup. Electron
+(no CEF patch) clears the cache on those notifications. No CEF API change.
+
+Resolves: Oriel docs/DRIFT.md Y2.
+Base: Chromium 154.0.8037.94 with CEF a03e714's patches. Applies in chromium/src.
+
+diff --git a/ui/gtk/os_settings_provider_gtk.cc b/ui/gtk/os_settings_provider_gtk.cc
+index faeb722..497e6f4 100644
+--- a/ui/gtk/os_settings_provider_gtk.cc
++++ b/ui/gtk/os_settings_provider_gtk.cc
+@@ -112,6 +112,9 @@ ScopedGSignal OsSettingsProviderGtk::ConnectSignal(const gchar* name) {
+ }
+ 
+ void OsSettingsProviderGtk::OnSignal(GtkSettings*, GtkParamSpec*) {
++  // CEF disconnects GtkUi::OnThemeChanged, which clears the cache otherwise,
++  // so PreferredColorScheme() would keep the startup theme's background.
++  ClearStyleColorCache();
+   NotifyOnSettingsChanged();
+ }
+ 

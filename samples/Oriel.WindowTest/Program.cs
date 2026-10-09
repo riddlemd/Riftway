@@ -323,6 +323,8 @@ async Task RunAsync(BrowserWindow win, BrowserWindow simple)
     await TransparencyAsync();
     await MacTransparencyAsync();
     await LinuxTransparencyAsync();
+    await LinuxPatchedInputAsync();
+    await LinuxActivationTokenAsync();
     await NativeImageAsync();
     await WebContentsLifecycleAsync(win);
     await PageEventsAsync();
@@ -3122,6 +3124,87 @@ async Task LinuxTransparencyAsync()
     }
 }
 
+// DRIFT W5: Electron's DisableEventListening keeps every event from a disabled window, the pointer crossing in or out
+// included, which the X11 input cover cannot. Real X input, through xdotool.
+async Task LinuxPatchedInputAsync()
+{
+    if (!OperatingSystem.IsLinux()) return;
+    var page = new BrowserWindow(new BrowserWindowOptions { Title = "Oriel window test: event listening", Width = 640, Height = 480, X = 100, Y = 100 });
+    if (!Oriel.Cef.CefRuntime.IsPatched)
+    {
+        Check("Linux, stock CEF: the window's input cannot be turned off in Views (DRIFT W5)", !page.SetLinuxInputEnabled(false));
+        page.Destroy();
+        await Task.Delay(300);
+        Console.WriteLine("SKIP  Linux event listening: the loaded libcef lacks Oriel's CEF patches (eng/cef)");
+        return;
+    }
+
+    static void Xdo(string args) => System.Diagnostics.Process.Start("/usr/bin/timeout", "10 /usr/bin/xdotool " + args)!.WaitForExit();
+    await page.LoadUrl("data:text/html,<body style='margin:0;height:300vh'><script>window.c={mousedown:0,mousemove:0,mouseover:0,mouseout:0,wheel:0,keydown:0};"
+        + "for(const k in c)addEventListener(k,()=>c[k]++,{capture:true,passive:true})</script>");
+    await Task.Delay(500);
+    page.Focus();
+    Eventually(() => page.IsFocused, step);
+    var content = page.GetContentBounds();
+    var (px, py) = (content.X + content.Width / 2, content.Y + content.Height / 2);
+    var outside = $"mousemove {content.X + content.Width + 150} {py}";
+    async Task<string> Counts(string? key = null) => (await Js(page, key is null ? "JSON.stringify(c)" : $"c.{key}"))?.ToString() ?? "null";
+    async Task<bool> Reaches(string key, string act)
+    {
+        var before = await Counts(key);
+        Xdo(act);
+        await Task.Delay(400);
+        return await Counts(key) != before;
+    }
+
+    Xdo(outside);
+    await Task.Delay(300);
+    Check("Linux, CEF patch 0002: the pointer crossing into an enabled window reaches its page", await Reaches("mouseover", $"mousemove {px} {py}"), await Counts());
+    Xdo(outside);
+    await Task.Delay(300);
+    Check("Linux, CEF patch 0002: SetEventListeningEnabled(false) is taken", page.SetLinuxInputEnabled(false));
+    Check("Linux, CEF patch 0002: the pointer crossing into a disabled window reaches no page handler, as Electron (DRIFT W5)",
+        !await Reaches("mouseover", $"mousemove {px} {py}") && !await Reaches("mousemove", $"mousemove {px - 20} {py - 20}"), await Counts());
+    Check("Linux, CEF patch 0002: the pointer crossing out of a disabled window reaches no page handler", !await Reaches("mouseout", outside), await Counts());
+    Check("Linux, CEF patch 0002: clicks, the wheel and keys reach no page handler of a disabled window",
+        !await Reaches("mousedown", $"mousemove {px} {py} click 1") && !await Reaches("wheel", $"mousemove {px} {py} click 5")
+        && !await Reaches("keydown", "key a"), await Counts());
+    page.SetLinuxInputEnabled(false);
+    page.SetLinuxInputEnabled(true);
+    Check("Linux, CEF patch 0002: one enable undoes repeated disables",
+        await Reaches("mousedown", $"mousemove {px} {py} click 1") && await Reaches("keydown", "key b"), await Counts());
+    Xdo(outside);
+    await Task.Delay(300);
+    Check("Linux, CEF patch 0002: the pointer crossing in reaches the page again", await Reaches("mouseover", $"mousemove {px} {py}"), await Counts());
+    page.Destroy();
+    await Task.Delay(300);
+}
+
+// T5 (linux-tray's register): a status notifier host's ProvideXdgActivationToken token goes on the next window Chromium maps.
+async Task LinuxActivationTokenAsync()
+{
+    if (!OperatingSystem.IsLinux()) return;
+    const string token = "oriel-window-test_TIME0";
+    var taken = Oriel.Cef.CefThread.InvokeOnUi(() => LinuxCefPatches.ProvideActivationToken(token));
+    if (!Oriel.Cef.CefRuntime.IsPatched)
+    {
+        Check("Linux, stock CEF: an activation token cannot reach Chromium (T5, linux-tray)", !taken);
+        Console.WriteLine("SKIP  Linux activation token: the loaded libcef lacks Oriel's CEF patches (eng/cef)");
+        return;
+    }
+    Check("Linux, CEF patch 0004: the activation token is taken", taken);
+    var next = new BrowserWindow(new BrowserWindowOptions { Title = "Oriel window test: activation token", Width = 300, Height = 200 });
+    await Task.Delay(500);
+    Check("Linux, CEF patch 0004: the next window carries the token as _NET_STARTUP_ID, as Chromium's tray gives it",
+        LinuxX11.StringProperty(next.GetNativeWindowHandle(), "_NET_STARTUP_ID") == token, LinuxX11.StringProperty(next.GetNativeWindowHandle(), "_NET_STARTUP_ID"));
+    var after = new BrowserWindow(new BrowserWindowOptions { Title = "Oriel window test: no activation token", Width = 300, Height = 200 });
+    await Task.Delay(500);
+    Check("Linux, CEF patch 0004: the token is used once", LinuxX11.StringProperty(after.GetNativeWindowHandle(), "_NET_STARTUP_ID") is null);
+    next.Destroy();
+    after.Destroy();
+    await Task.Delay(300);
+}
+
 async Task TransparencyAsync()
 {
     if (!OperatingSystem.IsWindows()) return;
@@ -4076,12 +4159,18 @@ async Task LinuxThemeAsync(BrowserWindow win, Func<int> updateCount)
     var fallback = Latency(() => portal.Set("color-scheme", 0u));
     Check("NativeTheme: with no portal preference, GTK's dark window background is dark",
         fallback is < 300 && NativeTheme.ShouldUseDarkColors, $"{fallback} ms; page dark={await PageNow(Dark)} (CEF keeps GTK's first colours, DRIFT Y2)");
+    // Patch 0003 clears Chromium's GTK style colour cache on the theme notifications, as Electron's GtkUi does.
+    var patched = Oriel.Cef.CefRuntime.IsPatched;
+    if (patched) Check("NativeTheme, CEF patch 0003: with no portal preference the page follows GTK's dark theme (DRIFT Y2)", await PageMatches(Dark, true));
     var restored = Latency(() => Gtk("gtk-theme-name", "Adwaita"));
     Check("NativeTheme: back to Adwaita is light and not high contrast, raised at once",
         restored is < 300 && !NativeTheme.ShouldUseDarkColors && !NativeTheme.ShouldUseHighContrastColors && await PageMatches(More, false), $"{restored} ms");
+    if (patched) Check("NativeTheme, CEF patch 0003: back to Adwaita, the page is light again (DRIFT Y2)", await PageMatches(Dark, false));
     var variant = Latency(() => Gtk("gtk-application-prefer-dark-theme", true));
     Check("NativeTheme: with no portal preference, GTK's prefer-dark variant is dark, raised at once",
         variant is < 300 && NativeTheme.ShouldUseDarkColors, $"{variant} ms");
+    if (patched) Check("NativeTheme, CEF patch 0003: GTK's prefer-dark variant makes the page dark (DRIFT Y2)", await PageMatches(Dark, true));
+    if (!patched) Console.WriteLine("SKIP  Linux page colours after a GTK theme change: the loaded libcef lacks Oriel's CEF patches (eng/cef)");
     Gtk("gtk-application-prefer-dark-theme", false);
     Check("NativeTheme: Linux has no inverted scheme, forced colours or reduced transparency, as Electron",
         !NativeTheme.ShouldUseInvertedColorScheme && !NativeTheme.InForcedColorsMode && !NativeTheme.PrefersReducedTransparency);

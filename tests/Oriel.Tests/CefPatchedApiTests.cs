@@ -1,3 +1,5 @@
+using System.Runtime.CompilerServices;
+using System.Runtime.InteropServices;
 using Oriel.Cef;
 using Oriel.Cef.Handlers;
 using Oriel.Cef.Interop;
@@ -7,7 +9,7 @@ namespace Oriel.Tests;
 public sealed unsafe class CefPatchedApiTests
 {
     private const string Stock = "5c8344ae7d7f6421bc801401e35d4dbf6d38e101";
-    private const string Patched = "a00027a57b67e129a7aefc08e6028c21fd94021a";
+    private const string Patched = "2d137e8cc7d079f5f2b310a17f487df99370c039";
 
     [Fact]
     public void Classify_NoNextVersionFallsBackTo15400() =>
@@ -71,5 +73,101 @@ public sealed unsafe class CefPatchedApiTests
         Assert.Equal(translucent ? 1 : 0, next->is_translucent(native, null));
 
         NativeObject.Release(native);
+    }
+
+    [Fact]
+    public void NextWindow_AppendsSetEventListeningEnabledAfterTheStockStruct()
+    {
+        Assert.Equal(sizeof(cef_window_t) + sizeof(nint), sizeof(cef_window_next_t));
+        cef_window_next_t value = default;
+        var offset = (byte*)&value.set_event_listening_enabled - (byte*)&value;
+        Assert.Equal(sizeof(cef_window_t), (int)offset);
+    }
+
+    private static int s_listeningCalls;
+    private static nint s_listeningWindow;
+    private static int s_listeningEnabled;
+
+    [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])]
+    private static void RecordListening(cef_window_t* window, int enabled)
+    {
+        s_listeningCalls++;
+        s_listeningWindow = (nint)window;
+        s_listeningEnabled = enabled;
+    }
+
+    private static cef_window_next_t* FakeNextWindow()
+    {
+        var window = (cef_window_next_t*)NativeMemory.AllocZeroed((nuint)sizeof(cef_window_next_t));
+        window->set_event_listening_enabled = &RecordListening;
+        s_listeningCalls = 0;
+        s_listeningWindow = 0;
+        s_listeningEnabled = -1;
+        return window;
+    }
+
+    [Theory]
+    [InlineData(false, 0)]
+    [InlineData(true, 1)]
+    public void SetEventListeningEnabled_PatchedCallsTheAppendedSlot(bool enabled, int expected)
+    {
+        var window = FakeNextWindow();
+        try
+        {
+            Assert.True(CefPatchedApi.SetEventListeningEnabled(&window->@base, enabled, patched: true));
+            Assert.Equal(1, s_listeningCalls);
+            Assert.Equal((nint)window, s_listeningWindow);
+            Assert.Equal(expected, s_listeningEnabled);
+        }
+        finally { NativeMemory.Free(window); }
+    }
+
+    [Fact]
+    public void SetEventListeningEnabled_StockNeverTouchesTheSlot()
+    {
+        var window = FakeNextWindow();
+        try
+        {
+            Assert.False(CefPatchedApi.SetEventListeningEnabled(&window->@base, false, patched: false));
+            Assert.Equal(0, s_listeningCalls);
+        }
+        finally { NativeMemory.Free(window); }
+    }
+
+    [Fact]
+    public void SetEventListeningEnabled_NoWindowIsNotTaken() =>
+        Assert.False(CefPatchedApi.SetEventListeningEnabled(null, false, patched: true));
+
+    private static int s_tokenCalls;
+    private static string? s_token;
+
+    private static void RecordToken(cef_string_utf16_t* token)
+    {
+        s_tokenCalls++;
+        s_token = CefString.Read(token);
+    }
+
+    [Theory]
+    [InlineData("gnome-shell/Oriel/1234-5-host_TIME42")]
+    [InlineData("")]
+    public void SetXdgActivationToken_PatchedPassesTheToken(string token)
+    {
+        s_tokenCalls = 0;
+        s_token = null;
+
+        Assert.True(CefPatchedApi.SetXdgActivationToken(token, patched: true, &RecordToken));
+
+        Assert.Equal(1, s_tokenCalls);
+        Assert.Equal(token, s_token);
+    }
+
+    [Fact]
+    public void SetXdgActivationToken_StockMakesNoCall()
+    {
+        s_tokenCalls = 0;
+
+        Assert.False(CefPatchedApi.SetXdgActivationToken("token", patched: false, &RecordToken));
+
+        Assert.Equal(0, s_tokenCalls);
     }
 }

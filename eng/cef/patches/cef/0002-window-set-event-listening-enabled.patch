@@ -1,0 +1,133 @@
+Oriel CEF patch 0002: CefWindow::SetEventListeningEnabled.
+
+Lets a client stop a Window from receiving input on Linux the way Electron's
+NativeWindowViews::SetEnabledInternal does for setEnabled(false) and for the
+parent of a shown modal: DesktopWindowTreeHostLinux::DisableEventListening
+swaps in a null event targeter, so no mouse, key, touch or pointer crossing
+event reaches the window's Views or contents, while activation is untouched.
+The method is API at CEF_NEXT (999998): API version 15400 and its hash are
+unchanged.
+
+Resolves: Oriel docs/DRIFT.md W5 (and MB4's window side).
+Base: CEF a03e714 (branch 8037, CEF 154) with 0001. Applies in chromium/src/cef.
+
+diff --git a/include/views/cef_window.h b/include/views/cef_window.h
+index 06221be..a7be650 100644
+--- a/include/views/cef_window.h
++++ b/include/views/cef_window.h
+@@ -38,6 +38,7 @@
+ #define CEF_INCLUDE_VIEWS_CEF_WINDOW_H_
+ #pragma once
+ 
++#include "include/cef_api_hash.h"
+ #include "include/cef_image.h"
+ #include "include/cef_menu_model.h"
+ #include "include/views/cef_display.h"
+@@ -431,6 +432,19 @@ class CefWindow : public CefPanel {
+   ///
+   /*--cef(default_retval=CEF_RUNTIME_STYLE_DEFAULT)--*/
+   virtual cef_runtime_style_t GetRuntimeStyle() = 0;
++
++#if CEF_API_ADDED(CEF_NEXT)
++  ///
++  /// Set whether this Window listens for input events. While disabled no
++  /// mouse, keyboard, touch or pointer crossing event reaches the Window's
++  /// Views or browser contents, as for the parent of a modal dialog. The
++  /// Window can still be activated and focused. Only implemented on Linux,
++  /// where Chromium swaps in a null event targeter for the Window; does
++  /// nothing on other platforms.
++  ///
++  /*--cef(added=next)--*/
++  virtual void SetEventListeningEnabled(bool enabled) = 0;
++#endif
+ };
+ 
+ #endif  // CEF_INCLUDE_VIEWS_CEF_WINDOW_H_
+diff --git a/libcef/browser/views/window_impl.cc b/libcef/browser/views/window_impl.cc
+index 008b420..33b4110 100644
+--- a/libcef/browser/views/window_impl.cc
++++ b/libcef/browser/views/window_impl.cc
+@@ -41,6 +41,11 @@
+ #include "ui/views/widget/desktop_aura/desktop_window_tree_host_platform.h"
+ #endif
+ 
++#if BUILDFLAG(IS_LINUX)
++#include "ui/aura/window_tree_host.h"
++#include "ui/views/widget/desktop_aura/desktop_window_tree_host_linux.h"
++#endif
++
+ namespace {
+ 
+ #if BUILDFLAG(IS_OZONE)
+@@ -513,6 +518,10 @@ void CefWindowImpl::OnWindowViewDeleted() {
+ 
+   destroyed_ = true;
+   widget_ = nullptr;
++#if BUILDFLAG(IS_LINUX)
++  // The host is gone with the widget; drop its closure unrun.
++  enable_event_listening_.ReplaceClosure(base::OnceClosure());
++#endif
+ 
+   if (delegate()) {
+     delegate()->OnWindowDestroyed(this);
+@@ -904,6 +913,28 @@ cef_runtime_style_t CefWindowImpl::GetRuntimeStyle() {
+   return CEF_RUNTIME_STYLE_DEFAULT;
+ }
+ 
++void CefWindowImpl::SetEventListeningEnabled(bool enabled) {
++  CEF_REQUIRE_VALID_RETURN_VOID();
++#if BUILDFLAG(IS_LINUX)
++  if (enabled) {
++    enable_event_listening_.RunAndReset();
++    return;
++  }
++  // DisableEventListening counts its callers (file dialogs use it too), so it
++  // is called once per disable and undone only by its own closure.
++  if (enable_event_listening_ || !widget_ || !widget_->GetNativeWindow()) {
++    return;
++  }
++  // Every CefWindow widget is a DesktopNativeWidgetAura on Linux, as in
++  // Electron's NativeWindowViews::SetEnabledInternal.
++  auto* host = static_cast<views::DesktopWindowTreeHostLinux*>(
++      widget_->GetNativeWindow()->GetHost());
++  if (host) {
++    enable_event_listening_.ReplaceClosure(host->DisableEventListening());
++  }
++#endif
++}
++
+ CefWindowView* CefWindowImpl::cef_window_view() const {
+   return static_cast<CefWindowView*>(root_view());
+ }
+diff --git a/libcef/browser/views/window_impl.h b/libcef/browser/views/window_impl.h
+index 83dfcb1..2f5da41 100644
+--- a/libcef/browser/views/window_impl.h
++++ b/libcef/browser/views/window_impl.h
+@@ -8,6 +8,7 @@
+ 
+ #include <map>
+ 
++#include "base/functional/callback_helpers.h"
+ #include "base/memory/raw_ptr.h"
+ #include "build/build_config.h"
+ #include "cef/include/views/cef_window.h"
+@@ -100,6 +101,7 @@ class CefWindowImpl
+   void SetThemeColor(int color_id, cef_color_t color) override;
+   void ThemeChanged() override;
+   cef_runtime_style_t GetRuntimeStyle() override;
++  void SetEventListeningEnabled(bool enabled) override;
+ 
+   // CefViewAdapter methods:
+   void Detach() override;
+@@ -191,6 +193,11 @@ class CefWindowImpl
+   // True if this window was shown using ShowAsBrowserModalDialog().
+   bool shown_as_browser_modal_ = false;
+ 
++#if BUILDFLAG(IS_LINUX)
++  // Runs DesktopWindowTreeHostLinux's EnableEventListening while disabled.
++  base::ScopedClosureRunner enable_event_listening_;
++#endif
++
+ #if BUILDFLAG(IS_OZONE)
+   // Used for input event simulation on Wayland where ui_controls is not
+   // available without a test compositor.

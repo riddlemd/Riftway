@@ -1455,6 +1455,9 @@ public sealed unsafe partial class BrowserWindow
         foreach (var window in GetAllWindows()) window.Focus();
     }
 
+    // WindowTest's handle on CEF patch 0002 (DRIFT W5); false on stock CEF.
+    internal bool SetLinuxInputEnabled(bool enabled) => Query(w => LinuxCefPatches.SetWindowInputEnabled(w, enabled), false);
+
     // Window calls are only valid on the UI thread and before the window is destroyed.
     private void Command(WindowAction action) => CefThread.RunOnUi(() =>
     {

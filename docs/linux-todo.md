@@ -26,10 +26,13 @@ General items: [todo.md](todo.md).
   - [ ] Run `eng/docker/test-linux.sh` on real x64 hardware: under QEMU `dotnet publish` segfaults (needs
         `DOTNET_EnableWriteXorExecute=0`) and Chromium's GPU process then dies with SIGTRAP, even with `--disable-gpu`
   - `eng/docker/*.sh` pick the CEF platform and RID from `uname -m`
-- [ ] Modal windows (`Modal = true`) don't block the parent's input (DRIFT W5). Electron disables it itself on Linux;
-      CEF exposes no input filter, so this needs another route. No window manager helps: under openbox, Mutter,
-      KWin and Xfwm4 the parent takes focus and clicks, in Electron too, because `X11Window::Map` rewrites
-      `_NET_WM_STATE` and drops the modal hint.
+- [ ] Modal windows (`Modal = true`) don't block the parent's input with stock CEF (DRIFT W5). Electron disables it
+      itself on Linux. No window manager helps: under openbox, Mutter, KWin and Xfwm4 the parent takes focus and
+      clicks, in Electron too, because `X11Window::Map` rewrites `_NET_WM_STATE` and drops the modal hint.
+  - [x] CEF patch [eng/cef](../eng/cef/README.md) 0002 (`CefWindow::SetEventListeningEnabled`, Electron's
+        `DisableEventListening`) and `LinuxCefPatches.SetWindowInputEnabled`; written, not built or run
+  - [ ] Call it from `ApplyLinuxEnabled` once `linux-integrate` merges, keeping the X11 input cover for stock CEF
+  - [ ] Run WindowTest's `LinuxPatchedInputAsync` on the patched libcef (crossing events, clicks, wheel, keys)
 - [x] Window-manager behaviour beyond openbox: WindowTest passes under Mutter 46 (`--x11`), KWin 5.27 (`kwin_x11`) and
       Xfwm4 4.18 as under openbox, including maximize, minimize, full screen, always on top, focus and workspaces.
       `ORIEL_WM=mutter|kwin|xfwm4 eng/docker/test-linux.sh` with the `oriel-linux-dev-wm` image
@@ -37,5 +40,10 @@ General items: [todo.md](todo.md).
 - [ ] Screen capture: Chromium's X11 desktop capturer dies with SIGILL under the Docker Xvfb (arm64) when getDisplayMedia starts; SessionTest skips the capture checks there (ORIEL_XVFB). Verify on a real X server; if it crashes there too, find the CHECK with CEF's symbols
 - [ ] nativeTheme against a real `xdg-desktop-portal` (GNOME, KDE): Docker has none, so the checks use a fake portal
       (`samples/Shared/FakePortal.cs`) that WindowTest starts before CEF
-- [ ] nativeTheme: with no portal preference, pages keep GTK's colours from startup (DRIFT Y2); a CEF patch to clear
-      Chromium's GTK style colour cache on theme notifications would let them follow
+- [ ] nativeTheme: with no portal preference, pages keep GTK's colours from startup with stock CEF (DRIFT Y2). Chromium
+      patch [eng/cef](../eng/cef/README.md) 0003 clears the GTK style colour cache on the settings notifications;
+      written, not built. Run `ThemeAsync`'s patched page checks on it
+- [ ] Tray activation token (linux-tray's T5): CEF patch [eng/cef](../eng/cef/README.md) 0004
+      (`CefWindow::SetXdgActivationToken`) and `LinuxCefPatches.ProvideActivationToken`; written, not built. Once
+      `linux-tray` merges, call it from `Tray.Linux.cs` `HandleItemCall` for `ProvideXdgActivationToken`, then run
+      WindowTest's `LinuxActivationTokenAsync`. T6 (Chromium's `dbus::Bus`) is not patched: see the eng/cef README

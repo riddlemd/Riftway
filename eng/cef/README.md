@@ -10,8 +10,18 @@ Base: CEF `a03e714` (branch 8037, CEF 154, Chromium 154.0.8037.94), the version 
 | Patch | Applies in | What it does | DRIFT |
 |---|---|---|---|
 | [`cef/0001-window-delegate-is-translucent.patch`](patches/cef/0001-window-delegate-is-translucent.patch) | `chromium/src/cef` | Adds `CefWindowDelegate::IsTranslucent`. `CefWindowView::CreateWidget` reads it into `views::Widget::InitParams::opacity` (`kTranslucent`), as Electron's `NativeWindowViews` does for `transparent: true`. On Linux X11, Chromium then gives the window a 32-bit ARGB visual while a compositing manager runs; on macOS the `NSWindow` is created non-opaque. | W24 (Linux; macOS's `InitParams::opacity`) |
+| [`cef/0002-window-set-event-listening-enabled.patch`](patches/cef/0002-window-set-event-listening-enabled.patch) | `chromium/src/cef` | Adds `CefWindow::SetEventListeningEnabled`. On Linux `CefWindowImpl` calls `DesktopWindowTreeHostLinux::DisableEventListening` (a null event targeter) and keeps the closure that undoes it, as Electron's `NativeWindowViews::SetEnabledInternal` does for `setEnabled(false)` and a shown modal's parent: no mouse, key, touch or pointer crossing event reaches the window, and activation is untouched. Does nothing elsewhere. | W5 |
+| [`chromium/0003-gtk-clear-style-color-cache-on-theme-change.patch`](patches/chromium/0003-gtk-clear-style-color-cache-on-theme-change.patch) | `chromium/src` | `OsSettingsProviderGtk::OnSignal` clears GTK's style colour cache (`gtk::ClearStyleColorCache`) before it notifies. CEF's `linux_gtk_theme_3610.patch` disconnects `GtkUi::OnThemeChanged`, which clears it in Electron, so with no portal colour scheme `PreferredColorScheme()` kept reading the startup theme's window background. No API change. | Y2 |
+| [`cef/0004-window-set-xdg-activation-token.patch`](patches/cef/0004-window-set-xdg-activation-token.patch) | `chromium/src/cef` | Adds the static `CefWindow::SetXdgActivationToken` (`cef_window_set_xdg_activation_token`), which calls `base::nix::SetActivationToken` as Chromium's `StatusIconLinuxDbus::OnProvideXdgActivationToken` does; Chromium puts the token on the next window it maps or activates (`_NET_STARTUP_ID` on X11, xdg-activation on Wayland). Does nothing off Linux. | T5 (branch `linux-tray`) |
 
-There are no Chromium patches yet; they would go in `patches/chromium/` and apply in `chromium/src`.
+CEF patches apply first, then Chromium patches (`patches/chromium/`, in `chromium/src`), each set in name order; the
+numbers are shared, so their order is the order they were written in.
+
+Not patched: T6 (export the tray through Chromium's `dbus::Bus`). `dbus::Bus` has no public accessor for its
+`DBusConnection`, and it runs on Chromium's D-Bus thread with its own dispatch, so exposing it means either a Chromium
+patch that hands libdbus's connection out (Oriel's tray handlers would then run on Chromium's D-Bus thread and be torn
+down by its shutdown) or a CEF API for exported objects, methods, properties and signals. Either is far more than the
+other patches, for a difference only in the item's unique bus name: the process, and so the PID a host reads, is the same.
 
 ### Why a delegate method
 
@@ -36,7 +46,10 @@ configured the next version (`CEF_API_IS_ADDED(CEF_NEXT)`), because an older cli
 - stock libcef: next is the same API as 15400, so its hash equals 15400's; Oriel runs as before;
 - patched libcef: the hash equals `CefPatchedApi.Hash*` ([`src/Oriel.Cef/CefPatchedApi.cs`](../../src/Oriel.Cef/CefPatchedApi.cs));
   `CefRuntime.IsPatched` is true, and `WindowDelegate` allocates `cef_window_delegate_next_t` (the stock struct plus
-  `is_translucent`), since CEF refuses a `base.size` that is not the configured version's;
+  `is_translucent`), since CEF refuses a `base.size` that is not the configured version's. The `cef_window_t` libcef
+  hands out is then its next-version struct, `cef_window_next_t` (plus `set_event_listening_enabled`), and
+  `cef_window_set_xdg_activation_token` is exported; `CefPatchedApi.SetEventListeningEnabled` and
+  `SetXdgActivationToken` call them only then, and return false otherwise;
 - any other hash: Oriel refuses to start, as for any API mismatch.
 
 The generated bindings (`tools/cef-interop/generate.sh`) stay at 15400 and need no regenerating: the new member is
@@ -74,6 +87,8 @@ recomputed without a build: copy `chromium/src/cef` (without `.git`) to a scratc
 `src/third_party/llvm-build` symlink, `src/chrome/VERSION` and the four sandbox files `tools/version_manager.py` lists
 (`SANDBOX_COMPAT_FILES`), `git init` and commit it, apply the patches, and run `python3 tools/version_manager.py -u`
 in it. That is how the current values were made; without the patches the same run reproduces stock 15400's hashes.
+For `apply-patches.sh` to apply the Chromium patches there too, copy the files they change
+(`ui/gtk/os_settings_provider_gtk.cc`) from the checkout into the scratch `src`; they do not change the hashes.
 Update `CefPatchedApi.cs` and add any new struct members to it.
 
 ## Running Oriel on the patched build
@@ -91,6 +106,18 @@ docker run --rm -v "$PWD":/src -v "$HOME/.cache/oriel/cef":/cef-cache -v <unpack
 
 WindowTest's `LinuxTransparencyAsync` runs its transparency checks only when `CefRuntime.IsPatched`; with stock CEF it
 checks that `Transparent` is still ignored (W24). It starts `xcompmgr` itself after checking the fallback without one.
+The same goes for `LinuxPatchedInputAsync` (0002, real X input through xdotool), `ThemeAsync`'s page checks after a
+GTK theme change (0003) and `LinuxActivationTokenAsync` (0004, the next window's `_NET_STARTUP_ID`). None has run yet.
+
+### Wiring left for other branches
+
+The Linux code that 0002 and 0004 serve is not on this branch yet. After the merges:
+
+- `linux-integrate`'s `BrowserWindow.ApplyLinuxEnabled`: call `LinuxCefPatches.SetWindowInputEnabled(_window,
+  _enabled.Enabled)` first and return when it is true, so a patched libcef blocks input in Views (crossing events
+  included) and the X11 input cover stays the stock fallback.
+- `linux-tray`'s `Tray.Linux.cs` `HandleItemCall`: add `case "ProvideXdgActivationToken":
+  LinuxCefPatches.ProvideActivationToken((string)call.Args[0]!); break;` (it runs on the UI thread already).
 
 The `cef-build-linux` script builds with `is_official_build=false`. The macOS build with the same defines died at
 startup on a PartitionAlloc DCHECK ([docs/todo.md](../../docs/todo.md#runtime-and-codecs)); if the Linux one does too,
