@@ -853,13 +853,30 @@ public sealed unsafe partial class BrowserWindow
     /// <summary>Whether a menu bar is showing; always false on macOS. Electron's <c>win.isMenuBarVisible()</c>.</summary>
     public bool IsMenuBarVisible => Query(_ => _menuBar?.IsVisible ?? false, false);
 
+    // The popup menu showing in this window, if any; UI thread.
+    private MenuRun? _popupRun;
+
     /// <summary>Shows <paramref name="menu"/> at a point in the page, by default at the pointer.</summary>
     internal void ShowPopup(Menu menu, int? x, int? y, Action? closed) => Command(w =>
     {
         var content = ContentBoundsOn(w);
         var at = x is { } ax && y is { } ay ? new Point(content.X + ax, content.Y + ay) : Screen.GetCursorScreenPoint();
         var screen = new cef_point_t { x = at.X, y = at.Y };
-        var popupDelegate = new MenuModelDelegate { CommandExecuted = (id, flags) => menu.FindByCommandId(id)?.Activate(this, KeyboardEvent.FromCefFlags(flags)), Closed = closed };
+        // MenuViews::PopupAt replaces the window's MenuRunner, which releases a popup still showing.
+        _popupRun?.Release();
+        var run = _popupRun = new MenuRun(menu);
+        var popupDelegate = new MenuModelDelegate
+        {
+            CommandExecuted = (id, flags) => menu.FindByCommandId(id)?.Activate(this, KeyboardEvent.FromCefFlags(flags)),
+            WillShow = run.WillShow,
+            // CEF reports each submenu closing too; the popup callback is for the whole menu.
+            Closed = model =>
+            {
+                if (!run.Closed(model)) return;
+                if (_popupRun == run) _popupRun = null;
+                closed?.Invoke();
+            },
+        };
         NativeObject.AddRef(popupDelegate.Native);
         var model = CefNative.cef_menu_model_create(popupDelegate.Native);
         MenuModels.Fill(model, menu);

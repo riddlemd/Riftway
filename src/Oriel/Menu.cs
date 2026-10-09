@@ -17,8 +17,8 @@ public enum MenuItemType
     /// <summary>Toggles <see cref="MenuItem.Checked"/> when clicked. Electron's <c>checkbox</c>.</summary>
     Checkbox,
 
-    /// <summary>One of a group: adjacent radio items form a group, and clicking one unchecks the others.
-    /// Electron's <c>radio</c>.</summary>
+    /// <summary>One of a group: radio items with no separator between them form a group, and clicking one unchecks
+    /// the others. The group is fixed when the item is inserted. Electron's <c>radio</c>.</summary>
     Radio,
 }
 
@@ -188,13 +188,23 @@ public sealed class MenuItem
     private MenuItemType? _type;
 
     /// <summary>Creates an item; set its properties with an object initializer.</summary>
-    public MenuItem() => CommandId = Interlocked.Increment(ref s_nextCommandId);
+    public MenuItem() => CommandId = NextCommandId();
+
+    /// <summary>A command id no other item or menu has.</summary>
+    internal static int NextCommandId() => Interlocked.Increment(ref s_nextCommandId);
 
     /// <summary>Identifies the item to native menus; unique in the process.</summary>
     internal int CommandId { get; }
 
     /// <summary>The menu this item is in, if any.</summary>
     internal Menu? Parent { get; set; }
+
+    /// <summary>A radio item's group, fixed when it is inserted; 0 for other items. Electron's <c>groupId</c>.</summary>
+    internal int GroupId { get; set; }
+
+    /// <summary>Sets <see cref="Checked"/> without telling native menus, as Electron's <c>_menuWillShow</c> writes its
+    /// checked map: menus read the change only when next rebuilt or refreshed.</summary>
+    internal void SetCheckedQuietly(bool value) => _checked = value;
 
     /// <summary>A name for <see cref="Menu.GetMenuItemById"/>. Electron's <c>id</c>.</summary>
     public string? Id { get; init; }
@@ -366,8 +376,12 @@ public sealed class Menu : IEnumerable<MenuItem>
     private static readonly Lock s_gate = new();
     private static Menu? s_applicationMenu;
     private static bool s_applicationMenuSet;
+    private static int s_groupIdIndex;
 
     private readonly List<MenuItem> _items = [];
+    // Electron's groupsMap: each radio group's items in the order they were inserted.
+    private readonly SortedDictionary<int, List<MenuItem>> _groups = [];
+    private int _markerCommandId;
 
     /// <summary>The menu's items, in order. Electron's <c>menu.items</c>.</summary>
     public IReadOnlyList<MenuItem> Items
@@ -404,10 +418,95 @@ public sealed class Menu : IEnumerable<MenuItem>
         {
             if (item.Parent is not null) throw new InvalidOperationException("That item is already in a menu.");
             var at = position ?? _items.Count;
+            if (at < 0 || at > _items.Count) throw new ArgumentOutOfRangeException(nameof(position));
+            if (item.Type == MenuItemType.Radio)
+            {
+                item.GroupId = GenerateGroupId(_items, at);
+                if (!_groups.TryGetValue(item.GroupId, out var group)) _groups[item.GroupId] = group = [];
+                group.Add(item);
+            }
             _items.Insert(at, item);
             item.Parent = this;
         }
         OnChanged();
+    }
+
+    // Electron's generateGroupId: the group of the nearest radio item before the position (after it, at position 0)
+    // with no separator between, else a new group. A normal item between two radio items does not split them.
+    private static int GenerateGroupId(List<MenuItem> items, int position)
+    {
+        if (position > 0)
+        {
+            for (var i = position - 1; i >= 0; i--)
+            {
+                if (items[i].Type == MenuItemType.Radio) return items[i].GroupId;
+                if (items[i].Type == MenuItemType.Separator) break;
+            }
+        }
+        else if (position < items.Count)
+        {
+            for (var i = position; i < items.Count; i++)
+            {
+                if (items[i].Type == MenuItemType.Radio) return items[i].GroupId;
+                if (items[i].Type == MenuItemType.Separator) break;
+            }
+        }
+        return ++s_groupIdIndex;
+    }
+
+    /// <summary>Raised on the UI thread before the menu shows. Electron's <c>menu-will-show</c>.</summary>
+    /// <remarks>As in Electron, which menus raise it depends on the OS: a popup or tray menu on Windows and Linux raises
+    /// it on each menu and submenu as it opens; on macOS the popup's (or application menu's) top menu raises it for
+    /// every menu that opens under it. A window menu bar's dropdown raises it on the dropdown's submenu, not on the
+    /// bar's menu. The Linux tray raises it on a submenu the host is about to show, never on the top menu.</remarks>
+    public event EventHandler? MenuWillShow;
+
+    /// <summary>Raised on the UI thread when the menu closes. Electron's <c>menu-will-close</c>.</summary>
+    /// <remarks>Raised by the menus that raise <see cref="MenuWillShow"/>, except the Linux tray's, which never
+    /// reports a close.</remarks>
+    public event EventHandler? MenuWillClose;
+
+    /// <summary>Electron's <c>_menuWillShow</c> then <c>menu-will-show</c>: checks the first item of each radio group
+    /// with none checked, then raises <see cref="MenuWillShow"/>. Returns the items it checked. UI thread.</summary>
+    internal IReadOnlyList<MenuItem> OnMenuWillShow()
+    {
+        var fixedUp = EnsureRadioGroupsChecked();
+        MenuWillShow?.Invoke(this, EventArgs.Empty);
+        return fixedUp;
+    }
+
+    /// <summary>Raises <see cref="MenuWillClose"/>. UI thread.</summary>
+    internal void OnMenuWillClose() => MenuWillClose?.Invoke(this, EventArgs.Empty);
+
+    /// <summary>Electron's <c>_menuWillShow</c>: a radio group with no item checked gets its first-inserted item checked,
+    /// quietly. Returns those items.</summary>
+    internal IReadOnlyList<MenuItem> EnsureRadioGroupsChecked()
+    {
+        List<MenuItem> fixedUp = [];
+        lock (s_gate)
+        {
+            foreach (var group in _groups.Values)
+            {
+                if (group.Exists(i => i.Checked)) continue;
+                group[0].SetCheckedQuietly(true);
+                fixedUp.Add(group[0]);
+            }
+        }
+        return fixedUp;
+    }
+
+    /// <summary>A command id for a hidden native item that names this menu when it has no visible items of its own.</summary>
+    internal int MarkerCommandId
+    {
+        get
+        {
+            lock (s_gate) return _markerCommandId != 0 ? _markerCommandId : _markerCommandId = MenuItem.NextCommandId();
+        }
+    }
+
+    internal bool IsMarker(int commandId)
+    {
+        lock (s_gate) return _markerCommandId != 0 && _markerCommandId == commandId;
     }
 
     /// <summary>Shows the menu as a popup in a window, as a context menu. Electron's <c>menu.popup()</c>.</summary>
@@ -460,17 +559,14 @@ public sealed class Menu : IEnumerable<MenuItem>
         }
     }
 
-    /// <summary>Checks <paramref name="item"/> and unchecks the other radio items adjacent to it.</summary>
+    /// <summary>Checks <paramref name="item"/> and unchecks the rest of its radio group, as Electron's radio
+    /// <c>checked</c> setter.</summary>
     internal void CheckRadio(MenuItem item)
     {
-        List<MenuItem> items;
-        lock (s_gate) items = [.. _items];
-        var index = items.IndexOf(item);
-        var start = index;
-        while (start > 0 && items[start - 1].Type == MenuItemType.Radio) start--;
-        var end = index;
-        while (end < items.Count - 1 && items[end + 1].Type == MenuItemType.Radio) end++;
-        for (var i = start; i <= end; i++) items[i].Checked = i == index;
+        List<MenuItem> group;
+        lock (s_gate) group = _groups.TryGetValue(item.GroupId, out var members) ? [.. members] : [item];
+        foreach (var other in group) if (other != item) other.Checked = false;
+        item.Checked = true;
     }
 
     internal void OnChanged()

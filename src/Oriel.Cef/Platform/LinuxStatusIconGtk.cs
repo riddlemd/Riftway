@@ -26,6 +26,10 @@ public sealed class LinuxGtkMenuItem
     public Func<bool> IsVisible { get; init; } = () => true;
     public Func<bool> IsChecked { get; init; } = () => false;
 
+    /// <summary>A submenu item's <c>MenuWillShow</c> on its submenu model, which <c>BuildSubmenuFromModel</c> calls once
+    /// the submenu is built.</summary>
+    public Action? SubmenuWillShow { get; init; }
+
     /// <summary><c>ActivatedAt</c>, with the Shift, Control and Alt state of the button release that chose it.</summary>
     public Action<bool, bool, bool>? Activated { get; init; }
 }
@@ -163,6 +167,7 @@ public sealed unsafe partial class LinuxStatusIconGtk : IDisposable
                 BuildSubmenu(item.Submenu ?? [], submenu);
                 gtk_menu_item_set_submenu(widget, submenu);
                 Refresh(submenu);
+                item.SubmenuWillShow?.Invoke();
                 connectToActivate = false;
             }
             _items[widget] = item;

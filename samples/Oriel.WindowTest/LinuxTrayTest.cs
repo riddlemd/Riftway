@@ -52,6 +52,9 @@ static partial class LinuxTrayTest
             new MenuItem { Label = "Two", Type = MenuItemType.Radio },
             new MenuItem { Label = "More", Submenu = new Menu { new MenuItem { Label = "Deep" } } },
         };
+        var gtkShown = new List<string>();
+        menu.MenuWillShow += (_, _) => gtkShown.Add("root");
+        menu.Items[7].Submenu!.MenuWillShow += (_, _) => gtkShown.Add("More");
         tray.SetContextMenu(menu);
         var backend = (LinuxTrayBackend)tray.Backend;
         LinuxStatusIconGtk? icon = null;
@@ -62,6 +65,8 @@ static partial class LinuxTrayTest
             tray.Destroy();
             return;
         }
+        check("MenuGtk raises MenuWillShow on each submenu as it builds it, never on the top menu (menu_util.cc BuildSubmenuFromModel)",
+            Eventually(() => CefThread.InvokeOnUi(() => string.Join(",", gtkShown)) == "More", step), CefThread.InvokeOnUi(() => string.Join(",", gtkShown)));
         var read = CefThread.InvokeOnUi(() => ReadIcon(icon.Handle));
         check("the GtkStatusIcon is visible with the image as an RGBA pixbuf and the tooltip",
             read is { Visible: true, Tip: "GTK tip", W: 16, Channels: 4, First: "255,0,0,255" }, read);
@@ -126,6 +131,14 @@ static partial class LinuxTrayTest
             new MenuItem { Role = MenuItemRole.Quit },
         };
 
+        var shown = new System.Collections.Concurrent.ConcurrentQueue<string>();
+        menu.MenuWillShow += (_, _) => shown.Enqueue("show root");
+        menu.MenuWillClose += (_, _) => shown.Enqueue("close root");
+        var more = menu.Items[5].Submenu!;
+        more.MenuWillShow += (_, _) => shown.Enqueue("show More");
+        more.MenuWillClose += (_, _) => shown.Enqueue("close More");
+        string Shown() => string.Join(",", shown);
+
         var tray = new Tray(translucent);
         tray.Clicked += (_, e) => clicks.Add(e);
         tray.SetToolTip("Oriel tray");
@@ -183,13 +196,19 @@ static partial class LinuxTrayTest
         var unknown = fake.Call(service, MenuPath, DbusMenu, "GetProperty", "is", 1, "bogus");
         check("GetProperty gives a stored value, the spec's default for one left out, and fails for a name the spec lacks",
             stored.Values is [FakeVariant { Signature: "b", Value: false }] && defaulted.Values is [FakeVariant { Signature: "i", Value: -1 }] && unknown.Error == "org.freedesktop.DBus.Error.Failed", unknown.Error);
+        check("nothing raises the menu events before the host asks", Shown() == "", Shown());
         var aboutSubmenu = fake.Call(service, MenuPath, DbusMenu, "AboutToShow", "i", 9);
+        check("AboutToShow on a submenu raises MenuWillShow on its Menu (DbusMenu::AboutToShowImpl)", Eventually(() => Shown() == "show More", step), Shown());
         var aboutRoot = fake.Call(service, MenuPath, DbusMenu, "AboutToShow", "i", 0);
         var aboutLeaf = fake.Call(service, MenuPath, DbusMenu, "AboutToShow", "i", 1);
         var aboutGroup = fake.Call(service, MenuPath, DbusMenu, "AboutToShowGroup", "ai", new List<int> { 9, 1, 99 });
         check("AboutToShow answers false (no update) for the root and a submenu, fails for a leaf; AboutToShowGroup lists the failures",
             aboutSubmenu.Values is [false] && aboutRoot.Values is [false] && aboutLeaf.Error == "org.freedesktop.DBus.Error.Failed"
             && aboutGroup is { Signature: "aiai", Values: [List<object?> { Count: 0 }, List<object?> errors] } && errors.SequenceEqual(new object?[] { 1, 99 }), aboutLeaf.Error);
+        check("AboutToShow on the root raises nothing; AboutToShowGroup raises for its submenu; no close is ever reported",
+            Eventually(() => Shown() == "show More,show More", step), Shown());
+        var moreRadio = more.Items[1];
+        check("_menuWillShow keeps the checked radio item", moreRadio.Checked && !more.Items[2].Checked, null);
         var menuProps = fake.Call(service, MenuPath, Props, "GetAll", "s", DbusMenu);
         check("the menu object's properties: IconThemePath, Status, TextDirection, Version 3",
             menuProps.Values is [var mp] && Properties(mp) == "IconThemePath=<as>[] Status=<s>'normal' TextDirection=<s>'ltr' Version=<u>3", menuProps.Values is [var mp2] ? Properties(mp2) : menuProps.Error);
@@ -262,13 +281,17 @@ static partial class LinuxTrayTest
         check("wrong arguments get InvalidArgs; methods Chromium does not export (Bogus, Properties.Set) get libdbus's UnknownMethod",
             wrong.Error == "org.freedesktop.DBus.Error.InvalidArgs" && bogus.Error == "org.freedesktop.DBus.Error.UnknownMethod" && setProperty.Error == "org.freedesktop.DBus.Error.UnknownMethod",
             $"{wrong.Error} {bogus.Error} {setProperty.Error}");
+        while (shown.TryDequeue(out _)) { }
         fake.Call(service, ItemPath, Sni, "ContextMenu", "ii", 300, 300);
         check("ContextMenu opens the context menu as a Views menu", Eventually(() => tray.MenuOpen, step), null);
+        check("the Views menu raises MenuWillShow on the top menu (ConcatMenuModel forwards it)", Eventually(() => Shown() == "show root", step), Shown());
         tray.PopUpContextMenu();
         tray.CloseContextMenu();
         check("CloseContextMenu does nothing on Linux, as Electron", tray.MenuOpen, null);
         tray.SetContextMenu(menu);
         check("setting the menu again closes it (menu_runner_.reset())", Eventually(() => !tray.MenuOpen, step), null);
+        await Task.Delay(300);
+        check("a released MenuRunner reports no MenuWillClose (MenuRunnerImpl::Release swaps in an empty delegate)", Shown() == "show root", Shown());
         check("balloons, focus and bounds are Electron's Linux no-ops",
             Ok(() => { tray.DisplayBalloon(new DisplayBalloonOptions { Title = "t", Content = "c" }); tray.RemoveBalloon(); tray.Focus(); tray.SetTitle("t"); tray.SetIgnoreDoubleClickEvents(true); })
             && tray.GetBounds() == default && tray.GetTitle() == "" && !tray.GetIgnoreDoubleClickEvents(), null);

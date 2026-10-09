@@ -8,13 +8,17 @@ namespace Oriel.Cef.Handlers;
 /// <paramref name="pressedLock"/> (AddRef it to keep the button pressed until the menu closes).</summary>
 public unsafe delegate void MenuButtonPressedCallback(cef_menu_button_t* button, cef_point_t screenPoint, cef_menu_button_pressed_lock_t* pressedLock);
 
-/// <summary><c>cef_menu_model_delegate_t</c>: commands chosen from a Views menu.</summary>
+/// <summary>A Views menu model event: the model (the top menu or a submenu), valid only during the call.</summary>
+public unsafe delegate void MenuModelCallback(cef_menu_model_t* model);
+
+/// <summary><c>cef_menu_model_delegate_t</c>: commands chosen from a Views menu, and its menus opening and closing.</summary>
 public sealed unsafe class MenuModelDelegate
 {
     public MenuModelDelegate()
     {
         Native = NativeObject.Create<cef_menu_model_delegate_t>(this);
         Native->execute_command = &ExecuteCommand;
+        Native->menu_will_show = &MenuWillShow;
         Native->menu_closed = &MenuClosed;
     }
 
@@ -23,8 +27,12 @@ public sealed unsafe class MenuModelDelegate
     /// <summary>An item was chosen: its command id.</summary>
     public Action<int, cef_event_flags_t>? CommandExecuted { get; init; }
 
-    /// <summary>The menu closed, whether or not an item was chosen.</summary>
-    public Action? Closed { get; init; }
+    /// <summary>A menu or submenu is about to show: CEF passes each submenu its own model.</summary>
+    public MenuModelCallback? WillShow { get; init; }
+
+    /// <summary>A menu or submenu closed, whether or not an item was chosen. The top menu reports it as the run ends;
+    /// CEF posts a submenu's, so it arrives after the top menu's when both close together.</summary>
+    public MenuModelCallback? Closed { get; init; }
 
     [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])]
     private static void ExecuteCommand(cef_menu_model_delegate_t* self, cef_menu_model_t* menuModel, int commandId, cef_event_flags_t eventFlags)
@@ -35,10 +43,18 @@ public sealed unsafe class MenuModelDelegate
     }
 
     [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])]
+    private static void MenuWillShow(cef_menu_model_delegate_t* self, cef_menu_model_t* menuModel)
+    {
+        var owner = NativeObject.Owner<MenuModelDelegate>(self);
+        if (owner.WillShow is { } callback) Guard.Run(() => callback(menuModel));
+        NativeObject.Release(menuModel);
+    }
+
+    [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])]
     private static void MenuClosed(cef_menu_model_delegate_t* self, cef_menu_model_t* menuModel)
     {
         var owner = NativeObject.Owner<MenuModelDelegate>(self);
-        if (owner.Closed is { } callback) Guard.Run(callback);
+        if (owner.Closed is { } callback) Guard.Run(() => callback(menuModel));
         NativeObject.Release(menuModel);
     }
 }

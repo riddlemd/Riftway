@@ -109,6 +109,12 @@ Counted from the Checklist at the end: `BaseWindow` and `BrowserWindow` are one 
   `shareMenu`); the click callback gets no `KeyboardEvent`; `Command`/`Super` accelerators are ignored on Windows
   and Linux (CEF accelerators have no such modifier); Alt shows an auto-hidden bar until pressed again, rather than
   until the menu is used; the bar takes CEF Views' default look.
+  `Menu.MenuWillShow`/`MenuWillClose` (Electron's `menu-will-show`/`menu-will-close`) come from CEF's
+  `D.menu_will_show`/`D.menu_closed` per Views model on Windows and Linux (a popup or tray menu and each submenu on its own
+  Menu; a bar dropdown on its submenu, never on the bar's Menu), from NSMenu delegates on the macOS application and Dock
+  menus (every menu under them reports on the top Menu), from DBusMenu `AboutToShow` (submenus only, no close) and
+  `MenuGtk`'s build on the Linux tray. Before each show `_menuWillShow` checks the first item of a radio group with none
+  checked; radio groups follow Electron's `generateGroupId`. Gaps: DRIFT M8 (macOS popups report the top menu only), M9.
 
 - Window polish, Windows (branch `window-polish`): `ShowInactive` (shown through CEF with `SWP_NOACTIVATE` forced in
   `WM_WINDOWPOSCHANGING`), `Opacity`/`SetOpacity`/`GetOpacity` (`WS_EX_LAYERED` alpha), `HasShadow`/`SetHasShadow` (stored only,

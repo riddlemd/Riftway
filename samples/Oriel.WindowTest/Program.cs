@@ -307,6 +307,7 @@ async Task RunAsync(BrowserWindow win, BrowserWindow simple)
     await DialogsAsync(win);
     await MenusAsync(win);
     await ContextMenusAsync(win);
+    await MenuEventsAsync(win);
     await MouseEventsAsync();
     await InputEventAsync();
     await PreferredSizeAsync();
@@ -2755,6 +2756,167 @@ async Task ContextMenusAsync(BrowserWindow win)
     Check("Popup with X but no Y throws", Throws<ArgumentException>(() => popup.Popup(new PopupOptions { Window = win, X = 1 })));
 }
 
+// Electron's menu-will-show / menu-will-close: which Menu raises them, in which order, and the radio fix-up.
+async Task MenuEventsAsync(BrowserWindow win)
+{
+    var log = new System.Collections.Concurrent.ConcurrentQueue<string>();
+    void Watch(Menu m, string name)
+    {
+        m.MenuWillShow += (_, _) => log.Enqueue("show " + name);
+        m.MenuWillClose += (_, _) => log.Enqueue("close " + name);
+    }
+    string Log() => string.Join(",", log);
+    void Key(string key)
+    {
+        System.Diagnostics.Process.Start("/usr/bin/xdotool", "key " + key)!.WaitForExit();
+        Thread.Sleep(150);
+    }
+    var keys = OperatingSystem.IsLinux() && File.Exists("/usr/bin/xdotool");
+
+    var radioA = new MenuItem { Label = "A", Type = MenuItemType.Radio };
+    var radioB = new MenuItem { Label = "B", Type = MenuItemType.Radio };
+    var deep = new Menu { new MenuItem { Label = "Deep" } };
+    var sub = new Menu { radioA, radioB, new MenuItem { Label = "Deeper", Submenu = deep } };
+    var popup = new Menu { new MenuItem { Label = "One" }, new MenuItem { Label = "Sub", Submenu = sub } };
+    Watch(popup, "popup");
+    Watch(sub, "sub");
+    Watch(deep, "deep");
+    win.Focus();
+    await Task.Delay(300);
+
+    using (var closed = new ManualResetEventSlim())
+    {
+        popup.Popup(new PopupOptions { Window = win, X = 20, Y = 20, Closed = () => { log.Enqueue("callback"); closed.Set(); } });
+        Check("a popup raises MenuWillShow on its menu", Eventually(() => Log() == "show popup", step), Log());
+        if (keys) Key("Escape");
+        else popup.ClosePopup(win);
+        Check("closing it raises MenuWillClose, then runs the popup's Closed", closed.Wait(step) && Eventually(() => Log() == "show popup,close popup,callback", step), Log());
+    }
+
+    if (!OperatingSystem.IsMacOS())
+    {
+        // MenuViews::PopupAt replaces the window's MenuRunner: the popup still showing is released, so its Menu hears
+        // no close and its callback never runs.
+        log.Clear();
+        var other = new Menu { new MenuItem { Label = "Other" } };
+        Watch(other, "other");
+        using var otherClosed = new ManualResetEventSlim();
+        popup.Popup(new PopupOptions { Window = win, X = 20, Y = 20, Closed = () => log.Enqueue("callback popup") });
+        Eventually(() => Log() == "show popup", step);
+        other.Popup(new PopupOptions { Window = win, X = 40, Y = 40, Closed = () => { log.Enqueue("callback other"); otherClosed.Set(); } });
+        Check("a second popup in the window releases the first: no MenuWillClose or Closed for it", Eventually(() => Log() == "show popup,show other", step), Log());
+        other.ClosePopup(win);
+        Check("the second popup closes as usual", otherClosed.Wait(step) && Eventually(() => Log() == "show popup,show other,close other,callback other", step), Log());
+        await Task.Delay(300);
+    }
+
+    if (keys)
+    {
+        // Views (Linux, Windows): each submenu raises the events on its own Menu as it opens and closes.
+        log.Clear();
+        using var closed = new ManualResetEventSlim();
+        popup.Popup(new PopupOptions { Window = win, X = 20, Y = 20, Closed = () => { log.Enqueue("callback"); closed.Set(); } });
+        Eventually(() => Log() == "show popup", step);
+        Key("Down");
+        Key("Down");
+        Key("Right");
+        Check("opening a submenu raises MenuWillShow on the submenu's Menu", Eventually(() => Log() == "show popup,show sub", step), Log());
+        Check("_menuWillShow checks the first radio item of a group with none checked", radioA.Checked && !radioB.Checked, $"{radioA.Checked} {radioB.Checked}");
+        Key("Down");
+        Key("Down");
+        Key("Right");
+        Check("a nested submenu raises it on its own Menu", Eventually(() => Log() == "show popup,show sub,show deep", step), Log());
+        Key("Escape");
+        await Task.Delay(500);
+        Check("Escape closes the deepest submenu without MenuWillClose: its item stays on Views' selection path (CloseSubmenu)",
+            Log() == "show popup,show sub,show deep", Log());
+        Key("Up");
+        Check("moving off that item raises MenuWillClose on the submenu's Menu (MenuController::SetSelection)",
+            Eventually(() => Log() == "show popup,show sub,show deep,close deep", step), Log());
+        Key("Down");
+        Key("Right");
+        Check("reopening it raises MenuWillShow again", Eventually(() => Log() == "show popup,show sub,show deep,close deep,show deep", step), Log());
+        Key("Escape");
+        Key("Right");
+        Check("reopening it after Escape raises MenuWillShow again, though it never reported closing",
+            Eventually(() => Log() == "show popup,show sub,show deep,close deep,show deep,show deep", step), Log());
+        log.Clear();
+        popup.ClosePopup(win);
+        Check("closing the popup with submenus open raises MenuWillClose top down (MenuController::SetSelection), then Closed",
+            closed.Wait(step) && Eventually(() => Log() == "close popup,close sub,close deep,callback", step), Log());
+        await Task.Delay(500);
+        Check("the submenus' own late close reports raise nothing more", Log() == "close popup,close sub,close deep,callback", Log());
+    }
+    else if (OperatingSystem.IsMacOS())
+    {
+        // CEF runs a context menu through Chromium's MenuControllerCocoa, the delegate of the top NSMenu only.
+        Check("radio fix-up on macOS runs on the top menu only (the submenu's Menu is never asked)", !radioA.Checked, radioA.Checked);
+    }
+
+    if (!OperatingSystem.IsMacOS())
+    {
+        // Electron's MenuBar runs a dropdown on the item's submenu model: the bar's own Menu raises nothing.
+        log.Clear();
+        var recent = new Menu { new MenuItem { Label = "Doc" } };
+        var file = new Menu { new MenuItem { Label = "Open" }, new MenuItem { Label = "Recent", Submenu = recent } };
+        var bar = new Menu { new MenuItem { Label = "&File", Submenu = file } };
+        Watch(bar, "bar");
+        Watch(file, "file");
+        Watch(recent, "recent");
+        win.SetMenu(bar);
+        Eventually(() => win.IsMenuBarVisible, step);
+        win.TriggerMenuBarItem(0);
+        Check("a menu bar dropdown raises MenuWillShow on its submenu's Menu", Eventually(() => Log() == "show file", step), Log());
+        if (keys) Key("Escape");
+        else win.CancelMenuBarMenu();
+        Check("closing it raises MenuWillClose there; the bar's Menu raises nothing", Eventually(() => Log() == "show file,close file", step) && Eventually(() => !win.IsMenuBarMenuOpen, step), Log());
+        if (keys)
+        {
+            log.Clear();
+            win.TriggerMenuBarItem(0);
+            Eventually(() => Log() == "show file", step);
+            Key("Down");
+            Key("Down");
+            Key("Right");
+            Check("a dropdown's submenu raises MenuWillShow on its own Menu", Eventually(() => Log() == "show file,show recent", step), Log());
+            win.CancelMenuBarMenu();
+            Check("cancelling the dropdown closes both, top down", Eventually(() => Log() == "show file,show recent,close file,close recent", step), Log());
+        }
+        win.RemoveMenu();
+        Eventually(() => !win.IsMenuBarVisible, step);
+    }
+    else
+    {
+#pragma warning disable CA1416
+        // ElectronMenuController: every NSMenu under the application menu raises MenuWillShow on the application menu;
+        // only a top-level menu closing raises MenuWillClose.
+        log.Clear();
+        var previous = Menu.GetApplicationMenu();
+        var recent = new Menu { new MenuItem { Label = "Doc" } };
+        var file = new Menu { new MenuItem { Label = "Open" }, new MenuItem { Label = "Recent", Submenu = recent } };
+        var app = new Menu { new MenuItem { Role = MenuItemRole.AppMenu }, new MenuItem { Label = "File", Submenu = file } };
+        Watch(app, "app");
+        Watch(file, "file");
+        Watch(recent, "recent");
+        Menu.SetApplicationMenu(app);
+        static nint Sub(nint menu, string title)
+        {
+            for (var i = 0; i < MacMenu.ItemCount(menu); i++)
+                if (MacMenu.Title(MacMenu.ItemAt(menu, i)) == title) return MacMenu.Submenu(MacMenu.ItemAt(menu, i));
+            return 0;
+        }
+        nint fileNs = 0, recentNs = 0;
+        Eventually(() => (fileNs = Oriel.Cef.CefThread.InvokeOnUi(() => Sub(MacMenu.MainMenu(), "File"))) != 0, step);
+        recentNs = Oriel.Cef.CefThread.InvokeOnUi(() => Sub(fileNs, "Recent"));
+        var sent = Oriel.Cef.CefThread.InvokeOnUi(() => MacMenu.SendToDelegate(fileNs, "menuWillOpen:") && MacMenu.SendToDelegate(recentNs, "menuWillOpen:")
+            && MacMenu.SendToDelegate(recentNs, "menuDidClose:") && MacMenu.SendToDelegate(fileNs, "menuDidClose:"));
+        Check("the application menu raises MenuWillShow for each menu opening under it, MenuWillClose once its top-level menu closes",
+            sent && Log() == "show app,show app,close app", Log());
+        Menu.SetApplicationMenu(previous);
+#pragma warning restore CA1416
+    }
+}
+
 static bool Throws<T>(Action act) where T : Exception
 {
     try { act(); return false; }
@@ -4825,6 +4987,9 @@ async Task TrayAsync()
         new MenuItem { Label = "More", Submenu = new Menu { new MenuItem { Label = "Deep" } } },
     };
     tray.SetContextMenu(menu);
+    var menuLog = new System.Collections.Concurrent.ConcurrentQueue<string>();
+    menu.MenuWillShow += (_, _) => menuLog.Enqueue("show");
+    menu.MenuWillClose += (_, _) => menuLog.Enqueue("close");
     events.Clear();
     WindowsShell.TrayCallback(host, Id, 0x0204 /* WM_RBUTTONDOWN */);
     nint menuWindow = 0;
@@ -4840,6 +5005,8 @@ async Task TrayAsync()
     Check("other Tray calls answer while the menu is open", Task.Run(() => tray.GetTitle()).Wait(step) && WindowsShell.ViewsMenuWindow() != 0);
     tray.CloseContextMenu();
     Check("CloseContextMenu closes it", Eventually(() => WindowsShell.ViewsMenuWindow() == 0, step));
+    Check("the tray menu raises MenuWillShow and MenuWillClose each time it opens and closes (NotifyIcon's Views MenuRunner)",
+        Eventually(() => string.Join(",", menuLog) == "show,close,show,close", step), string.Join(",", menuLog));
 
     // Explorer restarting broadcasts TaskbarCreated; the icon comes back as Electron's ResetIcon re-adds it: image, no tooltip.
     tray.SetToolTip("Oriel tray test");

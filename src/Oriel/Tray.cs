@@ -140,7 +140,8 @@ public sealed class Tray
     {
         if (_destroyed) return;
         _destroyed = true;
-        _menu.Close();
+        // The backend dies with its MenuRunner, which releases the menu rather than cancelling it.
+        _menu.Close(release: true);
         _backend.Destroy();
     });
 
@@ -262,7 +263,7 @@ public sealed class Tray
     }
 
     /// <summary>Linux: the menu model was replaced, which closes the Views menu the host opened. UI thread.</summary>
-    internal void CloseShellContextMenu() => _menu.Close();
+    internal void CloseShellContextMenu() => _menu.Close(release: true);
 
     /// <summary>The backend; for tests.</summary>
     internal object Backend => _backend;
@@ -421,6 +422,7 @@ internal sealed class TrayHoverDetector(Func<Point> cursor, Action<Action> start
 internal sealed unsafe class TrayMenu
 {
     private cef_window_t* _window;
+    private MenuRun? _run;
 
     /// <summary>Shows <paramref name="menu"/> at <paramref name="at"/> (screen DIPs), closing any menu shown before. Returns
     /// at once: Views runs the menu in the normal message loop.</summary>
@@ -432,11 +434,13 @@ internal sealed unsafe class TrayMenu
         var window = CefNative.cef_window_create_top_level(windowDelegate.Native);
         _window = window;
         var handle = (nint)window;
+        var run = _run = new MenuRun(menu);
         var popupDelegate = new MenuModelDelegate
         {
             CommandExecuted = (id, flags) => menu.FindByCommandId(id)?.Activate(BrowserWindow.GetFocusedWindow(), KeyboardEvent.FromCefFlags(flags)),
+            WillShow = run.WillShow,
             // Posted: CEF is still inside the window's menu code when it reports the close.
-            Closed = () => CefThread.PostUi(() => { if ((nint)_window == handle) Close(); }),
+            Closed = model => { if (run.Closed(model)) CefThread.PostUi(() => { if ((nint)_window == handle) Close(); }); },
         };
         NativeObject.AddRef(popupDelegate.Native);
         var model = CefNative.cef_menu_model_create(popupDelegate.Native);
@@ -449,10 +453,12 @@ internal sealed unsafe class TrayMenu
     /// <summary>Whether a menu is showing.</summary>
     public bool IsOpen => _window is not null;
 
-    /// <summary>Closes the menu, if one is open, and its window.</summary>
-    public void Close()
+    /// <summary>Closes the menu, if one is open, and its window. <paramref name="release"/> drops the menu as Chromium
+    /// destroying its <c>MenuRunner</c> does: no <c>menu-will-close</c>, where <c>Cancel</c> raises it.</summary>
+    public void Close(bool release = false)
     {
         if (_window is null) return;
+        if (release) _run?.Release();
         var window = _window;
         _window = null;
         window->cancel_menu(window);

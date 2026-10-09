@@ -167,11 +167,9 @@ internal static class LinuxTrayRules
         if (menu is null) return null;
         var items = menu.Items;
         var result = new List<LinuxGtkMenuItem>();
-        var group = 0;
         for (var i = 0; i < items.Count; i++)
         {
             var item = items[i];
-            if (item.Type == MenuItemType.Radio && (i == 0 || items[i - 1].Type != MenuItemType.Radio)) group++;
             var type = item.Type switch
             {
                 MenuItemType.Separator => LinuxGtkMenuItemType.Separator,
@@ -185,8 +183,9 @@ internal static class LinuxTrayRules
             {
                 Type = type,
                 Label = separator ? "" : LinuxTrayRules.MenuLabel(item.Label),
-                GroupId = group,
+                GroupId = item.GroupId,
                 Submenu = type == LinuxGtkMenuItemType.Submenu ? GtkModel(item.Submenu) : null,
+                SubmenuWillShow = type == LinuxGtkMenuItemType.Submenu ? () => item.Submenu!.OnMenuWillShow() : null,
                 IsEnabled = () => separator || item.Enabled,
                 IsVisible = () => separator || item.Visible,
                 IsChecked = () => item.Checked,
@@ -446,8 +445,12 @@ internal sealed class DbusMenu
     private bool AboutToShowImpl(int id)
     {
         if (!_items.TryGetValue(id, out var item)) return false;
-        // MenuWillShow on a submenu; Oriel's Menu has no menu-will-show to raise.
-        return id == 0 || item.Menu is not null;
+        if (id == 0) return true;
+        if (item.Menu is not { } menu) return false;
+        // MenuWillShow on the submenu. Its properties were computed when the layout was built and are not recomputed,
+        // so a radio item _menuWillShow checks shows only once the menu is set again, as in Chromium.
+        menu.OnMenuWillShow();
+        return true;
     }
 
     // DCHECKs aside, an event other than "clicked" (hovered, opened, closed) does nothing and succeeds.
