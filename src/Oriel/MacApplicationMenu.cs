@@ -118,7 +118,7 @@ internal static class MacApplicationMenu
 
         var accelerator = MacMenuItemState.ShownAccelerator(item, inMenuBar) is { } text ? Accelerator.Parse(text, macOS: true) : (Accelerator?)null;
         var native = MacMenu.AddItem(nsMenu, MenuLabels.WithoutMnemonics(item.Label), item.CommandId,
-            accelerator?.MacKeyEquivalent ?? string.Empty, accelerator is { } a ? MaskOf(a.Modifiers) : 0,
+            accelerator?.MacKeyEquivalent ?? string.Empty, accelerator is { } a ? MaskOf(a.MacMenuModifiers) : 0,
             MenuRoles.MacSelector(item.Role));
         if (MacMenuItemState.Of(item) is { } state) MacMenuTree.Instance.Apply(native, state);
 

@@ -38,6 +38,22 @@ public sealed class LinuxPowerAndShortcutTests
     [InlineData("]", 0x5Du)]
     [InlineData("\\", 0x5Cu)]
     [InlineData("`", 0x60u)]
+    [InlineData("num0", 0xFFB0u)]
+    [InlineData("num9", 0xFFB9u)]
+    [InlineData("numdec", 0xFFAEu)]
+    [InlineData("numadd", 0xFFABu)]
+    [InlineData("numsub", 0xFFADu)]
+    [InlineData("nummult", 0xFFAAu)]
+    [InlineData("numdiv", 0xFFAFu)]
+    [InlineData("numlock", 0xFF7Fu)]
+    [InlineData("capslock", 0xFFE5u)]
+    [InlineData("scrolllock", 0xFF14u)]
+    [InlineData("!", 0x31u)]
+    [InlineData("@", 0x32u)]
+    [InlineData(")", 0x30u)]
+    [InlineData("~", 0x60u)]
+    [InlineData("?", 0x2Fu)]
+    [InlineData("printscreen", 0u)] // Chromium's table has no VKEY_SNAPSHOT
     public void KeysymOf_IsChromiumsUnshiftedKeysym(string key, uint keysym)
         => Assert.Equal(keysym, X11Keys.KeysymOf((int)GlobalShortcuts.Key("Ctrl+" + key).VirtualKey));
 

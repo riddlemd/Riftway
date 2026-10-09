@@ -92,8 +92,7 @@ internal static class LinuxTrayRules
         var parts = new List<string>();
         if (parsed.Modifiers.HasFlag(AcceleratorModifiers.Control)) parts.Add("Control");
         if (parsed.Modifiers.HasFlag(AcceleratorModifiers.Alt)) parts.Add("Alt");
-        // Electron's "Plus" is VKEY_OEM_PLUS with Shift.
-        if (parsed.Modifiers.HasFlag(AcceleratorModifiers.Shift) || parsed.MacKeyEquivalent == "+") parts.Add("Shift");
+        if (parsed.Modifiers.HasFlag(AcceleratorModifiers.Shift)) parts.Add("Shift");
         if (parsed.Modifiers.HasFlag(AcceleratorModifiers.Command)) parts.Add("Super");
         parts.Add(key);
         return [.. parts];
