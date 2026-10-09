@@ -9,7 +9,7 @@ These figures are counted from the rows: after changing a row or checklist item,
 
 | Measure | Done | Partial | Not started | Total |
 |---|---|---|---|---|
-| Module rows below | 7 | 38 | 22 | 67 |
+| Module rows below | 7 | 39 | 21 | 67 |
 | M2 rows | 3 | 17 | 1 | 21 |
 
 The 67 rows include `BrowserView` (deprecated, never implemented; counted as not started).
@@ -18,6 +18,7 @@ The 67 rows include `BrowserView` (deprecated, never implemented; counted as not
 |---|---|---|---|---|---|---|
 | [BrowserWindow](parity/browser-window.md) (with `BaseWindow`) | 294 | 168 | 55 | 71 | 57.1% | 66.5% |
 | [webContents](parity/web-contents.md) (with `navigationHistory`, `WebFrameMain`) | 230 | 106 | 55 | 69 | 46.1% | 58.0% |
+| [DownloadItem](parity/download-item.md) (with the session's download API) | 31 | 20 | 9 | 2 | 64.5% | 79.0% |
 
 **Source** — where the implementation comes from:
 
@@ -97,7 +98,7 @@ Detailed item-by-item status, including `navigationHistory` and `WebFrameMain`: 
 | `protocol` | `Protocol` | CEF | M2 | partial: `handle`, `unhandle`, `isProtocolHandled`, `registerSchemesAsPrivileged`; per session through `Session.Protocol`; no `intercept*` or legacy `register*Protocol` (see DRIFT.md) |
 | `Cookies` | `Cookies` | CEF | M6 | partial: `get`, `set` (Electron's rejection messages), `remove`, `flushStore`, `changed` (read from the store, see DRIFT E4, E5) |
 | `WebRequest` | `WebRequest` | CEF | M6 | partial: all eight events with `urls`/`excludeUrls`/`types` filters, cancel and `redirectURL`, request header changes, `uploadData` (bytes and file paths), `frame`, `webContentsId`, custom-scheme requests, service and shared worker requests without a page; `onHeadersReceived` cannot change or cancel the response, no `fromCache`/`ip`/`initiatorOrigin`, a `net` module's requests unseen (see DRIFT.md E17-E19, E27) |
-| `DownloadItem` | `DownloadItem` | CEF | M6 | — |
+| `DownloadItem` | `DownloadItem` | CEF | M6 | partial: 20 of 31 applicable items done (64.5%) with `will-download`, `downloadURL` and `createInterruptedDownload`, see parity/download-item.md; no `getInitiatorOrigin` (E40), validators and gesture blank (E13), two-URL chain (E15) |
 | `net` | `Net` | CEF | M6 | partial _(branch `net-module`)_: `request`, `fetch` (and `Session.FetchAsync`, reaching the session's protocol handlers unless `bypassCustomProtocolHandlers`), `isOnline`/`online`, `resolveHost`; cookies follow credentials, no `Set-Cookie`, buffered chunked bodies, no `WebSocket` (DRIFT L1-L11) |
 | `ClientRequest` / `IncomingMessage` | `ClientRequest` / `IncomingMessage` | CEF | M6 | partial _(branch `net-module`)_: headers with Electron's rules and errors, write/end, abort, redirect modes with `followRedirect`, `login`, Electron's event order and `net::ERR_*` errors; gaps in DRIFT L1-L7 |
 | `WebSocket` (main process) | `WebSocket` | CEF or Patch (verify) | M6 | — |

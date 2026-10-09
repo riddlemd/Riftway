@@ -56,6 +56,7 @@ function countChecklist(file) {
 
 const bw = countChecklist(path.join(repo, 'docs/parity/browser-window.md'));
 const wc = countChecklist(path.join(repo, 'docs/parity/web-contents.md'));
+const di = countChecklist(path.join(repo, 'docs/parity/download-item.md'));
 
 const file = path.join(repo, 'docs/ELECTRON-PARITY.md');
 const text = fs.readFileSync(file, 'utf8');
@@ -80,11 +81,13 @@ let out = lines.map(l => {
   const row = (t, s) => { const app = s.items - s.na; return `| ${t} | ${app} | ${s.done} | ${s.partial} | ${s.missing} | ${pct(s.done, app)} | ${pct(s.done + s.partial / 2, app)} |`; };
   if (l.startsWith('| [BrowserWindow](parity/browser-window.md)')) return row(cells(l)[0], bw);
   if (l.startsWith('| [webContents](parity/web-contents.md)')) return row(cells(l)[0], wc);
+  if (l.startsWith('| [DownloadItem](parity/download-item.md)')) return row(cells(l)[0], di);
   return l;
 }).join('\n');
 out = out.replace(/The \d+ rows include/, `The ${tot(mod)} rows include`);
 out = out.replace(/(\| `BrowserWindow` \|[^\n]*?)\d+ of \d+ applicable items done \([\d.]+%\)/, (m, p) => `${p}${bw.done} of ${bw.items - bw.na} applicable items done (${pct(bw.done, bw.items - bw.na)})`);
 out = out.replace(/(\| `webContents` \|[^\n]*?)\d+ of \d+ applicable items done \([\d.]+%\)/, (m, p) => `${p}${wc.done} of ${wc.items - wc.na} applicable items done (${pct(wc.done, wc.items - wc.na)})`);
+out = out.replace(/(\| `DownloadItem` \|[^\n]*?)\d+ of \d+ applicable items done \([\d.]+%\)/, (m, p) => `${p}${di.done} of ${di.items - di.na} applicable items done (${pct(di.done, di.items - di.na)})`);
 write(file, text, out);
-console.log(`modules ${JSON.stringify(mod)} m2 ${JSON.stringify(m2)} bw ${JSON.stringify(bw)} wc ${JSON.stringify(wc)}`);
+console.log(`modules ${JSON.stringify(mod)} m2 ${JSON.stringify(m2)} bw ${JSON.stringify(bw)} wc ${JSON.stringify(wc)} di ${JSON.stringify(di)}`);
 console.log(changed.length ? `changed: ${changed.map(f => path.relative(repo, f)).join(', ')}` : 'no changes');

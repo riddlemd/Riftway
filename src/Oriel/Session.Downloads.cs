@@ -17,7 +17,7 @@ public sealed partial class Session
     {
         var item = new DownloadItem(snapshot, before) { Finished = done => _downloads.Remove(done.Id), Session = this };
         _downloads[snapshot.Id] = item;
-        if (_earlyControls.Remove(snapshot.Id, out var early)) early.Release();
+        if (_earlyControls.Remove(snapshot.Id, out var early)) item.Adopt(early);
         var args = new WillDownloadEventArgs(item, page);
         try { WillDownload?.Invoke(this, args); }
         catch (Exception e) { Console.Error.WriteLine($"[Oriel] A will-download handler failed: {e}"); }

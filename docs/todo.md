@@ -77,6 +77,11 @@ Cross-platform work. Platform-specific items: [linux-todo.md](linux-todo.md), [w
       macOS (branch `mac-clipboard`) and Linux X11 with `selection` (branch `linux-clipboard`); the macOS `Shell` (branch `mac-shell-shortcut`, WindowTest checks pass: DRIFT H1)
 - [x] `GlobalShortcut`, `PowerMonitor`, `PowerSaveBlocker` on Windows (branch `power-shortcuts`) and Linux (branch `linux-power-shortcuts`); `PowerMonitor` and `PowerSaveBlocker` on macOS (branch `mac-power-tray`); macOS `GlobalShortcut` (branch `mac-shell-shortcut`, WindowTest checks pass: DRIFT J1)
 - [x] `Tray` on Windows (branch `tray`), Linux (branch `linux-tray`) and macOS (branch `mac-power-tray`)
+- [ ] `DownloadItem` parity (branch `download-item`, [parity/download-item.md](parity/download-item.md)): Chromium's resume
+      rules, the save dialog's URL title and Windows filters, `savePath`, `hasUserGesture`/`getETag`/`getLastModifiedTime`
+      (DRIFT E13), pause/cancel before CEF hands a control. Unit tests pass; run the new SessionTest `HTTP:` download checks
+      (local server: redirect, Content-Disposition, ETag, pause/resume, reset and Range resume, 403) on Linux and macOS.
+      CEF patches for E13-E16, E39-E41
 - [ ] M3 Blazor Hybrid · M4 ship it · M5 desktop integration · M6 session/network/processes · M7 own CEF builds
       (see [PLAN.md](PLAN.md#milestones))
 - [ ] M7: CEF patches in [eng/cef](../eng/cef/README.md): 0001 `CefWindowDelegate::IsTranslucent` (W24), 0002

@@ -43,29 +43,40 @@ public sealed class DownloadItem
     private DownloadControl? _control;
     private string? _savePath;
     private bool _cancelRequested;
+    // A pause (true) or resume (false) asked before CEF gave a control or while the target is still pending.
+    private bool? _pauseRequested;
+    // CEF's net::GenerateFileName result; later reports carry only the raw suggested name.
+    private readonly string _filename;
 
     internal DownloadItem(DownloadSnapshot snapshot, BeforeDownload before)
     {
         _snapshot = snapshot;
         _before = before;
+        _filename = snapshot.SuggestedFileName;
     }
 
-    /// <summary>The download progressed or was interrupted. Electron's <c>updated</c> event.</summary>
+    /// <summary>The download progressed, or was interrupted in a way it can resume from. Electron's <c>updated</c> event.</summary>
     public event EventHandler<DownloadStateEventArgs>? Updated;
 
-    /// <summary>The download completed, was cancelled or was interrupted for good. Electron's <c>done</c> event.</summary>
+    /// <summary>The download completed, was cancelled or was interrupted in a way it cannot resume from. Electron's
+    /// <c>done</c> event.</summary>
     public event EventHandler<DownloadStateEventArgs>? Done;
 
-    /// <summary>Where to save the file, skipping the save dialog; only honoured during <see cref="Session.WillDownload"/>.
-    /// Chromium creates missing directories. Electron's <c>downloadItem.setSavePath()</c>.</summary>
-    public void SetSavePath(string path)
-    {
-        if (_before is not null) _savePath = path;
-    }
+    /// <summary>Where to save the file, skipping the save dialog; only honoured during <see cref="Session.WillDownload"/>,
+    /// though <see cref="GetSavePath"/> reports it whenever it is set. Chromium creates missing directories. Electron's
+    /// <c>downloadItem.setSavePath()</c>.</summary>
+    public void SetSavePath(string path) => _savePath = path;
 
-    /// <summary>The file's path: the one set, the one chosen in the dialog, or empty until then. Electron's
+    /// <summary>The path set, or the one chosen in the dialog; empty until then. Electron's
     /// <c>downloadItem.getSavePath()</c>.</summary>
-    public string GetSavePath() => _savePath ?? _snapshot.FullPath;
+    public string GetSavePath() => _savePath ?? "";
+
+    /// <summary>Electron's <c>downloadItem.savePath</c> property.</summary>
+    public string SavePath
+    {
+        get => GetSavePath();
+        set => SetSavePath(value);
+    }
 
     /// <summary>The save dialog's options when no save path is set. Electron's <c>downloadItem.setSaveDialogOptions()</c>.</summary>
     public void SetSaveDialogOptions(SaveDialogOptions options) => SaveDialogOptions = options;
@@ -76,24 +87,39 @@ public sealed class DownloadItem
     internal SaveDialogOptions SaveDialogOptions { get; private set; } = new();
 
     /// <summary>Electron's <c>downloadItem.pause()</c>.</summary>
-    public void Pause() => CefThread.RunOnUi(() => _control?.Pause());
+    public void Pause() => CefThread.RunOnUi(() => RequestPause(true));
 
     /// <summary>Electron's <c>downloadItem.isPaused()</c>.</summary>
     public bool IsPaused() => _snapshot.IsPaused;
 
-    /// <summary>Electron's <c>downloadItem.resume()</c>.</summary>
-    public void Resume() => CefThread.RunOnUi(() => _control?.Resume());
+    /// <summary>Continues a paused download, or one interrupted in a way it can resume from. Electron's
+    /// <c>downloadItem.resume()</c>.</summary>
+    public void Resume() => CefThread.RunOnUi(() => RequestPause(false));
 
-    /// <summary>Whether <see cref="Resume"/> can continue the download: true while paused. Electron's
+    /// <summary>True while paused, or when interrupted and only the user may resume it. Electron's
     /// <c>downloadItem.canResume()</c>.</summary>
-    public bool CanResume() => _snapshot.IsPaused;
+    public bool CanResume() => DownloadRules.CanResume(_snapshot);
 
     /// <summary>Electron's <c>downloadItem.cancel()</c>.</summary>
-    public void Cancel() => CefThread.RunOnUi(() =>
+    public void Cancel() => CefThread.RunOnUi(RequestCancel);
+
+    // UI thread. Until the save path is decided, CEF's control would spin re-posting the pause.
+    internal void RequestPause(bool pause)
     {
-        if (_before is not null) _cancelRequested = true;
-        else _control?.Cancel();
-    });
+        if (_before is null && _control is { } control)
+        {
+            if (pause) control.Pause();
+            else control.Resume();
+        }
+        else _pauseRequested = pause;
+    }
+
+    // UI thread.
+    internal void RequestCancel()
+    {
+        if (_before is null && _control is { } control) control.Cancel();
+        else _cancelRequested = true;
+    }
 
     /// <summary>Electron's <c>downloadItem.getURL()</c>.</summary>
     public string GetUrl() => _snapshot.Url;
@@ -105,10 +131,18 @@ public sealed class DownloadItem
     /// <summary>Electron's <c>downloadItem.getMimeType()</c>.</summary>
     public string GetMimeType() => _snapshot.MimeType;
 
-    /// <summary>The file's name: the saved file's once its path is known, the suggested one before. Electron's
-    /// <c>downloadItem.getFilename()</c>.</summary>
-    public string GetFilename()
-        => GetSavePath() is { Length: > 0 } path ? Path.GetFileName(path) : _snapshot.SuggestedFileName;
+    /// <summary>The name made from the URL, Content-Disposition, suggested name and MIME type; a name chosen in the save
+    /// dialog does not change it. Electron's <c>downloadItem.getFilename()</c>.</summary>
+    public string GetFilename() => _filename;
+
+    /// <summary>Always false: CEF's item has no gesture (DRIFT E13). Electron's <c>downloadItem.hasUserGesture()</c>.</summary>
+    public bool HasUserGesture() => false;
+
+    /// <summary>Always empty: CEF's item has no Last-Modified (DRIFT E13). Electron's <c>downloadItem.getLastModifiedTime()</c>.</summary>
+    public string GetLastModifiedTime() => "";
+
+    /// <summary>Always empty: CEF's item has no ETag (DRIFT E13). Electron's <c>downloadItem.getETag()</c>.</summary>
+    public string GetETag() => "";
 
     /// <summary>Electron's <c>downloadItem.getContentDisposition()</c>.</summary>
     public string GetContentDisposition() => _snapshot.ContentDisposition;
@@ -154,9 +188,11 @@ public sealed class DownloadItem
             Save(before, path);
             return;
         }
-        var options = SaveDialogOptions;
-        if (string.IsNullOrEmpty(options.DefaultPath))
-            options = options with { DefaultPath = Path.Combine(Session?.DownloadDirectoryForDialog() ?? DownloadsDirectory, _snapshot.SuggestedFileName) };
+        var generated = string.IsNullOrEmpty(SaveDialogOptions.DefaultPath)
+            ? Path.Combine(Session?.DownloadDirectoryForDialog() ?? DownloadsDirectory, _filename)
+            : "";
+        var options = DownloadRules.DialogOptionsFor(SaveDialogOptions, _snapshot.Url, generated, OperatingSystem.IsWindows(),
+            extension => OperatingSystem.IsWindows() ? DownloadRules.RegistryDescription(extension) : null);
         Dialog.ShowSaveDialogAsync(window, options).ContinueWith(t => CefThread.RunOnUi(() =>
         {
             if (t.IsCompletedSuccessfully && !t.Result.Canceled && t.Result.FilePath is { Length: > 0 } chosen && !_cancelRequested)
@@ -190,13 +226,34 @@ public sealed class DownloadItem
         _control = control;
         _snapshot = snapshot;
         var state = StateOf(snapshot);
-        if (state is DownloadState.Progressing) Updated?.Invoke(this, new DownloadStateEventArgs(state));
-        else
+        if (DownloadRules.IsDone(snapshot))
         {
             control.Release();
             _control = null;
             Complete(state);
+            return;
         }
+        if (_before is null) ApplyRequests(control);
+        Updated?.Invoke(this, new DownloadStateEventArgs(state));
+    }
+
+    /// <summary>UI thread: a control CEF gave before <see cref="Session.WillDownload"/>; the item owns it.</summary>
+    internal void Adopt(DownloadControl control)
+    {
+        _control?.Release();
+        _control = control;
+    }
+
+    private void ApplyRequests(DownloadControl control)
+    {
+        if (_cancelRequested) control.Cancel();
+        else if (_pauseRequested is { } pause)
+        {
+            if (pause) control.Pause();
+            else control.Resume();
+        }
+        _cancelRequested = false;
+        _pauseRequested = null;
     }
 
     private void Complete(DownloadState state)

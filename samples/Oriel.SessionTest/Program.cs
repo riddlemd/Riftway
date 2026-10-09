@@ -412,6 +412,98 @@ async Task RunAsync()
         e.Item.Updated += (_, _) => e.Item.Cancel();
     });
     Check("Cancel during the download: Done says cancelled", midway.State == DownloadState.Cancelled && midway.DoneCount == 1, $"{midway.State} {midway.DoneCount}");
+
+    // A real HTTP server: Content-Disposition, ETag and Last-Modified, a redirect, range requests, and a reset mid-body.
+    var served = new DownloadServer();
+    var downloadListener = new TcpListener(IPAddress.Loopback, 0);
+    downloadListener.Start();
+    _ = ServeDownloads(downloadListener, served);
+    var httpOrigin = $"http://127.0.0.1:{((IPEndPoint)downloadListener.LocalEndpoint).Port}/";
+    var transitions = new System.Collections.Concurrent.ConcurrentQueue<string>();
+    string? savePathAtStart = null;
+    var renamedPath = Path.Combine(downloadDir, "renamed.bin");
+    var viaRedirect = await Download(() => downloads.DownloadUrl(httpOrigin + "redirect.bin"), e =>
+    {
+        savePathAtStart = e.Item.GetSavePath();
+        e.Item.SetSavePath(renamedPath);
+        e.Item.Updated += (_, u) => transitions.Enqueue($"updated:{u.State}:{(e.Item.IsPaused() ? "paused" : "running")}");
+        e.Item.Done += (_, d) => transitions.Enqueue($"done:{d.State}");
+    });
+    var viaRedirectItem = viaRedirect.Item;
+    Check("HTTP: getURLChain after a redirect is the original URL then the final one; getURL is the final one",
+        viaRedirectItem?.GetUrlChain().SequenceEqual([httpOrigin + "redirect.bin", httpOrigin + "file.bin"]) == true && viaRedirectItem.GetUrl() == httpOrigin + "file.bin",
+        $"{string.Join(" > ", viaRedirectItem?.GetUrlChain() ?? [])} | {viaRedirectItem?.GetUrl()}");
+    Check("HTTP: getContentDisposition and getMimeType read back the response's headers",
+        viaRedirectItem?.GetContentDisposition() == DownloadServer.Disposition && viaRedirectItem.GetMimeType() == "application/octet-stream",
+        $"{viaRedirectItem?.GetContentDisposition()} | {viaRedirectItem?.GetMimeType()}");
+    Check("HTTP: getFilename is the Content-Disposition name, not the save path's", viaRedirectItem?.GetFilename() == "named.bin" && viaRedirect.Filename == "named.bin",
+        $"{viaRedirect.Filename} {viaRedirectItem?.GetFilename()}");
+    Check("HTTP: getSavePath is empty in will-download until set, then the path set", savePathAtStart == "" && viaRedirectItem?.GetSavePath() == renamedPath,
+        $"'{savePathAtStart}' {viaRedirectItem?.GetSavePath()}");
+    Check("HTTP: getETag, getLastModifiedTime and hasUserGesture are CEF's blanks (DRIFT E13)",
+        viaRedirectItem?.GetETag() == "" && viaRedirectItem.GetLastModifiedTime() == "" && !viaRedirectItem.HasUserGesture());
+    Check("HTTP: the file arrives whole, with its total and received bytes", viaRedirect.State == DownloadState.Completed && File.Exists(renamedPath)
+        && File.ReadAllBytes(renamedPath).SequenceEqual(DownloadServer.Body) && viaRedirectItem?.GetTotalBytes() == DownloadServer.Body.Length
+        && viaRedirectItem.GetReceivedBytes() == DownloadServer.Body.Length && viaRedirectItem.GetPercentComplete() == 100,
+        $"{viaRedirect.State} {viaRedirectItem?.GetReceivedBytes()}/{viaRedirectItem?.GetTotalBytes()}");
+    var sequence = transitions.ToArray();
+    Check("HTTP: state transitions are updated (progressing) then a single done (completed), and nothing after it",
+        sequence.Length >= 2 && sequence[..^1].All(t => t == "updated:Progressing:running") && sequence[^1] == "done:Completed",
+        string.Join(",", sequence.Distinct()));
+
+    var pausedHttpPath = Path.Combine(downloadDir, "paused-http.bin");
+    string? httpPause = null;
+    var pausedUpdate = 0;
+    var pausedHttp = await Download(() => downloads.DownloadUrl(httpOrigin + "file.bin"), e =>
+    {
+        e.Item.SetSavePath(pausedHttpPath);
+        var started = 0;
+        e.Item.Updated += (_, u) =>
+        {
+            if (e.Item.IsPaused()) Interlocked.Increment(ref pausedUpdate);
+            if (u.State != DownloadState.Progressing || Interlocked.Increment(ref started) != 1) return;
+            _ = Task.Run(async () =>
+            {
+                e.Item.Pause();
+                for (var i = 0; i < 60 && !e.Item.IsPaused(); i++) await Task.Delay(50);
+                var paused = e.Item.IsPaused() && e.Item.CanResume();
+                var before = e.Item.GetReceivedBytes();
+                await Task.Delay(800);
+                httpPause = $"{paused} {e.Item.GetReceivedBytes() == before} {e.Item.GetState()}";
+                e.Item.Resume();
+            });
+        };
+    });
+    Check("HTTP: pause holds the bytes with isPaused and canResume, and updated reports the pause", httpPause == "True True Progressing" && pausedUpdate > 0,
+        $"{httpPause} paused updates={pausedUpdate}");
+    Check("HTTP: resume finishes the file and canResume is then false", pausedHttp.State == DownloadState.Completed
+        && File.Exists(pausedHttpPath) && File.ReadAllBytes(pausedHttpPath).SequenceEqual(DownloadServer.Body) && pausedHttp.Item?.CanResume() == false,
+        $"{pausedHttp.State}");
+
+    var droppedPath = Path.Combine(downloadDir, "dropped.bin");
+    var interruptedUpdates = 0;
+    var canResumeWhenInterrupted = false;
+    var dropped = await Download(() => downloads.DownloadUrl(httpOrigin + "drop.bin"), e =>
+    {
+        e.Item.SetSavePath(droppedPath);
+        e.Item.Updated += (_, u) =>
+        {
+            if (u.State != DownloadState.Interrupted || Interlocked.Increment(ref interruptedUpdates) != 1) return;
+            canResumeWhenInterrupted = e.Item.CanResume();
+            e.Item.Resume();
+        };
+    });
+    Check("HTTP: a reset mid-body raises updated (interrupted), not done, and canResume is true",
+        interruptedUpdates >= 1 && canResumeWhenInterrupted, $"interrupted updates={interruptedUpdates} canResume={canResumeWhenInterrupted}");
+    Check("HTTP: resume after the reset asks for the rest with Range and completes the file, done once",
+        dropped.State == DownloadState.Completed && dropped.DoneCount == 1 && served.Ranges.Any(r => r.StartsWith("bytes=", StringComparison.Ordinal) && !r.StartsWith("bytes=0-", StringComparison.Ordinal))
+        && File.Exists(droppedPath) && File.ReadAllBytes(droppedPath).SequenceEqual(DownloadServer.Body),
+        $"{dropped.State} done={dropped.DoneCount} ranges={string.Join(",", served.Ranges)}");
+
+    var forbidden = await Download(() => downloads.DownloadUrl(httpOrigin + "forbidden.bin"), e => e.Item.SetSavePath(Path.Combine(downloadDir, "forbidden.bin")));
+    Check("HTTP: a 403 is an interruption it cannot resume from: done (interrupted), canResume false",
+        forbidden.State == DownloadState.Interrupted && forbidden.Item?.CanResume() == false && forbidden.DoneCount == 1, $"{forbidden.State} {forbidden.DoneCount}");
+    downloadListener.Stop();
     // Session.DownloadUrl: no page, through the session's hidden page, which no window list or event sees.
     var windowsBefore = BrowserWindow.GetAllWindows().Count;
     var pagesMade = 0;
@@ -1964,6 +2056,69 @@ static async Task Respond(Stream stream, int status, string reason, string heade
     await stream.FlushAsync();
 }
 
+// /file.bin slowly, with Content-Disposition, ETag, Last-Modified and byte ranges; /redirect.bin to it; /drop.bin
+// resets the connection halfway the first time; /forbidden.bin is a 403.
+static async Task ServeDownloads(TcpListener listener, DownloadServer state)
+{
+    while (true)
+    {
+        TcpClient client;
+        try { client = await listener.AcceptTcpClientAsync(); }
+        catch (Exception) { return; }
+        _ = Task.Run(async () =>
+        {
+            using (client)
+            {
+                try
+                {
+                    var stream = client.GetStream();
+                    var reader = new StreamReader(stream, Encoding.ASCII);
+                    var path = (await reader.ReadLineAsync() ?? "").Split(' ') is [_, var target, ..] ? target : "/";
+                    string? range = null;
+                    for (var line = await reader.ReadLineAsync(); !string.IsNullOrEmpty(line); line = await reader.ReadLineAsync())
+                        if (line.StartsWith("Range:", StringComparison.OrdinalIgnoreCase)) range = line["Range:".Length..].Trim();
+                    if (range is not null) state.Ranges.Enqueue(range);
+                    if (path == "/redirect.bin")
+                    {
+                        await Respond(stream, 302, "Found", "Location: /file.bin\r\n", "moved");
+                        return;
+                    }
+                    if (path == "/forbidden.bin")
+                    {
+                        await Respond(stream, 403, "Forbidden", "", "no");
+                        return;
+                    }
+                    var body = DownloadServer.Body;
+                    var from = range is not null && range.StartsWith("bytes=", StringComparison.Ordinal) ? long.Parse(range[6..].Split('-')[0], CultureInfo.InvariantCulture) : 0;
+                    var head = new StringBuilder(from > 0 ? "HTTP/1.1 206 Partial Content\r\n" : "HTTP/1.1 200 OK\r\n")
+                        .Append("Content-Type: application/octet-stream\r\n")
+                        .Append($"Content-Disposition: {DownloadServer.Disposition}\r\n")
+                        .Append("ETag: \"oriel-v1\"\r\nLast-Modified: Tue, 06 Oct 2026 12:00:00 GMT\r\nAccept-Ranges: bytes\r\n")
+                        .Append($"Content-Length: {body.Length - from}\r\n");
+                    if (from > 0) head.Append($"Content-Range: bytes {from}-{body.Length - 1}/{body.Length}\r\n");
+                    head.Append("Connection: close\r\n\r\n");
+                    await stream.WriteAsync(Encoding.ASCII.GetBytes(head.ToString()));
+                    var drop = path == "/drop.bin" && Interlocked.Exchange(ref state.Dropped, 1) == 0;
+                    const int Chunk = 64 * 1024;
+                    for (var offset = from; offset < body.Length; offset += Chunk)
+                    {
+                        if (drop && offset >= body.Length / 2)
+                        {
+                            // An RST, not a FIN: Chromium calls that a network failure, which only the user resumes.
+                            client.LingerState = new LingerOption(true, 0);
+                            return;
+                        }
+                        await stream.WriteAsync(body.AsMemory((int)offset, (int)Math.Min(Chunk, body.Length - offset)));
+                        await stream.FlushAsync();
+                        await Task.Delay(40);
+                    }
+                }
+                catch (Exception) { }
+            }
+        });
+    }
+}
+
 // Permissions: Electron's request, check and display media handlers, driven by real page requests.
 async Task PermissionChecks(bool mediaOnly = false)
 {
@@ -2453,6 +2608,14 @@ Console.WriteLine(failures < 0 ? "RESULT: no result" : $"RESULT: {failures} fail
 return failures;
 
 // A body that arrives in chunks over time, so a download can be paused midway.
+sealed class DownloadServer
+{
+    public const string Disposition = "attachment; filename=\"named.bin\"";
+    public static readonly byte[] Body = [.. Enumerable.Range(0, 2 * 1024 * 1024).Select(i => (byte)(i % 251))];
+    public readonly System.Collections.Concurrent.ConcurrentQueue<string> Ranges = new();
+    public int Dropped;
+}
+
 sealed class SlowStream(int chunks, int chunkSize) : Stream
 {
     private long _remaining = (long)chunks * chunkSize;
