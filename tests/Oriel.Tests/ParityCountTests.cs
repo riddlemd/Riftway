@@ -87,12 +87,16 @@ public sealed class ParityCountTests
     public void AppSummaryMatchesItsRows() => CheckChecklist(Path.Combine("docs", "parity", "app.md"));
 
     [Fact]
+    public void SessionSummaryMatchesItsRows() => CheckChecklist(Path.Combine("docs", "parity", "session.md"));
+
+    [Fact]
     public void ElectronParityFiguresMatchTheirRows()
     {
         var browserWindow = CheckChecklist(Path.Combine("docs", "parity", "browser-window.md"));
         var webContents = CheckChecklist(Path.Combine("docs", "parity", "web-contents.md"));
         var downloadItem = CheckChecklist(Path.Combine("docs", "parity", "download-item.md"));
         var app = CheckChecklist(Path.Combine("docs", "parity", "app.md"));
+        var session = CheckChecklist(Path.Combine("docs", "parity", "session.md"));
         var lines = File.ReadAllLines(Path.Combine(s_root, "docs", "ELECTRON-PARITY.md"));
         int[] modules = [0, 0, 0], m2 = [0, 0, 0];
         var inModules = false;
@@ -119,6 +123,9 @@ public sealed class ParityCountTests
         Assert.Contains(Row("[app](parity/app.md) (with `app.dock` as one item)", app), lines);
         Assert.Contains(lines, l => l.StartsWith("| `app` |", StringComparison.Ordinal)
             && l.Contains($"{app.Done} of {app.Applicable} applicable items done ({Percent(app.Done, app.Applicable)})", StringComparison.Ordinal));
+        Assert.Contains(Row("[session](parity/session.md) (module and `Session`; other modules' members n/a)", session), lines);
+        Assert.Contains(lines, l => l.StartsWith("| `session` |", StringComparison.Ordinal)
+            && l.Contains($"{session.Done} of {session.Applicable} applicable items done ({Percent(session.Done, session.Applicable)})", StringComparison.Ordinal));
     }
 
     [Fact]

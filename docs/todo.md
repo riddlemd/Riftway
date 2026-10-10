@@ -108,3 +108,8 @@ Cross-platform work. Platform-specific items: [linux-todo.md](linux-todo.md), [w
       Oriel detects a patched libcef by its next-version API hash (`CefRuntime.IsPatched`) and runs unchanged on stock
       CEF. None is built yet: build, check the hashes, run WindowTest on Linux ([linux-todo.md](linux-todo.md)) and
       SessionTest's `patched (0005)` and `patched (0006)` checks
+- [ ] `session` audit (branch `session-audit`, [parity/session.md](parity/session.md)): run SessionTest
+      `SessionAuditChecks` on macOS, Windows and Linux (written, never run): `StoragePath`, `SpellCheckerEnabled`,
+      `EnableNetworkEmulation` offline and latency on open and later pages, another session untouched (DRIFT E43),
+      `SetSslConfig` and `AllowNtlmCredentialsForDomains` accepted by Chromium's local state (E44). Not checked: a
+      TLS 1.2-only server refused after `MinVersion = tls1.3`, and NTLM credentials sent to an allow-listed server
