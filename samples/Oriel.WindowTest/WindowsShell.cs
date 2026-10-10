@@ -1008,10 +1008,6 @@ static unsafe class WindowsShell
         return ((int)pid, new string(name, 0, Math.Max(length, 0)), IsWindowVisible(hwnd) != 0, GetAncestor(hwnd, 1 /* GA_PARENT */) == GetDesktopWindow());
     }
 
-    /// <summary><c>SendMessageW</c> to one window: never a broadcast.</summary>
-    internal static nint Send(nint hwnd, uint message, nint wParam, nint lParam)
-        => hwnd is 0 or 0xFFFF ? throw new ArgumentException("Not a broadcast.", nameof(hwnd)) : SendMessageW(hwnd, message, wParam, lParam);
-
     /// <summary>DWM's immersive dark mode attribute (20) as <c>DwmGetWindowAttribute</c> reads it back; null if it fails.</summary>
     internal static bool? ImmersiveDarkMode(nint hwnd)
     {
@@ -1019,11 +1015,7 @@ static unsafe class WindowsShell
         return DwmGetWindowAttribute(hwnd, 20, &value, sizeof(int)) >= 0 ? value != 0 : null;
     }
 
-    [DllImport("user32.dll")] private static extern int IsWindowVisible(nint hwnd);
-    [DllImport("user32.dll")] private static extern nint GetAncestor(nint hwnd, uint flags);
     [DllImport("user32.dll")] private static extern nint GetDesktopWindow();
-    [DllImport("user32.dll")] private static extern nint SendMessageW(nint hwnd, uint message, nint wParam, nint lParam);
-    [DllImport("dwmapi.dll")] private static extern int DwmGetWindowAttribute(nint hwnd, uint attribute, void* value, uint size);
 
     /// <summary>The icon <c>LoadImage(IMAGE_ICON, size, size, LR_LOADFROMFILE)</c> makes of <paramref name="path"/>, as
     /// straight BGRA with the AND mask applied to icons without alpha; null if it cannot be loaded.</summary>
