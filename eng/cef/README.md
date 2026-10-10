@@ -94,6 +94,11 @@ eng/cef/apply-patches.sh <download-dir>
 build.sh --no-update --force-build
 ```
 
+On Linux, a non-official build needs `use_partition_alloc_as_malloc=false enable_backup_ref_ptr_support=false` in
+`GN_DEFINES`. CEF's `gn_args.py` adds them for official builds only, and without them libcef crashes in the .NET host,
+which mixes glibc and PartitionAlloc heaps (CEF issues #3061, #3095). Build `--build-target=libcef`: the default
+`cefclient` target needs GTK headers the arm64 sysroot lacks, and the minimal distribution doesn't use it.
+
 Before updating the checkout (a new CEF commit or Chromium), run `eng/cef/apply-patches.sh <download-dir> --revert`:
 automate-git runs `version_manager.py -a` after a Chromium change on a release branch, and that refuses `CEF_NEXT` in
 the headers. A changed CEF checkout re-copies `chromium/src/cef` and drops the patches; apply them again.

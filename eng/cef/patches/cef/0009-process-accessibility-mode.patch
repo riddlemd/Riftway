@@ -27,7 +27,7 @@ index 92c5409..fdb9ee6 100644
      "//third_party/icu",
      "//third_party/zlib:minizip",
 +    "//ui/accessibility:ax_base",
-+    "//ui/accessibility/platform",
++    "//ui/accessibility",
      "//ui/base",
      "//ui/base/ime",
      "//ui/events",
