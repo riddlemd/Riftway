@@ -20,6 +20,7 @@ The 67 rows include `BrowserView` (deprecated, never implemented; counted as not
 | [webContents](parity/web-contents.md) (with `navigationHistory`, `WebFrameMain`) | 230 | 106 | 55 | 69 | 46.1% | 58.0% |
 | [DownloadItem](parity/download-item.md) (with the session's download API) | 31 | 20 | 10 | 1 | 64.5% | 80.6% |
 | [app](parity/app.md) (with `app.dock` as one item) | 114 | 64 | 28 | 22 | 56.1% | 68.4% |
+| [session](parity/session.md) (module and `Session`; other modules' members n/a) | 75 | 24 | 15 | 36 | 32.0% | 42.0% |
 
 **Source** — where the implementation comes from:
 
@@ -95,7 +96,7 @@ Detailed item-by-item status, including `navigationHistory` and `WebFrameMain`: 
 
 | Electron | Oriel | Source | Wave | Status |
 |---|---|---|---|---|
-| `session` | `Session` | CEF | M2 core, M6 rest | partial: core done (`setUserAgent`/`getUserAgent`, `defaultSession`, `fromPartition`, `fromPath`, `persist:` partitions, `WebPreferences.Session`/`Partition`, `WebContents.Session`, per-session `protocol`, `flushStorageData`, `webRequest`, `setPermissionRequestHandler`, `setPermissionCheckHandler` (`navigator.permissions.query` only, E28), `setDisplayMediaRequestHandler` (whole desktop, E30), `setDownloadPath`, `clearCache`, `clearAuthCache`, `closeAllConnections`, `setProxy`, `resolveHost` (no options, E38), `clearStorageData`, `clearData` (E35), `getCacheSize` (sessions on disk, E34), `downloadURL` with `headers` (hidden page, E37), `will-download`); no device permission handlers (E31), `clearHostResolverCache`, `resolveProxy`, `clearCodeCaches` (E8), `createInterruptedDownload` (E16) (see DRIFT.md E1-E38) |
+| `session` | `Session` | CEF | M2 core, M6 rest | partial: 24 of 75 applicable items done (32.0%), see parity/session.md; `defaultSession`, `fromPartition`, `fromPath` (E1-E3), user agent, permission and display-media handlers (E12, E28-E32), cache, auth and storage clearing (E34-E37), `setDownloadPath`, preloads (E21), spell checker (E22, E23), `setProxy` and `resolveHost` (E38), `enableNetworkEmulation` per page (E43), `setSSLConfig` for every session (E44), `allowNTLMCredentialsForDomains`, `storagePath`, `spellCheckerEnabled`; no device handlers or chooser events (E11, E31), `clearHostResolverCache`, `clearCodeCaches`, `setCodeCachePath`, `forceReloadProxyConfig` (E8), `resolveProxy` (A35), `preconnect` (E10), `setCertificateVerifyProc` (E24), `getBlobData` (E47), shared dictionaries (E48) |
 | `protocol` | `Protocol` | CEF | M2 | partial: `handle`, `unhandle`, `isProtocolHandled`, `registerSchemesAsPrivileged`; per session through `Session.Protocol`; no `intercept*` or legacy `register*Protocol` (see DRIFT.md) |
 | `Cookies` | `Cookies` | CEF | M6 | partial: `get`, `set` (Electron's rejection messages), `remove`, `flushStore`, `changed` (read from the store, see DRIFT E4, E5) |
 | `WebRequest` | `WebRequest` | CEF | M6 | partial: all eight events with `urls`/`excludeUrls`/`types` filters, cancel and `redirectURL`, request header changes, `uploadData` (bytes and file paths), `frame`, `webContentsId`, custom-scheme requests, service and shared worker requests without a page; `onHeadersReceived` cannot change or cancel the response, no `fromCache`/`ip`/`initiatorOrigin`, a `net` module's requests unseen (see DRIFT.md E17-E19, E27) |

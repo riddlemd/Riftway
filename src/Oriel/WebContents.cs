@@ -849,6 +849,17 @@ public sealed unsafe partial class WebContents
         AddIsolatedScript();
     }
 
+    /// <summary>UI thread: the session's network emulation changed; it applies to the page's requests at once.</summary>
+    internal void OnSessionNetworkEmulation(NetworkEmulationOptions? options)
+    {
+        if (_browser is null) return;
+        SendNetworkEmulation(options);
+    }
+
+    // DevTools throttles the requests carrying this page's throttling profile; a DevTools window on the page shares it.
+    private void SendNetworkEmulation(NetworkEmulationOptions? options)
+        => _devTools.Send("Network.emulateNetworkConditionsByRule", w => NetworkPrefs.WriteEmulation(w, options));
+
     internal void OnSessionUserAgent(string userAgent, string? acceptLanguages)
     {
         _defaultUserAgent = userAgent;
@@ -978,6 +989,7 @@ public sealed unsafe partial class WebContents
         _devTools.Send("Page.setLifecycleEventsEnabled", w => w.WriteBoolean("enabled", true));
         // A session's user agent, or a fallback changed after start-up, applies from the first page, as Electron's.
         SendUserAgent();
+        if (Session.NetworkEmulation is { } emulation) SendNetworkEmulation(emulation);
         _devTools.Send("Runtime.enable");
         // Chrome-style browsers ignore the font sizes in the browser settings; this sets them for this page only.
         if (_preferences.DefaultFontSize is not null || _preferences.DefaultMonospaceFontSize is not null)

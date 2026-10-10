@@ -1372,6 +1372,7 @@ async Task RunAsync()
         && !Directory.Exists(missingLogs) && relativeDir is ArgumentException, $"{unknownPath?.Message} | {missingDir?.Message} | {relativeDir?.Message}");
     app.SetPath("logs", originalLogs);
     await AppAuditChecks();
+    await SessionAuditChecks();
     var movedTo = Directory.CreateTempSubdirectory("oriel-userdata-").FullName;
     var originalUserData = app.GetPath("userData");
     app.SetPath("userData", movedTo);
@@ -2759,6 +2760,68 @@ static async Task<string> ServeOneProxyRequest(TcpListener listener)
     await stream.WriteAsync(head);
     await stream.WriteAsync(body);
     return first;
+}
+
+// Session members added by the docs/parity/session.md audit; written for a macOS, Windows and Linux run.
+async Task SessionAuditChecks()
+{
+    var persistent = Session.FromPartition("persist:audit");
+    var memory = Session.FromPartition("audit-memory");
+    Check("StoragePath is GetStoragePath, null in memory", persistent.StoragePath == persistent.GetStoragePath() && persistent.StoragePath is not null
+        && memory.StoragePath is null, persistent.StoragePath);
+    persistent.SpellCheckerEnabled = false;
+    var off = persistent.SpellCheckerEnabled == false && !persistent.IsSpellCheckerEnabled();
+    persistent.SpellCheckerEnabled = true;
+    Check("SpellCheckerEnabled reads and writes IsSpellCheckerEnabled / SetSpellCheckerEnabled", off && persistent.IsSpellCheckerEnabled());
+
+    // Throttling is the network service's, so the server must be a real socket, not a protocol handler.
+    using var listener = new TcpListener(IPAddress.Loopback, 0);
+    listener.Start();
+    var url = $"http://127.0.0.1:{((IPEndPoint)listener.LocalEndpoint).Port}/";
+    var serving = Task.Run(async () =>
+    {
+        try { while (true) await ServeOneProxyRequest(listener); }
+        catch (Exception e) when (e is SocketException or ObjectDisposedException or IOException) { }
+    });
+    memory.EnableNetworkEmulation(new NetworkEmulationOptions { Offline = true });
+    var emulatedWin = new BrowserWindow(new BrowserWindowOptions { Show = false, WebPreferences = new WebPreferences { Session = memory } });
+    var offline = await Throws(() => emulatedWin.LoadUrl(url).WaitAsync(TimeSpan.FromSeconds(10)));
+    Check("EnableNetworkEmulation(offline) reaches a page made after it: loads fail with ERR_INTERNET_DISCONNECTED",
+        offline is LoadFailedException { ErrorCode: -106 }, offline?.Message);
+    var otherWin = new BrowserWindow(new BrowserWindowOptions { Show = false, WebPreferences = new WebPreferences { Session = Session.FromPartition("audit-other") } });
+    Check("another session is not emulated", await Throws(() => otherWin.LoadUrl(url).WaitAsync(TimeSpan.FromSeconds(10))) is null);
+    otherWin.Destroy();
+    memory.DisableNetworkEmulation();
+    Check("DisableNetworkEmulation lets the open page load again", await Throws(() => emulatedWin.LoadUrl(url).WaitAsync(TimeSpan.FromSeconds(10))) is null);
+    memory.EnableNetworkEmulation(new NetworkEmulationOptions { Latency = 1500 });
+    var timer = System.Diagnostics.Stopwatch.StartNew();
+    var slow = await Throws(() => emulatedWin.LoadUrl(url + "slow").WaitAsync(TimeSpan.FromSeconds(15)));
+    var slowMs = timer.ElapsedMilliseconds;
+    memory.DisableNetworkEmulation();
+    timer.Restart();
+    var fast = await Throws(() => emulatedWin.LoadUrl(url + "fast").WaitAsync(TimeSpan.FromSeconds(10)));
+    Check("EnableNetworkEmulation(latency) slows an open page's load, and disabling restores it",
+        slow is null && fast is null && slowMs >= 1400 && timer.ElapsedMilliseconds < 1400, $"{slowMs} ms, then {timer.ElapsedMilliseconds} ms");
+    emulatedWin.Destroy();
+    listener.Stop();
+    await serving.WaitAsync(TimeSpan.FromSeconds(5)).ContinueWith(_ => { });
+
+    var badVersion = await Throws(() => { persistent.SetSslConfig(new SslConfig { MinVersion = "tls1.1" }); return Task.CompletedTask; });
+    var setSsl = await Throws(() =>
+    {
+        persistent.SetSslConfig(new SslConfig { MinVersion = "tls1.3", DisabledCipherSuites = [0x0004, 0xC002] });
+        persistent.SetSslConfig(new SslConfig());
+        return Task.CompletedTask;
+    });
+    Check("SetSslConfig refuses tls1.1 and Chromium takes the TLS version and cipher suite preferences", badVersion is ArgumentException && setSsl is null,
+        $"{badVersion?.Message} | {setSsl?.Message}");
+    var ntlm = await Throws(() =>
+    {
+        persistent.AllowNtlmCredentialsForDomains("*.oriel.test,intranet");
+        persistent.AllowNtlmCredentialsForDomains("");
+        return Task.CompletedTask;
+    });
+    Check("AllowNtlmCredentialsForDomains: Chromium takes the auth.server_allowlist preference", ntlm is null, ntlm?.Message);
 }
 
 // app members added by the docs/parity/app.md audit; written for a macOS, Windows and Linux run.
