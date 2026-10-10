@@ -21,7 +21,8 @@ General items: [todo.md](todo.md). Windows work runs on the Windows laptop.
       SetForegroundWindow on a disabled window). Fix: focus the innermost visible modal child instead; merged
       (d5e0b6b). Its `is_visible` filter has no covering check.
 - [x] Run the window-menu and context-menu checks on Windows (pass, after the menu-bar reference fix)
-- [ ] windows-arm64: untested
+- [ ] windows-arm64: builds, publishes and lays out from x64 with every native binary ARM64 (2026-10-10);
+      not yet run on Arm hardware
 - [x] Run the Alt-key menu checks on Windows (Alt toggles an auto-hidden bar, Alt+F opens File): all 7 pass in a
       default WindowTest run (2026-10-10, 01e9524: WindowTest 235/235, ProtocolTest 34/34, IpcTest 11/11,
       SessionTest 42/42, unit 381 + 3 macOS skips; at 100% scaling over RDP)

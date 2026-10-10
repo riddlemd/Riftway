@@ -52,6 +52,8 @@ eng/layout-windows.ps1 artifacts/sample artifacts/subprocess/Oriel.Subprocess.ex
 artifacts/sample/Oriel.Sample.exe
 ```
 
+For Windows on Arm, pass `windowsarm64` to all three scripts and publish with `-r win-arm64`; it cross-builds from x64 too, with the "MSVC ARM64 build tools" component installed. Builds and packages; not yet run on Arm hardware.
+
 ## Known issues
 
 ### Video crashes the renderer on Linux arm64 VMs on Apple M4+ (worked around)
