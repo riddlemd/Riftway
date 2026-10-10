@@ -6293,7 +6293,8 @@ async Task ThemeAsync(BrowserWindow win)
     Check("NativeTheme: a session that already exists follows a change", loaded && await PageBecomes(partitioned, false));
     partitioned.Destroy();
     Check("NativeTheme: Light reaches macOS's appearance", AppIsDark() is null or false, AppIsDark());
-    Check("NativeTheme: setting ThemeSource raises Updated", updates >= 2, updates);
+    // Electron notifies only when the effective scheme changes: System to Dark changes nothing on a dark desktop.
+    Check("NativeTheme: setting ThemeSource raises Updated when the scheme changes", updates == (SystemIsDark() ? 1 : 2), updates);
 
     NativeTheme.ThemeSource = ThemeSource.System;
     var systemDark = SystemIsDark();
@@ -6311,19 +6312,121 @@ async Task ThemeAsync(BrowserWindow win)
     }
     else if (OperatingSystem.IsWindows())
     {
-        // The system's settings are read, not changed: toggling contrast or theme would disturb the desktop.
+        // The user's settings are only read: changes go to a key of the test's own, and messages to Oriel's own window.
         var (contrastApi, contrastRegistry) = WindowsShell.HighContrastOn();
-        Check("NativeTheme: ShouldUseHighContrastColors and InForcedColorsMode are Windows' contrast theme (SPI_GETHIGHCONTRAST)",
-            NativeTheme.ShouldUseHighContrastColors == contrastApi && NativeTheme.InForcedColorsMode == contrastApi && contrastApi == contrastRegistry,
-            $"oriel={NativeTheme.ShouldUseHighContrastColors}/{NativeTheme.InForcedColorsMode} spi={contrastApi} registry={contrastRegistry}");
+        Check("NativeTheme: InForcedColorsMode is Windows' contrast theme (SPI_GETHIGHCONTRAST)",
+            NativeTheme.InForcedColorsMode == contrastApi && contrastApi == contrastRegistry,
+            $"oriel={NativeTheme.InForcedColorsMode} spi={contrastApi} registry={contrastRegistry}");
+        Check("NativeTheme: ShouldUseHighContrastColors needs a contrast theme", contrastApi || !NativeTheme.ShouldUseHighContrastColors);
         var pageForced = (await win.WebContents.ExecuteJavaScriptAsync("matchMedia('(forced-colors: active)').matches"))?.GetValue<bool>();
         Check("NativeTheme: InForcedColorsMode agrees with the page's forced-colors", pageForced == NativeTheme.InForcedColorsMode, pageForced);
-        Check("NativeTheme: Windows has no inverted scheme or reduced transparency setting, as Electron",
-            !NativeTheme.ShouldUseInvertedColorScheme && !NativeTheme.PrefersReducedTransparency);
-        var checks = NativeTheme.Checks;
-        await Task.Delay(2500);
-        Check("NativeTheme: Windows checks the system settings once a second while there are handlers (DRIFT Y1)",
-            NativeTheme.Checks - checks is >= 2 and <= 4, $"{checks} -> {NativeTheme.Checks}");
+        var transparency = Microsoft.Win32.Registry.GetValue(@"HKEY_CURRENT_USER\Software\Microsoft\Windows\CurrentVersion\Themes\Personalize", "EnableTransparency", 1);
+        Check("NativeTheme: PrefersReducedTransparency is Windows' transparency effects being off, as Chromium 154",
+            NativeTheme.PrefersReducedTransparency == transparency is 0, transparency);
+        Check("NativeTheme: ShouldUseInvertedColorScheme is a dark contrast theme, as Electron off macOS",
+            NativeTheme.ShouldUseInvertedColorScheme == (contrastApi && NativeTheme.ShouldUseDarkColors));
+
+        var observer = Oriel.Cef.Platform.WindowsThemeSettings.Window;
+        var facts = WindowsShell.WindowFacts(observer);
+        Check("NativeTheme: a hidden top-level window of Oriel's own takes the system's broadcasts",
+            observer != 0 && facts == (Environment.ProcessId, "OrielThemeObserver", false, true), facts);
+
+        // DRIFT Y3: Chromium sets DWM's dark mode (attribute 20) from CEF's colour scheme on each window it gives a backdrop,
+        // transparent ones included; Electron's SetDarkModeForWindow agrees with it outside contrast themes.
+        bool?[] Frames(params nint[] hwnds) => [.. hwnds.Select(WindowsShell.ImmersiveDarkMode)];
+        var mainHwnd = win.GetNativeWindowHandle();
+        Check("NativeTheme: a window's DWM dark mode is the theme's, read back (DRIFT Y3)",
+            contrastApi || WindowsShell.ImmersiveDarkMode(mainHwnd) == NativeTheme.ShouldUseDarkColors, WindowsShell.ImmersiveDarkMode(mainHwnd));
+        NativeTheme.ThemeSource = ThemeSource.Dark;
+        var bar = new BrowserWindow(new BrowserWindowOptions { X = 200, Y = 150, Width = 400, Height = 300, Title = "Oriel window test: menu bar theme" });
+        await bar.LoadUrl("about:blank");
+        var seeThrough = new BrowserWindow(new BrowserWindowOptions { X = 220, Y = 170, Width = 300, Height = 200, Transparent = true, Title = "Oriel window test: transparent frame" });
+        await seeThrough.LoadUrl("about:blank");
+        await Task.Delay(1000);
+        nint[] hwnds = [mainHwnd, bar.GetNativeWindowHandle(), seeThrough.GetNativeWindowHandle()];
+        var underDark = Frames(hwnds);
+        var darkBar = WindowsShell.ClientPixel(hwnds[1], 360, 8);
+        NativeTheme.ThemeSource = ThemeSource.Light;
+        var lightFrames = Eventually(() => Frames(hwnds).All(f => f == false), TimeSpan.FromSeconds(2));
+        await Task.Delay(1000);
+        var lightBar = WindowsShell.ClientPixel(hwnds[1], 360, 8);
+        Check("NativeTheme: Dark and Light reach DWM's dark mode on open, new and transparent windows (DRIFT Y3)",
+            underDark.All(f => f == true) && lightFrames, $"dark [{string.Join(",", underDark)}] light [{string.Join(",", Frames(hwnds))}]");
+        static int Luma((byte R, byte G, byte B) c) => (c.R * 299 + c.G * 587 + c.B * 114) / 1000;
+        Check("NativeTheme: the menu bar is dark under Dark and light under Light (screen pixel; DRIFT Y3)",
+            Luma(darkBar) < 100 && Luma(lightBar) > 160, $"dark={darkBar} light={lightBar}");
+        NativeTheme.ThemeSource = ThemeSource.System;
+        Check("NativeTheme: System gives them the system's scheme (DRIFT Y3)",
+            contrastApi || Eventually(() => Frames(hwnds).All(f => f == NativeTheme.ShouldUseDarkColors), TimeSpan.FromSeconds(2)), string.Join(",", Frames(hwnds)));
+        bar.Destroy();
+        seeThrough.Destroy();
+        var prefix = $@"Software\OrielTest-{Guid.NewGuid():N}\";
+        var personalize = Microsoft.Win32.Registry.CurrentUser.CreateSubKey(prefix + @"Software\Microsoft\Windows\CurrentVersion\Themes\Personalize");
+        bool? darkSeen = null, transparencySeen = null;
+        EventHandler seen = (_, _) => (darkSeen, transparencySeen) = (NativeTheme.ShouldUseDarkColors, NativeTheme.PrefersReducedTransparency);
+        NativeTheme.Updated += seen;
+        try
+        {
+            personalize.SetValue("AppsUseLightTheme", 1, Microsoft.Win32.RegistryValueKind.DWord);
+            personalize.SetValue("EnableTransparency", 1, Microsoft.Win32.RegistryValueKind.DWord);
+            Oriel.Cef.CefThread.InvokeOnUi(() => { if (OperatingSystem.IsWindows()) NativeTheme.SetWindowsKeyPrefix(prefix); return 0; });
+            Check("NativeTheme: the redirected key is what Oriel reads", !NativeTheme.ShouldUseDarkColors && !NativeTheme.PrefersReducedTransparency);
+
+            var (before, checks) = (updates, NativeTheme.Checks);
+            await Task.Delay(2500);
+            Check("NativeTheme: Windows waits for notifications instead of polling (DRIFT Y1)", NativeTheme.Checks == checks && updates == before,
+                $"checks {checks} -> {NativeTheme.Checks}, updates {before} -> {updates}");
+
+            personalize.SetValue("AppsUseLightTheme", 0, Microsoft.Win32.RegistryValueKind.DWord);
+            var fired = Eventually(() => updates > before, TimeSpan.FromSeconds(2));
+            await Task.Delay(500);
+            Check("NativeTheme: AppsUseLightTheme changing fires Updated once, with the new value", fired && updates == before + 1 && darkSeen == true
+                && NativeTheme.ShouldUseDarkColors && await PageBecomes(win, true), $"updates {before} -> {updates} dark={darkSeen}");
+
+            (before, checks) = (updates, NativeTheme.Checks);
+            personalize.SetValue("AppsUseLightTheme", 0, Microsoft.Win32.RegistryValueKind.DWord);
+            personalize.SetValue("ColorPrevalence", 1, Microsoft.Win32.RegistryValueKind.DWord);
+            var notified = Eventually(() => NativeTheme.Checks > checks, TimeSpan.FromSeconds(2));
+            await Task.Delay(500);
+            Check("NativeTheme: a notification that changes nothing Chromium compares fires nothing", notified && updates == before,
+                $"checks {checks} -> {NativeTheme.Checks}, updates {before} -> {updates}");
+
+            before = updates;
+            personalize.SetValue("EnableTransparency", 0, Microsoft.Win32.RegistryValueKind.DWord);
+            fired = Eventually(() => updates > before, TimeSpan.FromSeconds(2));
+            await Task.Delay(500);
+            Check("NativeTheme: EnableTransparency changing fires Updated once, with the new value", fired && updates == before + 1 && transparencySeen == true,
+                $"updates {before} -> {updates} reduced={transparencySeen}");
+
+            // Electron's set_theme_source patch notifies only when the effective scheme changes; the key now says dark.
+            before = updates;
+            NativeTheme.ThemeSource = ThemeSource.Dark;
+            NativeTheme.ThemeSource = ThemeSource.System;
+            Check("NativeTheme: a ThemeSource that keeps the scheme fires nothing", updates == before, $"{before} -> {updates}");
+            NativeTheme.ThemeSource = ThemeSource.Light;
+            Check("NativeTheme: a ThemeSource that changes the scheme fires once", updates == before + 1, $"{before} -> {updates}");
+            NativeTheme.ThemeSource = ThemeSource.System;
+
+            (before, checks) = (updates, NativeTheme.Checks);
+            WindowsShell.Send(observer, 0x001A /* WM_SETTINGCHANGE */, 0x0043 /* SPI_SETHIGHCONTRAST */, 0);
+            var readHighContrast = NativeTheme.Checks == checks + 1;
+            WindowsShell.Send(observer, 0x001A, 0x0002 /* SPI_SETBEEP */, 0);
+            var ignoredOther = NativeTheme.Checks == checks + 1;
+            WindowsShell.Send(observer, 0x0015 /* WM_SYSCOLORCHANGE */, 0, 0);
+            await Task.Delay(500);
+            Check("NativeTheme: WM_SETTINGCHANGE for high contrast and WM_SYSCOLORCHANGE re-read; other settings do not",
+                readHighContrast && ignoredOther && NativeTheme.Checks == checks + 2, $"checks {checks} -> {NativeTheme.Checks}");
+            Check("NativeTheme: with the contrast theme unchanged, they fire nothing", contrastApi || updates == before, $"{before} -> {updates}");
+        }
+        finally
+        {
+            NativeTheme.Updated -= seen;
+            Oriel.Cef.CefThread.InvokeOnUi(() => { if (OperatingSystem.IsWindows()) NativeTheme.SetWindowsKeyPrefix(""); return 0; });
+            personalize.Dispose();
+            Microsoft.Win32.Registry.CurrentUser.DeleteSubKeyTree(prefix.TrimEnd('\\'), throwOnMissingSubKey: false);
+        }
+        Check("NativeTheme: the test's key is gone and the user's settings are read again",
+            Microsoft.Win32.Registry.CurrentUser.OpenSubKey(prefix.TrimEnd('\\')) is null && NativeTheme.ShouldUseDarkColors == SystemIsDark());
     }
     else if (OperatingSystem.IsLinux())
     {
