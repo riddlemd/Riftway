@@ -142,13 +142,13 @@ public sealed class CrashReporterConfigTests
     public void PathFor_IsBesideTheExecutable_OffMacOS()
         => Assert.Equal(Path.Combine("/x/A.app/Contents/MacOS", "crash_reporter.cfg"), CrashReporterConfig.PathFor("/x/A.app/Contents/MacOS", mac: false));
 
-    [Theory]
+    [PosixTheory]
     [InlineData("/x/A.app/Contents/MacOS")]
     [InlineData("/x/A.app/Contents/Frameworks/A Helper.app/Contents/MacOS")]
     public void PathFor_OnMacOS_IsTheOutermostBundlesResources(string exeDirectory)
         => Assert.Equal("/x/A.app/Contents/Resources/crash_reporter.cfg", CrashReporterConfig.PathFor(exeDirectory, mac: true));
 
-    [Fact]
+    [PosixFact]
     public void PathFor_OnMacOS_Unbundled_IsBesideTheExecutable()
         => Assert.Equal("/x/bin/crash_reporter.cfg", CrashReporterConfig.PathFor("/x/bin", mac: true));
 }
@@ -635,4 +635,21 @@ public sealed unsafe class CrashReporterNativeTests : IDisposable
 
     [Fact]
     public void Report_HasCrashpadsLayout() => Assert.Equal(152, sizeof(CrashReporterNative.Report));
+}
+
+// PathFor builds macOS paths with the host's Path, which joins with a backslash on Windows.
+public sealed class PosixFactAttribute : FactAttribute
+{
+    public PosixFactAttribute()
+    {
+        if (Path.DirectorySeparatorChar != '/') Skip = "POSIX paths";
+    }
+}
+
+public sealed class PosixTheoryAttribute : TheoryAttribute
+{
+    public PosixTheoryAttribute()
+    {
+        if (Path.DirectorySeparatorChar != '/') Skip = "POSIX paths";
+    }
 }
