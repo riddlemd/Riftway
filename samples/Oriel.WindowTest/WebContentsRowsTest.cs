@@ -535,16 +535,16 @@ static class WebContentsRowsTest
         check("PrintToPdfAsync prints the header template", error is null && read.Content.Contains("0 1 0 rg", StringComparison.Ordinal), error);
 
         var (_, paperError) = await Print(new PrintToPdfOptions { PageSize = "A9" });
-        check("PrintToPdfAsync rejects an unknown paper with Electron's message", paperError == "InvalidOperationException: Invalid pageSize A9", paperError);
+        check("PrintToPdfAsync rejects an unknown paper with Electron's message", paperError == "ArgumentException: Invalid pageSize A9", paperError);
         var (_, marginError) = await Print(new PrintToPdfOptions { PageSize = PageSize.Custom(4, 5), Margins = new PdfMargins { Left = 4.5 } });
-        check("PrintToPdfAsync rejects margins larger than the paper", marginError == "InvalidOperationException: margins must be less than or equal to pageSize", marginError);
+        check("PrintToPdfAsync rejects margins larger than the paper", marginError == "ArgumentException: margins must be less than or equal to pageSize", marginError);
         var (_, scaleError) = await Print(new PrintToPdfOptions { Scale = 3 });
         check("PrintToPdfAsync rejects a scale outside 0.1 to 2 with Chromium's message",
-            scaleError == "InvalidOperationException: Invalid print parameters: scale is outside of [0.1 - 2] range", scaleError);
+            scaleError == "ArgumentException: Invalid print parameters: scale is outside of [0.1 - 2] range", scaleError);
         // Each margin fits the paper, as Electron checks, but together they leave nothing to print on.
         var (_, areaError) = await Print(new PrintToPdfOptions { PageSize = PageSize.Custom(1, 1), Margins = new PdfMargins { Top = 0.6, Bottom = 0.6 } });
         check("PrintToPdfAsync rejects margins that leave no content area with Chromium's message",
-            areaError == "InvalidOperationException: Invalid print parameters: invalid print parameters: content area is empty", areaError);
+            areaError == "ArgumentException: Invalid print parameters: invalid print parameters: content area is empty", areaError);
         var (_, syntaxError) = await Print(new PrintToPdfOptions { PageRanges = "abc" });
         check("PrintToPdfAsync rejects a page range it cannot read", syntaxError == "InvalidOperationException: Failed to generate PDF: Page range syntax error", syntaxError);
         var (_, countError) = await Print(new PrintToPdfOptions { PageRanges = "7" });
