@@ -1743,6 +1743,53 @@ async Task RunAsync()
     await proxied.CloseAllConnectionsAsync();
     var direct = await Throws(() => proxyWin.LoadUrl("http://proxied.test/again").WaitAsync(TimeSpan.FromSeconds(10)));
     Check("Direct mode stops using the proxy", direct is LoadFailedException, direct?.Message);
+
+    // Electron's ProxyConfigDictionary: a bypassed host goes direct, and fixed_servers without rules is direct.
+    var bypassed = ServeOneProxyRequest(listener);
+    await proxied.SetProxyAsync(new ProxyConfig { ProxyRules = $"http=127.0.0.1:{port}", ProxyBypassRules = "proxied.test" });
+    await proxied.CloseAllConnectionsAsync();
+    var bypassLoad = await Throws(() => proxyWin.LoadUrl("http://proxied.test/bypassed").WaitAsync(TimeSpan.FromSeconds(10)));
+    Check("ProxyBypassRules sends the host direct", bypassLoad is LoadFailedException && !bypassed.IsCompleted, bypassLoad?.Message);
+    await proxied.SetProxyAsync(new ProxyConfig { Mode = ProxyMode.FixedServers, ProxyBypassRules = "<local>" });
+    var noRules = await Throws(() => proxyWin.LoadUrl("http://proxied.test/norules").WaitAsync(TimeSpan.FromSeconds(10)));
+    Check("FixedServers without ProxyRules is direct", noRules is LoadFailedException && !bypassed.IsCompleted, noRules?.Message);
+
+    if (Oriel.Cef.CefRuntime.IsPatched)
+    {
+        // Patch 0008: Electron's ses.resolveProxy and app.resolveProxy answer in PAC format.
+        await proxied.SetProxyAsync(new ProxyConfig { ProxyRules = $"http=127.0.0.1:{port}" });
+        var viaProxy = await proxied.ResolveProxyAsync("http://proxied.test/page");
+        var notHttp = await proxied.ResolveProxyAsync("https://proxied.test/page");
+        Check("patched (0008): ResolveProxyAsync names the session's proxy for http and DIRECT for https",
+            viaProxy == $"PROXY 127.0.0.1:{port}" && notHttp == "DIRECT", $"{viaProxy} | {notHttp}");
+        var pac = Convert.ToBase64String(Encoding.ASCII.GetBytes($"function FindProxyForURL(url, host) {{ return 'PROXY 127.0.0.1:{port + 1}'; }}"));
+        await proxied.SetProxyAsync(new ProxyConfig { PacScript = $"data:application/x-ns-proxy-autoconfig;base64,{pac}" });
+        var viaPac = await proxied.ResolveProxyAsync("http://proxied.test/page");
+        Check("patched (0008): a PacScript decides what ResolveProxyAsync answers", viaPac == $"PROXY 127.0.0.1:{port + 1}", viaPac);
+        await proxied.SetProxyAsync(new ProxyConfig { Mode = ProxyMode.Direct });
+        Check("patched (0008): and Direct answers DIRECT", await proxied.ResolveProxyAsync("http://proxied.test/page") == "DIRECT");
+
+        await app.SetProxyAsync(new ProxyConfig { ProxyRules = $"127.0.0.1:{port}" });
+        // The system network context picks the Local State change up asynchronously.
+        var systemProxy = "";
+        for (var i = 0; i < 20 && systemProxy != $"PROXY 127.0.0.1:{port}"; i++)
+        {
+            systemProxy = await app.ResolveProxyAsync("http://system.test/");
+            if (systemProxy != $"PROXY 127.0.0.1:{port}") await Task.Delay(100);
+        }
+        Check("patched (0008): app.SetProxyAsync sets the system context's proxy, which app.ResolveProxyAsync reads", systemProxy == $"PROXY 127.0.0.1:{port}", systemProxy);
+        Check("patched (0008): and leaves the sessions' own alone", await Oriel.Session.DefaultSession.ResolveProxyAsync("http://system.test/") == "DIRECT");
+        await app.SetProxyAsync(new ProxyConfig { Mode = ProxyMode.Direct });
+    }
+    else
+    {
+        var resolveError = await Throws(() => proxied.ResolveProxyAsync("http://proxied.test/"));
+        var appResolveError = await Throws(() => app.ResolveProxyAsync("http://proxied.test/"));
+        Check("stock CEF: ResolveProxyAsync and app.ResolveProxyAsync throw PlatformNotSupportedException (E8, A35)",
+            resolveError is PlatformNotSupportedException && appResolveError is PlatformNotSupportedException, $"{resolveError?.Message} | {appResolveError?.Message}");
+        Check("stock CEF: app.SetProxyAsync is accepted (the global proxy preference)",
+            await Throws(() => app.SetProxyAsync(new ProxyConfig { Mode = ProxyMode.Direct })) is null);
+    }
     proxyWin.Close();
     listener.Stop();
 }
@@ -2887,7 +2934,49 @@ async Task AppAuditChecks()
     Check("SetAccessibilitySupportEnabled(true) turns it on and says so", app.IsAccessibilitySupportEnabled() && app.AccessibilitySupportEnabled && a11yEvents.SequenceEqual([true]));
     app.AccessibilitySupportEnabled = false;
     Check("and false turns it off", !app.IsAccessibilitySupportEnabled() && a11yEvents.SequenceEqual([true, false]));
+    var unknownFeature = await Throws(() => { app.SetAccessibilitySupportFeatures(["webContents", "bogus"]); return Task.CompletedTask; });
+    Check("SetAccessibilitySupportFeatures rejects an unknown feature with Electron's message",
+        unknownFeature?.Message.StartsWith("Unknown accessibility feature: bogus") == true, unknownFeature?.Message);
+    if (Oriel.Cef.CefRuntime.IsPatched)
+    {
+        // Patch 0009: the process-wide mode, read back from Chromium.
+        app.SetAccessibilitySupportEnabled(true);
+        var complete = app.GetAccessibilitySupportFeatures();
+        Check("patched (0009): GetAccessibilitySupportFeatures reads the complete mode back",
+            new[] { "nativeAPIs", "webContents", "inlineTextBoxes", "extendedProperties" }.All(complete.Contains), string.Join(",", complete));
+        app.SetAccessibilitySupportFeatures(["webContents", "screenReader"]);
+        var partial = app.GetAccessibilitySupportFeatures();
+        Check("patched (0009): SetAccessibilitySupportFeatures replaces the app's mode, and complete mode is off",
+            partial.Contains("webContents") && partial.Contains("screenReader") && !app.IsAccessibilitySupportEnabled() && a11yEvents[^1] == false,
+            string.Join(",", partial));
+        app.SetAccessibilitySupportEnabled(true);
+        Check("patched (0009): enabling keeps the features' mode, as Electron's scoper", !app.GetAccessibilitySupportFeatures().Contains("inlineTextBoxes"));
+        app.SetAccessibilitySupportFeatures([]);
+        Check("patched (0009): no features turns the app's mode off", !app.GetAccessibilitySupportFeatures().Contains("screenReader"));
+    }
+    else
+    {
+        Check("stock CEF: SetAccessibilitySupportFeatures throws PlatformNotSupportedException (A28)",
+            await Throws(() => { app.SetAccessibilitySupportFeatures(["webContents"]); return Task.CompletedTask; }) is PlatformNotSupportedException);
+        app.SetAccessibilitySupportEnabled(true);
+        Check("stock CEF: GetAccessibilitySupportFeatures answers the complete mode Oriel asked for",
+            app.GetAccessibilitySupportFeatures().SequenceEqual(["nativeAPIs", "webContents", "inlineTextBoxes", "extendedProperties"]));
+        app.SetAccessibilitySupportEnabled(false);
+    }
     a11yPage.Destroy();
+
+    if (Oriel.Cef.CefRuntime.IsPatched)
+    {
+        // Patch 0007: Electron's spec crashes the GPU process with chrome://gpucrash.
+        var gone = new TaskCompletionSource<ChildProcessGoneDetails>(TaskCreationOptions.RunContinuationsAsynchronously);
+        app.ChildProcessGone += (_, details) => gone.TrySetResult(details);
+        var gpuCrashPage = new BrowserWindow(new BrowserWindowOptions { Show = false });
+        _ = gpuCrashPage.WebContents.LoadUrl("chrome://gpucrash");
+        var goneDetails = await gone.Task.WaitAsync(TimeSpan.FromSeconds(15)).ContinueWith(t => t.IsCompletedSuccessfully ? t.Result : null);
+        Check("patched (0007): ChildProcessGone reports the GPU process crashing", goneDetails is { Type: "GPU", Reason: "crashed" or "abnormal-exit" },
+            goneDetails?.ToString());
+        gpuCrashPage.Destroy();
+    }
 
     var resolverError = await Throws(() => { app.ConfigureHostResolver(new HostResolverOptions { SecureDnsServers = ["http://plain"] }); return Task.CompletedTask; });
     app.ConfigureHostResolver(new HostResolverOptions { SecureDnsMode = SecureDnsMode.Off });

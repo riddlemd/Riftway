@@ -9,7 +9,7 @@ namespace Oriel.Tests;
 public sealed unsafe class CefPatchedApiTests
 {
     private const string Stock = "5c8344ae7d7f6421bc801401e35d4dbf6d38e101";
-    private const string Patched = "1d9b34f5f12ecd861e292da95c07d5a829fe490d";
+    private const string Patched = "41328e768ef24db112c839e118ea0783d3d8543a";
 
     [Fact]
     public void Classify_NoNextVersionFallsBackTo15400() =>
@@ -278,7 +278,7 @@ public sealed unsafe class CefPatchedApiTests
     [Fact]
     public void NextRequestContext_AppendsPatch0006AfterTheStockStruct()
     {
-        Assert.Equal(sizeof(cef_request_context_t) + 3 * sizeof(nint), sizeof(cef_request_context_next_t));
+        Assert.Equal(sizeof(cef_request_context_t) + 4 * sizeof(nint), sizeof(cef_request_context_next_t));
         cef_request_context_next_t value = default;
         Assert.Equal(sizeof(cef_request_context_t), (int)((byte*)&value.start_net_log - (byte*)&value));
         Assert.Equal(sizeof(cef_request_context_t) + 2 * sizeof(nint), (int)((byte*)&value.is_net_logging - (byte*)&value));

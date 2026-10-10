@@ -1,0 +1,240 @@
+Oriel CEF patch 0009: the browser process's accessibility mode.
+
+Adds the static CefBrowserHost::GetProcessAccessibilityMode and
+SetProcessAccessibilityMode (cef_browser_host_get_process_accessibility_mode,
+cef_browser_host_set_process_accessibility_mode) and
+CefBrowserProcessHandler::OnAccessibilityModeChanged, as Electron's
+app.isAccessibilitySupportEnabled, get/setAccessibilitySupportFeatures,
+setAccessibilitySupportEnabled and accessibility-support-changed use
+content::BrowserAccessibilityState: the getter reads the process's effective
+ui::AXMode flags, the setter keeps one ScopedAccessibilityMode for the process
+(Electron's scoped_accessibility_mode_), replaced by the next call, and the
+callback reports the flags Chromium adds by itself (a ui::AXModeObserver on
+ui::AXPlatform: an assistive technology using the platform APIs), not those
+the setter adds. Chromium has no observer for removed flags. CefContext owns
+the state from context initialisation to shutdown. API at CEF_NEXT (999998):
+API version 15400 and its hash are unchanged.
+
+Resolves: Oriel docs/DRIFT.md A28.
+Base: CEF a03e714 (branch 8037, CEF 154) with 0001-0008. Applies in chromium/src/cef.
+
+diff --git a/BUILD.gn b/BUILD.gn
+index 92c5409..fdb9ee6 100644
+--- a/BUILD.gn
++++ b/BUILD.gn
+@@ -1022,6 +1022,8 @@ source_set("libcef_static") {
+     "//third_party/widevine/cdm",
+     "//third_party/icu",
+     "//third_party/zlib:minizip",
++    "//ui/accessibility:ax_base",
++    "//ui/accessibility/platform",
+     "//ui/base",
+     "//ui/base/ime",
+     "//ui/events",
+diff --git a/include/cef_browser.h b/include/cef_browser.h
+index 1831ac2..fc667e6 100644
+--- a/include/cef_browser.h
++++ b/include/cef_browser.h
+@@ -330,6 +330,29 @@ class CefBrowserHost : public virtual CefBaseRefCounted {
+   /*--cef()--*/
+   static CefRefPtr<CefBrowser> GetBrowserByIdentifier(int browser_id);
+ 
++#if CEF_API_ADDED(CEF_NEXT)
++  ///
++  /// Returns the browser process's effective accessibility mode
++  /// (content::BrowserAccessibilityState::GetAccessibilityMode), which applies
++  /// to every browser. The bits are Chromium's ui::AXMode flags: 1 native
++  /// APIs, 2 web contents, 4 inline text boxes, 8 extended properties, 16
++  /// HTML, 32 HTML metadata, 64 label images, 128 PDF printing, 256 annotate
++  /// main node and 1024 screen reader. Must be called on the browser process
++  /// UI thread.
++  ///
++  /*--cef(added=next)--*/
++  static int GetProcessAccessibilityMode();
++
++  ///
++  /// Add |mode| (bits as for GetProcessAccessibilityMode) to the browser
++  /// process's accessibility mode until the next call, which replaces it; 0
++  /// takes it away again. Modes that assistive technology or other callers
++  /// added stay. Must be called on the browser process UI thread.
++  ///
++  /*--cef(added=next)--*/
++  static void SetProcessAccessibilityMode(int mode);
++#endif
++
+   ///
+   /// Returns the hosted browser object.
+   ///
+diff --git a/include/cef_browser_process_handler.h b/include/cef_browser_process_handler.h
+index 2ac99bd..e975ce0 100644
+--- a/include/cef_browser_process_handler.h
++++ b/include/cef_browser_process_handler.h
+@@ -183,6 +183,17 @@ class CefBrowserProcessHandler : public virtual CefBaseRefCounted {
+                                   const CefString& service_name,
+                                   const CefString& name,
+                                   uint32_t system_error_code) {}
++
++  ///
++  /// Called on the browser process UI thread when Chromium adds flags to the
++  /// process-wide accessibility mode by itself, as when an assistive
++  /// technology starts using the platform's accessibility APIs. Changes made
++  /// through CefBrowserHost::SetProcessAccessibilityMode are not reported.
++  /// |mode| is the new mode, in the bits of
++  /// CefBrowserHost::GetProcessAccessibilityMode.
++  ///
++  /*--cef(added=next)--*/
++  virtual void OnAccessibilityModeChanged(int mode) {}
+ #endif
+ };
+ 
+diff --git a/libcef/browser/context.cc b/libcef/browser/context.cc
+index 9083745..b56a688 100644
+--- a/libcef/browser/context.cc
++++ b/libcef/browser/context.cc
+@@ -6,6 +6,7 @@
+ 
+ #include <memory>
+ 
++#include "base/auto_reset.h"
+ #include "base/files/file_util.h"
+ #include "base/functional/bind.h"
+ #include "base/notimplemented.h"
+@@ -21,10 +22,16 @@
+ #include "cef/libcef/common/cef_switches.h"
+ #include "chrome/browser/browser_process_impl.h"
+ #include "components/network_session_configurator/common/network_switches.h"
++#include "cef/include/cef_browser.h"
++#include "content/public/browser/browser_accessibility_state.h"
+ #include "content/public/browser/browser_child_process_observer.h"
+ #include "content/public/browser/child_process_data.h"
+ #include "content/public/browser/child_process_termination_info.h"
++#include "content/public/browser/scoped_accessibility_mode.h"
+ #include "content/public/common/process_type.h"
++#include "ui/accessibility/ax_mode.h"
++#include "ui/accessibility/platform/ax_mode_observer.h"
++#include "ui/accessibility/platform/ax_platform.h"
+ #include "ui/base/ui_base_switches.h"
+ 
+ #if BUILDFLAG(IS_WIN)
+@@ -426,6 +433,72 @@ class CefChildProcessObserver : public content::BrowserChildProcessObserver {
+   CefRefPtr<CefApp> application_;
+ };
+ 
++// The client's process-wide accessibility mode, as Electron's App keeps one
++// ScopedAccessibilityMode, and the flags Chromium adds by itself.
++class CefAccessibilityState : public ui::AXModeObserver {
++ public:
++  explicit CefAccessibilityState(CefRefPtr<CefApp> application)
++      : application_(application) {
++    ui::AXPlatform::GetInstance().AddModeObserver(this);
++  }
++
++  CefAccessibilityState(const CefAccessibilityState&) = delete;
++  CefAccessibilityState& operator=(const CefAccessibilityState&) = delete;
++
++  ~CefAccessibilityState() override {
++    ui::AXPlatform::GetInstance().RemoveModeObserver(this);
++  }
++
++  void SetMode(ui::AXMode mode) {
++    // Additions are observed synchronously; the client's own are not news.
++    base::AutoReset<bool> setting(&setting_, true);
++    if (mode.is_mode_off()) {
++      scoped_mode_.reset();
++    } else {
++      scoped_mode_ = content::BrowserAccessibilityState::GetInstance()
++                         ->CreateScopedModeForProcess(mode);
++    }
++  }
++
++  void OnAXModeAdded(ui::AXMode mode) override {
++    // A client built against an older API version has no callback for it.
++    if (setting_ || !CEF_API_IS_ADDED(CEF_NEXT)) {
++      return;
++    }
++    if (auto handler = application_->GetBrowserProcessHandler()) {
++      handler->OnAccessibilityModeChanged(static_cast<int>(
++          content::BrowserAccessibilityState::GetInstance()
++              ->GetAccessibilityMode()
++              .flags()));
++    }
++  }
++
++ private:
++  CefRefPtr<CefApp> application_;
++  std::unique_ptr<content::ScopedAccessibilityMode> scoped_mode_;
++  bool setting_ = false;
++};
++
++// static
++int CefBrowserHost::GetProcessAccessibilityMode() {
++  CEF_REQUIRE_UIT_RETURN(0);
++  return static_cast<int>(content::BrowserAccessibilityState::GetInstance()
++                              ->GetAccessibilityMode()
++                              .flags());
++}
++
++// static
++void CefBrowserHost::SetProcessAccessibilityMode(int mode) {
++  CEF_REQUIRE_UIT_RETURN_VOID();
++  if (!CONTEXT_STATE_VALID() || !g_context->accessibility_state()) {
++    return;
++  }
++  // kFromPlatform is reserved for platform activation, which tests may block.
++  const uint32_t known = (ui::AXMode::kLastModeFlag << 1) - 1;
++  g_context->accessibility_state()->SetMode(ui::AXMode(
++      static_cast<uint32_t>(mode) & known & ~ui::AXMode::kFromPlatform));
++}
++
+ // CefContext
+ 
+ CefContext::CefContext() = default;
+@@ -623,6 +696,8 @@ void CefContext::OnContextInitialized() {
+   if (application_) {
+     child_process_observer_ =
+         std::make_unique<CefChildProcessObserver>(application_);
++    accessibility_state_ =
++        std::make_unique<CefAccessibilityState>(application_);
+ 
+     // Notify the handler after the global browser context has initialized.
+     CefRefPtr<CefRequestContext> request_context =
+@@ -655,6 +730,7 @@ void CefContext::ShutdownOnUIThread() {
+   }
+ 
+   child_process_observer_.reset();
++  accessibility_state_.reset();
+ 
+   if (trace_subscriber_) {
+     trace_subscriber_.reset();
+diff --git a/libcef/browser/context.h b/libcef/browser/context.h
+index ec5752d..a18fd65 100644
+--- a/libcef/browser/context.h
++++ b/libcef/browser/context.h
+@@ -22,6 +22,7 @@ namespace pref_helper {
+ class Registrar;
+ }
+ 
++class CefAccessibilityState;
+ class CefBrowserInfoManager;
+ class CefChildProcessObserver;
+ class CefTraceSubscriber;
+@@ -82,6 +83,11 @@ class CefContext {
+   CefTraceSubscriber* GetTraceSubscriber();
+   pref_helper::Registrar* GetPrefRegistrar();
+ 
++  // Valid on the UI thread from context initialization until shutdown.
++  CefAccessibilityState* accessibility_state() const {
++    return accessibility_state_.get();
++  }
++
+   // Populate request context settings for the global system context based on
+   // CefSettings and command-line flags.
+   void PopulateGlobalRequestContextSettings(
+@@ -126,6 +132,7 @@ class CefContext {
+   std::unique_ptr<pref_helper::Registrar> pref_registrar_;
+   std::unique_ptr<CefBrowserInfoManager> browser_info_manager_;
+   std::unique_ptr<CefChildProcessObserver> child_process_observer_;
++  std::unique_ptr<CefAccessibilityState> accessibility_state_;
+ 
+   std::optional<
+       base::CurrentThread::ScopedAllowApplicationTasksInNativeNestedLoop>

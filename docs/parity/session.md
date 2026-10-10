@@ -15,9 +15,9 @@ Percentages are over the non-n/a items; the second counts a partial item as half
 |---|---|---|---|---|---|---|---|
 | Module methods and properties | 3 | 1 | 2 | 0 | 0 | 33.3% | 66.7% |
 | Instance events | 23 | 0 | 0 | 19 | 4 | 0.0% | 0.0% |
-| Instance methods | 56 | 20 | 13 | 17 | 6 | 40.0% | 53.0% |
+| Instance methods | 56 | 20 | 14 | 16 | 6 | 40.0% | 54.0% |
 | Instance properties | 9 | 3 | 0 | 0 | 6 | 100.0% | 100.0% |
-| **Total** | 91 | 24 | 15 | 36 | 16 | 32.0% | 42.0% |
+| **Total** | 91 | 24 | 16 | 35 | 16 | 32.0% | 42.7% |
 
 ## Checklist
 
@@ -65,10 +65,10 @@ Percentages are over the non-n/a items; the second counts a partial item as half
 | `ses.clearCache()` | `ClearCacheAsync` | done | CEF `clear_http_cache`. |
 | `ses.clearStorageData([options])` | `ClearStorageDataAsync` | partial | Every `storages` name, case-insensitive, unknown ones ignored, `origin` or all; through DevTools on a hidden page (E37); the media device id salt stays (E36). |
 | `ses.flushStorageData()` | `FlushStorageDataAsync` | partial | Flushes cookies only (E6). |
-| `ses.setProxy(config)` | `SetProxyAsync` | done | Through the profile's `proxy` preference. See A35 (worked on elsewhere). |
+| `ses.setProxy(config)` | `SetProxyAsync` | done | Through the profile's `proxy` preference, with Electron's mode rules (A35). |
 | `ses.resolveHost(host[, options])` | `ResolveHostAsync` | partial | No options; `HostResolutionException` carries the net error (E38). |
-| `ses.resolveProxy(url)` | — | missing | See A35 (worked on elsewhere); E8. |
-| `ses.forceReloadProxyConfig()` | — | missing | E8; see A35. |
+| `ses.resolveProxy(url)` | `ResolveProxyAsync` | partial | Oriel's CEF patch 0008 only; stock CEF throws `PlatformNotSupportedException` (A35, E8). |
+| `ses.forceReloadProxyConfig()` | — | missing | E8. |
 | `ses.setDownloadPath(path)` | `SetDownloadPath` | done | `download.default_directory`, as Electron. |
 | `ses.enableNetworkEmulation(options)` | `EnableNetworkEmulation` | partial | Per page through DevTools, open and later pages; page-less requests are not throttled (E43). |
 | `ses.preconnect(options)` | — | missing | E10. |

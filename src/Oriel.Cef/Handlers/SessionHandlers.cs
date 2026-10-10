@@ -218,6 +218,29 @@ public sealed unsafe class ResolveCallback : IReleaseObserver
     }
 }
 
+/// <summary><c>cef_resolve_proxy_callback_t</c> (patch 0008): completes with the net error and the PAC-format proxy list.</summary>
+public sealed unsafe class ResolveProxyCallback : IReleaseObserver
+{
+    private readonly TaskCompletionSource<(cef_errorcode_t Error, string Proxy)> _done =
+        new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+    public ResolveProxyCallback()
+    {
+        Native = NativeObject.Create<cef_resolve_proxy_callback_t>(this);
+        Native->on_resolve_proxy_completed = &OnResolveProxyCompleted;
+    }
+
+    public cef_resolve_proxy_callback_t* Native { get; }
+
+    public Task<(cef_errorcode_t Error, string Proxy)> Task => _done.Task;
+
+    void IReleaseObserver.Released() => _done.TrySetException(new InvalidOperationException("CEF dropped the operation."));
+
+    [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])]
+    private static void OnResolveProxyCompleted(cef_resolve_proxy_callback_t* self, cef_errorcode_t error, cef_string_utf16_t* proxy)
+        => NativeObject.Owner<ResolveProxyCallback>(self)._done.TrySetResult((error, CefString.Read(proxy)));
+}
+
 /// <summary><c>cef_end_tracing_callback_t</c>: completes with the trace file's path.</summary>
 public sealed unsafe class EndTracingCallback : IReleaseObserver
 {

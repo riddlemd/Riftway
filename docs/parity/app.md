@@ -12,10 +12,10 @@ Percentages are over the non-n/a items; the second counts a partial item as half
 
 | Area | Items | Done | Partial | Missing | n/a | % done | % done + partial/2 |
 |---|---|---|---|---|---|---|---|
-| Events | 30 | 16 | 6 | 8 | 0 | 53.3% | 63.3% |
-| Methods | 75 | 41 | 19 | 14 | 1 | 55.4% | 68.2% |
+| Events | 30 | 16 | 7 | 7 | 0 | 53.3% | 65.0% |
+| Methods | 75 | 41 | 23 | 10 | 1 | 55.4% | 70.9% |
 | Properties | 10 | 7 | 3 | 0 | 0 | 70.0% | 85.0% |
-| **Total** | 115 | 64 | 28 | 22 | 1 | 56.1% | 68.4% |
+| **Total** | 115 | 64 | 33 | 17 | 1 | 56.1% | 70.6% |
 
 ## Checklist
 
@@ -49,8 +49,8 @@ Percentages are over the non-n/a items; the second counts a partial item as half
 | `login` | `Login` | done | After the page's own. |
 | `gpu-info-update` | — | missing | CEF exposes no GpuDataManager observer (A27). |
 | `render-process-gone` | `RenderProcessGone` | done | With the page and its details, before the page's own event, as Electron's forwarding listener runs first. |
-| `child-process-gone` | — | missing | CEF has no browser-child-process observer (A31). |
-| `accessibility-support-changed` | `AccessibilitySupportChanged` | partial | Raised by `SetAccessibilitySupportEnabled`; a screen reader starting or stopping is not seen (A28). |
+| `child-process-gone` | `ChildProcessGone` | partial | Electron's details, from a `BrowserChildProcessObserver` with Oriel's CEF patch 0007; never raised with stock CEF (A31). |
+| `accessibility-support-changed` | `AccessibilitySupportChanged` | partial | Raised by the setters; with Oriel's CEF patch 0009 also when Chromium turns accessibility on for an assistive technology; with stock CEF a screen reader is not seen (A28). |
 | `session-created` | `SessionCreated` | done |  |
 | `second-instance` | `SecondInstance` | partial | The command line is one string, not `argv`; `AdditionalData` from `RequestSingleInstanceLock` on macOS and Linux only (A29). |
 
@@ -116,10 +116,10 @@ Percentages are over the non-n/a items; the second counts a partial item as half
 | `getBadgeCount()` | `GetBadgeCount` | done |  |
 | `getLoginItemSettings([options])` | `GetLoginItemSettings` | done | Windows registry; macOS SMAppService with `Status` and `WasOpenedAtLogin`; all off on Linux, as Electron. |
 | `setLoginItemSettings(settings)` | `SetLoginItemSettings` | done | Windows; macOS SMAppService (register / unregister); no-op on Linux. |
-| `isAccessibilitySupportEnabled()` | `IsAccessibilitySupportEnabled` | partial | Only what `SetAccessibilitySupportEnabled` set (A28). |
-| `setAccessibilitySupportEnabled(enabled)` | `SetAccessibilitySupportEnabled` | partial | Per page through CEF; off also clears a screen reader's mode (A28). |
-| `getAccessibilitySupportFeatures()` | — | missing | A28. |
-| `setAccessibilitySupportFeatures(features)` | — | missing | A28. |
+| `isAccessibilitySupportEnabled()` | `IsAccessibilitySupportEnabled` | partial | Chromium's process-wide mode with Oriel's CEF patch 0009; with stock CEF only what `SetAccessibilitySupportEnabled` set (A28). |
+| `setAccessibilitySupportEnabled(enabled)` | `SetAccessibilitySupportEnabled` | partial | One process-wide scoped mode with Oriel's CEF patch 0009; with stock CEF per page, and off also clears a screen reader's mode (A28). |
+| `getAccessibilitySupportFeatures()` | `GetAccessibilitySupportFeatures` | partial | Chromium's mode flags with Oriel's CEF patch 0009; with stock CEF the complete mode's names while Oriel's is on (A28). |
+| `setAccessibilitySupportFeatures(features)` | `SetAccessibilitySupportFeatures` | partial | With Oriel's CEF patch 0009; `PlatformNotSupportedException` with stock CEF (A28). |
 | `showAboutPanel()` | `ShowAboutPanel` | done | macOS standard panel; Linux GtkAboutDialog and Windows information box (not run yet). |
 | `setAboutPanelOptions(options)` | `SetAboutPanelOptions` | done |  |
 | `isEmojiPanelSupported()` | `IsEmojiPanelSupported` | done | macOS, Windows 10 1803+. |
@@ -130,8 +130,8 @@ Percentages are over the non-n/a items; the second counts a partial item as half
 | `moveToApplicationsFolder([options])` | — | missing | A33. |
 | `isSecureKeyboardEntryEnabled()` | `IsSecureKeyboardEntryEnabled` | done | macOS. |
 | `setSecureKeyboardEntryEnabled(enabled)` | `SetSecureKeyboardEntryEnabled` | partial | Oriel's switch is separate from Chromium's password-field counter (A37). |
-| `setProxy(config)` | — | missing | A35. |
-| `resolveProxy(url)` | — | missing | A35. |
+| `setProxy(config)` | `SetProxyAsync` | partial | The global `proxy` preference, which the system network context follows, with Electron's choices; completes before the context applies it (A35). |
+| `resolveProxy(url)` | `ResolveProxyAsync` | partial | The system network context's lookup with Oriel's CEF patch 0008; `PlatformNotSupportedException` with stock CEF (A35). |
 | `setClientCertRequestPasswordHandler(handler)` | — | missing | Linux NSS (A34). |
 
 ### Properties

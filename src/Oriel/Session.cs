@@ -153,34 +153,6 @@ public sealed unsafe partial class Session
         return callback.Task;
     }
 
-    /// <summary>Routes the session's requests through a proxy. Electron's <c>ses.setProxy()</c>.</summary>
-    /// <remarks>Connections already open keep their route; <see cref="CloseAllConnectionsAsync"/> drops them.</remarks>
-    /// <exception cref="ArgumentException">Chromium rejected the configuration.</exception>
-    public Task SetProxyAsync(ProxyConfig config)
-    {
-        ArgumentNullException.ThrowIfNull(config);
-        var mode = config.Mode ?? (config.PacScript is not null ? ProxyMode.PacScript : config.ProxyRules is not null ? ProxyMode.FixedServers : ProxyMode.Direct);
-        CefThread.InvokeOnUi(() =>
-        {
-            var dictionary = CefNative.cef_dictionary_value_create();
-            SetString(dictionary, "mode", ProxyModeName(mode));
-            if (mode == ProxyMode.FixedServers)
-            {
-                SetString(dictionary, "server", config.ProxyRules ?? "");
-                if (config.ProxyBypassRules is { } bypass) SetString(dictionary, "bypass_list", bypass);
-            }
-            else if (mode == ProxyMode.PacScript)
-            {
-                SetString(dictionary, "pac_url", config.PacScript ?? "");
-            }
-            var value = CefNative.cef_value_create();
-            value->set_dictionary(value, dictionary);
-            SetPreference(_context, "proxy", value);
-            return true;
-        });
-        return Task.CompletedTask;
-    }
-
     /// <summary>Sets the user agent, and optionally the accepted languages (e.g. <c>en-US,fr</c>), of the session's
     /// pages, open ones included; a page's own <see cref="WebContents.SetUserAgent"/> still wins. Electron's
     /// <c>ses.setUserAgent()</c>.</summary>
@@ -262,17 +234,8 @@ public sealed unsafe partial class Session
         catch (ArgumentException e) { Console.Error.WriteLine($"[Oriel] Could not reset saved zoom levels: {e.Message}"); }
 
         ForgetRememberedPermissions(context);
+        ForgetSavedProxy((cef_preference_manager_t*)context);
     }
-
-    internal static string ProxyModeName(ProxyMode mode) => mode switch
-    {
-        ProxyMode.Direct => "direct",
-        ProxyMode.AutoDetect => "auto_detect",
-        ProxyMode.PacScript => "pac_script",
-        ProxyMode.FixedServers => "fixed_servers",
-        ProxyMode.System => "system",
-        _ => throw new ArgumentOutOfRangeException(nameof(mode)),
-    };
 
     // Chrome-style CEF only creates profiles directly inside the root cache path, so not Electron's Partitions/<name>.
     internal static string PartitionDirectory(string name)
@@ -355,7 +318,7 @@ public sealed unsafe partial class Session
 
     private delegate void CompletionStart(cef_request_context_t* context, cef_completion_callback_t* callback);
 
-    private static void SetString(cef_dictionary_value_t* dictionary, string key, string value)
+    internal static void SetString(cef_dictionary_value_t* dictionary, string key, string value)
     {
         cef_string_utf16_t k = default, v = default;
         CefString.Set(&k, key);
@@ -367,10 +330,13 @@ public sealed unsafe partial class Session
 
     // Takes the value's reference. UI thread.
     private static void SetPreference(cef_request_context_t* context, string name, cef_value_t* value)
+        => SetPreference((cef_preference_manager_t*)context, name, value);
+
+    // Takes the value's reference; a null value resets the preference. UI thread.
+    internal static void SetPreference(cef_preference_manager_t* manager, string name, cef_value_t* value)
     {
         cef_string_utf16_t key = default, error = default;
         CefString.Set(&key, name);
-        var manager = (cef_preference_manager_t*)context;
         var ok = manager->set_preference(manager, &key, value, &error) != 0;
         var message = CefString.Read(&error);
         CefString.Clear(&key);
@@ -420,11 +386,12 @@ public enum ProxyMode
     System,
 }
 
-/// <summary>A session's proxy settings. Electron's <c>ProxyConfig</c>.</summary>
+/// <summary>Proxy settings for <see cref="Session.SetProxyAsync"/> and <see cref="OrielApp.SetProxyAsync"/>. Electron's
+/// <c>ProxyConfig</c>.</summary>
 public sealed record ProxyConfig
 {
-    /// <summary>The mode; null picks <see cref="ProxyMode.PacScript"/> when <see cref="PacScript"/> is set, else
-    /// <see cref="ProxyMode.FixedServers"/> when <see cref="ProxyRules"/> is set, else <see cref="ProxyMode.Direct"/>.</summary>
+    /// <summary>The mode; null picks <see cref="ProxyMode.PacScript"/> when <see cref="PacScript"/> is not empty, else
+    /// <see cref="ProxyMode.FixedServers"/>, which with no <see cref="ProxyRules"/> is a direct connection.</summary>
     public ProxyMode? Mode { get; init; }
 
     /// <summary>The URL of a PAC script.</summary>

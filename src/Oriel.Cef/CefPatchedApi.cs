@@ -12,9 +12,9 @@ public static unsafe class CefPatchedApi
     /// <summary>CEF's <c>CEF_API_VERSION_NEXT</c>.</summary>
     public const int Version = 999998;
 
-    public const string HashWindows = "30e79e5a6e1db4db305b80188052d76b46bdfd37";
-    public const string HashMac = "651a9644980c8e4cec5c8b2123084229bef13d54";
-    public const string HashLinux = "1d9b34f5f12ecd861e292da95c07d5a829fe490d";
+    public const string HashWindows = "a4f9ca4f07caca418ea9d2126d4cbbf408706fc9";
+    public const string HashMac = "a34eda7bf9c9d55f0a1b61c2da1267459e4da1d6";
+    public const string HashLinux = "41328e768ef24db112c839e118ea0783d3d8543a";
 
     /// <summary>What a libcef's hash for the next version says about it.</summary>
     internal enum Kind
@@ -153,6 +153,83 @@ public static unsafe class CefPatchedApi
 
     internal static bool IsNetLogging(cef_request_context_t* context, bool patched)
         => patched && context != null && ((cef_request_context_next_t*)context)->is_net_logging(context) != 0;
+
+    /// <summary><c>CefRequestContext::ResolveProxy</c> (patch 0008): the proxies the context's network context uses for
+    /// <paramref name="url"/>, in PAC format. Takes the callback's reference.</summary>
+    /// <returns>False, without a call, when the loaded libcef lacks the patches; the callback is then released.</returns>
+    public static bool ResolveProxy(cef_request_context_t* context, string url, cef_resolve_proxy_callback_t* callback)
+        => ResolveProxy(context, url, callback, CefRuntime.IsPatched);
+
+    internal static bool ResolveProxy(cef_request_context_t* context, string url, cef_resolve_proxy_callback_t* callback, bool patched)
+    {
+        ArgumentNullException.ThrowIfNull(url);
+        if (!patched || context == null)
+        {
+            NativeObject.Release(callback);
+            return false;
+        }
+        fixed (char* chars = url)
+        {
+            // libcef copies the URL before the call returns.
+            var value = new cef_string_utf16_t { str = chars, length = (nuint)url.Length };
+            ((cef_request_context_next_t*)context)->resolve_proxy(context, &value, callback);
+        }
+        return true;
+    }
+
+    /// <summary><c>CefRequestContext::ResolveSystemProxy</c> (patch 0008): as <see cref="ResolveProxy(cef_request_context_t*, string, cef_resolve_proxy_callback_t*)"/>
+    /// through the system network context. Takes the callback's reference.</summary>
+    /// <returns>False, without a call, when the loaded libcef lacks the patches; the callback is then released.</returns>
+    public static bool ResolveSystemProxy(string url, cef_resolve_proxy_callback_t* callback)
+        => ResolveSystemProxy(url, callback, CefRuntime.IsPatched, &cef_request_context_resolve_system_proxy);
+
+    internal static bool ResolveSystemProxy(string url, cef_resolve_proxy_callback_t* callback, bool patched,
+        delegate*<cef_string_utf16_t*, cef_resolve_proxy_callback_t*, void> resolve)
+    {
+        ArgumentNullException.ThrowIfNull(url);
+        // A stock libcef has no such export.
+        if (!patched)
+        {
+            NativeObject.Release(callback);
+            return false;
+        }
+        fixed (char* chars = url)
+        {
+            var value = new cef_string_utf16_t { str = chars, length = (nuint)url.Length };
+            resolve(&value, callback);
+        }
+        return true;
+    }
+
+    [DllImport("libcef", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
+    private static extern void cef_request_context_resolve_system_proxy(cef_string_utf16_t* url, cef_resolve_proxy_callback_t* callback);
+
+    /// <summary><c>CefBrowserHost::GetProcessAccessibilityMode</c> (patch 0009): the process's <c>ui::AXMode</c> flags.
+    /// Browser UI thread.</summary>
+    /// <returns>Null, without a call, when the loaded libcef lacks the patches.</returns>
+    public static int? GetProcessAccessibilityMode()
+        => GetProcessAccessibilityMode(CefRuntime.IsPatched, &cef_browser_host_get_process_accessibility_mode);
+
+    internal static int? GetProcessAccessibilityMode(bool patched, delegate*<int> get) => patched ? get() : null;
+
+    /// <summary><c>CefBrowserHost::SetProcessAccessibilityMode</c> (patch 0009): replaces the app's own addition to the
+    /// process's accessibility mode; 0 removes it. Browser UI thread.</summary>
+    /// <returns>False, without a call, when the loaded libcef lacks the patches.</returns>
+    public static bool SetProcessAccessibilityMode(int mode)
+        => SetProcessAccessibilityMode(mode, CefRuntime.IsPatched, &cef_browser_host_set_process_accessibility_mode);
+
+    internal static bool SetProcessAccessibilityMode(int mode, bool patched, delegate*<int, void> set)
+    {
+        if (!patched) return false;
+        set(mode);
+        return true;
+    }
+
+    [DllImport("libcef", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
+    private static extern int cef_browser_host_get_process_accessibility_mode();
+
+    [DllImport("libcef", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
+    private static extern void cef_browser_host_set_process_accessibility_mode(int mode);
 }
 
 /// <summary>A download's fields from patch 0005: Electron's <c>hasUserGesture</c>, <c>getLastModifiedTime</c>,
@@ -182,6 +259,30 @@ public unsafe struct cef_request_context_next_t
     public delegate* unmanaged[Cdecl]<cef_request_context_t*, cef_string_utf16_t*, int, long, cef_net_log_callback_t*, void> start_net_log;
     public delegate* unmanaged[Cdecl]<cef_request_context_t*, cef_net_log_callback_t*, void> stop_net_log;
     public delegate* unmanaged[Cdecl]<cef_request_context_t*, int> is_net_logging;
+
+    /// <summary>Patch 0008.</summary>
+    public delegate* unmanaged[Cdecl]<cef_request_context_t*, cef_string_utf16_t*, cef_resolve_proxy_callback_t*, void> resolve_proxy;
+}
+
+/// <summary><c>cef_resolve_proxy_callback_t</c> (patch 0008), implemented by the client.</summary>
+public unsafe struct cef_resolve_proxy_callback_t
+{
+    public cef_base_ref_counted_t @base;
+
+    /// <summary>UI thread: the net error, and the PAC-format proxy list (empty when the lookup failed).</summary>
+    public delegate* unmanaged[Cdecl]<cef_resolve_proxy_callback_t*, cef_errorcode_t, cef_string_utf16_t*, void> on_resolve_proxy_completed;
+}
+
+/// <summary><c>cef_browser_process_handler_t</c> at the next API version of a patched libcef.</summary>
+public unsafe struct cef_browser_process_handler_next_t
+{
+    public cef_browser_process_handler_t @base;
+
+    /// <summary>Patch 0007: type, status, exit code, service name, name, Windows launch error.</summary>
+    public delegate* unmanaged[Cdecl]<cef_browser_process_handler_t*, cef_string_utf16_t*, cef_termination_status_t, int, cef_string_utf16_t*, cef_string_utf16_t*, uint, void> on_child_process_gone;
+
+    /// <summary>Patch 0009: the process's new accessibility mode after Chromium added flags by itself.</summary>
+    public delegate* unmanaged[Cdecl]<cef_browser_process_handler_t*, int, void> on_accessibility_mode_changed;
 }
 
 /// <summary><c>cef_net_log_callback_t</c> (patch 0006), implemented by the client.</summary>
