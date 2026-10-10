@@ -1,0 +1,192 @@
+Oriel CEF patch 0007: CefBrowserProcessHandler::OnChildProcessGone.
+
+Reports the browser child processes that are not renderers (GPU, utility,
+zygote and the rest) when they crash, are killed or fail to launch, as
+Electron's App does for child-process-gone through
+content::BrowserChildProcessObserver (BrowserChildProcessCrashed, Killed and
+LaunchFailed): the process type's English name
+(content::GetProcessTypeNameInEnglish), the termination status, the exit code,
+the metrics (service) name, the display name and, for a failed launch on
+Windows, the system error code. CefContext owns the observer from context
+initialisation to shutdown. API at CEF_NEXT (999998): API version 15400 and
+its hash are unchanged.
+
+Resolves: Oriel docs/DRIFT.md A31.
+Base: CEF a03e714 (branch 8037, CEF 154) with 0001-0006. Applies in chromium/src/cef.
+
+diff --git a/include/cef_browser_process_handler.h b/include/cef_browser_process_handler.h
+index a8d5dc3..2ac99bd 100644
+--- a/include/cef_browser_process_handler.h
++++ b/include/cef_browser_process_handler.h
+@@ -161,6 +161,29 @@ class CefBrowserProcessHandler : public virtual CefBaseRefCounted {
+   GetDefaultRequestContextHandler() {
+     return nullptr;
+   }
++
++#if CEF_API_ADDED(CEF_NEXT)
++  ///
++  /// Called on the browser process UI thread when a child process that is not
++  /// a renderer crashes, is killed or fails to launch (GPU, utility and other
++  /// processes; see CefRequestHandler::OnRenderProcessTerminated for
++  /// renderers). |type| is the English name of the process type, such as
++  /// "GPU", "Utility", "Zygote" or "Sandbox helper". |status| says how it went
++  /// and |exit_code| is its exit code, or the platform's launch error for
++  /// TS_LAUNCH_FAILED. |service_name| is the name the process reports metrics
++  /// under (for a utility process, its service, such as
++  /// "network.mojom.NetworkService"). |name| is its display name, which may
++  /// be empty. |system_error_code| is the Windows error of a failed launch,
++  /// and 0 otherwise.
++  ///
++  /*--cef(added=next,optional_param=service_name,optional_param=name)--*/
++  virtual void OnChildProcessGone(const CefString& type,
++                                  cef_termination_status_t status,
++                                  int exit_code,
++                                  const CefString& service_name,
++                                  const CefString& name,
++                                  uint32_t system_error_code) {}
++#endif
+ };
+ 
+ #endif  // CEF_INCLUDE_CEF_BROWSER_PROCESS_HANDLER_H_
+diff --git a/libcef/browser/context.cc b/libcef/browser/context.cc
+index 53abc8d..9083745 100644
+--- a/libcef/browser/context.cc
++++ b/libcef/browser/context.cc
+@@ -17,9 +17,14 @@
+ #include "cef/libcef/browser/request_context_impl.h"
+ #include "cef/libcef/browser/thread_util.h"
+ #include "cef/libcef/browser/trace_subscriber.h"
++#include "cef/libcef/common/api_version_util.h"
+ #include "cef/libcef/common/cef_switches.h"
+ #include "chrome/browser/browser_process_impl.h"
+ #include "components/network_session_configurator/common/network_switches.h"
++#include "content/public/browser/browser_child_process_observer.h"
++#include "content/public/browser/child_process_data.h"
++#include "content/public/browser/child_process_termination_info.h"
++#include "content/public/common/process_type.h"
+ #include "ui/base/ui_base_switches.h"
+ 
+ #if BUILDFLAG(IS_WIN)
+@@ -344,6 +349,83 @@ void CefSetNestableTasksAllowed(bool allowed) {
+   g_context->SetNestableTasksAllowed(allowed);
+ }
+ 
++// Reports the non-renderer child processes that crash, are killed or fail to
++// launch, as Electron's App does for child-process-gone.
++class CefChildProcessObserver : public content::BrowserChildProcessObserver {
++ public:
++  explicit CefChildProcessObserver(CefRefPtr<CefApp> application)
++      : application_(application) {
++    content::BrowserChildProcessObserver::Add(this);
++  }
++
++  CefChildProcessObserver(const CefChildProcessObserver&) = delete;
++  CefChildProcessObserver& operator=(const CefChildProcessObserver&) = delete;
++
++  ~CefChildProcessObserver() override {
++    content::BrowserChildProcessObserver::Remove(this);
++  }
++
++  void BrowserChildProcessCrashed(
++      const content::ChildProcessData& data,
++      const content::ChildProcessTerminationInfo& info) override {
++    Notify(data, info);
++  }
++
++  void BrowserChildProcessKilled(
++      const content::ChildProcessData& data,
++      const content::ChildProcessTerminationInfo& info) override {
++    Notify(data, info);
++  }
++
++  void BrowserChildProcessLaunchFailed(
++      const content::ChildProcessData& data,
++      const content::ChildProcessTerminationInfo& info) override {
++    Notify(data, info);
++  }
++
++ private:
++  void Notify(const content::ChildProcessData& data,
++              const content::ChildProcessTerminationInfo& info) {
++    // A client built against an older API version has no OnChildProcessGone.
++    if (!CEF_API_IS_ADDED(CEF_NEXT)) {
++      return;
++    }
++    auto handler = application_->GetBrowserProcessHandler();
++    if (!handler) {
++      return;
++    }
++
++    // As CefBrowserContentsDelegate::RenderProcessGone.
++    cef_termination_status_t status = TS_ABNORMAL_TERMINATION;
++    if (info.status == base::TERMINATION_STATUS_PROCESS_WAS_KILLED) {
++      status = TS_PROCESS_WAS_KILLED;
++    } else if (info.status == base::TERMINATION_STATUS_PROCESS_CRASHED) {
++      status = TS_PROCESS_CRASHED;
++    } else if (info.status == base::TERMINATION_STATUS_OOM) {
++      status = TS_PROCESS_OOM;
++    } else if (info.status == base::TERMINATION_STATUS_LAUNCH_FAILED) {
++      status = TS_LAUNCH_FAILED;
++#if BUILDFLAG(IS_WIN)
++    } else if (info.status == base::TERMINATION_STATUS_INTEGRITY_FAILURE) {
++      status = TS_INTEGRITY_FAILURE;
++#endif
++    }
++
++    uint32_t system_error_code = 0;
++#if BUILDFLAG(IS_WIN)
++    if (info.status == base::TERMINATION_STATUS_LAUNCH_FAILED) {
++      system_error_code = static_cast<uint32_t>(info.last_error);
++    }
++#endif
++
++    handler->OnChildProcessGone(
++        content::GetProcessTypeNameInEnglish(data.process_type), status,
++        info.exit_code, data.metrics_name, data.name, system_error_code);
++  }
++
++  CefRefPtr<CefApp> application_;
++};
++
+ // CefContext
+ 
+ CefContext::CefContext() = default;
+@@ -539,6 +621,9 @@ void CefContext::OnContextInitialized() {
+   CEF_REQUIRE_UIT();
+ 
+   if (application_) {
++    child_process_observer_ =
++        std::make_unique<CefChildProcessObserver>(application_);
++
+     // Notify the handler after the global browser context has initialized.
+     CefRefPtr<CefRequestContext> request_context =
+         CefRequestContext::GetGlobalContext();
+@@ -569,6 +654,8 @@ void CefContext::ShutdownOnUIThread() {
+     observer.OnContextDestroyed();
+   }
+ 
++  child_process_observer_.reset();
++
+   if (trace_subscriber_) {
+     trace_subscriber_.reset();
+   }
+diff --git a/libcef/browser/context.h b/libcef/browser/context.h
+index b73fc32..ec5752d 100644
+--- a/libcef/browser/context.h
++++ b/libcef/browser/context.h
+@@ -23,6 +23,7 @@ class Registrar;
+ }
+ 
+ class CefBrowserInfoManager;
++class CefChildProcessObserver;
+ class CefTraceSubscriber;
+ 
+ class CefContext {
+@@ -124,6 +125,7 @@ class CefContext {
+   std::unique_ptr<CefTraceSubscriber> trace_subscriber_;
+   std::unique_ptr<pref_helper::Registrar> pref_registrar_;
+   std::unique_ptr<CefBrowserInfoManager> browser_info_manager_;
++  std::unique_ptr<CefChildProcessObserver> child_process_observer_;
+ 
+   std::optional<
+       base::CurrentThread::ScopedAllowApplicationTasksInNativeNestedLoop>

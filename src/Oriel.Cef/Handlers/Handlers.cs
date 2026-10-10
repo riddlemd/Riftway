@@ -135,12 +135,28 @@ public sealed unsafe class RenderProcessHandler
     }
 }
 
+/// <summary>What patch 0007's <c>on_child_process_gone</c> reports.</summary>
+public sealed record ChildProcessGoneInfo(string Type, cef_termination_status_t Status, int ExitCode, string ServiceName, string Name,
+    uint SystemErrorCode);
+
 /// <summary><c>cef_browser_process_handler_t</c>: browser-process lifecycle.</summary>
 public sealed unsafe class BrowserProcessHandler
 {
-    public BrowserProcessHandler()
+    public BrowserProcessHandler() : this(CefRuntime.IsPatched)
     {
-        Native = NativeObject.Create<cef_browser_process_handler_t>(this);
+    }
+
+    // CEF refuses a base.size that is not the configured API version's struct.
+    internal BrowserProcessHandler(bool patched)
+    {
+        if (patched)
+        {
+            var next = NativeObject.Create<cef_browser_process_handler_next_t>(this);
+            next->on_child_process_gone = &OnChildProcessGone;
+            next->on_accessibility_mode_changed = &OnAccessibilityModeChanged;
+            Native = &next->@base;
+        }
+        else Native = NativeObject.Create<cef_browser_process_handler_t>(this);
         Native->on_context_initialized = &OnContextInitialized;
         Native->on_already_running_app_relaunch = &OnAlreadyRunningAppRelaunch;
         Native->on_before_child_process_launch = &OnBeforeChildProcessLaunch;
@@ -161,6 +177,28 @@ public sealed unsafe class BrowserProcessHandler
 
     /// <summary>Preferences to register before CEF reads them from disk; an unregistered one cannot be set.</summary>
     public RegisterPreferencesCallback? RegisterPreferences { get; init; }
+
+    /// <summary>A child process that is not a renderer crashed, was killed or failed to launch (patch 0007; UI thread).</summary>
+    public Action<ChildProcessGoneInfo>? ChildProcessGone { get; init; }
+
+    /// <summary>Chromium added flags to the process's accessibility mode by itself; the new mode (patch 0009; UI thread).</summary>
+    public Action<int>? AccessibilityModeChanged { get; init; }
+
+    [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])]
+    private static void OnChildProcessGone(cef_browser_process_handler_t* self, cef_string_utf16_t* type, cef_termination_status_t status,
+        int exitCode, cef_string_utf16_t* serviceName, cef_string_utf16_t* name, uint systemErrorCode)
+    {
+        var owner = NativeObject.Owner<BrowserProcessHandler>(self);
+        var info = new ChildProcessGoneInfo(CefString.Read(type), status, exitCode, CefString.Read(serviceName), CefString.Read(name), systemErrorCode);
+        if (owner.ChildProcessGone is { } callback) Guard.Run(() => callback(info));
+    }
+
+    [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])]
+    private static void OnAccessibilityModeChanged(cef_browser_process_handler_t* self, int mode)
+    {
+        var owner = NativeObject.Owner<BrowserProcessHandler>(self);
+        if (owner.AccessibilityModeChanged is { } callback) Guard.Run(() => callback(mode));
+    }
 
     // The registrar is scoped to the call (cef_base_scoped_t), so it is never released.
     [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])]

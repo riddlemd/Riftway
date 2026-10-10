@@ -1,0 +1,202 @@
+Oriel CEF patch 0008: CefRequestContext::ResolveProxy and ResolveSystemProxy.
+
+Adds what Electron's session.resolveProxy and app.resolveProxy do through
+ResolveProxyHelper (shell/browser/net/resolve_proxy_helper.cc):
+NetworkContext::LookUpProxyForURL with an empty NetworkAnonymizationKey, and
+the answer as net::ProxyInfo::ToPacString, empty when the lookup fails.
+ResolveProxy asks the context's profile network context; the static
+ResolveSystemProxy (cef_request_context_resolve_system_proxy) asks the system
+network context, which follows Local State's "proxy" preference, as app's.
+Setting proxies needs no patch: the "proxy" preference of a request context or
+of the global preference manager. The client callback is
+CefResolveProxyCallback. API at CEF_NEXT (999998): API version 15400 and its
+hash are unchanged.
+
+Resolves: Oriel docs/DRIFT.md A35 (resolveProxy) and E8's resolveProxy.
+Base: CEF a03e714 (branch 8037, CEF 154) with 0001-0007. Applies in chromium/src/cef.
+
+diff --git a/include/cef_request_context.h b/include/cef_request_context.h
+index fadeb74..b4a8c37 100644
+--- a/include/cef_request_context.h
++++ b/include/cef_request_context.h
+@@ -103,6 +103,23 @@ class CefNetLogCallback : public virtual CefBaseRefCounted {
+   /*--cef(optional_param=error)--*/
+   virtual void OnNetLogComplete(const CefString& error) = 0;
+ };
++
++///
++/// Callback interface for CefRequestContext::ResolveProxy and
++/// CefRequestContext::ResolveSystemProxy.
++///
++/*--cef(source=client,added=next)--*/
++class CefResolveProxyCallback : public virtual CefBaseRefCounted {
++ public:
++  ///
++  /// Called on the UI thread when the proxy lookup has completed. |result| is
++  /// the result code. |proxy| is the PAC-format list of proxies to try, such
++  /// as "PROXY host:8080;DIRECT", or empty if the lookup failed.
++  ///
++  /*--cef(optional_param=proxy)--*/
++  virtual void OnResolveProxyCompleted(cef_errorcode_t result,
++                                       const CefString& proxy) = 0;
++};
+ #endif
+ 
+ ///
+@@ -414,6 +431,26 @@ class CefRequestContext : public CefPreferenceManager {
+   ///
+   /*--cef(added=next)--*/
+   virtual bool IsNetLogging() = 0;
++
++  ///
++  /// Look up the proxies this context's network context would use for |url|
++  /// (NetworkContext::LookUpProxyForURL), running a PAC script if the proxy
++  /// configuration has one. |callback| will be executed on the UI thread
++  /// after completion.
++  ///
++  /*--cef(added=next)--*/
++  virtual void ResolveProxy(const CefString& url,
++                            CefRefPtr<CefResolveProxyCallback> callback) = 0;
++
++  ///
++  /// Look up the proxies for |url| as ResolveProxy does, through the system
++  /// network context, which the global ("Local State") "proxy" preference
++  /// configures. |callback| will be executed on the UI thread after
++  /// completion.
++  ///
++  /*--cef(added=next)--*/
++  static void ResolveSystemProxy(const CefString& url,
++                                 CefRefPtr<CefResolveProxyCallback> callback);
+ #endif
+ };
+ 
+diff --git a/libcef/browser/request_context_impl.cc b/libcef/browser/request_context_impl.cc
+index 4037028..1a81d8a 100644
+--- a/libcef/browser/request_context_impl.cc
++++ b/libcef/browser/request_context_impl.cc
+@@ -22,7 +22,9 @@
+ #include "cef/libcef/common/app_manager.h"
+ #include "cef/libcef/common/task_runner_impl.h"
+ #include "cef/libcef/common/values_impl.h"
++#include "chrome/browser/browser_process.h"
+ #include "chrome/browser/content_settings/host_content_settings_map_factory.h"
++#include "chrome/browser/net/system_network_context_manager.h"
+ #include "chrome/browser/profiles/profile.h"
+ #include "chrome/browser/themes/theme_service.h"
+ #include "chrome/browser/themes/theme_service_factory.h"
+@@ -39,11 +41,15 @@
+ #include "mojo/public/cpp/bindings/remote.h"
+ #include "net/base/net_errors.h"
+ #include "net/dns/host_resolver.h"
++#include "net/base/network_anonymization_key.h"
+ #include "net/log/net_log_capture_mode.h"
++#include "net/proxy_resolution/proxy_info.h"
+ #include "services/network/public/cpp/resolve_host_client_base.h"
+ #include "services/network/public/mojom/clear_data_filter.mojom.h"
+ #include "services/network/public/mojom/net_log.mojom.h"
+ #include "services/network/public/mojom/network_context.mojom.h"
++#include "services/network/public/mojom/proxy_lookup_client.mojom.h"
++#include "url/gurl.h"
+ 
+ using content::BrowserThread;
+ 
+@@ -262,6 +268,53 @@ void StopNetLogInternal(CefRefPtr<CefNetLogCallback> callback,
+   net_log->Stop(callback);
+ }
+ 
++// One proxy lookup, as Electron's ResolveProxyHelper; deletes itself once the
++// network context answers or goes away.
++class ResolveProxyHelper : public network::mojom::ProxyLookupClient {
++ public:
++  explicit ResolveProxyHelper(CefRefPtr<CefResolveProxyCallback> callback)
++      : callback_(callback) {}
++
++  ResolveProxyHelper(const ResolveProxyHelper&) = delete;
++  ResolveProxyHelper& operator=(const ResolveProxyHelper&) = delete;
++
++  void Start(network::mojom::NetworkContext* network_context, const GURL& url) {
++    CEF_REQUIRE_UIT();
++    network_context->LookUpProxyForURL(url, net::NetworkAnonymizationKey(),
++                                       receiver_.BindNewPipeAndPassRemote());
++    receiver_.set_disconnect_handler(
++        base::BindOnce(&ResolveProxyHelper::OnProxyLookupComplete,
++                       base::Unretained(this), net::ERR_ABORTED, std::nullopt));
++  }
++
++ private:
++  void OnProxyLookupComplete(
++      int32_t net_error,
++      const std::optional<net::ProxyInfo>& proxy_info) override {
++    CEF_REQUIRE_UIT();
++    receiver_.reset();
++    callback_->OnResolveProxyCompleted(
++        static_cast<cef_errorcode_t>(net_error),
++        proxy_info ? proxy_info->ToPacString() : std::string());
++    delete this;
++  }
++
++  CefRefPtr<CefResolveProxyCallback> callback_;
++  mojo::Receiver<network::mojom::ProxyLookupClient> receiver_{this};
++};
++
++void ResolveProxyInternal(const CefString& url,
++                          CefRefPtr<CefResolveProxyCallback> callback,
++                          CefBrowserContext::Getter browser_context_getter) {
++  auto browser_context = browser_context_getter.Run();
++  if (!browser_context) {
++    callback->OnResolveProxyCompleted(ERR_ABORTED, CefString());
++    return;
++  }
++  (new ResolveProxyHelper(callback))
++      ->Start(browser_context->GetNetworkContext(), GURL(url.ToString()));
++}
++
+ CefBrowserContext* GetCefBrowserContext(
+     CefRefPtr<CefRequestContext> request_context) {
+   CEF_REQUIRE_UIT();
+@@ -719,6 +772,32 @@ bool CefRequestContextImpl::IsNetLogging() {
+   return net_log && net_log->IsLogging();
+ }
+ 
++void CefRequestContextImpl::ResolveProxy(
++    const CefString& url,
++    CefRefPtr<CefResolveProxyCallback> callback) {
++  GetBrowserContext(content::GetUIThreadTaskRunner({}),
++                    base::BindOnce(&ResolveProxyInternal, url, callback));
++}
++
++// static
++void CefRequestContext::ResolveSystemProxy(
++    const CefString& url,
++    CefRefPtr<CefResolveProxyCallback> callback) {
++  if (!CONTEXT_STATE_VALID()) {
++    DCHECK(false) << "context not valid";
++    return;
++  }
++  if (!CEF_CURRENTLY_ON_UIT()) {
++    CEF_POST_TASK(CEF_UIT, base::BindOnce(&CefRequestContext::ResolveSystemProxy,
++                                          url, callback));
++    return;
++  }
++  // The system network context follows Local State's "proxy" preference.
++  (new ResolveProxyHelper(callback))
++      ->Start(g_browser_process->system_network_context_manager()->GetContext(),
++              GURL(url.ToString()));
++}
++
+ CefRefPtr<CefMediaRouter> CefRequestContextImpl::GetMediaRouter(
+     CefRefPtr<CefCompletionCallback> callback) {
+   CefRefPtr<CefMediaRouterImpl> media_router = new CefMediaRouterImpl();
+diff --git a/libcef/browser/request_context_impl.h b/libcef/browser/request_context_impl.h
+index e7158fa..99ca7fa 100644
+--- a/libcef/browser/request_context_impl.h
++++ b/libcef/browser/request_context_impl.h
+@@ -153,6 +153,8 @@ class CefRequestContextImpl : public CefRequestContext {
+                    CefRefPtr<CefNetLogCallback> callback) override;
+   void StopNetLog(CefRefPtr<CefNetLogCallback> callback) override;
+   bool IsNetLogging() override;
++  void ResolveProxy(const CefString& url,
++                    CefRefPtr<CefResolveProxyCallback> callback) override;
+ 
+   const CefRequestContextSettings& settings() const { return config_.settings; }
+ 

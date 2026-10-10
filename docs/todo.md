@@ -57,9 +57,12 @@ Cross-platform work. Platform-specific items: [linux-todo.md](linux-todo.md), [w
       by title, thumbnail size and pixels, screen `display_id`s against `Screen.GetAllDisplays`, icons, sharing a running
       request) and SessionTest's `chromeMediaSourceId` checks on each OS; per-OS items in the platform todos
 
-- [ ] `app` ([parity/app.md](parity/app.md)): CEF patches for A23 (context initialised after AppKit's launch),
-      A24, A27 (GPU info observer), A28 (accessibility state), A31 (`child-process-gone`), A35 (system proxy); choose
-      the app locale as Electron does and pass it as `CefSettings.locale` (A30); a relauncher mode (A21)
+- [ ] `app` ([parity/app.md](parity/app.md)): CEF patches for A23 (context initialised after AppKit's launch; what
+      it needs is in eng/cef/README.md), A24, A27 (GPU info observer); choose the app locale as Electron does and pass it
+      as `CefSettings.locale` (A30); a relauncher mode (A21)
+- [ ] CEF patches 0007-0009 (A31 `child-process-gone`, A35 `resolveProxy`, A28 accessibility mode): build a patched
+      libcef and run SessionTest's `patched (0007)`, `(0008)` and `(0009)` checks on each OS; the stock proxy checks
+      (bypass list, fixed servers without rules, `app.SetProxyAsync`) have not run either
 
 ## Tests
 

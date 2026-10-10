@@ -238,6 +238,8 @@ public sealed unsafe partial class OrielApp
                 ContextInitialized = OnContextInitialized,
                 AlreadyRunningAppRelaunch = OnSecondInstance,
                 RegisterPreferences = WindowStateStore.Register,
+                ChildProcessGone = OnChildProcessGone,
+                AccessibilityModeChanged = OnAccessibilityModeChanged,
                 // Every child (the Linux zygote included) must register the same schemes as this process.
                 BeforeChildProcessLaunch = commandLine =>
                 {
@@ -406,6 +408,7 @@ public sealed unsafe partial class OrielApp
         var global = CefNative.cef_request_context_get_global_context();
         Session.ApplyElectronDefaults(global);
         NativeObject.Release(global);
+        ForgetSavedSystemProxy();
         NativeTheme.OnReady();
         // Before Ready, so the first window's page can already load from a custom scheme.
         Protocol.OnContextInitialized();

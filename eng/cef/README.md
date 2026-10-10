@@ -15,9 +15,25 @@ Base: CEF `a03e714` (branch 8037, CEF 154, Chromium 154.0.8037.94), the version 
 | [`cef/0004-window-set-xdg-activation-token.patch`](patches/cef/0004-window-set-xdg-activation-token.patch) | `chromium/src/cef` | Adds the static `CefWindow::SetXdgActivationToken` (`cef_window_set_xdg_activation_token`), which calls `base::nix::SetActivationToken` as Chromium's `StatusIconLinuxDbus::OnProvideXdgActivationToken` does; Chromium puts the token on the next window it maps or activates (`_NET_STARTUP_ID` on X11, xdg-activation on Wayland). Does nothing off Linux. | T5 (branch `linux-tray`) |
 | [`cef/0005-download-item-gesture-validators-initiator-frame.patch`](patches/cef/0005-download-item-gesture-validators-initiator-frame.patch) | `chromium/src/cef` | Adds `CefDownloadItem::HasUserGesture`, `GetLastModifiedTime`, `GetETag`, `GetRequestInitiator` (the initiator's `url::Origin::Serialize`) and `GetFrameIdentifier` (the `CefFrame` identifier of `content::DownloadItemUtils::GetRenderFrameHost`, empty once the frame is gone), all read from the `download::DownloadItem` that `CefDownloadItemImpl` wraps, as Electron's `DownloadItem` and `will-download` read them. | E13, E40 |
 | [`cef/0006-request-context-net-log.patch`](patches/cef/0006-request-context-net-log.patch) | `chromium/src/cef` | Adds `CefRequestContext::StartNetLog`, `StopNetLog` and `IsNetLogging`, with the client callback `CefNetLogCallback`, as Electron's `electron_api_net_log.cc`: the profile's network context creates a `network::mojom::NetLogExporter`, the file is opened off the UI thread, and the JSON export starts with the content client's net log constants. One export per profile, kept as its user data; failures carry Electron's texts. | E42 |
+| [`cef/0007-browser-process-handler-child-process-gone.patch`](patches/cef/0007-browser-process-handler-child-process-gone.patch) | `chromium/src/cef` | Adds `CefBrowserProcessHandler::OnChildProcessGone(type, status, exit_code, service_name, name, system_error_code)`. A `content::BrowserChildProcessObserver` that `CefContext` owns from context initialisation to shutdown reports `BrowserChildProcessCrashed`, `Killed` and `LaunchFailed` as Electron's `App::EmitChildProcessGone`: `GetProcessTypeNameInEnglish`, the status (as `CefBrowserContentsDelegate` maps it), the exit code, `metrics_name`, `name`, and on Windows a failed launch's `last_error`. | A31 |
+| [`cef/0008-request-context-resolve-proxy.patch`](patches/cef/0008-request-context-resolve-proxy.patch) | `chromium/src/cef` | Adds `CefRequestContext::ResolveProxy` and the static `ResolveSystemProxy` (`cef_request_context_resolve_system_proxy`), with the client callback `CefResolveProxyCallback`, as Electron's `ResolveProxyHelper`: `NetworkContext::LookUpProxyForURL` on the profile's or the system network context, answered with `net::ProxyInfo::ToPacString`. Setting proxies needs no patch (the `proxy` preference). | A35, E8 |
+| [`cef/0009-process-accessibility-mode.patch`](patches/cef/0009-process-accessibility-mode.patch) | `chromium/src/cef` | Adds the static `CefBrowserHost::GetProcessAccessibilityMode` and `SetProcessAccessibilityMode` (`ui::AXMode` flags) and `CefBrowserProcessHandler::OnAccessibilityModeChanged`: the getter reads `BrowserAccessibilityState::GetAccessibilityMode`, the setter keeps one `ScopedAccessibilityMode` for the process (Electron's `scoped_accessibility_mode_`), and a `ui::AXModeObserver` reports the flags Chromium adds by itself, not the setter's. `BUILD.gn` gains `//ui/accessibility:ax_base` and `//ui/accessibility/platform`. | A28 |
 
 CEF patches apply first, then Chromium patches (`patches/chromium/`, in `chromium/src`), each set in name order; the
-numbers are shared, so their order is the order they were written in.
+numbers are shared, so their order is the order they were written in. Later patches change the context of earlier ones
+in the same file (0008 follows 0006 in `request_context_impl.cc`, 0009 follows 0007 in `context.cc`), so
+`apply-patches.sh` works out each patch's state on a copy of the files they touch: it takes the applied ones out newest
+first, then puts them back in order.
+
+Not patched: A23 (macOS: `ready` after AppKit's `applicationDidFinishLaunching:`, with `launchInfo`). CEF calls
+`on_context_initialized` from `CefContext::OnContextInitialized` while `cef_initialize` runs, before `[NSApp run]`
+finishes launching. The patch would, on macOS, check `[NSApp isRunning]` / the launch state there and, if launching is
+not finished, observe `NSApplicationDidFinishLaunchingNotification` and call the handler from it, passing the
+notification's `userInfo` (a new `on_context_initialized` variant or a `CefDictionaryValue` getter at `CEF_NEXT`). That
+needs Objective-C++ in `context.cc` (or a new `.mm` file in `BUILD.gn`), and a check that nothing CEF starts itself
+(the Chrome-style startup browser, `CefBrowserProcessHandler::GetDefaultClient`, the external message pump) relies on the
+early call; Oriel would then raise `WillFinishLaunching`, the launch's `OpenFile` / `OpenUrl` and `Ready` in Electron's
+order. Larger than 0007-0009, so left for its own branch.
 
 Not patched: T6 (export the tray through Chromium's `dbus::Bus`). `dbus::Bus` has no public accessor for its
 `DBusConnection`, and it runs on Chromium's D-Bus thread with its own dispatch, so exposing it means either a Chromium
@@ -55,7 +71,11 @@ configured the next version (`CEF_API_IS_ADDED(CEF_NEXT)`), because an older cli
   `cef_request_context_t` it hands out are `cef_download_item_next_t` (0005's five getters appended) and
   `cef_request_context_next_t` (0006's `start_net_log`, `stop_net_log`, `is_net_logging`), and the client's
   `cef_net_log_callback_t` is hand-written too; `CefPatchedApi.ReadDownloadExtras` returns null and the net log calls
-  return false (releasing the callback) without the patches;
+  return false (releasing the callback) without the patches. 0007 and 0009 append `on_child_process_gone` and
+  `on_accessibility_mode_changed` to the client's `cef_browser_process_handler_t`, so `BrowserProcessHandler` allocates
+  `cef_browser_process_handler_next_t` when patched; 0008 appends `resolve_proxy` to `cef_request_context_next_t` and
+  adds the client's `cef_resolve_proxy_callback_t`; the exports `cef_request_context_resolve_system_proxy` (0008) and
+  `cef_browser_host_get_process_accessibility_mode` / `_set_` (0009) are called only when patched;
 - any other hash: Oriel refuses to start, as for any API mismatch.
 
 The generated bindings (`tools/cef-interop/generate.sh`) stay at 15400 and need no regenerating: the new member is
@@ -115,7 +135,10 @@ checks that `Transparent` is still ignored (W24). It starts `xcompmgr` itself af
 The same goes for `LinuxPatchedInputAsync` (0002, real X input through xdotool), `ThemeAsync`'s page checks after a
 GTK theme change (0003) and `LinuxActivationTokenAsync` (0004, the next window's `_NET_STARTUP_ID`), and SessionTest's
 `patched (0005)` download checks (gesture, initiator, `will-download` frame, ETag and Last-Modified) and `NetLogChecks`
-(0006); with stock CEF SessionTest checks the blanks and the `PlatformNotSupportedException` instead. None has run yet.
+(0006), and its `patched (0007)` (`chrome://gpucrash` raises `ChildProcessGone` for the GPU process), `patched (0008)`
+(`ResolveProxyAsync` for fixed servers, a PAC script and `DIRECT`, and `app.SetProxyAsync` / `app.ResolveProxyAsync`
+on the system context) and `patched (0009)` (the accessibility features read back) checks; with stock CEF SessionTest
+checks the blanks and the `PlatformNotSupportedException` instead. None has run yet.
 
 ### Wiring
 
@@ -130,6 +153,15 @@ GTK theme change (0003) and `LinuxActivationTokenAsync` (0004, the next window's
   `PlatformNotSupportedException` (Electron's own errors are kept for the patched path). Stock CEF's only net log is
   Chromium's `--log-net-log=<path>` switch, read when the network service starts: every profile, the whole run, with
   `--net-log-capture-mode` and `--net-log-max-size-mb`; CEF passes it through.
+- `OrielApp.ChildProcessGone` is raised from 0007's callback with Electron's details (`ChildProcessGoneFrom`, the same
+  reason strings as `render-process-gone`); never with stock CEF.
+- `Session.SetProxyAsync` and `OrielApp.SetProxyAsync` write Electron's `ProxyConfigDictionary` choice to the profile's
+  or the global `proxy` preference on stock CEF too, and reset it when a session or the app starts, as Electron keeps it
+  in memory. `Session.ResolveProxyAsync` and `OrielApp.ResolveProxyAsync` call 0008, and throw
+  `PlatformNotSupportedException` with stock CEF.
+- `OrielApp`'s accessibility members use 0009's process-wide mode when patched (`AccessibilityModes` maps Electron's
+  feature names); with stock CEF they keep the per-page `set_accessibility_state` path, and
+  `SetAccessibilitySupportFeatures` throws `PlatformNotSupportedException`.
 - `Tray.Linux.cs` `HandleItemCall` passes `ProvideXdgActivationToken`'s token to `LinuxCefPatches.ProvideActivationToken`
   (on the UI thread) and replies as before.
 

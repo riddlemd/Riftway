@@ -19,28 +19,66 @@ shopt -s nullglob
 patches=()
 for p in "$here"/patches/cef/*.patch; do patches+=("cef:$p"); done
 for p in "$here"/patches/chromium/*.patch; do patches+=("chromium:$p"); done
+
+dir_of() { if [ "$1" = cef ]; then echo "$src/cef"; else echo "$src"; fi; }
+
+# Later patches change the context of earlier ones in the same file, so a patch's state is only known in sequence:
+# copy the files the patches touch, take the applied ones out newest first, then put them back in order.
+work="$(mktemp -d)"
+trap 'rm -rf "$work"' EXIT
+for entry in "${patches[@]}"; do
+  repo="${entry%%:*}"; patch="${entry#*:}"; dir="$(dir_of "$repo")"
+  sed -n 's#^diff --git a/\([^ ]*\) b/.*#\1#p' "$patch" | while read -r file; do
+    if [ -e "$dir/$file" ] && [ ! -e "$work/$repo/$file" ]; then
+      mkdir -p "$work/$repo/$(dirname "$file")"
+      cp "$dir/$file" "$work/$repo/$file"
+    fi
+  done
+  mkdir -p "$work/$repo"
+done
+
+states=()
+for ((i = ${#patches[@]} - 1; i >= 0; i--)); do
+  repo="${patches[i]%%:*}"; patch="${patches[i]#*:}"
+  if git -C "$work/$repo" apply --reverse --check "$patch" 2> /dev/null; then
+    git -C "$work/$repo" apply --reverse "$patch"
+    states[i]=applied
+  else
+    states[i]=unapplied
+  fi
+done
+for ((i = 0; i < ${#patches[@]}; i++)); do
+  repo="${patches[i]%%:*}"; patch="${patches[i]#*:}"
+  if [ "${states[i]}" = applied ]; then
+    git -C "$work/$repo" apply "$patch"
+  elif git -C "$work/$repo" apply --check "$patch" 2> /dev/null; then
+    git -C "$work/$repo" apply "$patch"
+    states[i]=applicable
+  else
+    states[i]=conflicting
+  fi
+done
+
+order=()
+for ((i = 0; i < ${#patches[@]}; i++)); do order+=("$i"); done
 if [ "$mode" = --revert ]; then
   reversed=()
-  for ((i = ${#patches[@]} - 1; i >= 0; i--)); do reversed+=("${patches[i]}"); done
-  patches=("${reversed[@]}")
+  for ((i = ${#order[@]} - 1; i >= 0; i--)); do reversed+=("${order[i]}"); done
+  order=("${reversed[@]}")
 fi
 
 failed=0
-for entry in "${patches[@]}"; do
-  repo="${entry%%:*}"; patch="${entry#*:}"; name="$(basename "$patch")"
-  dir="$src"; [ "$repo" = cef ] && dir="$src/cef"
-  if git -C "$dir" apply --reverse --check "$patch" 2> /dev/null; then state=applied
-  elif git -C "$dir" apply --check "$patch" 2> /dev/null; then state=applicable
-  else state=conflicting
-  fi
+for i in "${order[@]}"; do
+  repo="${patches[i]%%:*}"; patch="${patches[i]#*:}"; name="$(basename "$patch")"
+  dir="$(dir_of "$repo")"; state="${states[i]}"
   case "$mode:$state" in
     --check:*) echo "$state  $repo/$name" ;;
-    apply:applied | --revert:applicable) echo "skip  $repo/$name ($state)" ;;
+    apply:applied | --revert:applicable | --revert:conflicting) echo "skip  $repo/$name ($state)" ;;
     apply:applicable) git -C "$dir" apply "$patch" && echo "applied  $repo/$name" ;;
     --revert:applied) git -C "$dir" apply --reverse "$patch" && echo "reverted  $repo/$name" ;;
-    *:conflicting)
+    apply:conflicting)
       echo "CONFLICT  $repo/$name does not apply to $dir:" >&2
-      git -C "$dir" apply --check "$patch" >&2 || true
+      git -C "$work/$repo" apply --check "$patch" >&2 || true
       failed=1 ;;
   esac
 done
