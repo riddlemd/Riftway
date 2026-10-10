@@ -29,7 +29,10 @@ General items: [todo.md](todo.md). Windows work runs on the Windows laptop.
 - [ ] Run WindowTest `NativeImageAsync`'s `createThumbnailFromPath` check (branch `image-screen`; never built for or run
       on Windows): the thumbnail cache, `IconUtil`'s conversion and the per-step rejections
 - [ ] windows-arm64: untested
-- [ ] Run the Alt-key menu checks on Windows (Alt toggles an auto-hidden bar, Alt+F opens File; pass on Linux)
+- [x] Run the Alt-key menu checks on Windows (Alt toggles an auto-hidden bar, Alt+F opens File): all 7 pass in a
+      default WindowTest run (2026-10-10, 01e9524: WindowTest 235/235, ProtocolTest 34/34, IpcTest 11/11,
+      SessionTest 42/42, unit 381 + 3 macOS skips; at 100% scaling over RDP)
+- [ ] Screen checks at 125% scaling: not yet run on Windows
 - [ ] Run the menu-event checks on Windows (WindowTest `MenuEventsAsync` popup and bar, the tray's Views menu)
 - [ ] `desktopCapturer` (branch `desktop-capturer`): written on macOS, never built for or run on Windows. Run WindowTest
       `DesktopCapturerChecks` (webrtc's window rules with this process's windows merged by z-order, `EnumDisplayDevices`

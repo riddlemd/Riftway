@@ -33,6 +33,8 @@ print(c['version'], c['cdn'], c['minimal']['$platform'])" | tr -d '\r')
 
 name="cef_binary_${version}_${platform}_minimal"
 cache="${ORIEL_CEF_CACHE:-$HOME/.cache/oriel/cef}"
+# A C:\ cache path reads as a remote host to tar and gets its hash "\"-escaped by sha1sum.
+if command -v cygpath >/dev/null; then cache="$(cygpath -u "$cache")"; fi
 dir="$cache/$name"
 
 if [ ! -f "$dir/.complete" ]; then
@@ -40,7 +42,9 @@ if [ ! -f "$dir/.complete" ]; then
   archive="$cache/$name.tar.bz2"
   url="$cdn/$(python3 -c "import urllib.parse;print(urllib.parse.quote('$name.tar.bz2'))")"
   curl -fsSL -o "$archive" "$url"
-  actual="$(shasum -a 1 "$archive" | cut -d' ' -f1)"
+  # Git for Windows ships sha1sum but not shasum (a Perl script).
+  if command -v shasum >/dev/null; then hasher=(shasum -a 1); else hasher=(sha1sum); fi
+  actual="$("${hasher[@]}" "$archive" | cut -d' ' -f1)"
   if [ "$actual" != "$sha1" ]; then
     echo "sha1 mismatch for $name: expected $sha1, got $actual" >&2
     rm -f "$archive"
