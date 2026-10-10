@@ -22,4 +22,7 @@ General items: [todo.md](todo.md). Windows work runs on the Windows laptop.
       (d5e0b6b). Its `is_visible` filter has no covering check.
 - [x] Run the window-menu and context-menu checks on Windows (pass, after the menu-bar reference fix)
 - [ ] windows-arm64: untested
-- [ ] Run the Alt-key menu checks on Windows (Alt toggles an auto-hidden bar, Alt+F opens File; pass on Linux)
+- [x] Run the Alt-key menu checks on Windows (Alt toggles an auto-hidden bar, Alt+F opens File): all 7 pass in a
+      default WindowTest run (2026-10-10, 01e9524: WindowTest 235/235, ProtocolTest 34/34, IpcTest 11/11,
+      SessionTest 42/42, unit 381 + 3 macOS skips; at 100% scaling over RDP)
+- [ ] Screen checks at 125% scaling: not yet run on Windows
