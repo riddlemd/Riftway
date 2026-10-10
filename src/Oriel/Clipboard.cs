@@ -118,6 +118,9 @@ public static class Clipboard
 
     /// <summary>Empties the clipboard. Electron's <c>clipboard.clear()</c>.</summary>
     public static void Clear() => s_api.Clear();
+
+    // webContents.copyImageAt writes as Blink does, outside the ClipboardItem path.
+    internal static void Write(ClipboardWriter writer) => s_api.Write(writer);
 }
 
 /// <summary>The X11 PRIMARY selection: the text last selected, pasted with the middle button. Electron's
@@ -196,6 +199,8 @@ internal sealed class ClipboardApi(IClipboardBackend backend)
     internal void Clear() => backend.Clear();
 
     internal Task<object> ReadTypeAsync(string mime) => Task.Run(() => ClipboardReader.ReadType(backend, mime, () => OrielApp.CurrentOrNull is { IsReady: true }));
+
+    internal void Write(ClipboardWriter writer) => backend.Write(writer);
 }
 
 /// <summary>Electron's payload handling for <c>ClipboardItem</c>: resolving promises, the native constructor's type

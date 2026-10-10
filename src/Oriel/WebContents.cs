@@ -980,6 +980,7 @@ public sealed unsafe partial class WebContents
         NativeObject.AddRef(browser);
         _browser = browser;
         _devTools.Attach(browser);
+        ReadDevToolsTargetId();
         if (_preferences.DevTools) WatchDevTools();
 
         // A page made after app.SetAccessibilitySupportEnabled(true) joins the process-wide mode it set.

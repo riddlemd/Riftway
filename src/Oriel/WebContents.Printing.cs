@@ -29,6 +29,19 @@ public sealed unsafe partial class WebContents
         }
     }
 
+    // DevTools prints only the main frame, so frame.printToPDF refuses the others (drift C51).
+    internal Task<byte[]> PrintFrameToPDFAsync(FrameState frame, PrintToPdfOptions? options)
+    {
+        var checkedFrame = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        CefThread.RunOnUi(() =>
+        {
+            if (frame.Detached) checkedFrame.TrySetException(new InvalidOperationException("Render frame was disposed before WebFrameMain could be accessed"));
+            else if (frame.Id != _mainFrameId) checkedFrame.TrySetException(new NotSupportedException("Only a page's main frame can be printed to PDF here (drift C51)."));
+            else checkedFrame.TrySetResult();
+        });
+        return checkedFrame.Task.ContinueWith(t => t.IsFaulted ? Task.FromException<byte[]>(t.Exception!.InnerException!) : PrintToPDFAsync(options), TaskScheduler.Default).Unwrap();
+    }
+
     private Task<byte[]> SendPrintToPdf(PrintRules.PdfSettings s)
     {
         var done = new TaskCompletionSource<byte[]>(TaskCreationOptions.RunContinuationsAsynchronously);

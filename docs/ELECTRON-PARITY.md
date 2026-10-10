@@ -17,7 +17,7 @@ The 67 rows include `BrowserView` (deprecated, never implemented; counted as not
 | Checklist | Applicable items | Done | Partial | Missing | % done | % done + partial/2 |
 |---|---|---|---|---|---|---|
 | [BrowserWindow](parity/browser-window.md) (with `BaseWindow`) | 294 | 168 | 55 | 71 | 57.1% | 66.5% |
-| [webContents](parity/web-contents.md) (with `navigationHistory`, `WebFrameMain`) | 230 | 106 | 55 | 69 | 46.1% | 58.0% |
+| [webContents](parity/web-contents.md) (with `navigationHistory`, `WebFrameMain`) | 230 | 111 | 70 | 49 | 48.3% | 63.5% |
 | [DownloadItem](parity/download-item.md) (with the session's download API) | 31 | 20 | 10 | 1 | 64.5% | 80.6% |
 | [app](parity/app.md) (with `app.dock` as one item) | 114 | 64 | 33 | 17 | 56.1% | 70.6% |
 | [session](parity/session.md) (module and `Session`; other modules' members n/a) | 75 | 24 | 16 | 35 | 32.0% | 42.7% |
@@ -75,7 +75,7 @@ Detailed item-by-item status, including `navigationHistory` and `WebFrameMain`: 
 
 | Electron | Oriel | Source | Wave | Status |
 |---|---|---|---|---|
-| `webContents` | `WebContents` | CEF | M2 | partial: 106 of 230 applicable items done (46.1%) across `webContents`, `navigationHistory` and `WebFrameMain`, see parity/web-contents.md; `loadURL`/`loadFile`/`reload`, `send`, IPC, window-open handler, context menu, input events, zoom, user agent, DevTools |
+| `webContents` | `WebContents` | CEF | M2 | partial: 111 of 230 applicable items done (48.3%) across `webContents`, `navigationHistory` and `WebFrameMain`, see parity/web-contents.md; `loadURL`/`loadFile`/`reload`, `send`, IPC, window-open handler, context menu, input events, zoom, user agent, DevTools |
 | `webFrameMain` | `WebFrameMain` | CEF | M2 | partial: frame tree, url/origin/name, `frameToken`, `processId`, `osProcessId`, `visibilityState`, `fromFrameToken`, `executeJavaScript`, `reload`, `send`, IPC `senderFrame`; script and messages in in-process frames only; no `frameTreeNodeId`, `routingId`, `fromId`, `collectJavaScriptCallStack` (see DRIFT.md F1, F2, F5-F7) |
 | `NavigationHistory` | `NavigationHistory` | CEF | M2 | partial: back/forward, index/offset moves, entries, clear; no `removeEntryAtIndex` or `restore` (see DRIFT.md) |
 | `Debugger` (`webContents.debugger`) | `Debugger` (DevTools protocol) | CEF | M2 | done: `attach` (protocol version check), `isAttached`, `detach`, `sendCommand` (with `sessionId`), `message` and `detach` events; shares Oriel's protocol session (DRIFT C43) |

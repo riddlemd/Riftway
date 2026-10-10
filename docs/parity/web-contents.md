@@ -10,15 +10,15 @@ Percentages are over the non-n/a items; the second counts a partial item as half
 
 | Area | Items | Done | Partial | Missing | n/a | % done | % done + partial/2 |
 |---|---|---|---|---|---|---|---|
-| Static methods | 5 | 2 | 2 | 1 | 0 | 40.0% | 60.0% |
+| Static methods | 5 | 3 | 2 | 0 | 0 | 60.0% | 80.0% |
 | Instance events | 59 | 31 | 18 | 8 | 2 | 54.4% | 70.2% |
-| Instance methods | 118 | 39 | 26 | 45 | 8 | 35.5% | 47.3% |
-| Instance properties | 18 | 10 | 1 | 6 | 1 | 58.8% | 61.8% |
+| Instance methods | 118 | 43 | 38 | 29 | 8 | 39.1% | 56.4% |
+| Instance properties | 18 | 10 | 3 | 4 | 1 | 58.8% | 67.6% |
 | navigationHistory | 14 | 12 | 0 | 2 | 0 | 85.7% | 85.7% |
 | WebFrameMain events and statics | 3 | 1 | 1 | 1 | 0 | 33.3% | 50.0% |
-| WebFrameMain methods | 9 | 1 | 4 | 4 | 0 | 11.1% | 33.3% |
+| WebFrameMain methods | 9 | 1 | 5 | 3 | 0 | 11.1% | 38.9% |
 | WebFrameMain properties | 15 | 10 | 3 | 2 | 0 | 66.7% | 76.7% |
-| **Total** | 241 | 106 | 55 | 69 | 11 | 46.1% | 58.0% |
+| **Total** | 241 | 111 | 70 | 49 | 11 | 48.3% | 63.5% |
 
 ## Checklist
 
@@ -30,7 +30,7 @@ Percentages are over the non-n/a items; the second counts a partial item as half
 | `getFocusedWebContents()` | `GetFocusedWebContents` | partial | Never a DevTools page (C17). |
 | `fromId(id)` | `FromId` | done |  |
 | `fromFrame(frame)` | `FromFrame` | done |  |
-| `fromDevToolsTargetId(targetId)` | — | missing |  |
+| `fromDevToolsTargetId(targetId)` | `FromDevToolsTargetId` | done |  |
 
 ### Instance events
 
@@ -146,13 +146,13 @@ Percentages are over the non-n/a items; the second counts a partial item as half
 | `setAudioMuted()` | `SetAudioMuted` | done |  |
 | `isAudioMuted()` | `IsAudioMuted` | done |  |
 | `isCurrentlyAudible()` | — | missing | CEF never reports audio for Chrome-style browsers (C23). |
-| `setCaretBrowsingEnabled()` | — | missing |  |
-| `isCaretBrowsingEnabled()` | — | missing |  |
+| `setCaretBrowsingEnabled()` | `SetCaretBrowsingEnabled` | partial | Applies to every page of the session (C53). |
+| `isCaretBrowsingEnabled()` | `IsCaretBrowsingEnabled` | partial | What this page set; the session's pages share the setting (C53). |
 | `setZoomMode()` | — | missing |  |
 | `getZoomMode()` | — | missing |  |
 | `setVisualZoomLevelLimits()` | `SetVisualZoomLevelLimits` | partial | Pinch on or off; off on Windows/Linux (C37) |
 | `centerSelection()` | `CenterSelection` | partial | Script; does nothing off macOS, as Electron (C20). |
-| `copyImageAt()` | — | missing |  |
+| `copyImageAt()` | `CopyImageAt` | partial | The page's own hit test over DevTools: a canvas the page cannot read and a cross-origin image in an iframe are not copied (C48). |
 | `copyVideoFrameAt()` | — | missing |  |
 | `saveVideoFrameAs()` | — | missing |  |
 | `unselect()` | `Unselect` | partial | Script in the focused frame (C20). |
@@ -168,7 +168,7 @@ Percentages are over the non-n/a items; the second counts a partial item as half
 | `isBeingCaptured()` | — | missing |  |
 | `getPrintersAsync()` | `GetPrintersAsync` | partial | Windows only, listed as Chromium lists them (Z4). |
 | `print()` | `Print` | partial | Electron's option checks and device-name errors; opens Chromium's print dialog without the settings; no silent printing or outcome callback (Z1-Z3). |
-| `printToPDF()` | `PrintToPDFAsync` | done | Page.printToPDF over DevTools with Electron's defaults, validation messages and per-page queue. |
+| `printToPDF()` | `PrintToPDFAsync` | partial | Page.printToPDF over DevTools with Electron's defaults, validation messages and per-page queue; always the main frame, even with a selection in a focused iframe (C51). |
 | `addWorkSpace()` | — | missing |  |
 | `removeWorkSpace()` | — | missing |  |
 | `setDevToolsWebContents()` | — | missing |  |
@@ -178,7 +178,7 @@ Percentages are over the non-n/a items; the second counts a partial item as half
 | `inspectElement()` | `InspectElement` | done | Which element DevTools selects is unverified: the selection is not visible from the page. |
 | `inspectSharedWorker()` | — | missing |  |
 | `inspectSharedWorkerById()` | — | missing |  |
-| `getAllSharedWorkers()` | — | missing |  |
+| `getAllSharedWorkers()` | `GetAllSharedWorkers` | partial | Through DevTools' target discovery; a page's first call on the UI thread lists none (C54). |
 | `inspectServiceWorker()` | — | missing |  |
 | `sendToFrame()` | — | missing |  |
 | `postMessage(channel, message, transfer)` | `PostMessage` | partial | JSON messages (I1). |
@@ -187,29 +187,29 @@ Percentages are over the non-n/a items; the second counts a partial item as half
 | `beginFrameSubscription()` | — | missing |  |
 | `endFrameSubscription()` | — | missing |  |
 | `startDrag()` | `StartDrag` | partial | Windows only; the drag blocks queued UI tasks and its image is painted with GDI (C40). |
-| `savePage()` | — | missing |  |
+| `savePage()` | `SavePageAsync` | partial | Through DevTools; `HTMLComplete` saves only the main document and its images, scripts and style sheets (C50). |
 | `showDefinitionForSelection()` | — | missing |  |
-| `isOffscreen()` | — | missing |  |
+| `isOffscreen()` | `IsOffscreen` | done | Always false: Oriel has no offscreen rendering (webPreferences `offscreen` is missing). |
 | `startPainting()` | — | missing |  |
 | `stopPainting()` | — | missing |  |
 | `isPainting()` | — | missing |  |
 | `setFrameRate()` | — | missing |  |
 | `getFrameRate()` | — | missing |  |
 | `invalidate()` | — | missing |  |
-| `getWebRTCIPHandlingPolicy()` | — | missing |  |
-| `setWebRTCIPHandlingPolicy()` | — | missing |  |
-| `getWebRTCUDPPortRange()` | — | missing |  |
-| `setWebRTCUDPPortRange()` | — | missing |  |
+| `getWebRTCIPHandlingPolicy()` | `GetWebRtcIpHandlingPolicy` | partial | The value this page set; the session's pages share the setting (C52). |
+| `setWebRTCIPHandlingPolicy()` | `SetWebRtcIpHandlingPolicy` | partial | Applies to every page of the session (C52). |
+| `getWebRTCUDPPortRange()` | `GetWebRtcUdpPortRange` | partial | The range this page set; the session's pages share the setting (C52). |
+| `setWebRTCUDPPortRange()` | `SetWebRtcUdpPortRange` | partial | Electron's checks and messages; applies to every page of the session (C52). |
 | `getMediaSourceId()` | — | missing |  |
-| `getOrCreateDevToolsTargetId()` | — | missing |  |
-| `getOSProcessId()` | — | missing |  |
-| `getProcessId()` | — | missing |  |
+| `getOrCreateDevToolsTargetId()` | `GetOrCreateDevToolsTargetId` | partial | Read over DevTools as the page is created; `'` on the UI thread before that (C46). |
+| `getOSProcessId()` | `GetOSProcessId` | done | 0 once the page has closed. |
+| `getProcessId()` | `GetProcessId` | done | The main frame's, read from CEF's main frame; -1 once the page has closed. |
 | `clone()` | — | missing |  |
-| `takeHeapSnapshot()` | — | missing |  |
+| `takeHeapSnapshot()` | `TakeHeapSnapshotAsync` | done | DevTools `HeapProfiler.takeHeapSnapshot`, one at a time per page (C47). |
 | `getBackgroundThrottling()` | — | missing |  |
 | `setBackgroundThrottling()` | — | missing |  |
-| `getType()` | — | missing |  |
-| `setImageAnimationPolicy()` | — | missing |  |
+| `getType()` | `GetWebContentsType` | done | Renamed from .NET's `GetType` (C45); always `window`. |
+| `setImageAnimationPolicy()` | `SetImageAnimationPolicy` | partial | Applies to every page of the session (C53). |
 | `canGoBack()` | — | n/a | Deprecated; use navigationHistory. |
 | `canGoForward()` | — | n/a | Deprecated; use navigationHistory. |
 | `canGoToOffset()` | — | n/a | Deprecated; use navigationHistory. |
@@ -232,14 +232,14 @@ Percentages are over the non-n/a items; the second counts a partial item as half
 | `hostWebContents` | — | n/a | <webview> only. |
 | `focusedFrame` | `FocusedFrame` | done | Not cross-site frames in another process (F3). |
 | `ipc` | `Ipc` | done |  |
-| `caretBrowsingEnabled` | — | missing |  |
+| `caretBrowsingEnabled` | `SetCaretBrowsingEnabled / IsCaretBrowsingEnabled` | partial | C53. |
 | `frameRate` | — | missing |  |
 | `id` | `Id` | done |  |
 | `session` | `Session` | done | See DRIFT E1-E11 for the session gaps. |
 | `devToolsWebContents` | — | missing |  |
 | `debugger` | `Debugger` | done | Shares Oriel's protocol session (DRIFT C43) |
 | `backgroundThrottling` | — | missing |  |
-| `opener` | — | missing |  |
+| `opener` | `Opener` | partial | Read over DevTools; on the UI thread, the value last read (C49). |
 | `zoomMode` | — | missing |  |
 
 ### `navigationHistory` (`NavigationHistory`)
@@ -281,7 +281,7 @@ Percentages are over the non-n/a items; the second counts a partial item as half
 | `collectJavaScriptCallStack()` | — | missing | F5. |
 | `copyVideoFrameAt(x, y)` | — | missing |  |
 | `saveVideoFrameAs(x, y)` | — | missing |  |
-| `printToPDF(options)` | — | missing |  |
+| `printToPDF(options)` | `WebFrameMain.PrintToPdfAsync` | partial | The main frame only; a subframe throws (C51). |
 
 ### `WebFrameMain` instance properties
 

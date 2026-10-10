@@ -3,6 +3,17 @@ namespace Oriel.Tests;
 public sealed class WebContentsMethodsTests
 {
     [Fact]
+    public void ImageMarkup_EscapesAsBlinksURLToImageMarkup()
+    {
+        Assert.Equal("<img src=\"http://x/a?b=1&amp;c=&quot;&lt;&gt;&#39;\" alt=\"x &amp; &quot;y&quot;\"/>", WebContents.ImageMarkup("http://x/a?b=1&c=\"<>'", "x & \"y\""));
+    }
+
+    [Fact]
+    public void ImageMarkup_LeavesOutAnEmptyAlt()
+    {
+        Assert.Equal("<img src=\"http://x/a.png\"/>", WebContents.ImageMarkup("http://x/a.png", ""));
+    }
+    [Fact]
     public void DeviceMetricsOverride_MapsElectronsParameters()
     {
         var overrides = WebContents.DeviceMetricsOverride(new DeviceEmulationParameters
