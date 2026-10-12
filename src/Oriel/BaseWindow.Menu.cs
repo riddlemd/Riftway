@@ -54,7 +54,7 @@ public unsafe partial class BaseWindow
         var run = _popupRun = new MenuRun(menu);
         var popupDelegate = new MenuModelDelegate
         {
-            CommandExecuted = (id, flags) => menu.FindByCommandId(id)?.Activate(this as BrowserWindow, KeyboardEvent.FromCefFlags(flags)),
+            CommandExecuted = (id, flags) => menu.FindByCommandId(id)?.Activate(this, KeyboardEvent.FromCefFlags(flags)),
             WillShow = run.WillShow,
             // CEF reports each submenu closing too; the popup callback is for the whole menu.
             Closed = model =>

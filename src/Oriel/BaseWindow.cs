@@ -1248,6 +1248,21 @@ public unsafe partial class BaseWindow
         return hex.Length == 6 ? 0xFF000000 | value : value;
     }
 
+    // UI thread: the page CEF's dialogs run through, the window's own or else the first open one among its views.
+    internal WebContents? DialogPage()
+    {
+        if (_window is null) return null;
+        if (OwnPage is { } own) return own.Browser is null ? null : own;
+        return PagesIn(ContentView).FirstOrDefault(p => p.Browser is not null);
+    }
+
+    private static IEnumerable<WebContents> PagesIn(View view)
+    {
+        if (view is WebContentsView { WebContents: var page }) yield return page;
+        foreach (var child in view.Children)
+            foreach (var nested in PagesIn(child)) yield return nested;
+    }
+
     internal static void FocusAll()
     {
         foreach (var window in GetAllWindows()) window.Focus();
@@ -1530,6 +1545,9 @@ public unsafe partial class BaseWindow
     }
 
     // The base constructor runs before the subclass has its contents, so it only stores delegates that read these later.
+
+    /// <summary>The window's own page, if it has one.</summary>
+    private protected virtual WebContents? OwnPage => null;
 
     /// <summary>Whether the page has the keyboard and the menu bar's accelerators stand aside.</summary>
     private protected virtual bool IgnoresMenuShortcuts => false;

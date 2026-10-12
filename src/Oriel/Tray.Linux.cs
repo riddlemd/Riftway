@@ -188,7 +188,7 @@ internal static class LinuxTrayRules
                 IsEnabled = () => separator || item.Enabled,
                 IsVisible = () => separator || item.Visible,
                 IsChecked = () => item.Checked,
-                Activated = separator ? null : (shift, ctrl, alt) => item.Run(BrowserWindow.GetFocusedWindow(), new KeyboardEvent { ShiftKey = shift, CtrlKey = ctrl, AltKey = alt }),
+                Activated = separator ? null : (shift, ctrl, alt) => item.Run(BaseWindow.GetFocusedWindow(), new KeyboardEvent { ShiftKey = shift, CtrlKey = ctrl, AltKey = alt }),
             });
         }
         return result;
@@ -630,7 +630,7 @@ internal sealed class StatusNotifierItem
         _serviceName = $"org.freedesktop.StatusNotifierItem-{Environment.ProcessId}-{_serviceId}";
         _itemExported = true;
         _menu = new DbusMenu((member, signature, args) => Emit(MenuPath, DbusMenu.Interface, member, signature, args),
-            item => item.Run(BrowserWindow.GetFocusedWindow(), new KeyboardEvent()),
+            item => item.Run(BaseWindow.GetFocusedWindow(), new KeyboardEvent()),
             LinuxTrayRules.TextDirection(LinuxTrayRules.ApplicationLanguage(OrielApp.LinuxLanguages(Environment.GetEnvironmentVariable), HasLocaleData)));
         UpdateMenuImpl(_delegate.MenuModel, false);
 

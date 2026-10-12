@@ -19,15 +19,17 @@ Counted from the Checklist at the end: `BaseWindow` and `BrowserWindow` are one 
 |---|---|---|---|---|---|---|---|
 | BaseWindow + BrowserWindow options | 54 | 32 | 12 | 10 | 0 | 59.3% | 70.4% |
 | webPreferences | 46 | 12 | 4 | 23 | 7 | 30.8% | 35.9% |
-| Instance methods | 143 | 88 | 25 | 24 | 6 | 64.2% | 73.4% |
+| Instance methods | 143 | 87 | 27 | 23 | 6 | 63.5% | 73.4% |
 | Instance properties | 24 | 13 | 4 | 7 | 0 | 54.2% | 62.5% |
 | Events | 35 | 18 | 10 | 7 | 0 | 51.4% | 65.7% |
-| Static methods | 6 | 5 | 0 | 0 | 1 | 100.0% | 100.0% |
-| **Total** | 308 | 168 | 55 | 71 | 14 | 57.1% | 66.5% |
+| Static methods | 7 | 6 | 0 | 0 | 1 | 100.0% | 100.0% |
+| **Total** | 309 | 168 | 57 | 70 | 14 | 56.9% | 66.6% |
 
 ## Done since the audit
 
 - Lookup: `Id`, `GetAllWindows`, `GetFocusedWindow`, `FromWebContents`, `FromId`.
+- `BaseWindow`: public, a window with no page of its own; `SetContentView`; a `BrowserWindow`'s page lies below
+  `ContentView`, which a new window has empty, as Electron's.
 - Runtime setters/getters: resizable, minimizable, maximizable, closable (+ `Closable` option; code can still close),
   minimum/maximum size.
 - Sizes: `GetSize`, `GetPosition`, `Get/SetContentBounds`, `Get/SetContentSize`, `UseContentSize`, `Center` options.
@@ -310,7 +312,7 @@ Parameters in brackets are optional in Electron. `webContents` members are in [w
 
 | Electron | Oriel | Status | Note |
 |---|---|---|---|
-| `setContentView(view)` | — | missing | DRIFT V9 (with `BaseWindow`) |
+| `setContentView(view)` | `SetContentView` | done | A `BrowserWindow`'s page stays below the new view; another window's content view moves, as Electron's |
 | `getContentView()` | `ContentView` | done | A property, as Electron's `contentView` |
 | `destroy()` | `Destroy` | done |  |
 | `close()` | `Close` | done |  |
@@ -431,8 +433,8 @@ Parameters in brackets are optional in Electron. `webContents` members are in [w
 | `setFocusable(focusable)` | `SetFocusable` | partial | Windows: style, taskbar button, blur, as Electron; stored only elsewhere (W43). |
 | `isFocusable()` | `IsFocusable` | partial | Windows reads `WS_EX_NOACTIVATE` too (W43). |
 | `setParentWindow(parent)` | `SetParentWindow` | done | As Electron on each OS: Windows `GWLP_HWNDPARENT` with re-show, Linux `WM_TRANSIENT_FOR`, macOS `addChildWindow:`; modal throws. macOS checks pass (W8). |
-| `getParentWindow()` | `GetParentWindow` | done |  |
-| `getChildWindows()` | `GetChildWindows` | done |  |
+| `getParentWindow()` | `GetParentWindow` | partial | `BrowserWindow`'s own overload returns only a `BrowserWindow` parent (V16) |
+| `getChildWindows()` | `GetChildWindows` | partial | `BrowserWindow`'s own overload lists only `BrowserWindow` children (V16) |
 | `setAutoHideCursor(autoHide)` | — | missing |  |
 | `selectPreviousTab()` | — | missing |  |
 | `selectNextTab()` | — | missing |  |
@@ -527,9 +529,10 @@ Parameters in brackets are optional in Electron. `webContents` members are in [w
 
 | Electron | Oriel | Status | Note |
 |---|---|---|---|
-| `getAllWindows()` | `GetAllWindows` | done |  |
-| `getFocusedWindow()` | `GetFocusedWindow` | done |  |
-| `fromId(id)` | `FromId` | done |  |
+| `new BaseWindow([options])` | `new BaseWindow(BaseWindowOptions?)` | done | A top-level window with an empty `ContentView` and no page |
+| `getAllWindows()` | `GetAllWindows` | done | `BaseWindow`'s lists every window; `BrowserWindow`'s only `BrowserWindow`s, as Electron's |
+| `getFocusedWindow()` | `GetFocusedWindow` | done | `BaseWindow`'s finds any window; `BrowserWindow`'s only a `BrowserWindow` |
+| `fromId(id)` | `FromId` | done | `BrowserWindow.FromId` of a `BaseWindow`'s id is null, as Electron's |
 | `fromWebContents(webContents)` | `FromWebContents` | done |  |
 | `fromBrowserView(browserView)` | — | n/a | Deprecated. |
 | `clearPersistedState(name)` | `BrowserWindow.ClearPersistedState` | done |  |

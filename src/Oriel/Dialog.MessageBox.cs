@@ -25,7 +25,7 @@ public enum MessageBoxType
     Question,
 }
 
-/// <summary>Options for <see cref="Dialog.ShowMessageBoxAsync(BrowserWindow?, MessageBoxOptions)"/>; Electron's
+/// <summary>Options for <see cref="Dialog.ShowMessageBoxAsync(BaseWindow?, MessageBoxOptions)"/>; Electron's
 /// <c>showMessageBox</c> options.</summary>
 public sealed record MessageBoxOptions
 {
@@ -98,7 +98,7 @@ public static partial class Dialog
     /// <exception cref="ArgumentException">An option Electron rejects, such as <see cref="MessageBoxOptions.CheckboxChecked"/>
     /// without a label.</exception>
     /// <exception cref="PlatformNotSupportedException">Linux: GTK 3 cannot be used (drift MB5); the task fails with it.</exception>
-    public static Task<MessageBoxResult> ShowMessageBoxAsync(BrowserWindow? window, MessageBoxOptions options)
+    public static Task<MessageBoxResult> ShowMessageBoxAsync(BaseWindow? window, MessageBoxOptions options)
     {
         var settings = PrepareMessageBox(options);
         // Electron answers an already-aborted signal without a box.
@@ -109,7 +109,7 @@ public static partial class Dialog
         return ShowAsyncOnWindows(window, options, settings);
     }
 
-    /// <inheritdoc cref="ShowMessageBoxAsync(BrowserWindow?, MessageBoxOptions)"/>
+    /// <inheritdoc cref="ShowMessageBoxAsync(BaseWindow?, MessageBoxOptions)"/>
     public static Task<MessageBoxResult> ShowMessageBoxAsync(MessageBoxOptions options) => ShowMessageBoxAsync(null, options);
 
     /// <summary>Shows a message box and waits: the index of the button chosen, or the cancel id. Electron's
@@ -118,9 +118,9 @@ public static partial class Dialog
     /// disabled, but no other UI-thread work runs until it closes. From another thread the call
     /// waits for the UI thread, so it must not come from a thread the UI thread is itself waiting on.</remarks>
     /// <exception cref="InvalidOperationException">Before <see cref="OrielApp.Ready"/>.</exception>
-    /// <exception cref="ArgumentException">See <see cref="ShowMessageBoxAsync(BrowserWindow?, MessageBoxOptions)"/>.</exception>
+    /// <exception cref="ArgumentException">See <see cref="ShowMessageBoxAsync(BaseWindow?, MessageBoxOptions)"/>.</exception>
     /// <exception cref="PlatformNotSupportedException">Linux: GTK 3 cannot be used (drift MB5).</exception>
-    public static int ShowMessageBoxSync(BrowserWindow? window, MessageBoxOptions options)
+    public static int ShowMessageBoxSync(BaseWindow? window, MessageBoxOptions options)
     {
         var settings = PrepareMessageBox(options);
         if (options.Signal.IsCancellationRequested) return settings.CancelId;
@@ -130,7 +130,7 @@ public static partial class Dialog
         return ShowSyncOnWindows(window, options, settings);
     }
 
-    /// <inheritdoc cref="ShowMessageBoxSync(BrowserWindow?, MessageBoxOptions)"/>
+    /// <inheritdoc cref="ShowMessageBoxSync(BaseWindow?, MessageBoxOptions)"/>
     public static int ShowMessageBoxSync(MessageBoxOptions options) => ShowMessageBoxSync(null, options);
 
     /// <summary>Shows an error box, owned by no window, and waits for it to close; usable before <see cref="OrielApp.Ready"/>,
@@ -196,7 +196,7 @@ public static partial class Dialog
     // Electron's ShowMessageBoxSync: TaskDialogIndirect straight on the main thread, whose modal loop keeps
     // dispatching window messages while Chromium holds back its tasks.
     [SupportedOSPlatform("windows")]
-    private static int ShowSyncOnWindows(BrowserWindow? window, MessageBoxOptions options, WindowsMessageBoxSettings settings)
+    private static int ShowSyncOnWindows(BaseWindow? window, MessageBoxOptions options, WindowsMessageBoxSettings settings)
     {
         var full = settings with { Parent = MessageBoxOwnerOf(window), Icon = MessageBoxIconOf(options.Icon) };
         return CefThread.InvokeOnUi(() =>
@@ -292,7 +292,7 @@ public static partial class Dialog
     private static PlatformNotSupportedException MessageBoxNotYet() => new("Message boxes are not implemented on this platform yet.");
 
     // Electron resolves the owner's HWND on the UI thread before the box's thread starts.
-    private static nint MessageBoxOwnerOf(BrowserWindow? window) => window is null || window.IsDestroyed ? 0 : window.GetNativeWindowHandle();
+    private static nint MessageBoxOwnerOf(BaseWindow? window) => window is null || window.IsDestroyed ? 0 : window.GetNativeWindowHandle();
 
     // Electron's HICON comes from the image's 1x bitmap; icon DIBs take straight alpha.
     private static WindowsIconBitmap? MessageBoxIconOf(NativeImage? icon)
@@ -310,7 +310,7 @@ public static partial class Dialog
     // Electron's mac ShowMessageBox: runModal without a window, which the abort signal cannot reach; else a sheet, which
     // the signal ends with the cancel id, the answer posted to the next UI task as Electron does.
     [SupportedOSPlatform("macos")]
-    private static Task<MessageBoxResult> ShowAsyncOnMac(BrowserWindow? window, MessageBoxOptions options, WindowsMessageBoxSettings settings)
+    private static Task<MessageBoxResult> ShowAsyncOnMac(BaseWindow? window, MessageBoxOptions options, WindowsMessageBoxSettings settings)
     {
         var mac = MacAlertOf(options, settings);
         var done = new TaskCompletionSource<MessageBoxResult>(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -341,7 +341,7 @@ public static partial class Dialog
     // Electron's mac ShowMessageBoxSync: runModal without a visible window, else a sheet with the window run modally.
     // Cancelling Signal from another thread stops either and answers the cancel id (drift MB2).
     [SupportedOSPlatform("macos")]
-    private static int ShowSyncOnMac(BrowserWindow? window, MessageBoxOptions options, WindowsMessageBoxSettings settings)
+    private static int ShowSyncOnMac(BaseWindow? window, MessageBoxOptions options, WindowsMessageBoxSettings settings)
     {
         var mac = MacAlertOf(options, settings);
         return CefThread.InvokeOnUi(() =>
@@ -364,7 +364,7 @@ public static partial class Dialog
 
     // Electron's ShowMessageBox: a dedicated COM STA thread per box, the answer delivered on the UI thread.
     [SupportedOSPlatform("windows")]
-    private static Task<MessageBoxResult> ShowAsyncOnWindows(BrowserWindow? window, MessageBoxOptions options, WindowsMessageBoxSettings settings)
+    private static Task<MessageBoxResult> ShowAsyncOnWindows(BaseWindow? window, MessageBoxOptions options, WindowsMessageBoxSettings settings)
     {
         var full = settings with { Parent = MessageBoxOwnerOf(window), Icon = MessageBoxIconOf(options.Icon) };
         var closer = new WindowsMessageBoxCloser();
@@ -388,7 +388,7 @@ public static partial class Dialog
 
     // Electron's GtkMessageBox settings: the parent's X11 window and the icon's 1x bitmap as straight RGBA.
     [SupportedOSPlatform("linux")]
-    private static GtkMessageBoxSettings GtkSettingsOf(BrowserWindow? window, MessageBoxOptions options, WindowsMessageBoxSettings settings)
+    private static GtkMessageBoxSettings GtkSettingsOf(BaseWindow? window, MessageBoxOptions options, WindowsMessageBoxSettings settings)
         => new((int)settings.Type, settings.Buttons, settings.DefaultId, settings.CancelId, settings.Title, settings.Message, settings.Detail,
             settings.CheckboxLabel, settings.CheckboxChecked, GtkIconOf(options.Icon), MessageBoxOwnerOf(window));
 
@@ -404,7 +404,7 @@ public static partial class Dialog
     // Electron's GTK ShowMessageBox: the box shows and the UI thread carries on. The abort goes through the GLib loop,
     // which also turns while a Sync box holds the UI thread, where CEF tasks would wait.
     [SupportedOSPlatform("linux")]
-    private static Task<MessageBoxResult> ShowAsyncOnLinux(BrowserWindow? window, MessageBoxOptions options, WindowsMessageBoxSettings settings)
+    private static Task<MessageBoxResult> ShowAsyncOnLinux(BaseWindow? window, MessageBoxOptions options, WindowsMessageBoxSettings settings)
     {
         var gtk = GtkSettingsOf(window, options, settings);
         var done = new TaskCompletionSource<MessageBoxResult>(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -433,7 +433,7 @@ public static partial class Dialog
     // Electron's GTK ShowMessageBoxSync: gtk_dialog_run on the UI thread, whose nested GLib loop runs no CEF tasks.
     // Cancelling Signal from another thread reaches it through that loop (drift MB2).
     [SupportedOSPlatform("linux")]
-    private static int ShowSyncOnLinux(BrowserWindow? window, MessageBoxOptions options, WindowsMessageBoxSettings settings)
+    private static int ShowSyncOnLinux(BaseWindow? window, MessageBoxOptions options, WindowsMessageBoxSettings settings)
     {
         var gtk = GtkSettingsOf(window, options, settings);
         return CefThread.InvokeOnUi(() =>

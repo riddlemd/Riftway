@@ -6889,6 +6889,30 @@ async Task BaseWindowAsync()
     Check("BaseWindow: GetFocusedWindow finds it; BrowserWindow's does not, nor is the app's BrowserWindowFocus raised",
         Eventually(() => BaseWindow.GetFocusedWindow() == bw, step) && BrowserWindow.GetFocusedWindow() is null && appFocus == 0, appFocus);
     app.BrowserWindowFocus -= onAppFocus;
+    var popup = new Menu { new MenuItem { Label = "One" } };
+    using (var popupClosed = new ManualResetEventSlim())
+    {
+        Exception? popupError = null;
+        try
+        {
+            popup.Popup(new PopupOptions { X = 20, Y = 20, Closed = popupClosed.Set });
+            await Task.Delay(300);
+            popup.ClosePopup();
+        }
+        catch (InvalidOperationException e) { popupError = e; }
+        Check("BaseWindow: Menu.Popup and ClosePopup default to it as the focused window, as Electron's",
+            popupError is null && popupClosed.Wait(step), popupError?.Message);
+    }
+    if (OperatingSystem.IsLinux())
+    {
+        var pageless = new BaseWindow(new BaseWindowOptions { Title = "Oriel window test: base pageless", Show = false });
+        Exception? dialogError = null;
+        try { await Dialog.ShowOpenDialogAsync(pageless, new OpenDialogOptions()).WaitAsync(step); }
+        catch (Exception e) { dialogError = e; }
+        Check("BaseWindow: Linux: a file dialog for a window with no page in it fails, as CEF shows it through a page",
+            dialogError?.GetBaseException() is InvalidOperationException, dialogError?.GetBaseException().Message);
+        pageless.Destroy();
+    }
 
     // Content.
     Check("BaseWindow: ContentView starts empty", bw.ContentView.Children.Count == 0 && bw.ContentView.NativeChildrenMatch());
@@ -6967,6 +6991,19 @@ async Task BaseWindowAsync()
     Eventually(() => bw.IsVisible, step);
     Check("BaseWindow: Maximize raises Maximized", Fires(h => bw.Maximized += h, h => bw.Maximized -= h, bw.Maximize, step) && bw.IsMaximized);
     Check("BaseWindow: Unmaximize raises Unmaximized", Fires(h => bw.Unmaximized += h, h => bw.Unmaximized -= h, bw.Unmaximize, step) && !bw.IsMaximized);
+    if (OperatingSystem.IsLinux() && File.Exists("/usr/bin/xdotool"))
+    {
+        bw.SetMenu(new Menu { new MenuItem { Label = "&Window", Submenu = new Menu { new MenuItem { Role = MenuItemRole.Minimize } } } });
+        bw.Focus();
+        Eventually(() => bw.IsFocused, step);
+        await Task.Delay(300);
+        Check("BaseWindow: a window role from its menu bar's accelerator acts on it",
+            Fires(h => bw.Minimized += h, h => bw.Minimized -= h, () => System.Diagnostics.Process.Start("/usr/bin/timeout", "10 /usr/bin/xdotool key ctrl+m")!.WaitForExit(), step));
+        bw.Restore();
+        Eventually(() => !bw.IsMinimized, step);
+        bw.RemoveMenu();
+        bw.Focus();
+    }
     bw.SetContentSize(420, 300);
     Check("BaseWindow: SetContentSize and GetContentBounds",
         Eventually(() => bw.GetContentBounds() is { Width: 420, Height: 300 }, step) && bw.GetContentSize() == (420, 300), bw.GetContentBounds());

@@ -184,7 +184,7 @@ internal static class MacApplicationMenu
         }
         if (item is null) return;
         var (flags, keyDown) = MacMenu.CurrentEvent();
-        item.Activate(BrowserWindow.GetFocusedWindow(), KeyboardEvent.FromMacModifiers(flags, keyDown));
+        item.Activate(BaseWindow.GetFocusedWindow(), KeyboardEvent.FromMacModifiers(flags, keyDown));
     }
 }
 

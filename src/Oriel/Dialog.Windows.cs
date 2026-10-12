@@ -8,7 +8,7 @@ namespace Oriel;
 public static partial class Dialog
 {
     [SupportedOSPlatform("windows")]
-    private static Task<OpenDialogReturnValue> ShowOpenOnWindows(BrowserWindow? window, OpenDialogOptions options)
+    private static Task<OpenDialogReturnValue> ShowOpenOnWindows(BaseWindow? window, OpenDialogOptions options)
     {
         RequireReady();
         var settings = SettingsOf(OpenOptionsOf(options.Properties), options.Title, options.ButtonLabel, options.DefaultPath, options.Filters);
@@ -21,7 +21,7 @@ public static partial class Dialog
     }
 
     [SupportedOSPlatform("windows")]
-    private static Task<SaveDialogReturnValue> ShowSaveOnWindows(BrowserWindow? window, SaveDialogOptions options)
+    private static Task<SaveDialogReturnValue> ShowSaveOnWindows(BaseWindow? window, SaveDialogOptions options)
     {
         RequireReady();
         var settings = SettingsOf(SaveOptionsOf(options.Properties), options.Title, options.ButtonLabel, options.DefaultPath, options.Filters);
@@ -43,7 +43,7 @@ public static partial class Dialog
     }
 
     // Electron resolves the owner's HWND on the UI thread and passes none when no window is given.
-    private static nint OwnerOf(BrowserWindow? window) => window?.GetNativeWindowHandle() ?? 0;
+    private static nint OwnerOf(BaseWindow? window) => window?.GetNativeWindowHandle() ?? 0;
 
     /// <summary>The <c>FOS_</c> flags Electron's <c>ShowOpenDialogSyncWithParent</c> sets; properties it does not
     /// read on Windows add nothing.</summary>

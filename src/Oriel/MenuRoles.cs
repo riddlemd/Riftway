@@ -172,9 +172,9 @@ internal static class MenuRoles
     };
 
     /// <summary>Runs <paramref name="role"/>; false when it has no action here, so the item's click runs instead.</summary>
-    internal static bool Execute(MenuItemRole role, BrowserWindow? window)
+    internal static bool Execute(MenuItemRole role, BaseWindow? window)
     {
-        var page = window?.WebContents;
+        var page = (window as BrowserWindow)?.WebContents;
         switch (role)
         {
             case MenuItemRole.Undo: page?.Undo(); return true;

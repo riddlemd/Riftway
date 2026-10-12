@@ -513,6 +513,8 @@ public sealed unsafe partial class BrowserWindow : BaseWindow
         WebContents.OnBrowserDestroyed();
     }
 
+    private protected override WebContents? OwnPage => WebContents;
+
     private protected override bool IgnoresMenuShortcuts => WebContents.IgnoresMenuShortcuts;
 
     private protected override bool PageTransparent => BrowserOptions.WebPreferences.Transparent;

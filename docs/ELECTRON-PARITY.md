@@ -9,14 +9,14 @@ These figures are counted from the rows: after changing a row or checklist item,
 
 | Measure | Done | Partial | Not started | Total |
 |---|---|---|---|---|
-| Module rows below | 8 | 41 | 18 | 67 |
-| M2 rows | 3 | 17 | 1 | 21 |
+| Module rows below | 8 | 42 | 17 | 67 |
+| M2 rows | 3 | 18 | 0 | 21 |
 
 The 67 rows include `BrowserView` (deprecated, never implemented; counted as not started).
 
 | Checklist | Applicable items | Done | Partial | Missing | % done | % done + partial/2 |
 |---|---|---|---|---|---|---|
-| [BrowserWindow](parity/browser-window.md) (with `BaseWindow`) | 294 | 168 | 55 | 71 | 57.1% | 66.5% |
+| [BrowserWindow](parity/browser-window.md) (with `BaseWindow`) | 295 | 168 | 57 | 70 | 56.9% | 66.6% |
 | [webContents](parity/web-contents.md) (with `navigationHistory`, `WebFrameMain`) | 230 | 111 | 70 | 49 | 48.3% | 63.5% |
 | [DownloadItem](parity/download-item.md) (with the session's download API) | 31 | 20 | 10 | 1 | 64.5% | 80.6% |
 | [app](parity/app.md) (with `app.dock` as one item) | 114 | 64 | 33 | 17 | 56.1% | 70.6% |
@@ -57,10 +57,10 @@ Detailed item-by-item status: [parity/browser-window.md](parity/browser-window.m
 
 | Electron | Oriel | Source | Wave | Status |
 |---|---|---|---|---|
-| `BaseWindow` | `BaseWindow` | CEF (Views) | M2 | — |
-| `BrowserWindow` | `BrowserWindow` | CEF (Views) | M2 | partial: 168 of 294 applicable items done (57.1%), see parity/browser-window.md |
+| `BaseWindow` | `BaseWindow` | CEF (Views) | M2 | partial: a window with an empty `ContentView` and no page, `SetContentView`, `GetAllWindows`/`GetFocusedWindow`/`FromId` over every window; items counted in [parity/browser-window.md](parity/browser-window.md) (DRIFT V15, V16) |
+| `BrowserWindow` | `BrowserWindow` | CEF (Views) | M2 | partial: 168 of 295 applicable items done (56.9%), see parity/browser-window.md |
 | `View` | `View` | CEF (Views panel) | M2 | partial: `addChildView` (index, move to top, reparent), `removeChildView`, `children`, `setBounds`/`getBounds`, `setVisible`/`getVisible`, `setBackgroundColor`, `bounds-changed`; no `setBorderRadius` (DRIFT V1) |
-| `WebContentsView` | `WebContentsView` | CEF (Views browser view) | M2 | partial: `new WebContentsView({ webPreferences })`, `webContents`, child views over the page, in `BrowserWindow.ContentView`; pages outlive their window and the view stays when its page closes, as Electron; popups and `webContents.close()` from view pages; `webContents` option for a `createWindow` popup (V4); Alloy style (DRIFT V2, V4, V7, V9, V12, V13) |
+| `WebContentsView` | `WebContentsView` | CEF (Views browser view) | M2 | partial: `new WebContentsView({ webPreferences })`, `webContents`, child views in a window's `ContentView`, above a `BrowserWindow`'s page; pages outlive their window and the view stays when its page closes, as Electron; popups and `webContents.close()` from view pages; `webContents` option for a `createWindow` popup (V4); Alloy style (DRIFT V2, V4, V7, V12, V13) |
 | `ImageView` | `ImageView` | CEF + .NET | M5 | — |
 | `win.setSimpleFullScreen` (macOS) | `BrowserWindow.SetSimpleFullScreen` | OS | M2 | done (native full screen blacks out other displays on macOS) |
 | `BrowserView` (deprecated) | not implemented; use `WebContentsView` | — | — | — |
