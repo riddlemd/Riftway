@@ -243,6 +243,8 @@ public sealed unsafe partial class WebContents
     internal bool ViewHasFocus()
     {
         if (_browser is null) return false;
+        // CEF takes over a reference to an argument.
+        NativeObject.AddRef(_browser);
         var view = CefNative.cef_browser_view_get_for_browser(_browser);
         if (view is null) return false;
         var focused = view->@base.has_focus(&view->@base) != 0;
