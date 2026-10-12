@@ -166,7 +166,7 @@ public sealed unsafe partial class BrowserWindow : BaseWindow
         _pageView = new WebContentsView(WebContents);
         CefThread.InvokeOnUi(() =>
         {
-            ContentView.InsertChild(_pageView, 0);
+            _contentsView.InsertChild(_pageView, 0);
             return true;
         });
         WebContents.PageTitleUpdated += (_, e) => PageTitleUpdated?.Invoke(this, e);
@@ -512,8 +512,6 @@ public sealed unsafe partial class BrowserWindow : BaseWindow
         DetachViews();
         WebContents.OnBrowserDestroyed();
     }
-
-    private protected override View? PageView => _pageView;
 
     private protected override bool IgnoresMenuShortcuts => WebContents.IgnoresMenuShortcuts;
 

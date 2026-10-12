@@ -71,7 +71,8 @@ public unsafe class View
     /// <summary>The view this one is a child of.</summary>
     internal View? Parent { get; private set; }
 
-    /// <summary>Whether this view always fills its parent instead of keeping its own bounds: a window's own page.</summary>
+    /// <summary>Whether this view always fills its parent instead of keeping its own bounds: a window's own page and its
+    /// content view.</summary>
     internal bool FillsParent { get; set; }
 
     /// <summary>The view's bounds changed, by <see cref="SetBounds"/> or a layout. Raised on the UI thread.
@@ -167,6 +168,9 @@ public unsafe class View
         _backgroundColor = argb;
         ApplyBackgroundColor();
     }
+
+    /// <summary>The background colour CEF has for the view, as ARGB. For tests.</summary>
+    internal uint NativeBackgroundColor() => CefThread.InvokeOnUi(() => NativeView is null ? 0 : NativeView->get_background_color(NativeView));
 
     /// <summary>Whether CEF's children are exactly <see cref="Children"/>, in order. For tests.</summary>
     internal bool NativeChildrenMatch() => CefThread.InvokeOnUi(() =>

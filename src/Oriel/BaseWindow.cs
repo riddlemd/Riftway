@@ -244,6 +244,8 @@ public unsafe partial class BaseWindow
     // Whether the window takes input (every OS), and Linux's X11 cover that blocks it while it does not; UI thread only.
     private readonly WindowEnabledState _enabled = new();
     private nint _inputCover;
+    // Electron's GetContentsView: fills the content area, with a BrowserWindow's page below ContentView, both filling it.
+    private protected readonly View _contentsView;
     // Touched only on the UI thread.
     private readonly List<BaseWindow> _children = [];
     // The option until SetParentWindow changes it; UI thread.
@@ -290,7 +292,13 @@ public unsafe partial class BaseWindow
         _resizable = _options.Resizable;
         _backgroundColor = WindowTransparency.InitialBackgroundColor(_options.BackgroundColor, _transparent || _macTransparent || _linuxTransparent,
             OperatingSystem.IsWindows() ? _options.BackgroundMaterial : null);
-        ContentView = new View();
+        _contentsView = new View();
+        ContentView = new View { FillsParent = true };
+        CefThread.InvokeOnUi(() =>
+        {
+            _contentsView.InsertChild(ContentView, 0);
+            return true;
+        });
         if (!OperatingSystem.IsMacOS())
         {
             _menuBar = new WindowMenuBar(this) { AutoHide = _options.AutoHideMenuBar };
@@ -350,10 +358,11 @@ public unsafe partial class BaseWindow
         _window = CefNative.cef_window_create_top_level(_windowDelegate.Native);
     }
 
-    /// <summary>The view filling the window's content area; add <see cref="WebContentsView"/>s and other views to it. A
-    /// <see cref="BrowserWindow"/>'s first child shows its page and fills it. Electron's <c>win.contentView</c>.</summary>
+    /// <summary>The view filling the window's content area; add <see cref="WebContentsView"/>s and other views to it. A new
+    /// window's has no children: a <see cref="BrowserWindow"/>'s page is not one of them but lies below it, filling the
+    /// content area, as in Electron. Electron's <c>win.contentView</c>.</summary>
     /// <remarks>As in Electron, the views in it outlive the window: their pages stay open until closed or the app quits.</remarks>
-    public View ContentView { get; }
+    public View ContentView { get; private set; }
 
     /// <summary>A number unique among this process's windows. Electron's <c>win.id</c>.</summary>
     public int Id { get; }
@@ -449,7 +458,7 @@ public unsafe partial class BaseWindow
     {
         var root = view;
         while (root.Parent is { } parent) root = parent;
-        return GetAllWindows().FirstOrDefault(w => w.ContentView == root) is { BlocksInput: true };
+        return GetAllWindows().FirstOrDefault(w => w._contentsView == root) is { BlocksInput: true };
     }
 
     private void ApplyLinuxEnabled()
@@ -1100,8 +1109,8 @@ public unsafe partial class BaseWindow
         w->@base.@base.set_background_color(&w->@base.@base, ParseColor(fill));
         var under = WindowTransparency.BrowserViewColor(ParseColor(page));
         ApplyPageViewBackground(under);
-        // The content view sits between the window and the page; a themed panel colour there would hide a transparent window.
-        ContentView.SetBackgroundArgb(under);
+        // The contents view sits between the window and the page; a themed panel colour there would hide a transparent window.
+        _contentsView.SetBackgroundArgb(under);
     }
 
     /// <summary>The colour behind the page, as set. Electron's <c>win.getBackgroundColor()</c>.</summary>
@@ -1240,13 +1249,13 @@ public unsafe partial class BaseWindow
         RouteSizeEvents(window);
         if (_menuBar is not null)
         {
-            _menuBar.Attach(window, ContentView.NativeView);
+            _menuBar.Attach(window, _contentsView.NativeView);
             _menuBar.SetMenu(_hasOwnMenu ? _ownMenu : Menu.GetApplicationMenu());
         }
         else
         {
-            NativeObject.AddRef(ContentView.NativeView);
-            window->@base.add_child_view(&window->@base, ContentView.NativeView);
+            NativeObject.AddRef(_contentsView.NativeView);
+            window->@base.add_child_view(&window->@base, _contentsView.NativeView);
         }
 
         var size = new cef_size_t { width = _options.Width, height = _options.Height };
@@ -1383,11 +1392,10 @@ public unsafe partial class BaseWindow
     }
 
     // As Electron, views added to the window outlive it: tearing the window down would destroy their pages, and a page
-    // whose view has merely been removed lives on.
+    // whose view has merely left the window lives on. The content view keeps its children, as Electron's does.
     private protected void DetachViews()
     {
-        foreach (var view in ContentView.Children)
-            if (view != PageView) ContentView.RemoveChild(view);
+        if (ContentView.Parent == _contentsView) _contentsView.RemoveChild(ContentView);
     }
 
     private void OnActivationChanged(bool active)
@@ -1489,9 +1497,6 @@ public unsafe partial class BaseWindow
     }
 
     // The base constructor runs before the subclass has its contents, so it only stores delegates that read these later.
-
-    /// <summary>The view showing the window's own page, which goes with the window; null for a plain window.</summary>
-    private protected virtual View? PageView => null;
 
     /// <summary>Whether the page has the keyboard and the menu bar's accelerators stand aside.</summary>
     private protected virtual bool IgnoresMenuShortcuts => false;

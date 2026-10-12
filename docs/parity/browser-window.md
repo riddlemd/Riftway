@@ -460,7 +460,7 @@ Parameters in brackets are optional in Electron. `webContents` members are in [w
 |---|---|---|---|
 | `webContents` | `WebContents` | done |  |
 | `id` | `Id` | done |  |
-| `contentView` | `ContentView` | done | First child is the window's page (Chrome style); views added over it are Alloy style (DRIFT V2) |
+| `contentView` | `ContentView` | done | Empty in a new window; a `BrowserWindow`'s page (Chrome style) lies below it, as Electron's; views added to it are Alloy style (DRIFT V2) |
 | `tabbingIdentifier` | — | missing |  |
 | `autoHideMenuBar` | `AutoHideMenuBar` | done |  |
 | `simpleFullScreen` | `SetSimpleFullScreen / IsSimpleFullScreen` | done |  |

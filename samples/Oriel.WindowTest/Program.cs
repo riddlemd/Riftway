@@ -6636,23 +6636,36 @@ async Task ViewsAsync()
 
     var host = new BrowserWindow(new BrowserWindowOptions { Width = 600, Height = 400, Title = "views" });
     await host.WebContents.LoadFile(page);
-    var main = host.ContentView.Children;
-    Check("Views: ContentView's first child shows the window's page",
-        main.Count == 1 && main[0] is WebContentsView own && own.WebContents == host.WebContents);
+    async Task<string?> HostPageSizeBecomes(string size)
+    {
+        string? seen = null;
+        for (var i = 0; i < 80 && seen != size; i++)
+        {
+            seen = await JsOf(host.WebContents, "innerWidth + 'x' + innerHeight");
+            if (seen != size) await Task.Delay(100);
+        }
+        return seen;
+    }
+    var (contentWidth, contentHeight) = host.GetContentSize();
+    var filled = await HostPageSizeBecomes($"\"{contentWidth}x{contentHeight}\"");
+    Check("Views: a new BrowserWindow's ContentView is empty; its page fills the content area under it, as Electron's",
+        host.ContentView.Children.Count == 0 && host.ContentView.NativeChildrenMatch() && filled == $"\"{contentWidth}x{contentHeight}\""
+        && host.ContentView.GetBounds() == new Rectangle(0, 0, contentWidth, contentHeight), $"{filled} {host.ContentView.GetBounds()}");
 
     var view = new WebContentsView(new WebContentsViewOptions { WebPreferences = new WebPreferences { Preload = preload } });
     host.ContentView.AddChildView(view);
     view.SetBounds(new Rectangle(10, 20, 200, 150));
     await view.WebContents.LoadFile(page);
-    Check("Views: AddChildView adds above the page", host.ContentView.Children is [WebContentsView, var added] && added == view);
+    Check("Views: AddChildView adds the first child", host.ContentView.Children is [var added] && added == view && host.ContentView.NativeChildrenMatch());
     Check("Views: the view's page loads", view.WebContents.GetUrl().EndsWith("view.html"), view.WebContents.GetUrl());
     Check("Views: GetBounds reads SetBounds back", view.GetBounds() == new Rectangle(10, 20, 200, 150), view.GetBounds());
     var size = await PageSizeBecomes(view, "\"200x150\"");
     Check("Views: the page is the size of its bounds", size == "\"200x150\"", size);
 
     host.SetContentSize(700, 500);
-    var grown = Eventually(() => main[0].GetBounds() is { Width: 700, Height: 500 }, step);
-    Check("Views: the window's page fills the content view as it resizes", grown, main[0].GetBounds());
+    var grown = await HostPageSizeBecomes("\"700x500\"");
+    Check("Views: the window's page and its content view fill the content area as it resizes",
+        grown == "\"700x500\"" && host.ContentView.GetBounds() == new Rectangle(0, 0, 700, 500), $"{grown} {host.ContentView.GetBounds()}");
     string? keptWidth = null;
     for (var i = 0; i < 40 && keptWidth != "200"; i++)
     {
@@ -6675,12 +6688,10 @@ async Task ViewsAsync()
     view.SetBounds(new Rectangle(30, 40, 220, 160));
     Check("Views: BoundsChanged once for a move, not for the same bounds", movesAfterOne == 1 && viewMoves == 1, $"{movesAfterOne} {viewMoves}");
     var contentMoves = 0;
-    var pageMoves = 0;
     host.ContentView.BoundsChanged += (_, _) => contentMoves++;
-    main[0].BoundsChanged += (_, _) => pageMoves++;
     host.SetContentSize(640, 480);
-    Check("Views: a window resize raises BoundsChanged on the content view and its page",
-        Eventually(() => contentMoves > 0 && pageMoves > 0, step) && viewMoves == 1, $"content={contentMoves} page={pageMoves} view={viewMoves}");
+    Check("Views: a window resize raises BoundsChanged on the content view, not on its children",
+        Eventually(() => contentMoves > 0, step) && viewMoves == 1, $"content={contentMoves} view={viewMoves}");
 
     // IPC from a view's page.
     WebContents? asker = null;
@@ -6713,12 +6724,12 @@ async Task ViewsAsync()
 
     // Order and moves.
     var second = new WebContentsView();
-    host.ContentView.AddChildView(second, 1);
+    host.ContentView.AddChildView(second, 0);
     Check("Views: AddChildView at an index",
-        host.ContentView.Children is [_, var s1, var v2] && s1 == second && v2 == view && host.ContentView.NativeChildrenMatch());
+        host.ContentView.Children is [var s1, var v2] && s1 == second && v2 == view && host.ContentView.NativeChildrenMatch());
     host.ContentView.AddChildView(second);
     Check("Views: adding a child again moves it to the top",
-        host.ContentView.Children is [_, var v1, var s2] && v1 == view && s2 == second && host.ContentView.NativeChildrenMatch());
+        host.ContentView.Children is [var v1, var s2] && v1 == view && s2 == second && host.ContentView.NativeChildrenMatch());
     var group = new View();
     host.ContentView.AddChildView(group);
     group.SetBounds(new Rectangle(250, 20, 300, 200));
@@ -6887,6 +6898,23 @@ async Task BaseWindowAsync()
     await view.WebContents.LoadFile(page);
     Check("BaseWindow: a WebContentsView in it loads and is the size of its bounds",
         view.WebContents.GetUrl().EndsWith("view.html") && await PageSizeBecomes(view, "\"300x200\"") == "\"300x200\"", view.WebContents.GetUrl());
+    // Stock CEF on Linux: the keyboard handler of a view's page drops keys for the disabled window the view is in.
+    if (OperatingSystem.IsLinux() && !Oriel.Cef.CefRuntime.IsPatched)
+    {
+        await view.WebContents.ExecuteJavaScriptAsync("window.keys = 0; addEventListener('keydown', () => keys++, { capture: true }); 1");
+        async Task<string?> KeyReaches()
+        {
+            view.WebContents.SendInputEvent(new KeyboardInputEvent(KeyboardInputEventType.KeyDown, "a"));
+            view.WebContents.SendInputEvent(new KeyboardInputEvent(KeyboardInputEventType.KeyUp, "a"));
+            await Task.Delay(400);
+            return await ViewJs(view, "keys");
+        }
+        bw.SetEnabled(false);
+        var whileDisabled = await KeyReaches();
+        bw.SetEnabled(true);
+        var enabledAgain = await KeyReaches();
+        Check("BaseWindow: a disabled window drops keys for the pages of its views", whileDisabled == "0" && enabledAgain == "1", $"{whileDisabled} {enabledAgain}");
+    }
 
     // Window state.
     bw.SetTitle("Oriel window test: base window renamed");
@@ -6923,7 +6951,9 @@ async Task BaseWindowAsync()
     bw.SetClosable(false);
     Check("BaseWindow: Close from code closes it although it is not closable, raising Closing and Closed",
         Fires(h => bw.Closed += h, h => bw.Closed -= h, bw.Close, step) && bw.IsDestroyed && closings == 1, closings);
-    Check("BaseWindow: its views' pages outlive it", !view.WebContents.IsDestroyed() && await ViewJs(view, "1 + 1") == "2", view.WebContents.IsDestroyed());
+    await Task.Delay(1500);
+    Check("BaseWindow: its views' pages outlive it, and ContentView keeps them, as Electron's",
+        !view.WebContents.IsDestroyed() && await ViewJs(view, "1 + 1") == "2" && bw.ContentView.Children.Contains(view), view.WebContents.IsDestroyed());
     Check("BaseWindow: a closed window leaves the registry", !BaseWindow.GetAllWindows().Contains(bw) && BaseWindow.FromId(bw.Id) is null);
 
     var destroyed = new BaseWindow(new BaseWindowOptions { Title = "Oriel window test: base destroyed", Show = false });
@@ -6942,6 +6972,37 @@ async Task BaseWindowAsync()
 
     view.WebContents.Close();
     Check("BaseWindow: a page that outlived it still closes", Eventually(() => view.WebContents.IsDestroyed(), step));
+
+    // Electron's layout: a BrowserWindow's page lies below its ContentView, which does not hide its own colour under the page's.
+    var layout = new BrowserWindow(new BrowserWindowOptions { Title = "Oriel window test: layout", Width = 500, Height = 360, X = 120, Y = 120 });
+    layout.ContentView.SetBackgroundColor("#80FF0000");
+    layout.SetBackgroundColor("#336699");
+    Check("BaseWindow: a colour set on ContentView stays when the window's background changes",
+        Eventually(() => layout.ContentView.NativeBackgroundColor() == 0x80FF0000, step), $"{layout.ContentView.NativeBackgroundColor():X8}");
+    if (OperatingSystem.IsLinux() && File.Exists("/usr/bin/xdotool"))
+    {
+        const string counting = "data:text/html,<body style='margin:0'><script>window.downs=0;addEventListener('mousedown',()=>downs++,{capture:true})</script>";
+        await layout.LoadUrl(counting);
+        var overlay = new WebContentsView();
+        layout.ContentView.AddChildView(overlay);
+        overlay.SetBounds(new Rectangle(0, 0, 200, 150));
+        await overlay.WebContents.LoadUrl(counting);
+        layout.Focus();
+        await Task.Delay(500);
+        var content = layout.GetContentBounds();
+        async Task<string> Downs() => $"{await JsOf(layout.WebContents, "downs")}/{await JsOf(overlay.WebContents, "downs")}";
+        async Task<string> ClickAt(int x, int y)
+        {
+            System.Diagnostics.Process.Start("/usr/bin/timeout", $"10 /usr/bin/xdotool mousemove {content.X + x} {content.Y + y} click 1")!.WaitForExit();
+            await Task.Delay(400);
+            return await Downs();
+        }
+        Check("BaseWindow: a real click where ContentView has no child reaches the page below it", await ClickAt(350, 250) == "1/0", await Downs());
+        Check("BaseWindow: a real click on a child of ContentView reaches the child's page, not the window's", await ClickAt(50, 50) == "1/1", await Downs());
+        layout.ContentView.RemoveChildView(overlay);
+        overlay.WebContents.Close();
+    }
+    layout.Destroy();
     Directory.Delete(dir, recursive: true);
 }
 
