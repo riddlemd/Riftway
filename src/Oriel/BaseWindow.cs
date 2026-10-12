@@ -1248,12 +1248,13 @@ public unsafe partial class BaseWindow
         return hex.Length == 6 ? 0xFF000000 | value : value;
     }
 
-    // UI thread: the page CEF's dialogs run through, the window's own or else the first open one among its views.
+    // UI thread: the page CEF's dialogs run through, the window's own or else the first open one among the views it
+    // shows; a content view moved to another window is that window's.
     internal WebContents? DialogPage()
     {
         if (_window is null) return null;
         if (OwnPage is { } own) return own.Browser is null ? null : own;
-        return PagesIn(ContentView).FirstOrDefault(p => p.Browser is not null);
+        return HostedPages().FirstOrDefault(p => p.Browser is not null);
     }
 
     /// <summary>The pages in the window's views, its own page first: what it shows now, not what its
