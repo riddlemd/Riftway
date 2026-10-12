@@ -334,7 +334,7 @@ public sealed unsafe partial class OrielApp
         BeforeQuit?.Invoke(this, before);
         if (before.Cancel) return;
         _quitting = true;
-        var windows = BrowserWindow.GetAllWindows();
+        var windows = BaseWindow.GetAllWindows();
         if (windows.Count == 0) FinishQuit();
         else foreach (var window in windows) window.Close();
     }
@@ -400,7 +400,7 @@ public sealed unsafe partial class OrielApp
     {
         var (line, data) = TakeAdditionalData(commandLine);
         if (SecondInstance is { } handler) handler(this, new SecondInstanceEventArgs(line, workingDirectory, data));
-        else BrowserWindow.FocusAll();
+        else BaseWindow.FocusAll();
     }
 
     private void OnContextInitialized()

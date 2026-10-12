@@ -44,7 +44,7 @@ public sealed class AppDock
         {
             if (Environment.TickCount64 - _lastShow < 1000) return;
             // Electron's: windows of an app without a Dock icon cannot be hidden with it.
-            foreach (var window in BrowserWindow.GetAllWindows())
+            foreach (var window in BaseWindow.GetAllWindows())
                 if (window.GetNativeWindowHandle() is var handle and not 0) MacWindow.SetCanHide(handle, false);
             MacActivation.TransformProcess(foreground: false);
         });
@@ -171,7 +171,7 @@ public sealed partial class OrielApp
             CefThread.RunOnUi(() => MacActivation.Activate(steal));
             return;
         }
-        BrowserWindow.GetAllWindows().FirstOrDefault(w => w.IsVisible)?.Focus();
+        BaseWindow.GetAllWindows().FirstOrDefault(w => w.IsVisible)?.Focus();
     }
 
     /// <summary>Shows <paramref name="count"/> on the app's badge: the Dock tile on macOS, an overlay drawn on the taskbar

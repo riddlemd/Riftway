@@ -157,7 +157,7 @@ public sealed unsafe partial class BrowserWindow : BaseWindow
     }
 
     // A popup's window waits for CEF to create its browser view (AdoptPopupView) instead of creating one.
-    private BrowserWindow(BrowserWindowOptions options, WebContents? opener) : base(Validated(options, ref opener))
+    private BrowserWindow(BrowserWindowOptions options, WebContents? opener) : base(Validated(options, ref opener), opensItself: false)
     {
         var adopted = options.WebContents;
         var session = adopted?.Session ?? options.WebPreferences.ResolveSession();
@@ -506,20 +506,14 @@ public sealed unsafe partial class BrowserWindow : BaseWindow
         ApplyPageBackground();
     }
 
-    // As Electron, views added to the window outlive it: tearing the window down would destroy their pages, and a page
-    // whose view has merely been removed lives on.
-    private void DetachViews()
-    {
-        foreach (var view in ContentView.Children)
-            if (view != _pageView) ContentView.RemoveChild(view);
-    }
-
     // The window's page goes first; the window's teardown follows at once, without asking can_close again.
     private void OnBrowserDestroyed(cef_browser_t* browser)
     {
         DetachViews();
         WebContents.OnBrowserDestroyed();
     }
+
+    private protected override View? PageView => _pageView;
 
     private protected override bool IgnoresMenuShortcuts => WebContents.IgnoresMenuShortcuts;
 

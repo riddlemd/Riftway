@@ -324,6 +324,7 @@ async Task RunAsync(BrowserWindow win, BrowserWindow simple)
     await BadgeAsync(win);
     await ThemeAsync(win);
     await ViewsAsync();
+    await BaseWindowAsync();
     await WindowsApisAsync();
     await TransparencyAsync();
     await WindowsStateChecks.RunAsync(Check, step);
@@ -6845,6 +6846,102 @@ async Task ViewsAsync()
     second.WebContents.Close();
     Check("Views: a page outliving its window still closes",
         Eventually(() => view.WebContents.IsDestroyed() && second.WebContents.IsDestroyed(), step));
+    Directory.Delete(dir, recursive: true);
+}
+
+// Electron's BaseWindow: a window with no page of its own, showing only its ContentView.
+async Task BaseWindowAsync()
+{
+    var dir = Directory.CreateTempSubdirectory("oriel-base-window-").FullName;
+    var page = Path.Combine(dir, "view.html");
+    File.WriteAllText(page, "<!doctype html><title>view</title><body style='margin:0;background:#2a4'>view</body>");
+
+    // Registry.
+    var browser = new BrowserWindow(new BrowserWindowOptions { Show = false });
+    var bw = new BaseWindow(new BaseWindowOptions { Width = 500, Height = 360, Title = "Oriel window test: base window", Show = false });
+    Check("BaseWindow: ids come from the windows' one sequence", bw.Id == browser.Id + 1, $"{browser.Id} {bw.Id}");
+    Check("BaseWindow: BaseWindow.GetAllWindows and FromId find both kinds",
+        BaseWindow.GetAllWindows().Contains(bw) && BaseWindow.GetAllWindows().Contains(browser) && BaseWindow.FromId(bw.Id) == bw && BaseWindow.FromId(browser.Id) == browser);
+    Check("BaseWindow: BrowserWindow.GetAllWindows and FromId leave it out, as Electron's",
+        !BrowserWindow.GetAllWindows().Any(w => w.Id == bw.Id) && BrowserWindow.GetAllWindows().Contains(browser) && BrowserWindow.FromId(bw.Id) is null);
+    browser.Destroy();
+
+    // Show and focus.
+    var appFocus = 0;
+    EventHandler<BrowserWindow> onAppFocus = (_, _) => appFocus++;
+    app.BrowserWindowFocus += onAppFocus;
+    var (shown, focused) = (false, false);
+    bw.Shown += (_, _) => shown = true;
+    bw.Focused += (_, _) => focused = true;
+    bw.Show();
+    Check("BaseWindow: Show raises Shown and Focused", Eventually(() => shown && focused, step) && bw.IsVisible, $"shown={shown} focused={focused}");
+    Check("BaseWindow: GetFocusedWindow finds it; BrowserWindow's does not, nor is the app's BrowserWindowFocus raised",
+        Eventually(() => BaseWindow.GetFocusedWindow() == bw, step) && BrowserWindow.GetFocusedWindow() is null && appFocus == 0, appFocus);
+    app.BrowserWindowFocus -= onAppFocus;
+
+    // Content.
+    Check("BaseWindow: ContentView starts empty", bw.ContentView.Children.Count == 0 && bw.ContentView.NativeChildrenMatch());
+    var view = new WebContentsView();
+    bw.ContentView.AddChildView(view);
+    view.SetBounds(new Rectangle(0, 0, 300, 200));
+    await view.WebContents.LoadFile(page);
+    Check("BaseWindow: a WebContentsView in it loads and is the size of its bounds",
+        view.WebContents.GetUrl().EndsWith("view.html") && await PageSizeBecomes(view, "\"300x200\"") == "\"300x200\"", view.WebContents.GetUrl());
+
+    // Window state.
+    bw.SetTitle("Oriel window test: base window renamed");
+    Check("BaseWindow: SetTitle and GetTitle", bw.GetTitle() == "Oriel window test: base window renamed", bw.GetTitle());
+    Check("BaseWindow: Hide raises Hidden", Fires(h => bw.Hidden += h, h => bw.Hidden -= h, bw.Hide, step) && !bw.IsVisible);
+    bw.Show();
+    Eventually(() => bw.IsVisible, step);
+    Check("BaseWindow: Maximize raises Maximized", Fires(h => bw.Maximized += h, h => bw.Maximized -= h, bw.Maximize, step) && bw.IsMaximized);
+    Check("BaseWindow: Unmaximize raises Unmaximized", Fires(h => bw.Unmaximized += h, h => bw.Unmaximized -= h, bw.Unmaximize, step) && !bw.IsMaximized);
+    bw.SetContentSize(420, 300);
+    Check("BaseWindow: SetContentSize and GetContentBounds",
+        Eventually(() => bw.GetContentBounds() is { Width: 420, Height: 300 }, step) && bw.GetContentSize() == (420, 300), bw.GetContentBounds());
+
+    // A quit closes BaseWindows too: each refuses here, which also cancels the quit.
+    var refusedQuit = 0;
+    EventHandler<CancelEventArgs> refuse = (_, e) => e.Cancel = true;
+    EventHandler<CancelEventArgs> refuseBase = (_, e) => { refusedQuit++; e.Cancel = true; };
+    var others = BaseWindow.GetAllWindows().Where(w => w != bw).ToList();
+    foreach (var w in others) w.Closing += refuse;
+    bw.Closing += refuseBase;
+    app.Quit();
+    await Task.Delay(1500);
+    Check("BaseWindow: a quit closes it too, and the refusals cancel the quit",
+        refusedQuit == 1 && !bw.IsDestroyed && others.All(w => !w.IsDestroyed), $"refused={refusedQuit}");
+    foreach (var w in others) w.Closing -= refuse;
+
+    // Close.
+    bw.Close();
+    await Task.Delay(1000);
+    Check("BaseWindow: cancelling Closing keeps it open", refusedQuit == 2 && !bw.IsDestroyed, refusedQuit);
+    bw.Closing -= refuseBase;
+    var closings = 0;
+    bw.Closing += (_, _) => closings++;
+    bw.SetClosable(false);
+    Check("BaseWindow: Close from code closes it although it is not closable, raising Closing and Closed",
+        Fires(h => bw.Closed += h, h => bw.Closed -= h, bw.Close, step) && bw.IsDestroyed && closings == 1, closings);
+    Check("BaseWindow: its views' pages outlive it", !view.WebContents.IsDestroyed() && await ViewJs(view, "1 + 1") == "2", view.WebContents.IsDestroyed());
+    Check("BaseWindow: a closed window leaves the registry", !BaseWindow.GetAllWindows().Contains(bw) && BaseWindow.FromId(bw.Id) is null);
+
+    var destroyed = new BaseWindow(new BaseWindowOptions { Title = "Oriel window test: base destroyed", Show = false });
+    var destroyedClosings = 0;
+    destroyed.Closing += (_, _) => destroyedClosings++;
+    Check("BaseWindow: Destroy raises Closed but no Closing",
+        Fires(h => destroyed.Closed += h, h => destroyed.Closed -= h, destroyed.Destroy, step) && destroyed.IsDestroyed && destroyedClosings == 0, destroyedClosings);
+
+    // A BrowserWindow child of a BaseWindow closes with it.
+    var parent = new BaseWindow(new BaseWindowOptions { Title = "Oriel window test: base parent", Width = 300, Height = 200 });
+    var child = new BrowserWindow(new BrowserWindowOptions { Title = "Oriel window test: base child", Parent = parent, Width = 200, Height = 150 });
+    Check("BaseWindow: a BrowserWindow can have it as Parent", parent.GetChildWindows().Contains(child));
+    parent.Close();
+    Check("BaseWindow: closing it destroys its BrowserWindow child", Eventually(() => parent.IsDestroyed && child.IsDestroyed, step),
+        $"parent={parent.IsDestroyed} child={child.IsDestroyed}");
+
+    view.WebContents.Close();
+    Check("BaseWindow: a page that outlived it still closes", Eventually(() => view.WebContents.IsDestroyed(), step));
     Directory.Delete(dir, recursive: true);
 }
 

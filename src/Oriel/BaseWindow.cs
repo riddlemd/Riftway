@@ -225,6 +225,8 @@ public unsafe partial class BaseWindow
     private nint _attentionRequest;
     // Set by Close()/Destroy(): a close from code goes through even when the user may not close.
     private bool _closeFromCode;
+    // Set by Destroy(): CEF still asks can_close, which must then neither ask the app nor raise Closing.
+    private bool _destroying;
     private protected string? _backgroundColor;
     // Windows: a transparent window loses its frame, resizing and maximizing.
     private readonly bool _transparent;
@@ -249,9 +251,23 @@ public unsafe partial class BaseWindow
     // macOS: Electron's NativeWindowMac parent links, which attach this window to its parent as an AppKit child window.
     private readonly MacParentLink? _macLink;
 
-    // The native window is created by the subclass once its contents exist (OpenWindow), and it raises the app's
-    // created event itself: virtual members it overrides are not usable until its constructor has run.
-    private protected BaseWindow(BaseWindowOptions options)
+    /// <summary>Creates the window, with an empty <see cref="ContentView"/>, shown unless <see cref="BaseWindowOptions.Show"/>
+    /// is false. Electron's <c>new BaseWindow()</c>.</summary>
+    /// <exception cref="InvalidOperationException">The application is not ready yet, or the parent is closed.</exception>
+    /// <exception cref="ArgumentException"><see cref="BaseWindowOptions.Modal"/> without a parent.</exception>
+    public BaseWindow(BaseWindowOptions? options = null) : this(options ?? new BaseWindowOptions(), opensItself: true)
+    {
+        CefThread.InvokeOnUi(() =>
+        {
+            ThrowIfParentClosed();
+            OpenWindow();
+            return true;
+        });
+    }
+
+    // A subclass creates the native window once its contents exist (OpenWindow), and raises the app's created event
+    // itself: virtual members it overrides are not usable until its constructor has run.
+    private protected BaseWindow(BaseWindowOptions options, bool opensItself)
     {
         CheckOptions(options);
         _options = options;
@@ -336,6 +352,7 @@ public unsafe partial class BaseWindow
 
     /// <summary>The view filling the window's content area; add <see cref="WebContentsView"/>s and other views to it. A
     /// <see cref="BrowserWindow"/>'s first child shows its page and fills it. Electron's <c>win.contentView</c>.</summary>
+    /// <remarks>As in Electron, the views in it outlive the window: their pages stay open until closed or the app quits.</remarks>
     public View ContentView { get; }
 
     /// <summary>A number unique among this process's windows. Electron's <c>win.id</c>.</summary>
@@ -968,6 +985,7 @@ public unsafe partial class BaseWindow
     /// <summary>Closes the window at once: no <see cref="Closing"/>, no beforeunload. Electron's <c>win.destroy()</c>.</summary>
     public void Destroy() => Command(w =>
     {
+        _destroying = true;
         DestroyContents();
         w->close(w);
     });
@@ -1330,9 +1348,9 @@ public unsafe partial class BaseWindow
     private bool OnClosing(cef_window_t* window)
     {
         // CEF asks again once the contents are gone; by then the close was already approved.
-        if (CloseApproved)
+        if (CloseApproved || _destroying)
         {
-            FlushWindowState(window);
+            ApproveClose(window);
             return true;
         }
 
@@ -1353,9 +1371,23 @@ public unsafe partial class BaseWindow
         }
 
         var canClose = ContinueClose();
-        // Electron saves from OnWindowClosed; by on_window_destroyed CEF reports empty bounds.
-        if (canClose) FlushWindowState(window);
+        if (canClose) ApproveClose(window);
         return canClose;
+    }
+
+    private void ApproveClose(cef_window_t* window)
+    {
+        // Electron saves from OnWindowClosed; by on_window_destroyed CEF reports empty bounds.
+        FlushWindowState(window);
+        DetachViews();
+    }
+
+    // As Electron, views added to the window outlive it: tearing the window down would destroy their pages, and a page
+    // whose view has merely been removed lives on.
+    private protected void DetachViews()
+    {
+        foreach (var view in ContentView.Children)
+            if (view != PageView) ContentView.RemoveChild(view);
     }
 
     private void OnActivationChanged(bool active)
@@ -1457,6 +1489,9 @@ public unsafe partial class BaseWindow
     }
 
     // The base constructor runs before the subclass has its contents, so it only stores delegates that read these later.
+
+    /// <summary>The view showing the window's own page, which goes with the window; null for a plain window.</summary>
+    private protected virtual View? PageView => null;
 
     /// <summary>Whether the page has the keyboard and the menu bar's accelerators stand aside.</summary>
     private protected virtual bool IgnoresMenuShortcuts => false;

@@ -38,6 +38,12 @@ static class WindowStatePersistenceChecks
         var loaded = await Child(dir, "load", "on");
         check("Persistence: the bounds come back on the next run, and persisted-state-restored is raised",
             savedBounds is not null && BoundsOf(loaded) == savedBounds && loaded.Contains("restored=True") && loaded.Contains("max=False"), $"{saved} -> {loaded}");
+        DeleteUserData(dir);
+        dir = NewUserData();
+        saved = await Child(dir, "save-now", "base");
+        loaded = await Child(dir, "load", "base");
+        check("Persistence: a named BaseWindow keeps its bounds too",
+            BoundsOf(saved) is { } baseBounds && Entry(dir, "persisted") is not null && BoundsOf(loaded) == baseBounds && loaded.Contains("restored=True"), $"{saved} -> {loaded}");
 
         // Maximized, over the normal bounds saved before it; destroyed within the 200 ms, so only the save on close keeps it.
         dir = NewUserData();
@@ -175,7 +181,9 @@ static class WindowStatePersistenceChecks
                 "noname" => options with { WindowStatePersistence = true },
                 _ => options with { Name = "persisted" },
             };
-            var win = new BrowserWindow(options);
+            BaseWindow win = spec == "base"
+                ? new BaseWindow(new BaseWindowOptions { Title = options.Title, Width = DefaultWidth, Height = DefaultHeight, Name = "persisted", WindowStatePersistence = true })
+                : new BrowserWindow(options);
             var restored = false;
             win.PersistedStateRestored += (_, _) => restored = true;
             _ = Task.Run(async () =>
