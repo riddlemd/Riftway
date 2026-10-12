@@ -530,7 +530,7 @@ public sealed unsafe partial class BrowserWindow : BaseWindow
             SendPageBackground(WebContents, ParseColor(page));
     }
 
-    // A forced close_browser destroys the browser before CEF asks can_close, so Closing is never raised.
+    // No beforeunload: the page closes at once, and _destroying keeps the can_close that follows from raising Closing.
     private protected override void DestroyContents()
     {
         var browser = WebContents.Browser;

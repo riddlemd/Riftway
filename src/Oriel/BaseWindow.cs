@@ -223,7 +223,7 @@ public unsafe partial class BaseWindow
     private bool _roundedCorners = true;
     // macOS: the Dock bounce FlashFrame started, to cancel.
     private nint _attentionRequest;
-    // Set by Close()/Destroy(): a close from code goes through even when the user may not close.
+    // Set by Close(): a close from code goes through even when the user may not close.
     private bool _closeFromCode;
     // Set by Destroy(): CEF still asks can_close, which must then neither ask the app nor raise Closing.
     private bool _destroying;
@@ -1429,7 +1429,7 @@ public unsafe partial class BaseWindow
 
     private bool OnClosing(cef_window_t* window)
     {
-        // CEF asks again once the contents are gone; by then the close was already approved.
+        // CEF asks again once the contents are gone, by when the close was approved; a Destroy is never put to the app.
         if (CloseApproved || _destroying)
         {
             ApproveClose(window);
