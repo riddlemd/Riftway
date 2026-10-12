@@ -1,4 +1,5 @@
 using System.ComponentModel;
+using Oriel.Cef;
 using Oriel.Cef.Interop;
 
 namespace Oriel;
@@ -70,8 +71,10 @@ public sealed unsafe partial class WebContents
         lock (s_registryGate) return s_live.Find(w => w.Id == id);
     }
 
-    /// <summary>The focused window's page, or null. Electron's <c>webContents.getFocusedWebContents()</c>.</summary>
-    public static WebContents? GetFocusedWebContents() => BrowserWindow.GetFocusedWindow()?.WebContents;
+    /// <summary>The page with keyboard focus in the focused window, a window's own page or a view's, or null. Electron's
+    /// <c>webContents.getFocusedWebContents()</c>.</summary>
+    public static WebContents? GetFocusedWebContents() => CefThread.InvokeOnUi(()
+        => BaseWindow.GetFocusedWindow()?.HostedPages().FirstOrDefault(page => page.ViewHasFocus()));
 
     /// <summary>The page's renderer process ended unexpectedly. Electron's <c>render-process-gone</c>.</summary>
     public event EventHandler<RenderProcessGoneEventArgs>? RenderProcessGone;

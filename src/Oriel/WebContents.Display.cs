@@ -238,7 +238,19 @@ public sealed unsafe partial class WebContents
     /// <summary>Whether the page's view has keyboard focus in a visible window. Electron's <c>webContents.isFocused()</c>.</summary>
     public bool IsFocused() => CefThread.InvokeOnUi(() => _hasFocus) && BaseWindow.HostOf(this) is not { IsVisible: false };
 
-    internal FocusHandler FocusEvents => _focusEvents ??= new FocusHandler { GotFocus = OnGotFocus };
+    // UI thread. Chromium's RenderWidgetHostView::HasFocus as Views knows it; _hasFocus misses focus moving between
+    // views of one window, which CEF reports to neither page.
+    internal bool ViewHasFocus()
+    {
+        if (_browser is null) return false;
+        var view = CefNative.cef_browser_view_get_for_browser(_browser);
+        if (view is null) return false;
+        var focused = view->@base.has_focus(&view->@base) != 0;
+        NativeObject.Release(view);
+        return focused;
+    }
+
+    internal FocusHandler FocusEvents =>_focusEvents ??= new FocusHandler { GotFocus = OnGotFocus };
 
     /// <summary>The page <paramref name="frame"/> belongs to, or null once it is gone. Electron's
     /// <c>webContents.fromFrame()</c>.</summary>
