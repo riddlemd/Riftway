@@ -6916,6 +6916,49 @@ async Task BaseWindowAsync()
         Check("BaseWindow: a disabled window drops keys for the pages of its views", whileDisabled == "0" && enabledAgain == "1", $"{whileDisabled} {enabledAgain}");
     }
 
+    // SetContentView.
+    var firstContent = bw.ContentView;
+    var replacement = new WebContentsView();
+    bw.SetContentView(replacement);
+    await replacement.WebContents.LoadFile(page);
+    Check("SetContentView: ContentView is the new view; the old one leaves the window with its children",
+        bw.ContentView == replacement && firstContent.Children is [var kept] && kept == view && bw.ContentsViewMatches() && firstContent.NativeChildrenMatch());
+    var (baseWidth, baseHeight) = bw.GetContentSize();
+    var replaced = await PageSizeBecomes(replacement, $"\"{baseWidth}x{baseHeight}\"");
+    Check("SetContentView: a WebContentsView as content view fills the content area", replaced == $"\"{baseWidth}x{baseHeight}\"", $"{replaced} {baseWidth}x{baseHeight}");
+    if (!OperatingSystem.IsMacOS())
+    {
+        bw.SetMenu(new Menu { new MenuItem { Label = "&File", Submenu = new Menu { new MenuItem { Label = "Quit" } } } });
+        var belowBar = Eventually(() => bw.IsMenuBarVisible && replacement.GetBounds().Height == bw.GetContentSize().Height, step);
+        Check("SetContentView: below a menu bar the content view is the content size", belowBar, $"{replacement.GetBounds()} {bw.GetContentSize()} bar={bw.IsMenuBarVisible} bounds={bw.GetBounds()}");
+        bw.RemoveMenu();
+    }
+    await Task.Delay(1000);
+    Check("SetContentView: the old content view's pages live on", !view.WebContents.IsDestroyed() && await ViewJs(view, "1 + 1") == "2");
+    bw.SetContentView(firstContent);
+    Check("SetContentView: the old content view can come back, its page at its bounds",
+        bw.ContentView == firstContent && bw.ContentsViewMatches() && await PageSizeBecomes(view, "\"300x200\"") == "\"300x200\"");
+    var lastBounds = replacement.GetBounds();
+    firstContent.AddChildView(replacement);
+    bw.SetContentSize(baseWidth + 40, baseHeight + 30);
+    await Task.Delay(800);
+    Check("SetContentView: a former content view added elsewhere keeps its last bounds instead of filling",
+        bw.GetContentSize() == (baseWidth + 40, baseHeight + 30) && replacement.GetBounds() == lastBounds, $"{replacement.GetBounds()} {lastBounds} {bw.GetContentSize()}");
+    firstContent.RemoveChildView(replacement);
+    replacement.WebContents.Close();
+    var holder = new View();
+    var held = new View();
+    holder.AddChildView(held);
+    bw.SetContentView(held);
+    Check("SetContentView: a view leaves its parent first", bw.ContentView == held && holder.Children.Count == 0 && bw.ContentsViewMatches() && holder.NativeChildrenMatch());
+    var lender = new BaseWindow(new BaseWindowOptions { Title = "Oriel window test: base lender", Show = false });
+    var lent = lender.ContentView;
+    bw.SetContentView(lent);
+    Check("SetContentView: another window's content view moves here, and that window still names it, as Electron's",
+        bw.ContentView == lent && lender.ContentView == lent && bw.ContentsViewMatches() && !lender.ContentsViewMatches());
+    lender.Destroy();
+    bw.SetContentView(firstContent);
+
     // Window state.
     bw.SetTitle("Oriel window test: base window renamed");
     Check("BaseWindow: SetTitle and GetTitle", bw.GetTitle() == "Oriel window test: base window renamed", bw.GetTitle());
@@ -6955,6 +6998,8 @@ async Task BaseWindowAsync()
     Check("BaseWindow: its views' pages outlive it, and ContentView keeps them, as Electron's",
         !view.WebContents.IsDestroyed() && await ViewJs(view, "1 + 1") == "2" && bw.ContentView.Children.Contains(view), view.WebContents.IsDestroyed());
     Check("BaseWindow: a closed window leaves the registry", !BaseWindow.GetAllWindows().Contains(bw) && BaseWindow.FromId(bw.Id) is null);
+    bw.SetContentView(new View());
+    Check("SetContentView: ignored once the window has closed", bw.ContentView == firstContent && firstContent.Children.Contains(view));
 
     var destroyed = new BaseWindow(new BaseWindowOptions { Title = "Oriel window test: base destroyed", Show = false });
     var destroyedClosings = 0;
@@ -7003,6 +7048,34 @@ async Task BaseWindowAsync()
         overlay.WebContents.Close();
     }
     layout.Destroy();
+
+    // A BrowserWindow's own content view swapped: its page stays below, and its close still asks the page.
+    var unloading = Path.Combine(dir, "unloading.html");
+    File.WriteAllText(unloading, "<!doctype html><script>addEventListener('beforeunload', e => { e.preventDefault(); e.returnValue = ''; });</script>");
+    var swapped = new BrowserWindow(new BrowserWindowOptions { Title = "Oriel window test: swapped content", Width = 420, Height = 300 });
+    await swapped.LoadFile(unloading);
+    var cover = new View();
+    swapped.SetContentView(cover);
+    var (swappedWidth, swappedHeight) = swapped.GetContentSize();
+    string? swappedSize = null;
+    for (var i = 0; i < 40 && swappedSize != $"\"{swappedWidth}x{swappedHeight}\""; i++)
+    {
+        swappedSize = await JsOf(swapped.WebContents, "innerWidth + 'x' + innerHeight");
+        if (swappedSize != $"\"{swappedWidth}x{swappedHeight}\"") await Task.Delay(100);
+    }
+    Check("SetContentView on a BrowserWindow: its page still fills the content area below the new view",
+        swapped.ContentView == cover && swapped.ContentsViewMatches() && swappedSize == $"\"{swappedWidth}x{swappedHeight}\""
+        && BrowserWindow.FromWebContents(swapped.WebContents) == swapped, swappedSize);
+    var unloadPreventions = 0;
+    swapped.WebContents.WillPreventUnload += (_, _) => unloadPreventions++;
+    // Chromium asks beforeunload only of a page the user has interacted with.
+    await swapped.WebContents.ExecuteJavaScriptAsync("0", userGesture: true);
+    swapped.Close();
+    await Task.Delay(1500);
+    Check("SetContentView on a BrowserWindow: Close still runs the page's beforeunload", unloadPreventions == 1 && !swapped.IsDestroyed, unloadPreventions);
+    swapped.WebContents.WillPreventUnload += (_, e) => e.Cancel = true;
+    Check("SetContentView on a BrowserWindow: Close still raises Closed",
+        Fires(h => swapped.Closed += h, h => swapped.Closed -= h, swapped.Close, step) && swapped.IsDestroyed);
     Directory.Delete(dir, recursive: true);
 }
 

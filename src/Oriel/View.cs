@@ -75,6 +75,14 @@ public unsafe class View
     /// content view.</summary>
     internal bool FillsParent { get; set; }
 
+    /// <summary>UI thread: a view that filled its parent keeps the bounds it has, as a view placed there would.</summary>
+    internal void StopFilling()
+    {
+        if (!FillsParent) return;
+        FillsParent = false;
+        if (NativeView is not null) _requested = BrowserWindow.ToRectangle(NativeView->get_bounds(NativeView));
+    }
+
     /// <summary>The view's bounds changed, by <see cref="SetBounds"/> or a layout. Raised on the UI thread.
     /// Electron's <c>bounds-changed</c> event.</summary>
     public event EventHandler? BoundsChanged;

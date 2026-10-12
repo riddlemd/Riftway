@@ -246,6 +246,7 @@ public unsafe partial class BaseWindow
     private nint _inputCover;
     // Electron's GetContentsView: fills the content area, with a BrowserWindow's page below ContentView, both filling it.
     private protected readonly View _contentsView;
+    private bool _viewsDetached;
     // Touched only on the UI thread.
     private readonly List<BaseWindow> _children = [];
     // The option until SetParentWindow changes it; UI thread.
@@ -363,6 +364,35 @@ public unsafe partial class BaseWindow
     /// content area, as in Electron. Electron's <c>win.contentView</c>.</summary>
     /// <remarks>As in Electron, the views in it outlive the window: their pages stay open until closed or the app quits.</remarks>
     public View ContentView { get; private set; }
+
+    /// <summary>Makes <paramref name="view"/> the window's <see cref="ContentView"/>, filling the content area; a
+    /// <see cref="BrowserWindow"/>'s page stays below it. The previous content view leaves the window with its children,
+    /// whose pages live on. A view with a parent leaves it first, as with <see cref="View.AddChildView"/>; another window's
+    /// content view moves here, while that window's <see cref="ContentView"/> still returns it, as in Electron. Ignored
+    /// once the window has closed. Electron's <c>win.setContentView()</c>.</summary>
+    public void SetContentView(View view)
+    {
+        ArgumentNullException.ThrowIfNull(view);
+        CefThread.InvokeOnUi(() =>
+        {
+            // As other commands, nothing on a closed window, whose views have left it.
+            if (_viewsDetached) return true;
+            if (ContentView.Parent == _contentsView)
+            {
+                _contentsView.RemoveChild(ContentView);
+                ContentView.StopFilling();
+            }
+            view.Parent?.RemoveChild(view);
+            ContentView = view;
+            view.FillsParent = true;
+            _contentsView.InsertChild(view, _contentsView.Children.Count);
+            return true;
+        });
+    }
+
+    // The contents view holds only the page (if any) below ContentView, both filling it, natively in the same order. For tests.
+    internal bool ContentsViewMatches() => CefThread.InvokeOnUi(() => _contentsView.NativeChildrenMatch() && _contentsView.Children is { Count: 1 or 2 } children
+        && children[^1] == ContentView && children.All(c => c.FillsParent) && (children.Count == 1 || this is BrowserWindow));
 
     /// <summary>A number unique among this process's windows. Electron's <c>win.id</c>.</summary>
     public int Id { get; }
@@ -1395,7 +1425,10 @@ public unsafe partial class BaseWindow
     // whose view has merely left the window lives on. The content view keeps its children, as Electron's does.
     private protected void DetachViews()
     {
-        if (ContentView.Parent == _contentsView) _contentsView.RemoveChild(ContentView);
+        _viewsDetached = true;
+        if (ContentView.Parent != _contentsView) return;
+        _contentsView.RemoveChild(ContentView);
+        ContentView.StopFilling();
     }
 
     private void OnActivationChanged(bool active)

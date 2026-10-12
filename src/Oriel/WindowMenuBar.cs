@@ -44,7 +44,12 @@ internal sealed unsafe class WindowMenuBar
         // The window delegate releases its argument after on_window_created, which frees this wrapper.
         NativeObject.AddRef(window);
         _window = window;
-        var vertical = new cef_box_layout_settings_t { size = (nuint)sizeof(cef_box_layout_settings_t) };
+        // Stretched across: the default (start) sizes the content to its preferred width, a plain panel's to its children's.
+        var vertical = new cef_box_layout_settings_t
+        {
+            size = (nuint)sizeof(cef_box_layout_settings_t),
+            cross_axis_alignment = cef_axis_alignment_t.CEF_AXIS_ALIGNMENT_STRETCH,
+        };
         var layout = window->@base.set_to_box_layout(&window->@base, &vertical);
 
         var horizontal = new cef_box_layout_settings_t { size = (nuint)sizeof(cef_box_layout_settings_t), horizontal = 1 };
