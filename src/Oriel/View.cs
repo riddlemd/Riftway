@@ -46,6 +46,15 @@ public unsafe class View
     /// <summary>The native panel, holding one reference of this object's.</summary>
     internal cef_view_t* NativeView { get; private set; }
 
+    /// <summary>UI thread: drops this object's reference to the panel, for a view no window will ever hold.</summary>
+    internal void ReleaseNative()
+    {
+        if (NativeView is null) return;
+        NativeObject.Release(NativeView);
+        NativeView = null;
+        _panel = null;
+    }
+
     // Native child indexes count the page first.
     private int Offset => _page is null ? 0 : 1;
 

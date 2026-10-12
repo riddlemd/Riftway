@@ -262,7 +262,13 @@ public unsafe partial class BaseWindow
     {
         CefThread.InvokeOnUi(() =>
         {
-            ThrowIfParentClosed();
+            // The parent may have closed since the base constructor checked it.
+            try { ThrowIfParentClosed(); }
+            catch
+            {
+                ReleaseViews();
+                throw;
+            }
             OpenWindow();
             return true;
         });
@@ -273,6 +279,10 @@ public unsafe partial class BaseWindow
     private protected BaseWindow(BaseWindowOptions options, bool opensItself)
     {
         CheckOptions(options);
+        // Before the name and views exist, which a refused window would leave behind; BrowserWindow checks its own, as
+        // its popups are not refused.
+        if (opensItself && CefThread.InvokeOnUi(() => options.Parent is { _window: null }))
+            throw new InvalidOperationException("The parent window is closed.");
         _options = options;
         _parent = _options.Parent;
         if (OperatingSystem.IsMacOS())
@@ -346,6 +356,14 @@ public unsafe partial class BaseWindow
         if (_options.Parent is not { _window: null }) return;
         ReleaseName();
         throw new InvalidOperationException("The parent window is closed.");
+    }
+
+    // UI thread: no window will own the views of a window refused after they exist.
+    private void ReleaseViews()
+    {
+        _contentsView.RemoveChild(ContentView);
+        _contentsView.ReleaseNative();
+        ContentView.ReleaseNative();
     }
 
     private protected void OpenWindow()
