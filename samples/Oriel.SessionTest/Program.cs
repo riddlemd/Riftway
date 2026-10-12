@@ -1355,12 +1355,17 @@ async Task RunAsync()
     }
     if (OperatingSystem.IsLinux())
     {
-        var userDirs =Path.Combine(app.GetPath("appData"), "user-dirs.dirs");
+        // Paths are cached as by PathService, and the default session has already asked for downloads; any override clears it.
+        void ClearPathCache() => app.SetPath("temp", app.GetPath("temp"));
+        var userDirs = Path.Combine(app.GetPath("appData"), "user-dirs.dirs");
         File.WriteAllText(userDirs, "XDG_DOWNLOAD_DIR=\"$HOME/Fetched\"\n");
+        ClearPathCache();
         var downloadsDir = app.GetPath("downloads");
         File.Delete(userDirs);
+        ClearPathCache();
+        var plainDownloadsDir = app.GetPath("downloads");
         Check("GetPath(downloads) follows the XDG user directories on Linux", downloadsDir == Path.Combine(app.GetPath("home"), "Fetched")
-            && app.GetPath("downloads") == Path.Combine(app.GetPath("home"), "Downloads"), downloadsDir);
+            && plainDownloadsDir == Path.Combine(app.GetPath("home"), "Downloads"), $"{downloadsDir} then {plainDownloadsDir}");
     }
     var unknownPath = await Throws(() => Task.FromResult(app.GetPath("nope")));
     var originalLogs = app.GetPath("logs");
