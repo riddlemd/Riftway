@@ -5,8 +5,8 @@ using Oriel.Cef.Interop;
 
 namespace Oriel;
 
-/// <summary>A blank page in a session's profile that is never shown, for what CEF only offers through a browser:
-/// DevTools commands on the session's storage partition, and downloads.</summary>
+/// <summary>A page in a session's profile that is never shown, for what CEF only offers through a browser: DevTools
+/// commands on the session's storage partition, downloads, and reading <c>chrome://gpu</c>.</summary>
 /// <remarks>Not a <see cref="WebContents"/>: Electron's session methods make no page, so the app's events and window
 /// list must not see one. UI thread only, except <see cref="SendAsync"/>.</remarks>
 internal sealed unsafe partial class SessionHelperPage
@@ -23,7 +23,7 @@ internal sealed unsafe partial class SessionHelperPage
     private cef_browser_t* _browser;
     private bool _closing;
 
-    private SessionHelperPage(Session session)
+    private SessionHelperPage(Session session, string pageUrl)
     {
         _client = new ClientHandler(load: new LoadHandler
         {
@@ -87,7 +87,7 @@ internal sealed unsafe partial class SessionHelperPage
 
         var settings = new cef_browser_settings_t { size = (nuint)sizeof(cef_browser_settings_t) };
         cef_string_utf16_t url = default;
-        CefString.Set(&url, "about:blank");
+        CefString.Set(&url, pageUrl);
         NativeObject.AddRef(_client.Native);
         NativeObject.AddRef(_viewDelegate.Native);
         var context = session.IsDefault ? null : session.AddRefNative();
@@ -107,7 +107,7 @@ internal sealed unsafe partial class SessionHelperPage
     internal Task Ready => _ready.Task;
 
     /// <summary>Creates the page once the session's profile has loaded: CEF refuses a browser view before.</summary>
-    internal static Task<SessionHelperPage> CreateAsync(Session session)
+    internal static Task<SessionHelperPage> CreateAsync(Session session, string url = "about:blank")
     {
         var created = new TaskCompletionSource<SessionHelperPage>(TaskCreationOptions.RunContinuationsAsynchronously);
         session.Initialized.ContinueWith(_ =>
@@ -117,7 +117,7 @@ internal sealed unsafe partial class SessionHelperPage
             {
                 CefThread.RunOnUi(() =>
                 {
-                    try { created.SetResult(new SessionHelperPage(session)); }
+                    try { created.SetResult(new SessionHelperPage(session, url)); }
                     catch (Exception e) { created.SetException(e); }
                 });
             }
@@ -174,6 +174,13 @@ internal sealed unsafe partial class SessionHelperPage
     internal static void CloseAll()
     {
         foreach (var page in s_open.ToArray()) page.Close();
+    }
+
+    /// <summary>Closes the page from any thread; nothing to do once CEF is shutting down, which closes it anyway.</summary>
+    internal void CloseSoon()
+    {
+        try { CefThread.RunOnUi(Close); }
+        catch (InvalidOperationException) { }
     }
 
     private void Close()

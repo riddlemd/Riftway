@@ -110,8 +110,8 @@ Percentages are over the non-n/a items; the second counts a partial item as half
 | `isHardwareAccelerationEnabled()` | `IsHardwareAccelerationEnabled` | partial | Does not see Chromium's own fallback to software (A24). |
 | `disableDomainBlockingFor3DAPIs()` | — | missing | A24. |
 | `getAppMetrics()` | `GetAppMetrics` | partial | A18. |
-| `getGPUFeatureStatus()` | `GetGpuFeatureStatusAsync` | partial | Asynchronous, from the browser DevTools target (A27). |
-| `getGPUInfo(infoType)` | `GetGpuInfoAsync` | partial | From DevTools: fewer device fields, `basic` answers as `complete` (A27). |
+| `getGPUFeatureStatus()` | `GetGpuFeatureStatusAsync` | partial | Asynchronous, read from a hidden `chrome://gpu` page (A27). |
+| `getGPUInfo(infoType)` | `GetGpuInfoAsync` | partial | From `chrome://gpu`'s rows: fewer device and aux fields; `complete` waits for the rows to settle (A27). |
 | `setBadgeCount([count])` | `SetBadgeCount` | partial | A17 (Windows text), A20 (Linux). |
 | `getBadgeCount()` | `GetBadgeCount` | done |  |
 | `getLoginItemSettings([options])` | `GetLoginItemSettings` | done | Windows registry; macOS SMAppService with `Status` and `WasOpenedAtLogin`; all off on Linux, as Electron. |

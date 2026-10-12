@@ -189,16 +189,28 @@ public sealed class AppAuditTests
     }
 
     [Fact]
-    public void GpuInfoFromDevTools_IsElectronsShape()
+    public void GpuInfoFromChromeGpu_IsElectronsShape()
     {
         using var doc = JsonDocument.Parse("""
-            {"gpu":{"devices":[{"vendorId":4098,"deviceId":1,"vendorString":"","driverVersion":"9"},{"vendorId":32902,"deviceId":2}],
-             "auxAttributes":{"initializationTime":0.25,"optimus":false,"glVendor":"","glRenderer":"R","processCrashCount":3,"visibilityCallbackCallCount":1},
-             "featureStatus":{"webgl":"enabled"}},"modelName":"MacBookPro","modelVersion":"","commandLine":"x"}
+            [{"description":"Initialization time","value":"314"},{"description":"In-process GPU","value":false},
+             {"description":"GPU0","value":"VENDOR= 0x10de, DEVICE=0x2203 [NVIDIA GeForce RTX 3090 Ti], SUBSYS=0x49833842, REV=161, LUID={0,59666}, DRIVER_VENDOR=NVIDIA, DRIVER_VERSION=32.0.16.1656 *ACTIVE*"},
+             {"description":"GPU1","value":"VENDOR= 0x8086, DEVICE=0x4680, LUID={0,64362}, DRIVER_VERSION=31.0"},
+             {"description":"Optimus","value":false},{"description":"Desktop compositing","value":"Aero Glass"},
+             {"description":"Machine model name","value":"MacBookPro"},{"description":"Machine model version","value":""},
+             {"description":"GL_VENDOR","value":""},{"description":"GL_RENDERER","value":"R"},
+             {"description":"Reset notification strategy","value":"0x8252"},{"description":"GPU process crash count","value":0}]
             """);
-        var info = OrielApp.GpuInfoFromDevTools(doc.RootElement);
-        Assert.Equal("""{"auxAttributes":{"initializationTime":250,"optimus":false,"glRenderer":"R","visibilityCallbackCallCount":1},"gpuDevice":[{"active":true,"vendorId":4098,"deviceId":1,"driverVersion":"9"},{"active":false,"vendorId":32902,"deviceId":2}],"machineModelName":"MacBookPro"}""",
+        var info = OrielApp.GpuInfoFromChromeGpu(doc.RootElement);
+        Assert.Equal("""{"auxAttributes":{"initializationTime":314,"inProcessGpu":false,"optimus":false,"glRenderer":"R","glResetNotificationStrategy":33362},"gpuDevice":[{"vendorId":4318,"deviceId":8707,"revision":161,"subSysId":1233336386,"active":true,"deviceString":"NVIDIA GeForce RTX 3090 Ti","driverVendor":"NVIDIA","driverVersion":"32.0.16.1656"},{"vendorId":32902,"deviceId":18048,"active":false,"driverVersion":"31.0"}],"machineModelName":"MacBookPro"}""",
             info.ToJsonString());
+    }
+
+    [Fact]
+    public void GpuDeviceFromRow_KeepsCommasInsideNamesAndWrapsTheHighBit()
+    {
+        var device = OrielApp.GpuDeviceFromRow("VENDOR= 0x106b [Google Inc. (Apple)], DEVICE=0x0000 [ANGLE (Apple, ANGLE Metal Renderer: Apple M1, Unspecified Version)], SUBSYS=0x80001028, REV=0, DRIVER_VERSION=1");
+        Assert.Equal("""{"vendorId":4203,"deviceId":0,"revision":0,"subSysId":-2147479512,"active":false,"vendorString":"Google Inc. (Apple)","deviceString":"ANGLE (Apple, ANGLE Metal Renderer: Apple M1, Unspecified Version)","driverVersion":"1"}""",
+            device.ToJsonString());
     }
 
     [Fact]

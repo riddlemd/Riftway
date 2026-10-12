@@ -2920,11 +2920,19 @@ async Task AppAuditChecks()
         app.IsHardwareAccelerationEnabled() == !app.CommandLine.HasSwitch("disable-gpu")
         && (await Throws(() => { app.DisableHardwareAcceleration(); return Task.CompletedTask; }))?.Message == "app.disableHardwareAcceleration() can only be called before app is ready");
 
+    // First: once one chrome://gpu has asked for Windows' DirectX rows, later pages report them at once.
+    var completeGpuInfo = await app.GetGpuInfoAsync(GpuInfoType.Complete);
+    var dx12 = completeGpuInfo["auxAttributes"]?["dx12FeatureLevel"] is System.Text.Json.Nodes.JsonValue dx12Value && dx12Value.TryGetValue<string>(out var level) ? level : null;
+    Check("GetGpuInfoAsync(Complete) waits for the later report: Windows' D3D12 feature level is filled in",
+        OperatingSystem.IsWindows() ? dx12 is { Length: > 0 } && dx12 != "Not supported" : dx12 is null, dx12);
     var gpuStatus = await app.GetGpuFeatureStatusAsync();
     Check("GetGpuFeatureStatusAsync lists chrome://gpu's features", gpuStatus.ContainsKey("webgl") && gpuStatus.ContainsKey("gpu_compositing"), string.Join(",", gpuStatus.Select(p => $"{p.Key}={p.Value}")));
     var gpuInfo = await app.GetGpuInfoAsync(GpuInfoType.Basic);
     Check("GetGpuInfoAsync answers auxAttributes and gpuDevice, the active device first", gpuInfo["auxAttributes"] is System.Text.Json.Nodes.JsonObject
         && gpuInfo["gpuDevice"] is System.Text.Json.Nodes.JsonArray { Count: > 0 } devices && devices[0]!["active"]!.GetValue<bool>(), gpuInfo.ToJsonString());
+    Check("GetGpuInfoAsync(Basic) carries the GPU process's initialization time",
+        gpuInfo["auxAttributes"]?["initializationTime"] is System.Text.Json.Nodes.JsonValue initTime && initTime.TryGetValue<double>(out var initMs) && initMs > 0,
+        gpuInfo["auxAttributes"]?["initializationTime"]?.ToJsonString());
 
     var a11yEvents = new List<bool>();
     app.AccessibilitySupportChanged += (_, on) => a11yEvents.Add(on);
