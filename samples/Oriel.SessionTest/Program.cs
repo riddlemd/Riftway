@@ -1641,7 +1641,11 @@ async Task RunAsync()
     // Every CPU busy: the percent is of all of them, so it nears 100 only when divided by their count.
     var spinUntil = DateTime.UtcNow + TimeSpan.FromMilliseconds(400);
     var spins = 0L;
-    Parallel.For(0, Environment.ProcessorCount, _ => { while (DateTime.UtcNow < spinUntil) Interlocked.Increment(ref spins); });
+    // Threads of their own: the thread pool adds threads too slowly to busy every CPU of a large machine in 400 ms.
+    var spinners = Enumerable.Range(0, Environment.ProcessorCount)
+        .Select(_ => new Thread(() => { while (DateTime.UtcNow < spinUntil) Interlocked.Increment(ref spins); })).ToList();
+    spinners.ForEach(t => t.Start());
+    spinners.ForEach(t => t.Join());
     var usage = OrielProcess.GetCPUUsage();
     Check("GetCPUUsage measures since the previous call, across all CPUs, with the running total", usage.PercentCPUUsage > 50
         && usage.PercentCPUUsage <= 110 && usage.CumulativeCPUUsage > 0.3 && (OperatingSystem.IsWindows() ? usage.IdleWakeupsPerSecond == 0 : usage.IdleWakeupsPerSecond > 0), $"{usage} spins={spins}");
