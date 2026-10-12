@@ -108,7 +108,13 @@ public unsafe class View
             lock (_children) count = _children.Count - (view.Parent == this ? 1 : 0);
             if (index < 0) throw new ArgumentOutOfRangeException(nameof(index));
             var at = Math.Min(index ?? count, count);
-            view.Parent?.RemoveChild(view);
+            if (view.Parent is { } previous && previous != this)
+            {
+                previous.RemoveChild(view);
+                // Only a window fills its content view; anywhere else a view keeps its own bounds.
+                view.StopFilling();
+            }
+            else view.Parent?.RemoveChild(view);
             InsertChild(view, at);
             return true;
         });
