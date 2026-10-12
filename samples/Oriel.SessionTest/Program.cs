@@ -2332,8 +2332,9 @@ static async Task ServeDownloads(TcpListener listener, DownloadServer state)
                     {
                         if (drop && offset >= body.Length / 2)
                         {
-                            // An RST, not a FIN: Chromium calls that a network failure, which only the user resumes.
-                            client.LingerState = new LingerOption(true, 0);
+                            // An RST, not a FIN: Chromium calls that a network failure, which only the user resumes; a FIN is
+                            // a length mismatch it resumes itself. Disposing the TcpClient would shut the stream down (a FIN) first.
+                            client.Client.Close(0);
                             return;
                         }
                         await stream.WriteAsync(body.AsMemory((int)offset, (int)Math.Min(Chunk, body.Length - offset)));
