@@ -10,7 +10,7 @@ namespace Oriel;
 /// drawn image (background inset by the spacing, symbol centred), since a Views background fills the whole view.</remarks>
 internal sealed unsafe class TitleBarOverlayView
 {
-    private readonly BrowserWindow _owner;
+    private readonly BaseWindow _owner;
     private readonly Func<uint> _foreground;
     private readonly cef_label_button_t*[] _buttons = new cef_label_button_t*[3];
     private readonly ButtonDelegate[] _delegates = new ButtonDelegate[3];
@@ -28,7 +28,7 @@ internal sealed unsafe class TitleBarOverlayView
 
     /// <summary>An overlay for <paramref name="owner"/>; <paramref name="foreground"/> gives the caption foreground the
     /// hover and press tints use, read at each paint so a theme change is followed.</summary>
-    internal TitleBarOverlayView(BrowserWindow owner, Func<uint> foreground) => (_owner, _foreground) = (owner, foreground);
+    internal TitleBarOverlayView(BaseWindow owner, Func<uint> foreground) => (_owner, _foreground) = (owner, foreground);
 
     /// <summary>The overlay's height in DIPs.</summary>
     internal int Height => _height;

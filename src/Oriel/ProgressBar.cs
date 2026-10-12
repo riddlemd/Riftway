@@ -21,7 +21,7 @@ public enum ProgressBarMode
     Paused,
 }
 
-/// <summary>Options for <see cref="BrowserWindow.SetProgressBar"/>; Electron's <c>options</c> argument.</summary>
+/// <summary>Options for <see cref="BaseWindow.SetProgressBar"/>; Electron's <c>options</c> argument.</summary>
 public sealed record ProgressBarOptions
 {
     /// <summary>How the bar shows. Electron's <c>mode</c>.</summary>

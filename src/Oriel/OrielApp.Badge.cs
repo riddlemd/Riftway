@@ -12,7 +12,7 @@ public sealed partial class OrielApp
         if (!OperatingSystem.IsWindows()) return;
         var badge = count == 0 ? null : WindowsBadge.Draw(BadgeText(count));
         var description = BadgeDescription(count);
-        foreach (var window in BrowserWindow.GetAllWindows()) window.SetBadgeOverlay(badge, description);
+        foreach (var window in BaseWindow.GetAllWindows()) window.SetBadgeOverlay(badge, description);
     }
 
     // Chromium's IDS_BADGE_UNREAD_NOTIFICATIONS* (ui_strings.grd), which Electron gives the overlay for screen readers.
@@ -28,7 +28,7 @@ public sealed partial class OrielApp
     private static string FormatBadgeNumber(int value) => value.ToString("#,0", CultureInfo.InvariantCulture);
 }
 
-public sealed unsafe partial class BrowserWindow
+public unsafe partial class BaseWindow
 {
     /// <summary>Shows <paramref name="bgra"/> (a straight-alpha <see cref="WindowsBadge.Size"/>-pixel badge) over the
     /// taskbar icon, or removes the overlay when null, with <paramref name="description"/> for screen readers.</summary>

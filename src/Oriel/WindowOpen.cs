@@ -117,11 +117,16 @@ internal sealed class PopupGuest(WebContents opener)
     /// another window or view took it.</exception>
     public static PopupGuest Adopt(WebContents page, object host)
     {
-        if (page.Guest is not { Host: null } guest)
-            throw new NotSupportedException("Only the page a window-open handler's createWindow receives can be adopted, while it runs, by one window or view.");
+        var guest = Adoptable(page);
         guest.Host = host;
         return guest;
     }
+
+    /// <summary>The guest a window or view would join by adopting <paramref name="page"/>.</summary>
+    /// <exception cref="NotSupportedException">As <see cref="Adopt"/>.</exception>
+    public static PopupGuest Adoptable(WebContents page)
+        => page.Guest is { Host: null } guest ? guest
+            : throw new NotSupportedException("Only the page a window-open handler's createWindow receives can be adopted, while it runs, by one window or view.");
 
     /// <summary>Electron's handling of what <c>createWindow</c> did (guest-window-manager.ts): an adopted page shows
     /// either way, and joins its opener's lifetime only when it was returned.</summary>

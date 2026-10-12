@@ -81,7 +81,7 @@ public enum MenuItemRole
     /// <summary>Minimizes the focused window.</summary>
     Minimize,
 
-    /// <summary>Closes the focused window, as <see cref="BrowserWindow.Close"/>.</summary>
+    /// <summary>Closes the focused window, as <see cref="BaseWindow.Close"/>.</summary>
     Close,
 
     /// <summary>Maximizes the focused window, or restores it if maximized. Electron's <c>zoom</c> (macOS).</summary>
@@ -581,7 +581,7 @@ public sealed class Menu : IEnumerable<MenuItem>
     IEnumerator IEnumerable.GetEnumerator() => GetEnumerator();
 
     /// <summary>Sets the application menu: on macOS the menu bar at the top of the screen, elsewhere the menu
-    /// bar of every window without its own (<see cref="BrowserWindow.SetMenu"/>). Null removes it.
+    /// bar of every window without its own (<see cref="BaseWindow.SetMenu"/>). Null removes it.
     /// Electron's <c>Menu.setApplicationMenu()</c>.</summary>
     /// <remarks>On macOS the first item becomes the application menu, titled with the app's name whatever
     /// its label. If none is set by the end of <see cref="OrielApp.Ready"/>, macOS gets a default menu

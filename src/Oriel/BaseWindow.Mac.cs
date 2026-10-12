@@ -5,7 +5,7 @@ using Oriel.Cef.Platform;
 
 namespace Oriel;
 
-/// <summary>Options for <see cref="BrowserWindow.SetVisibleOnAllWorkspaces"/>; Electron's options.</summary>
+/// <summary>Options for <see cref="BaseWindow.SetVisibleOnAllWorkspaces"/>; Electron's options.</summary>
 public sealed record VisibleOnAllWorkspacesOptions
 {
     /// <summary>Also shows the window over full-screen apps (macOS).</summary>
@@ -16,7 +16,7 @@ public sealed record VisibleOnAllWorkspacesOptions
     public bool SkipTransformProcessType { get; init; }
 }
 
-public sealed unsafe partial class BrowserWindow
+public unsafe partial class BaseWindow
 {
     /// <summary>The file the title bar's proxy icon stands for (macOS); does nothing elsewhere. Electron's
     /// <c>win.setRepresentedFilename()</c>.</summary>

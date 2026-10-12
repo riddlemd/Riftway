@@ -305,7 +305,7 @@ public sealed unsafe partial class OrielApp
     /// <summary>Ends <see cref="Run"/> once open windows have closed. Electron's <c>app.quit()</c>.</summary>
     /// <remarks>May be called from any thread once the application is ready.</remarks>
     /// <remarks>As Electron: raises <see cref="BeforeQuit"/>, closes every window (each may still cancel with
-    /// <see cref="BrowserWindow.Closing"/>, which cancels the quit), then raises <see cref="WillQuit"/>.</remarks>
+    /// <see cref="BaseWindow.Closing"/>, which cancels the quit), then raises <see cref="WillQuit"/>.</remarks>
     public void Quit()
     {
         // CEF only quits from the UI thread; called anywhere else, cef_quit_message_loop does nothing.

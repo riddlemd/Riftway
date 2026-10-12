@@ -23,7 +23,7 @@ public partial record BaseWindowOptions
     public string? Type { get; init; }
 }
 
-/// <summary>Arguments for <see cref="BrowserWindow.QuerySessionEnd"/>: cancel to ask Windows not to end the session.</summary>
+/// <summary>Arguments for <see cref="BaseWindow.QuerySessionEnd"/>: cancel to ask Windows not to end the session.</summary>
 public sealed class QuerySessionEndEventArgs(IReadOnlyList<string> reasons) : CancelEventArgs
 {
     /// <summary>Why the session is ending: <c>shutdown</c>, or any of <c>close-app</c>, <c>critical</c>, <c>logoff</c>.
@@ -31,21 +31,21 @@ public sealed class QuerySessionEndEventArgs(IReadOnlyList<string> reasons) : Ca
     public IReadOnlyList<string> Reasons { get; } = reasons;
 }
 
-/// <summary>Arguments for <see cref="BrowserWindow.SessionEnded"/>.</summary>
+/// <summary>Arguments for <see cref="BaseWindow.SessionEnded"/>.</summary>
 public sealed class SessionEndEventArgs(IReadOnlyList<string> reasons) : EventArgs
 {
     /// <summary>Why the session ended, as in <see cref="QuerySessionEndEventArgs.Reasons"/>.</summary>
     public IReadOnlyList<string> Reasons { get; } = reasons;
 }
 
-/// <summary>Arguments for <see cref="BrowserWindow.SystemContextMenu"/>: cancel to keep the system menu from showing.</summary>
+/// <summary>Arguments for <see cref="BaseWindow.SystemContextMenu"/>: cancel to keep the system menu from showing.</summary>
 public sealed class SystemContextMenuEventArgs(Point point) : CancelEventArgs
 {
     /// <summary>Where the menu was asked for, in screen pixels as Windows reports it (not DIPs, as in Electron).</summary>
     public Point Point { get; } = point;
 }
 
-/// <summary>Arguments for <see cref="BrowserWindow.AppCommand"/>.</summary>
+/// <summary>Arguments for <see cref="BaseWindow.AppCommand"/>.</summary>
 public sealed class AppCommandEventArgs(string command) : EventArgs
 {
     /// <summary>Electron's name for the command, such as <c>browser-backward</c> or <c>media-play-pause</c>;
@@ -53,7 +53,7 @@ public sealed class AppCommandEventArgs(string command) : EventArgs
     public string Command { get; } = command;
 }
 
-public sealed unsafe partial class BrowserWindow
+public unsafe partial class BaseWindow
 {
     // Windows: Electron's NativeWindowViews state that PreHandleMSG reads, kept in a subclass of the HWND.
     private readonly WindowsMessageHooks _windowsHooks = new();

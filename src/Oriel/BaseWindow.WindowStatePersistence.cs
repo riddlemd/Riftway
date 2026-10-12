@@ -18,7 +18,7 @@ public partial record BaseWindowOptions
     public WindowStatePersistence? WindowStatePersistence { get; init; }
 }
 
-public sealed unsafe partial class BrowserWindow
+public unsafe partial class BaseWindow
 {
     // Names of windows not yet destroyed (Electron's WindowList), guarded by s_openGate.
     private static readonly HashSet<string> s_names = new(StringComparer.Ordinal);
@@ -90,7 +90,7 @@ public sealed unsafe partial class BrowserWindow
         Resized += DebouncedSave;
     }
 
-    private void ReleaseName()
+    private protected void ReleaseName()
     {
         if (Name is { } name)
             lock (s_openGate) s_names.Remove(name);

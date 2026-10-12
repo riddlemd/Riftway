@@ -11,7 +11,7 @@ internal sealed unsafe class WindowMenuBar
 {
     private const int AltKeyCode = 0x12;
 
-    private readonly BrowserWindow _owner;
+    private readonly BaseWindow _owner;
     private readonly List<int> _accelerators = [];
     // Button positions by mnemonic letter, for Alt+letter.
     private readonly Dictionary<char, int> _mnemonics = [];
@@ -22,7 +22,7 @@ internal sealed unsafe class WindowMenuBar
     private bool _rebuildPosted;
     private bool _altAlone;
 
-    internal WindowMenuBar(BrowserWindow owner)
+    internal WindowMenuBar(BaseWindow owner)
     {
         _owner = owner;
     }
@@ -99,7 +99,7 @@ internal sealed unsafe class WindowMenuBar
     {
         // A disabled item leaves the key to whatever else wants it.
         if (_menu?.FindByCommandId(commandId) is not { Enabled: true } item) return false;
-        item.ActivateByAccelerator(_owner);
+        item.ActivateByAccelerator(_owner as BrowserWindow);
         return true;
     }
 
@@ -204,7 +204,7 @@ internal sealed unsafe class WindowMenuBar
         if (_menu?.FindByCommandId(commandId) is not { Submenu: { } submenu })
         {
             // A top-level item without a submenu acts as a button.
-            _menu?.FindByCommandId(commandId)?.Activate(_owner);
+            _menu?.FindByCommandId(commandId)?.Activate(_owner as BrowserWindow);
             return;
         }
 
@@ -278,7 +278,7 @@ internal sealed unsafe class WindowMenuBar
     }
 
 
-    private void Execute(int commandId, cef_event_flags_t flags) => _menu?.FindByCommandId(commandId)?.Activate(_owner, KeyboardEvent.FromCefFlags(flags));
+    private void Execute(int commandId, cef_event_flags_t flags) => _menu?.FindByCommandId(commandId)?.Activate(_owner as BrowserWindow, KeyboardEvent.FromCefFlags(flags));
 
     private void UpdateVisibility()
     {
