@@ -6913,6 +6913,40 @@ async Task BaseWindowAsync()
             dialogError?.GetBaseException() is InvalidOperationException, dialogError?.GetBaseException().Message);
         pageless.Destroy();
     }
+    if (OperatingSystem.IsLinux() && File.Exists("/usr/bin/xdotool"))
+    {
+        static string Xdo(string args)
+        {
+            var p = System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo("/usr/bin/timeout", "10 /usr/bin/xdotool " + args) { RedirectStandardOutput = true })!;
+            var output = p.StandardOutput.ReadToEnd();
+            p.WaitForExit();
+            return p.ExitCode == 0 ? output.Trim() : "";
+        }
+        var lending = new BaseWindow(new BaseWindowOptions { Title = "Oriel window test: base dialog host", Width = 400, Height = 300 });
+        var lendingView = new WebContentsView();
+        lending.ContentView.AddChildView(lendingView);
+        lendingView.SetBounds(new Rectangle(0, 0, 200, 150));
+        await lendingView.WebContents.LoadUrl("about:blank");
+        var viewDialog = Dialog.ShowOpenDialogAsync(lending, new OpenDialogOptions { Title = "Oriel base view dialog" });
+        var dialogId = "";
+        // GTK's dialog is its own X window; Escape cancels it, as a user would.
+        Eventually(() => (dialogId = Xdo($"search --all --pid {Environment.ProcessId} --name \"Oriel base view dialog\"").Split('\n')[0]).Length > 0, step);
+        if (dialogId.Length > 0) Xdo($"windowactivate --sync {dialogId} key --clearmodifiers Escape");
+        var viewDialogDone = await Task.WhenAny(viewDialog, Task.Delay(step)) == viewDialog;
+        Check("BaseWindow: Linux: a file dialog runs through the page of a view in a window with no page of its own",
+            dialogId.Length > 0 && viewDialogDone && viewDialog is { IsCompletedSuccessfully: true, Result.Canceled: true },
+            $"id={dialogId} {viewDialog.Status} {viewDialog.Exception?.GetBaseException().Message}");
+        var taker = new BaseWindow(new BaseWindowOptions { Title = "Oriel window test: base content taker", Show = false });
+        taker.SetContentView(lending.ContentView);
+        Exception? movedError = null;
+        try { await Dialog.ShowOpenDialogAsync(lending, new OpenDialogOptions { Title = "Oriel base moved dialog" }).WaitAsync(step); }
+        catch (Exception e) { movedError = e; }
+        Check("BaseWindow: Linux: a content view moved to another window lends its pages to that window's dialogs, not this one's",
+            movedError?.GetBaseException() is InvalidOperationException, movedError?.GetBaseException().Message ?? "the dialog ran");
+        taker.Destroy();
+        lending.Destroy();
+        lendingView.WebContents.Close();
+    }
 
     // Content.
     Check("BaseWindow: ContentView starts empty", bw.ContentView.Children.Count == 0 && bw.ContentView.NativeChildrenMatch());
@@ -6922,6 +6956,31 @@ async Task BaseWindowAsync()
     await view.WebContents.LoadFile(page);
     Check("BaseWindow: a WebContentsView in it loads and is the size of its bounds",
         view.WebContents.GetUrl().EndsWith("view.html") && await PageSizeBecomes(view, "\"300x200\"") == "\"300x200\"", view.WebContents.GetUrl());
+
+    // The focused page is the view's: GetFocusedWebContents, page roles, IsFocused and Focus follow it.
+    const string selection = "i.selectionStart + '-' + i.selectionEnd";
+    await view.WebContents.ExecuteJavaScriptAsync("const i = document.createElement('input'); i.id = 'i'; i.value = 'hello'; document.body.append(i); i.focus(); i.setSelectionRange(0, 0); 1");
+    bw.Focus();
+    Eventually(() => bw.IsFocused, step);
+    view.WebContents.Focus();
+    Check("BaseWindow: GetFocusedWebContents is the focused view's page",
+        Eventually(() => WebContents.GetFocusedWebContents() == view.WebContents, step), WebContents.GetFocusedWebContents()?.Id);
+    new MenuItem { Role = MenuItemRole.SelectAll }.Activate(bw);
+    Check("BaseWindow: a page role acts on the focused view's page", Eventually(() => ViewJs(view, selection).Result == "\"0-5\"", step), await ViewJs(view, selection));
+    Check("BaseWindow: a focused view's page is focused while its window shows", Eventually(() => view.WebContents.IsFocused(), step));
+    bw.Hide();
+    Check("BaseWindow: a view's page is not focused while its window is hidden", Eventually(() => !view.WebContents.IsFocused(), step));
+    bw.Show();
+    Eventually(() => bw.IsVisible, step);
+    var thief = new BaseWindow(new BaseWindowOptions { Title = "Oriel window test: base focus thief", Width = 200, Height = 150 });
+    thief.Focus();
+    var thiefFocused = Eventually(() => thief.IsFocused, step);
+    var roleClicked = false;
+    new MenuItem { Role = MenuItemRole.SelectAll, Click = (_, _, _) => roleClicked = true }.Activate(thief);
+    Check("BaseWindow: with no focused page a page role runs the item's click instead, as Electron's",
+        thiefFocused && roleClicked && WebContents.GetFocusedWebContents() is null, $"focused={thiefFocused} clicked={roleClicked}");
+    thief.Destroy();
+    bw.Focus();
     // Stock CEF on Linux: the keyboard handler of a view's page drops keys for the disabled window the view is in.
     if (OperatingSystem.IsLinux() && !Oriel.Cef.CefRuntime.IsPatched)
     {
@@ -6970,6 +7029,15 @@ async Task BaseWindowAsync()
         bw.GetContentSize() == (baseWidth + 40, baseHeight + 30) && replacement.GetBounds() == lastBounds, $"{replacement.GetBounds()} {lastBounds} {bw.GetContentSize()}");
     firstContent.RemoveChildView(replacement);
     replacement.WebContents.Close();
+    var mover = new BaseWindow(new BaseWindowOptions { Title = "Oriel window test: base mover", Width = 260, Height = 180 });
+    var moved = mover.ContentView;
+    var movedBounds = Eventually(() => moved.GetBounds().Width > 0, step) ? moved.GetBounds() : default;
+    firstContent.AddChildView(moved);
+    await Task.Delay(500);
+    Check("AddChildView: a window's content view moved into another view keeps its bounds instead of filling it",
+        movedBounds.Width > 0 && moved.GetBounds() == movedBounds && firstContent.GetBounds() != movedBounds, $"{moved.GetBounds()} {movedBounds} {firstContent.GetBounds()}");
+    firstContent.RemoveChildView(moved);
+    mover.Destroy();
     var holder = new View();
     var held = new View();
     holder.AddChildView(held);
@@ -7038,6 +7106,19 @@ async Task BaseWindowAsync()
     bw.SetContentView(new View());
     Check("SetContentView: ignored once the window has closed", bw.ContentView == firstContent && firstContent.Children.Contains(view));
 
+    // Checked before the icon is read or the name claimed: a missing icon would otherwise be the error.
+    var closedParent = new BaseWindow(new BaseWindowOptions { Title = "Oriel window test: base closed parent", Show = false });
+    closedParent.Destroy();
+    Eventually(() => closedParent.IsDestroyed, step);
+    Exception? refusedError = null;
+    try { _ = new BaseWindow(new BaseWindowOptions { Name = "base-refused", Parent = closedParent, Show = false, Icon = Path.Combine(dir, "no-such-icon.png") }); }
+    catch (Exception e) { refusedError = e; }
+    var nameFree = true;
+    try { new BaseWindow(new BaseWindowOptions { Name = "base-refused", Show = false }).Destroy(); }
+    catch (ArgumentException) { nameFree = false; }
+    Check("BaseWindow: a closed parent is refused first, leaving the name free",
+        refusedError is InvalidOperationException && nameFree, $"{refusedError?.GetType().Name} nameFree={nameFree}");
+
     var destroyed = new BaseWindow(new BaseWindowOptions { Title = "Oriel window test: base destroyed", Show = false });
     var destroyedClosings = 0;
     destroyed.Closing += (_, _) => destroyedClosings++;
@@ -7061,6 +7142,30 @@ async Task BaseWindowAsync()
     layout.SetBackgroundColor("#336699");
     Check("BaseWindow: a colour set on ContentView stays when the window's background changes",
         Eventually(() => layout.ContentView.NativeBackgroundColor() == 0x80FF0000, step), $"{layout.ContentView.NativeBackgroundColor():X8}");
+    // A BrowserWindow's focused view, not its own page, is the focused page.
+    const string inputPage = "data:text/html,<input id=i value=hello>";
+    const string collapse = "i.focus(); i.setSelectionRange(0, 0); 1";
+    await layout.LoadUrl(inputPage);
+    var focusOverlay = new WebContentsView();
+    layout.ContentView.AddChildView(focusOverlay);
+    focusOverlay.SetBounds(new Rectangle(0, 160, 200, 100));
+    await focusOverlay.WebContents.LoadUrl(inputPage);
+    await layout.WebContents.ExecuteJavaScriptAsync(collapse);
+    await focusOverlay.WebContents.ExecuteJavaScriptAsync(collapse);
+    layout.Focus();
+    Eventually(() => layout.IsFocused, step);
+    focusOverlay.WebContents.Focus();
+    Check("BrowserWindow: GetFocusedWebContents is a focused view's page, not the window's",
+        Eventually(() => WebContents.GetFocusedWebContents() == focusOverlay.WebContents, step), WebContents.GetFocusedWebContents()?.Id);
+    new MenuItem { Role = MenuItemRole.SelectAll }.Activate(layout);
+    Check("BrowserWindow: a page role acts on the focused view's page, not the window's",
+        Eventually(() => JsOf(focusOverlay.WebContents, selection).Result == "\"0-5\"", step) && await JsOf(layout.WebContents, selection) == "\"0-0\"",
+        $"{await JsOf(focusOverlay.WebContents, selection)} {await JsOf(layout.WebContents, selection)}");
+    layout.WebContents.Focus();
+    Check("BrowserWindow: GetFocusedWebContents follows focus back to the window's page",
+        Eventually(() => WebContents.GetFocusedWebContents() == layout.WebContents, step), WebContents.GetFocusedWebContents()?.Id);
+    layout.ContentView.RemoveChildView(focusOverlay);
+    focusOverlay.WebContents.Close();
     if (OperatingSystem.IsLinux() && File.Exists("/usr/bin/xdotool"))
     {
         const string counting = "data:text/html,<body style='margin:0'><script>window.downs=0;addEventListener('mousedown',()=>downs++,{capture:true})</script>";
