@@ -51,8 +51,16 @@ public sealed class MenuTests
     public void Activate_RunsTheRoleInsteadOfClick()
     {
         var clicked = false;
-        new MenuItem { Role = MenuItemRole.Copy, Click = (_, _, _) => clicked = true }.Activate(null);
+        new MenuItem { Role = MenuItemRole.Quit, Click = (_, _, _) => clicked = true }.Activate(null);
         Assert.False(clicked);
+    }
+
+    [Fact]
+    public void Activate_RunsClickForAPageRoleWithNoFocusedPage()
+    {
+        var clicked = false;
+        new MenuItem { Role = MenuItemRole.Copy, Click = (_, _, _) => clicked = true }.Activate(null);
+        Assert.True(clicked);
     }
 
     [Fact]
