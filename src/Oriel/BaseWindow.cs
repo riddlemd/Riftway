@@ -1025,6 +1025,8 @@ public unsafe partial class BaseWindow
     public void Destroy() => Command(w =>
     {
         _destroying = true;
+        // Also for the children OnWindowDestroyed destroys: a window with a sheet attached does not close.
+        if (OperatingSystem.IsMacOS()) MacWindow.EndAttachedSheets((nint)w->get_window_handle(w));
         DestroyContents();
         w->close(w);
     });
