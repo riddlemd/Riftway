@@ -73,8 +73,9 @@ public sealed unsafe partial class WebContents
 
     /// <summary>The page with keyboard focus in the focused window, a window's own page or a view's, or null. Electron's
     /// <c>webContents.getFocusedWebContents()</c>.</summary>
-    public static WebContents? GetFocusedWebContents() => CefThread.InvokeOnUi(()
-        => BaseWindow.GetFocusedWindow()?.HostedPages().FirstOrDefault(page => page.ViewHasFocus()));
+    public static WebContents? GetFocusedWebContents() => BaseWindow.GetFocusedWindow() is { } window
+        ? CefThread.InvokeOnUi(() => window.HostedPages().FirstOrDefault(page => page.ViewHasFocus()))
+        : null;
 
     /// <summary>The page's renderer process ended unexpectedly. Electron's <c>render-process-gone</c>.</summary>
     public event EventHandler<RenderProcessGoneEventArgs>? RenderProcessGone;
