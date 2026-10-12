@@ -106,6 +106,17 @@ static class WindowStatePersistenceChecks
         try { again = new BrowserWindow(new BrowserWindowOptions { Name = "named", Show = false }); }
         catch (ArgumentException e) { error = e.Message; }
         check("Name: free again once the window is destroyed", again is not null && again.Name == "named", error);
+
+        // A window refused for its other options must not keep the name it would have taken.
+        string? pageError = null, iconError = null;
+        try { _ = new BrowserWindow(new BrowserWindowOptions { Name = "refused-page", Show = false, WebContents = again?.WebContents }); }
+        catch (NotSupportedException e) { pageError = e.Message; }
+        check("Name: a window refused for a page it cannot adopt leaves its name free",
+            pageError is not null && NameIsFree("refused-page"), pageError);
+        try { _ = new BrowserWindow(new BrowserWindowOptions { Name = "refused-icon", Show = false, Icon = Path.Combine(Path.GetTempPath(), "oriel-no-such-icon.png") }); }
+        catch (IOException e) { iconError = e.Message; }
+        check("Name: a window refused for a missing icon file leaves its name free",
+            iconError is not null && NameIsFree("refused-icon"), iconError);
         again?.Destroy();
 
         // Electron keeps restore_display_mode_ without a name, and with it skips the fullscreen option.
@@ -196,6 +207,13 @@ static class WindowStatePersistenceChecks
             });
         };
         return app.Run();
+    }
+
+    private static bool NameIsFree(string name)
+    {
+        try { new BrowserWindow(new BrowserWindowOptions { Name = name, Show = false }).Destroy(); }
+        catch (ArgumentException) { return false; }
+        return true;
     }
 
     private static string Format(Rectangle r) => $"{r.X},{r.Y},{r.Width},{r.Height}";
