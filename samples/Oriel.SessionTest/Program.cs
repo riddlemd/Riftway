@@ -1754,7 +1754,8 @@ async Task RunAsync()
     await proxied.SetProxyAsync(new ProxyConfig { ProxyRules = $"http=127.0.0.1:{port}", ProxyBypassRules = "proxied.test" });
     await proxied.CloseAllConnectionsAsync();
     var bypassLoad = await Throws(() => proxyWin.LoadUrl("http://proxied.test/bypassed").WaitAsync(TimeSpan.FromSeconds(10)));
-    Check("ProxyBypassRules sends the host direct", bypassLoad is LoadFailedException && !bypassed.IsCompleted, bypassLoad?.Message);
+    Check("ProxyBypassRules sends the host direct", bypassLoad is LoadFailedException && !bypassed.IsCompleted,
+        $"{bypassLoad?.GetType().Name} {bypassLoad?.Message} proxied={bypassed.IsCompleted} url={proxyWin.WebContents.GetUrl()}");
     await proxied.SetProxyAsync(new ProxyConfig { Mode = ProxyMode.FixedServers, ProxyBypassRules = "<local>" });
     var noRules = await Throws(() => proxyWin.LoadUrl("http://proxied.test/norules").WaitAsync(TimeSpan.FromSeconds(10)));
     Check("FixedServers without ProxyRules is direct", noRules is LoadFailedException && !bypassed.IsCompleted, noRules?.Message);
@@ -2801,9 +2802,11 @@ static bool InstallClientCertificates()
 }
 
 // Answers one proxied request and reports its request line.
-static async Task<string> ServeOneProxyRequest(TcpListener listener)
+static async Task<string> ServeOneProxyRequest(TcpListener listener) => await AnswerRequest(await listener.AcceptTcpClientAsync());
+
+static async Task<string> AnswerRequest(TcpClient connection)
 {
-    using var client = await listener.AcceptTcpClientAsync();
+    using var client = connection;
     var stream = client.GetStream();
     var reader = new StreamReader(stream, Encoding.ASCII);
     var first = await reader.ReadLineAsync() ?? "";
@@ -2833,7 +2836,8 @@ async Task SessionAuditChecks()
     var url = $"http://127.0.0.1:{((IPEndPoint)listener.LocalEndpoint).Port}/";
     var serving = Task.Run(async () =>
     {
-        try { while (true) await ServeOneProxyRequest(listener); }
+        // Chromium may open a socket it never sends on (a preconnect), so each connection is answered on its own.
+        try { while (true) { var client = await listener.AcceptTcpClientAsync(); _ = AnswerRequest(client).ContinueWith(_ => { }); } }
         catch (Exception e) when (e is SocketException or ObjectDisposedException or IOException) { }
     });
     memory.EnableNetworkEmulation(new NetworkEmulationOptions { Offline = true });
@@ -2842,10 +2846,12 @@ async Task SessionAuditChecks()
     Check("EnableNetworkEmulation(offline) reaches a page made after it: loads fail with ERR_INTERNET_DISCONNECTED",
         offline is LoadFailedException { ErrorCode: -106 }, offline?.Message);
     var otherWin = new BrowserWindow(new BrowserWindowOptions { Show = false, WebPreferences = new WebPreferences { Session = Session.FromPartition("audit-other") } });
-    Check("another session is not emulated", await Throws(() => otherWin.LoadUrl(url).WaitAsync(TimeSpan.FromSeconds(10))) is null);
+    var other = await Throws(() => otherWin.LoadUrl(url).WaitAsync(TimeSpan.FromSeconds(10)));
+    Check("another session is not emulated", other is null, $"{other?.GetType().Name} {other?.Message}");
     otherWin.Destroy();
     memory.DisableNetworkEmulation();
-    Check("DisableNetworkEmulation lets the open page load again", await Throws(() => emulatedWin.LoadUrl(url).WaitAsync(TimeSpan.FromSeconds(10))) is null);
+    var again = await Throws(() => emulatedWin.LoadUrl(url).WaitAsync(TimeSpan.FromSeconds(10)));
+    Check("DisableNetworkEmulation lets the open page load again", again is null, $"{again?.GetType().Name} {again?.Message}");
     memory.EnableNetworkEmulation(new NetworkEmulationOptions { Latency = 1500 });
     var timer = System.Diagnostics.Stopwatch.StartNew();
     var slow = await Throws(() => emulatedWin.LoadUrl(url + "slow").WaitAsync(TimeSpan.FromSeconds(15)));
