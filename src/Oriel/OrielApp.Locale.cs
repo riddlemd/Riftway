@@ -1,3 +1,4 @@
+using System.Runtime.InteropServices;
 using Oriel.Cef.Platform;
 
 namespace Oriel;
@@ -113,7 +114,7 @@ public sealed unsafe partial class OrielApp
     public string GetLocaleCountryCode()
     {
         var region = OperatingSystem.IsMacOS() ? MacLocale.CountryCode()
-            : OperatingSystem.IsLinux() ? LinuxRegion(Environment.GetEnvironmentVariable)
+            : OperatingSystem.IsLinux() ? LinuxRegion(IsReady ? LibcTimeLocale() : LinuxTimeLocale(Environment.GetEnvironmentVariable))
             : OperatingSystem.IsWindows() ? WindowsLocale.IsoCountryName() : "";
         return CountryCodeOrEmpty(region);
     }
@@ -123,12 +124,15 @@ public sealed unsafe partial class OrielApp
 
     // GLib's g_get_language_names: LANGUAGE (a list), else LC_ALL, LC_MESSAGES, LANG; each locale with its variants,
     // longest first; "C" dropped and each canonicalised, as Electron's language_util_linux.cc does.
-    internal static IReadOnlyList<string> LinuxLanguages(Func<string, string?> environment)
+    internal static IReadOnlyList<string> LinuxLanguages(Func<string, string?> environment) => LinuxLanguages(environment, GLibAlias);
+
+    // Each entry is first unaliased through GLib's locale.alias, as g_get_language_names does.
+    internal static IReadOnlyList<string> LinuxLanguages(Func<string, string?> environment, Func<string, string?> alias)
     {
         var value = new[] { "LANGUAGE", "LC_ALL", "LC_MESSAGES", "LANG" }.Select(environment).FirstOrDefault(v => !string.IsNullOrEmpty(v)) ?? "C";
         var languages = new List<string>();
         foreach (var locale in value.Split(':', StringSplitOptions.RemoveEmptyEntries))
-            foreach (var variant in Variants(locale))
+            foreach (var variant in Variants(Unalias(locale, alias)))
                 if (variant != "C") languages.Add(Canonical(variant));
         return languages;
     }
@@ -169,10 +173,45 @@ public sealed unsafe partial class OrielApp
         return Canonical(value) + modifier;
     }
 
-    // Electron's: the region of the LC_TIME locale (LC_ALL, LC_TIME, then LANG, as setlocale reads them).
-    internal static string LinuxRegion(Func<string, string?> environment)
+    // GLib's unalias_lang: follow the alias chain, at most 31 steps.
+    internal static string Unalias(string locale, Func<string, string?> alias)
     {
-        var locale = new[] { "LC_ALL", "LC_TIME", "LANG" }.Select(environment).FirstOrDefault(v => !string.IsNullOrEmpty(v)) ?? "C";
+        for (var i = 0; i <= 30 && alias(locale) is { } next && next != locale; i++) locale = next;
+        return locale;
+    }
+
+    private static readonly Lazy<Dictionary<string, string>> s_glibAliases = new(() => ReadAliases("/usr/share/locale/locale.alias"));
+
+    private static string? GLibAlias(string locale) => s_glibAliases.Value.GetValueOrDefault(locale);
+
+    // GLib's read_aliases: "alias value" per line, whitespace-separated, # comments; the first entry for an alias wins.
+    internal static Dictionary<string, string> ReadAliases(string path)
+    {
+        var aliases = new Dictionary<string, string>(StringComparer.Ordinal);
+        if (!File.Exists(path)) return aliases;
+        foreach (var line in File.ReadLines(path))
+        {
+            var parts = line.Split([' ', '\t'], StringSplitOptions.RemoveEmptyEntries);
+            if (parts.Length < 2 || parts[0].StartsWith('#')) continue;
+            aliases.TryAdd(parts[0], parts[1]);
+        }
+        return aliases;
+    }
+
+    // What setlocale(LC_TIME, "") would read: LC_ALL, LC_TIME, then LANG. Used before Chromium has applied it.
+    internal static string LinuxTimeLocale(Func<string, string?> environment)
+        => new[] { "LC_ALL", "LC_TIME", "LANG" }.Select(environment).FirstOrDefault(v => !string.IsNullOrEmpty(v)) ?? "C";
+
+    // Chromium has called setlocale(LC_ALL, "") by Ready, so this is the locale the C library took: one it lacks is C.
+    private static string LibcTimeLocale() => Marshal.PtrToStringUTF8(setlocale(LcTime, null)) ?? "C";
+
+    private const int LcTime = 2;
+
+    [DllImport("libc", EntryPoint = "setlocale")] private static extern nint setlocale(int category, string? locale);
+
+    // Electron's: the region of the LC_TIME locale.
+    internal static string LinuxRegion(string locale)
+    {
         var dot = locale.IndexOf('.');
         if (dot >= 0) locale = locale[..dot];
         var underscore = locale.IndexOf('_');

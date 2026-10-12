@@ -13,9 +13,9 @@ Percentages are over the non-n/a items; the second counts a partial item as half
 | Area | Items | Done | Partial | Missing | n/a | % done | % done + partial/2 |
 |---|---|---|---|---|---|---|---|
 | Events | 30 | 16 | 7 | 7 | 0 | 53.3% | 65.0% |
-| Methods | 75 | 41 | 23 | 10 | 1 | 55.4% | 70.9% |
+| Methods | 75 | 44 | 20 | 10 | 1 | 59.5% | 73.0% |
 | Properties | 10 | 7 | 3 | 0 | 0 | 70.0% | 85.0% |
-| **Total** | 115 | 64 | 33 | 17 | 1 | 56.1% | 70.6% |
+| **Total** | 115 | 67 | 30 | 17 | 1 | 58.8% | 71.9% |
 
 ## Checklist
 
@@ -78,9 +78,9 @@ Percentages are over the non-n/a items; the second counts a partial item as half
 | `setName(name)` | `Name` setter | done | Renames the default user agent; a `userData` already read keeps its name, as PathService's cache does. |
 | `setDesktopName(name)` | `SetDesktopName` | done | Linux; A20 for the launcher entry. |
 | `getLocale()` | `GetLocale` | partial | Chromium's choice recomputed from CEF's inputs; CEF starts Chromium with `--lang=en-US` (A30). |
-| `getLocaleCountryCode()` | `GetLocaleCountryCode` | partial | A15 (Windows), A16 (Linux). |
-| `getSystemLocale()` | `GetSystemLocale` | partial | A15, A16. |
-| `getPreferredSystemLanguages()` | `GetPreferredSystemLanguages` | partial | A15, A16. |
+| `getLocaleCountryCode()` | `GetLocaleCountryCode` | done | Linux reads the C library's `LC_TIME` locale once ready, as Electron. |
+| `getSystemLocale()` | `GetSystemLocale` | done | |
+| `getPreferredSystemLanguages()` | `GetPreferredSystemLanguages` | done | Linux unaliases through GLib's `locale.alias`. |
 | `addRecentDocument(path)` | `AddRecentDocument` | done | Windows (A13); macOS `NSDocumentController`; no-op on Linux, as Electron. |
 | `clearRecentDocuments()` | `ClearRecentDocuments` | done | Windows, macOS. |
 | `getRecentDocuments()` | `GetRecentDocuments` | done | Windows, macOS. |
