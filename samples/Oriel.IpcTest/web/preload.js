@@ -7,6 +7,8 @@ const watched = new FinalizationRegistry((tag) => collected.add(tag));
 let held = null;
 let kept = null;
 let last = null;
+let lastObject = null;
+let settleLater = null;
 
 contextBridge.exposeInMainWorld('api', {
   version: 1,
@@ -38,4 +40,24 @@ contextBridge.exposeInMainWorld('api', {
     return same;
   },
   forgetLast: () => { last = null; },
+
+  shapeOf: (value) => ({
+    shared: value.a === value.b,
+    cyclic: value.self === value,
+    arrayShared: Array.isArray(value.list) && value.list[0] === value.list[1],
+  }),
+  makeCycle: () => {
+    const made = { name: 'made', inner: {} };
+    made.self = made;
+    made.twice = [made.inner, made.inner];
+    return made;
+  },
+  sameAsLastObject: (value) => {
+    const same = value === lastObject;
+    lastObject = value;
+    return same;
+  },
+  never: () => new Promise(() => {}),
+  later: () => new Promise((resolve) => { settleLater = resolve; }),
+  settle: (value) => settleLater(value),
 });
