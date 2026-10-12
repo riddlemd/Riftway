@@ -452,12 +452,6 @@ public sealed unsafe partial class BrowserWindow : BaseWindow
     /// <summary>The open window with <paramref name="id"/>, or null. Electron's <c>BrowserWindow.fromId()</c>.</summary>
     public static new BrowserWindow? FromId(int id) => GetAllWindows().FirstOrDefault(w => w.Id == id);
 
-    /// <summary>The window this one belongs to, or null. Electron's <c>win.getParentWindow()</c>.</summary>
-    public new BrowserWindow? GetParentWindow() => base.GetParentWindow() as BrowserWindow;
-
-    /// <summary>The open windows that belong to this one. Electron's <c>win.getChildWindows()</c>.</summary>
-    public new IReadOnlyList<BrowserWindow> GetChildWindows() => [.. base.GetChildWindows().OfType<BrowserWindow>()];
-
     /// <summary>The page set its title; cancel to keep the window's title. Electron's <c>page-title-updated</c>.</summary>
     public event EventHandler<PageTitleUpdatedEventArgs>? PageTitleUpdated;
 

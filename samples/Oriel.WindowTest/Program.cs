@@ -7129,6 +7129,12 @@ async Task BaseWindowAsync()
     var parent = new BaseWindow(new BaseWindowOptions { Title = "Oriel window test: base parent", Width = 300, Height = 200 });
     var child = new BrowserWindow(new BrowserWindowOptions { Title = "Oriel window test: base child", Parent = parent, Width = 200, Height = 150 });
     Check("BaseWindow: a BrowserWindow can have it as Parent", parent.GetChildWindows().Contains(child));
+    Check("BaseWindow: a BrowserWindow child's GetParentWindow is it, as Electron's", child.GetParentWindow() == parent, child.GetParentWindow()?.GetTitle());
+    var browserParent = new BrowserWindow(new BrowserWindowOptions { Title = "Oriel window test: browser parent", Show = false });
+    var baseChild = new BaseWindow(new BaseWindowOptions { Title = "Oriel window test: base child", Parent = browserParent, Show = false });
+    Check("BaseWindow: a BrowserWindow's GetChildWindows includes a BaseWindow child, as Electron's",
+        browserParent.GetChildWindows() is [var onlyChild] && onlyChild == baseChild, browserParent.GetChildWindows().Count);
+    browserParent.Destroy();
     parent.Close();
     Check("BaseWindow: closing it destroys its BrowserWindow child", Eventually(() => parent.IsDestroyed && child.IsDestroyed, step),
         $"parent={parent.IsDestroyed} child={child.IsDestroyed}");

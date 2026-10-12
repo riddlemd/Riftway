@@ -16,7 +16,7 @@ The 67 rows include `BrowserView` (deprecated, never implemented; counted as not
 
 | Checklist | Applicable items | Done | Partial | Missing | % done | % done + partial/2 |
 |---|---|---|---|---|---|---|
-| [BrowserWindow](parity/browser-window.md) (with `BaseWindow`) | 295 | 168 | 57 | 70 | 56.9% | 66.6% |
+| [BrowserWindow](parity/browser-window.md) (with `BaseWindow`) | 295 | 170 | 55 | 70 | 57.6% | 66.9% |
 | [webContents](parity/web-contents.md) (with `navigationHistory`, `WebFrameMain`) | 230 | 111 | 70 | 49 | 48.3% | 63.5% |
 | [DownloadItem](parity/download-item.md) (with the session's download API) | 31 | 20 | 10 | 1 | 64.5% | 80.6% |
 | [app](parity/app.md) (with `app.dock` as one item) | 114 | 64 | 33 | 17 | 56.1% | 70.6% |
@@ -57,8 +57,8 @@ Detailed item-by-item status: [parity/browser-window.md](parity/browser-window.m
 
 | Electron | Oriel | Source | Wave | Status |
 |---|---|---|---|---|
-| `BaseWindow` | `BaseWindow` | CEF (Views) | M2 | partial: a window with an empty `ContentView` and no page, `SetContentView`, `GetAllWindows`/`GetFocusedWindow`/`FromId` over every window; items counted in [parity/browser-window.md](parity/browser-window.md) (DRIFT V15, V16) |
-| `BrowserWindow` | `BrowserWindow` | CEF (Views) | M2 | partial: 168 of 295 applicable items done (56.9%), see parity/browser-window.md |
+| `BaseWindow` | `BaseWindow` | CEF (Views) | M2 | partial: a window with an empty `ContentView` and no page, `SetContentView`, `GetAllWindows`/`GetFocusedWindow`/`FromId` over every window; items counted in [parity/browser-window.md](parity/browser-window.md) (DRIFT V15) |
+| `BrowserWindow` | `BrowserWindow` | CEF (Views) | M2 | partial: 170 of 295 applicable items done (57.6%), see parity/browser-window.md |
 | `View` | `View` | CEF (Views panel) | M2 | partial: `addChildView` (index, move to top, reparent), `removeChildView`, `children`, `setBounds`/`getBounds`, `setVisible`/`getVisible`, `setBackgroundColor`, `bounds-changed`; no `setBorderRadius` (DRIFT V1) |
 | `WebContentsView` | `WebContentsView` | CEF (Views browser view) | M2 | partial: `new WebContentsView({ webPreferences })`, `webContents`, child views in a window's `ContentView`, above a `BrowserWindow`'s page; pages outlive their window and the view stays when its page closes, as Electron; popups and `webContents.close()` from view pages; `webContents` option for a `createWindow` popup (V4); Alloy style (DRIFT V2, V4, V7, V12, V13) |
 | `ImageView` | `ImageView` | CEF + .NET | M5 | — |

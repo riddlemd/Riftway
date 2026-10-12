@@ -19,11 +19,11 @@ Counted from the Checklist at the end: `BaseWindow` and `BrowserWindow` are one 
 |---|---|---|---|---|---|---|---|
 | BaseWindow + BrowserWindow options | 54 | 32 | 12 | 10 | 0 | 59.3% | 70.4% |
 | webPreferences | 46 | 12 | 4 | 23 | 7 | 30.8% | 35.9% |
-| Instance methods | 143 | 87 | 27 | 23 | 6 | 63.5% | 73.4% |
+| Instance methods | 143 | 89 | 25 | 23 | 6 | 65.0% | 74.1% |
 | Instance properties | 24 | 13 | 4 | 7 | 0 | 54.2% | 62.5% |
 | Events | 35 | 18 | 10 | 7 | 0 | 51.4% | 65.7% |
 | Static methods | 7 | 6 | 0 | 0 | 1 | 100.0% | 100.0% |
-| **Total** | 309 | 168 | 57 | 70 | 14 | 56.9% | 66.6% |
+| **Total** | 309 | 170 | 55 | 70 | 14 | 57.6% | 66.9% |
 
 ## Done since the audit
 
@@ -433,8 +433,8 @@ Parameters in brackets are optional in Electron. `webContents` members are in [w
 | `setFocusable(focusable)` | `SetFocusable` | partial | Windows: style, taskbar button, blur, as Electron; stored only elsewhere (W43). |
 | `isFocusable()` | `IsFocusable` | partial | Windows reads `WS_EX_NOACTIVATE` too (W43). |
 | `setParentWindow(parent)` | `SetParentWindow` | done | As Electron on each OS: Windows `GWLP_HWNDPARENT` with re-show, Linux `WM_TRANSIENT_FOR`, macOS `addChildWindow:`; modal throws. macOS checks pass (W8). |
-| `getParentWindow()` | `GetParentWindow` | partial | `BrowserWindow`'s own overload returns only a `BrowserWindow` parent (V16) |
-| `getChildWindows()` | `GetChildWindows` | partial | `BrowserWindow`'s own overload lists only `BrowserWindow` children (V16) |
+| `getParentWindow()` | `GetParentWindow` | done |  |
+| `getChildWindows()` | `GetChildWindows` | done |  |
 | `setAutoHideCursor(autoHide)` | — | missing |  |
 | `selectPreviousTab()` | — | missing |  |
 | `selectNextTab()` | — | missing |  |

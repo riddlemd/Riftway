@@ -41,7 +41,7 @@ Cross-platform work. Platform-specific items: [linux-todo.md](linux-todo.md), [w
 - [x] Core `Session` (`Session`, `Cookies`, partitions; gaps DRIFT E1-E11) and `NativeImage` (gaps DRIFT B1, B3-B5; `createThumbnailFromPath` and template images on branch `image-screen`)
 - [x] `Debugger` (`WebContents.Debugger`; shares Oriel's protocol session, DRIFT C43)
 - [x] `View` and `WebContentsView` ([design](design/web-contents-view.md)): `ContentView`, child views, bounds, visibility,
-      `bounds-changed`, popups and `close()` from view pages, `BaseWindow` and `SetContentView` (gaps DRIFT V1, V2, V4, V7, V12-V16)
+      `bounds-changed`, popups and `close()` from view pages, `BaseWindow` and `SetContentView` (gaps DRIFT V1, V2, V4, V7, V12-V15)
 - [ ] `BaseWindow`: check Electron's layout on macOS and Windows (a click on an empty part of `ContentView` reaches the page
       below; checked on Linux only)
 - [x] Windows: closing a view's page tears it down in a hidden, never-shown window; check it takes no focus there (WindowTest: no `EVENT_SYSTEM_FOREGROUND`, the window keeps the foreground)
