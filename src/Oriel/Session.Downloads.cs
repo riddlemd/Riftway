@@ -21,7 +21,7 @@ public sealed partial class Session
         var args = new WillDownloadEventArgs(item, page, DownloadFrame(snapshot.Extras?.FrameIdentifier, WebContents.FromFrameToken));
         try { WillDownload?.Invoke(this, args); }
         catch (Exception e) { Console.Error.WriteLine($"[Oriel] A will-download handler failed: {e}"); }
-        item.Start(args.Cancel, page is null ? null : BrowserWindow.FromWebContents(page));
+        item.Start(args.Cancel, page is null ? null : BaseWindow.HostOf(page));
     }
 
     // CEF's frame identifier carries the render process id and frame token, which find the frame in any page.

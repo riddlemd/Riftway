@@ -185,7 +185,7 @@ public sealed class DownloadItem
             : DownloadState.Progressing;
 
     /// <summary>UI thread: what <see cref="Session.WillDownload"/> decided. The before-download callback is answered here.</summary>
-    internal void Start(bool cancelled, BrowserWindow? window)
+    internal void Start(bool cancelled, BaseWindow? window)
     {
         var before = _before!;
         if (cancelled || _cancelRequested)

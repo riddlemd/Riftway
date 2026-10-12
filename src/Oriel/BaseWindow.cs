@@ -1256,6 +1256,13 @@ public unsafe partial class BaseWindow
         return PagesIn(ContentView).FirstOrDefault(p => p.Browser is not null);
     }
 
+    /// <summary>The pages in the window's views, its own page first: what it shows now, not what its
+    /// <see cref="ContentView"/> held once.</summary>
+    internal IEnumerable<WebContents> HostedPages() => PagesIn(_contentsView);
+
+    /// <summary>The open window showing <paramref name="page"/>, as its own page or in any of its views, or null.</summary>
+    internal static BaseWindow? HostOf(WebContents page) => GetAllWindows().FirstOrDefault(w => w.HostedPages().Contains(page));
+
     private static IEnumerable<WebContents> PagesIn(View view)
     {
         if (view is WebContentsView { WebContents: var page }) yield return page;

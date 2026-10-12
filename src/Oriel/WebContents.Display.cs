@@ -231,12 +231,12 @@ public sealed unsafe partial class WebContents
     /// <c>webContents.focus()</c>.</summary>
     public void Focus()
     {
-        if (!OperatingSystem.IsWindows()) BrowserWindow.FromWebContents(this)?.Focus();
+        if (!OperatingSystem.IsWindows()) BaseWindow.HostOf(this)?.Focus();
         WithHost(host => host->set_focus(host, 1));
     }
 
     /// <summary>Whether the page's view has keyboard focus in a visible window. Electron's <c>webContents.isFocused()</c>.</summary>
-    public bool IsFocused() => CefThread.InvokeOnUi(() => _hasFocus) && BrowserWindow.FromWebContents(this) is not { IsVisible: false };
+    public bool IsFocused() => CefThread.InvokeOnUi(() => _hasFocus) && BaseWindow.HostOf(this) is not { IsVisible: false };
 
     internal FocusHandler FocusEvents => _focusEvents ??= new FocusHandler { GotFocus = OnGotFocus };
 
