@@ -16,8 +16,8 @@ public sealed class AlwaysOnTopChangedEventArgs(bool isAlwaysOnTop) : EventArgs
     public bool IsAlwaysOnTop { get; } = isAlwaysOnTop;
 }
 
-/// <summary>Options for a new <see cref="BrowserWindow"/>; Electron's <c>BrowserWindowConstructorOptions</c>.</summary>
-public sealed partial record BrowserWindowOptions
+/// <summary>Options for a new window; Electron's <c>BaseWindowConstructorOptions</c>.</summary>
+public partial record BaseWindowOptions
 {
     /// <summary>Width in device-independent pixels.</summary>
     public int Width { get; init; } = 800;
@@ -165,7 +165,11 @@ public sealed partial record BrowserWindowOptions
 
     /// <summary>Hides the menu bar until Alt is pressed (Windows, Linux). Electron's <c>autoHideMenuBar</c>.</summary>
     public bool AutoHideMenuBar { get; init; }
+}
 
+/// <summary>Options for a new <see cref="BrowserWindow"/>; Electron's <c>BrowserWindowConstructorOptions</c>.</summary>
+public sealed partial record BrowserWindowOptions : BaseWindowOptions
+{
     /// <summary>Settings for the page. Electron's <c>webPreferences</c>.</summary>
     public WebPreferences WebPreferences { get; init; } = new();
 
@@ -237,7 +241,7 @@ public sealed record WebPreferences
     public string? Partition { get; init; }
 
     /// <summary>Whether the page's default background is transparent instead of white, so what lies behind the page
-    /// shows where the page paints nothing. A window's <see cref="BrowserWindowOptions.BackgroundColor"/>, and a transparent
+    /// shows where the page paints nothing. A window's <see cref="BaseWindowOptions.BackgroundColor"/>, and a transparent
     /// or material window, decide its page's background over this. Electron's <c>transparent</c>, which for a window's
     /// or a <see cref="WebContentsView"/>'s page acts only when true (its documented default of true is a
     /// <c>&lt;webview&gt;</c>'s).</summary>
@@ -376,9 +380,9 @@ public sealed unsafe partial class BrowserWindow
         public nint Delegate => Window is { } window ? (nint)window._viewDelegate.Native : View!.ViewDelegateNative;
     }
 
-    /// <summary>Creates the window, shown unless <see cref="BrowserWindowOptions.Show"/> is false.</summary>
+    /// <summary>Creates the window, shown unless <see cref="BaseWindowOptions.Show"/> is false.</summary>
     /// <exception cref="InvalidOperationException">The application is not ready yet, or the parent is closed.</exception>
-    /// <exception cref="ArgumentException"><see cref="BrowserWindowOptions.Modal"/> without a parent.</exception>
+    /// <exception cref="ArgumentException"><see cref="BaseWindowOptions.Modal"/> without a parent.</exception>
     /// <exception cref="NotSupportedException">An option CEF cannot honour, such as <see cref="WebPreferences.MinimumFontSize"/>,
     /// or a <see cref="BrowserWindowOptions.WebContents"/> that is not a createWindow callback's popup page.</exception>
     public BrowserWindow(BrowserWindowOptions? options = null) : this(options, opener: null)
@@ -1054,7 +1058,7 @@ public sealed unsafe partial class BrowserWindow
     public bool IsFocused => Query(w => w->is_active(w) != 0, false);
 
     /// <summary>Maximizes the window. Electron's <c>win.maximize()</c>.</summary>
-    /// <remarks>A <see cref="BrowserWindowOptions.Transparent"/> window fills its display's work area instead, as in
+    /// <remarks>A <see cref="BaseWindowOptions.Transparent"/> window fills its display's work area instead, as in
     /// Electron.</remarks>
     public void Maximize() => Command(MaximizeOn);
 
@@ -1126,7 +1130,7 @@ public sealed unsafe partial class BrowserWindow
     public bool IsMinimized => Query(w => w->is_minimized(w) != 0, false);
 
     /// <summary>Enters or leaves full screen. Electron's <c>win.setFullScreen()</c>.</summary>
-    /// <remarks>On macOS this is native full screen unless <see cref="BrowserWindowOptions.SimpleFullScreen"/>
+    /// <remarks>On macOS this is native full screen unless <see cref="BaseWindowOptions.SimpleFullScreen"/>
     /// is set: native moves the window to its own Space and the other displays go black. For a window on
     /// one display while the others stay usable (an audience screen, a kiosk beside a control window),
     /// set that option or call <see cref="SetSimpleFullScreen"/>.</remarks>

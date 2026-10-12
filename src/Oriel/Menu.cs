@@ -74,7 +74,7 @@ public enum MenuItemRole
     /// <summary>Zoom level −0.5 on the focused window.</summary>
     ZoomOut,
 
-    /// <summary>Toggles the focused window's full screen, honouring <see cref="BrowserWindowOptions.SimpleFullScreen"/>.
+    /// <summary>Toggles the focused window's full screen, honouring <see cref="BaseWindowOptions.SimpleFullScreen"/>.
     /// Electron's <c>togglefullscreen</c>.</summary>
     ToggleFullScreen,
 

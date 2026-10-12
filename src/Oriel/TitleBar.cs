@@ -8,7 +8,7 @@ public enum TitleBarStyle
     /// <summary>The standard title bar. Electron's <c>default</c>.</summary>
     Default,
 
-    /// <summary>No title bar; the page fills the window. On Windows and Linux with <see cref="BrowserWindowOptions.TitleBarOverlay"/>
+    /// <summary>No title bar; the page fills the window. On Windows and Linux with <see cref="BaseWindowOptions.TitleBarOverlay"/>
     /// the window keeps its minimize, maximize and close buttons over the page. Electron's <c>hidden</c>.</summary>
     Hidden,
 

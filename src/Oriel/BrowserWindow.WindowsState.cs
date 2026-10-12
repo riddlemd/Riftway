@@ -7,7 +7,7 @@ using Oriel.Cef.Platform;
 
 namespace Oriel;
 
-public sealed partial record BrowserWindowOptions
+public partial record BaseWindowOptions
 {
     /// <summary>Whether the window can be focused. On Windows false gives it <c>WS_EX_NOACTIVATE</c>, which also keeps it
     /// off the taskbar. Electron's <c>focusable</c>.</summary>
