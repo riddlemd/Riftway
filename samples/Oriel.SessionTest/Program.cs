@@ -24,6 +24,14 @@ if (mediaChild)
     // Devices that exist everywhere and need no OS consent; the handler still decides.
     app.CommandLine.AppendSwitch("use-fake-device-for-media-stream");
 }
+// A second launch for the second-instance check: it hands itself to the main run and stops before Run.
+const string SecondInstanceChild = "--oriel-second-instance-child";
+if (args.Contains(SecondInstanceChild))
+{
+    var handedOver = !app.RequestSingleInstanceLock(new System.Text.Json.Nodes.JsonObject { ["child"] = "ok ✓" });
+    Console.WriteLine((handedOver ? "HANDED-OVER" : "LOCK-GRANTED") + "|" + Environment.CurrentDirectory);
+    return handedOver ? 0 : 1;
+}
 var failures = -1;
 var results = new List<string>();
 // Before Run: the lock is free (no other run), and WillFinishLaunching, Ready and WhenReady come in Electron's order.
@@ -940,15 +948,20 @@ async Task RunAsync()
         spellWin.WebContents.ContextMenu -= onMenu;
         return menu;
     }
-    // Linux and Windows download the dictionary first; text typed before it arrives stays unchecked.
+    // Linux downloads the dictionary first, and text typed before it arrives stays unchecked. Windows' platform checker
+    // has no readiness signal, so each attempt's state goes in the detail.
     ContextMenuParams? misspelled = null;
+    var attempts = new List<string>();
+    var spellClock = System.Diagnostics.Stopwatch.StartNew();
     for (var i = 0; i < 15 && misspelled?.MisspelledWord is not { Length: > 0 }; i++)
     {
         await TypeMisspelling();
         misspelled = await RightClickFirstWord();
+        var pageState = await spellWin.WebContents.ExecuteJavaScriptAsync("document.visibilityState + (document.hasFocus() ? '+focus' : '-focus')");
+        attempts.Add($"{(misspelled is null ? "nomenu" : misspelled.MisspelledWord is { Length: > 0 } w ? w : "-")}/{pageState}@{spellClock.Elapsed.TotalSeconds:F0}s");
     }
     Check("a misspelled word reaches the context menu with suggestions", misspelled is { MisspelledWord: "helo" } && misspelled.DictionarySuggestions.Contains("hello"),
-        $"{misspelled?.MisspelledWord} [{string.Join(",", misspelled?.DictionarySuggestions ?? [])}] menu={misspelled is not null} editable={misspelled?.IsEditable} spellcheck={misspelled?.SpellcheckEnabled} value={await spellWin.WebContents.ExecuteJavaScriptAsync("t.value")}");
+        $"{misspelled?.MisspelledWord} [{string.Join(",", misspelled?.DictionarySuggestions ?? [])}] menu={misspelled is not null} editable={misspelled?.IsEditable} value={await spellWin.WebContents.ExecuteJavaScriptAsync("t.value")} attempts={string.Join(" ", attempts)}");
     spellWin.WebContents.ReplaceMisspelling("hello");
     await Task.Delay(300);
     var replaced = (await spellWin.WebContents.ExecuteJavaScriptAsync("t.value"))?.ToString();
@@ -2882,6 +2895,43 @@ async Task AppAuditChecks()
     app.ReleaseSingleInstanceLock();
     Check("ReleaseSingleInstanceLock drops it, and asking again while running grants it without notifying itself",
         !app.HasSingleInstanceLock() && app.RequestSingleInstanceLock() && app.HasSingleInstanceLock());
+
+    // A second launch, from another working directory, hands this run its command line, directory and additional data.
+    var seconds = new System.Collections.Concurrent.ConcurrentQueue<SecondInstanceEventArgs>();
+    EventHandler<SecondInstanceEventArgs> onSecond = (_, e) => seconds.Enqueue(e);
+    app.SecondInstance += onSecond;
+    var secondDirectory = Directory.CreateTempSubdirectory("oriel-second-").FullName;
+    try
+    {
+        var start = new System.Diagnostics.ProcessStartInfo(Environment.ProcessPath!) { WorkingDirectory = secondDirectory, RedirectStandardOutput = true, RedirectStandardError = true };
+        start.ArgumentList.Add(SecondInstanceChild);
+        using var second = System.Diagnostics.Process.Start(start)!;
+        string secondOutput;
+        try { secondOutput = (await second.StandardOutput.ReadToEndAsync().WaitAsync(TimeSpan.FromSeconds(60))).Trim(); }
+        catch (TimeoutException)
+        {
+            second.Kill(entireProcessTree: true);
+            secondOutput = "timeout";
+        }
+        for (var waited = 0; waited < 100 && seconds.IsEmpty; waited++) await Task.Delay(100);
+        var heard = seconds.TryPeek(out var arrived) ? arrived : null;
+        // CEF's bootstrap.exe moves the browser process into its own folder (drift A38), so on Windows the launch's
+        // directory is the app's; elsewhere it is the one the launch started in.
+        var (handOver, secondCwd) = secondOutput.Split('|', 2) is [var verdict, var cwd] ? (verdict, cwd) : (secondOutput, "");
+        static bool SamePath(string? a, string? b) => string.Equals(Path.TrimEndingDirectorySeparator(a ?? ""), Path.TrimEndingDirectorySeparator(b ?? ""),
+            OperatingSystem.IsLinux() ? StringComparison.Ordinal : StringComparison.OrdinalIgnoreCase);
+        Check("a second launch's RequestSingleInstanceLock answers false, and SecondInstance gets its command line, working directory and additional data",
+            handOver == "HANDED-OVER" && seconds.Count == 1 && heard is { } h && h.CommandLine.Contains(SecondInstanceChild, StringComparison.Ordinal)
+            && !h.CommandLine.Contains("oriel-second-instance-data", StringComparison.Ordinal)
+            && SamePath(h.WorkingDirectory, secondCwd) && (OperatingSystem.IsWindows() || SamePath(secondCwd, secondDirectory))
+            && h.AdditionalData?["child"]?.GetValue<string>() == "ok ✓",
+            $"{secondOutput} | {seconds.Count} | {heard?.CommandLine} | {heard?.WorkingDirectory} (started in {secondDirectory}) | {heard?.AdditionalData?.ToJsonString()}");
+    }
+    finally
+    {
+        app.SecondInstance -= onSecond;
+        Directory.Delete(secondDirectory);
+    }
 
     Check("GetPath(cache), (userCache) and (userDesktop) are Chromium's, userCache made under cache",
         app.GetPath("userCache") == Path.Combine(app.GetPath("cache"), app.Name) && Directory.Exists(app.GetPath("userCache"))

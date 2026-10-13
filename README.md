@@ -59,7 +59,7 @@ Renderers run in Chromium's sandbox, as in Electron. Only CEF's `bootstrap.exe` 
 
 - the exe name must differ from the app's assembly name, whose `.dll` stays beside it;
 - publish self-contained (no framework-dependent or single-file publish);
-- sign the exe and `<Exe>.dll` with the same certificate, or neither;
+- sign the exe, `<Exe>.dll` and `chrome_elf.dll` with the same trusted certificate, or none of them (a certificate Windows does not trust stops the launch, docs/DRIFT.md P13);
 - a crash on start writes its reason to stderr, or shows it in a message box when there is none;
 - `--no-sandbox` turns the sandbox off; there is no per-window `sandbox: false` (docs/DRIFT.md W13).
 

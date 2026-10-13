@@ -2,6 +2,7 @@ using System.Net.Sockets;
 using System.Text;
 using System.Text.Json.Nodes;
 using System.Text.RegularExpressions;
+using Oriel.Cef.Platform;
 
 namespace Oriel;
 
@@ -16,13 +17,19 @@ public sealed partial class OrielApp
     /// instance holds it and has been sent this launch's command line, working directory and
     /// <paramref name="additionalData"/> (its <see cref="SecondInstance"/>), so this one should quit.</summary>
     /// <remarks>Oriel is always single-instance per session data directory (drift A2), so the lock is that directory's,
-    /// which CEF takes in <see cref="Run"/>. macOS and Linux speak Chromium's singleton socket protocol here; Windows
-    /// answers true and leaves the hand-over to <see cref="Run"/>, without the data (drift A29).</remarks>
+    /// which CEF takes in <see cref="Run"/>. This speaks Chromium's singleton protocol to a running instance: the socket
+    /// on macOS and Linux, the message window's <c>WM_COPYDATA</c> on Windows.</remarks>
     public bool RequestSingleInstanceLock(JsonNode? additionalData = null)
     {
         if (_singleInstanceLock) return true;
-        // Once running, this instance already holds CEF's lock, and the socket there is its own.
-        if (!IsReady && !OperatingSystem.IsWindows())
+        // Once running, this instance already holds CEF's lock, and the socket or window there is its own.
+        if (!IsReady && OperatingSystem.IsWindows())
+        {
+            // Chromium forwards the raw command line; the data rides on it as on macOS and Linux.
+            var commandLine = Environment.CommandLine + (additionalData is null ? "" : " " + EncodeAdditionalData(additionalData));
+            if (WindowsProcessSingleton.Notify(GetPath("sessionData"), Environment.CurrentDirectory, commandLine)) return false;
+        }
+        else if (!IsReady)
         {
             var directory = GetPath("sessionData");
             var argv = RelaunchArgv(Environment.ProcessPath, Environment.GetCommandLineArgs(), null).ToList();

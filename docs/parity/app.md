@@ -52,7 +52,7 @@ Percentages are over the non-n/a items; the second counts a partial item as half
 | `child-process-gone` | `ChildProcessGone` | partial | Electron's details, from a `BrowserChildProcessObserver` with Oriel's CEF patch 0007; never raised with stock CEF (A31). |
 | `accessibility-support-changed` | `AccessibilitySupportChanged` | partial | Raised by the setters; with Oriel's CEF patch 0009 also when Chromium turns accessibility on for an assistive technology; with stock CEF a screen reader is not seen (A28). |
 | `session-created` | `SessionCreated` | done |  |
-| `second-instance` | `SecondInstance` | partial | The command line is one string, not `argv`; `AdditionalData` from `RequestSingleInstanceLock` on macOS and Linux only (A29). |
+| `second-instance` | `SecondInstance` | partial | The command line is one string, not `argv` (A29); on Windows the working directory is the app's folder (A38). |
 
 ### Methods
 
@@ -92,7 +92,7 @@ Percentages are over the non-n/a items; the second counts a partial item as half
 | `setUserTasks(tasks)` | `SetUserTasks` | done | Windows. |
 | `getJumpListSettings()` | `GetJumpListSettings` | done | Windows. |
 | `setJumpList(categories)` | `SetJumpList` | done | Windows. |
-| `requestSingleInstanceLock([additionalData])` | `RequestSingleInstanceLock` | partial | Always single-instance (A2); macOS and Linux notify the running instance over Chromium's singleton socket; Windows defers to `Run`, without the data (A29). |
+| `requestSingleInstanceLock([additionalData])` | `RequestSingleInstanceLock` | partial | Always single-instance (A2); notifies the running instance over Chromium's singleton socket (macOS, Linux) or message window (Windows), with the data (A29). |
 | `hasSingleInstanceLock()` | `HasSingleInstanceLock` | done |  |
 | `releaseSingleInstanceLock()` | `ReleaseSingleInstanceLock` | partial | CEF keeps the data directory locked (A2). |
 | `setUserActivity(type, userInfo[, webpageURL])` | — | missing | A32. |
@@ -123,7 +123,7 @@ Percentages are over the non-n/a items; the second counts a partial item as half
 | `showAboutPanel()` | `ShowAboutPanel` | done | macOS standard panel; Linux GtkAboutDialog and Windows information box (not run yet). |
 | `setAboutPanelOptions(options)` | `SetAboutPanelOptions` | done |  |
 | `isEmojiPanelSupported()` | `IsEmojiPanelSupported` | done | macOS, Windows 10 1803+. |
-| `showEmojiPanel()` | `ShowEmojiPanel` | partial | macOS character palette; Windows not wired (A25). |
+| `showEmojiPanel()` | `ShowEmojiPanel` | partial | macOS character palette; Windows sends Win+. as Electron, unverified (A25). |
 | `startAccessingSecurityScopedResource(bookmarkData)` | — | n/a | Mac App Store builds only; Oriel has none. |
 | `enableSandbox()` | `EnableSandbox` | partial | A1. |
 | `isInApplicationsFolder()` | `IsInApplicationsFolder` | done | macOS. |

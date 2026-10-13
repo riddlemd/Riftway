@@ -245,6 +245,40 @@ async Task RunAsync(BrowserWindow win, BrowserWindow simple)
     Check("SetFullScreen(false) raises LeftFullScreen",
         Fires(h => win.LeftFullScreen += h, h => win.LeftFullScreen -= h, () => win.SetFullScreen(false), step * 2));
     Check("not full screen", Eventually(() => !win.IsFullScreen, step), win.IsFullScreen);
+    if (OperatingSystem.IsWindows())
+    {
+        // Electron's SetFullScreen on Windows notifies before the resize, and on every call: it checks no state first.
+        Eventually(() => win.GetBounds() is { Width: 700, Height: 500 }, step);
+        var windowed = win.GetBounds();
+        var entered = new System.Collections.Concurrent.ConcurrentQueue<Rectangle>();
+        var left = new System.Collections.Concurrent.ConcurrentQueue<Rectangle>();
+        EventHandler onEnter = (_, _) => entered.Enqueue(win.GetBounds());
+        EventHandler onLeave = (_, _) => left.Enqueue(win.GetBounds());
+        win.EnteredFullScreen += onEnter;
+        win.LeftFullScreen += onLeave;
+        try
+        {
+            win.SetFullScreen(true);
+            Eventually(() => win.IsFullScreen, step);
+            await Task.Delay(500);
+            var full = win.GetBounds();
+            Check("Windows: SetFullScreen(true) raises EnteredFullScreen once, before the window takes the display, as Electron",
+                entered.ToArray() is [var seen] && seen == windowed && full != windowed, $"{string.Join(" ", entered)} then {full}");
+            win.SetFullScreen(true);
+            await Task.Delay(500);
+            Check("Windows: SetFullScreen(true) when already full screen raises EnteredFullScreen again, as Electron", entered.Count == 2 && win.IsFullScreen, entered.Count);
+            win.SetFullScreen(false);
+            Eventually(() => !win.IsFullScreen, step);
+            await Task.Delay(500);
+            Check("Windows: SetFullScreen(false) raises LeftFullScreen once, while the window still has the display's bounds, as Electron",
+                left.ToArray() is [var leaving] && leaving == full, $"{string.Join(" ", left)} vs {full}");
+        }
+        finally
+        {
+            win.EnteredFullScreen -= onEnter;
+            win.LeftFullScreen -= onLeave;
+        }
+    }
 
     // Window managers restore the bounds after reporting the state change.
     Eventually(() => win.GetBounds() is { Width: 700, Height: 500 }, step);
@@ -5807,8 +5841,16 @@ async Task NotificationAsync()
         n.Reply += (_, r) => events.Enqueue("reply " + r);
         var shownDuringShow = Oriel.Cef.CefThread.InvokeOnUi(() => { n.Show(); return events.Contains("shown"); });
         Check("Show raises Shown after it returns, posted as Electron posts it", !shownDuringShow && Eventually(() => events.Contains("shown"), step), $"{shownDuringShow} {string.Join(",", events)}");
+        // Toasts off for the user, the app or by policy: Windows drops every toast, so only Electron's failure shows.
+        var toastSetting = PowerShell($"$null = [Windows.UI.Notifications.ToastNotificationManager,Windows.UI.Notifications,ContentType=WindowsRuntime]; [Windows.UI.Notifications.ToastNotificationManager]::CreateToastNotifier('{id}').Setting");
+        var toastsOn = toastSetting == "Enabled";
+        void Skip(string name) => Console.WriteLine($"SKIP  {name}: Windows' toast setting for this app is {toastSetting}");
+        if (!toastsOn)
+            Check($"with toasts {toastSetting}, Show raises Failed with Electron's text for Windows' reason",
+                Eventually(() => events.Any(e => e.StartsWith("failed Notification failed - ", StringComparison.Ordinal)), step), string.Join(",", events));
         var shown = "";
-        Check("the toast reaches the Action Center tagged with its Id in group Notifications, with Electron's reminder, reply and action XML",
+        if (!toastsOn) Skip("the toast reaches the Action Center tagged with its Id in group Notifications, with Electron's reminder, reply and action XML");
+        else Check("the toast reaches the Action Center tagged with its Id in group Notifications, with Electron's reminder, reply and action XML",
             Eventually(() => (shown = PowerShell(string.Format(history, id))).Contains($"{tag}/Notifications <toast scenario=\"reminder\">")
                 && shown.Contains("<text>Oriel toast</text><text>Body text</text>")
                 && shown.Contains("<actions><action activationType=\"system\" arguments=\"dismiss\" content=\"Close\"/><input id=\"reply\" type=\"text\" placeHolderContent=\"Say\"/>")
@@ -5816,20 +5858,26 @@ async Task NotificationAsync()
                 && shown.Contains($"<action activationType=\"foreground\" arguments=\"type=action&amp;action=1&amp;tag={tag}\" content=\"Pick\" hint-inputId=\"selection1\"/>")
                 && shown.Contains($"<action activationType=\"foreground\" arguments=\"type=reply&amp;tag={tag}\" content=\"Reply\" hint-inputId=\"reply\"/></actions>"), step), shown);
         var icon = System.Text.RegularExpressions.Regex.Match(shown, "<image id=\"1\" placement=\"appLogoOverride\" hint-crop=\"none\" src=\"([^\"]+)\"/>").Groups[1].Value;
-        Check("the icon is a PNG copy in a scoped_dir temporary directory, by plain path",
+        if (!toastsOn) Skip("the icon is a PNG copy in a scoped_dir temporary directory, by plain path");
+        else Check("the icon is a PNG copy in a scoped_dir temporary directory, by plain path",
             icon.StartsWith(Path.GetTempPath(), StringComparison.OrdinalIgnoreCase) && Path.GetFileName(Path.GetDirectoryName(icon))!.StartsWith("scoped_dir", StringComparison.Ordinal) && File.Exists(icon) && File.ReadAllBytes(icon).AsSpan().StartsWith((byte[])[0x89, (byte)'P', (byte)'N', (byte)'G']), icon);
 
         Check("the activator's class object is registered", Eventually(() => WindowsToastActivator.IsRegistered, step));
+        // A failed toast is forgotten, as Electron's, so an activation naming it reaches HandleActivation but no notification.
         var hr = WindowsShell.ActivateToast(Guid.Parse(clsid), id, $"type=action&action=1&tag={tag}", ("selection1", "2"));
-        Check("Windows' activation of the CLSID (local server) with a selection raises Action (1, 2)",
+        if (!toastsOn) Skip("Windows' activation of the CLSID (local server) with a selection raises Action (1, 2)");
+        else Check("Windows' activation of the CLSID (local server) with a selection raises Action (1, 2)",
             hr == 0 && Eventually(() => events.Contains("action 1 2"), step), $"0x{hr:X8} {string.Join(",", events)}");
         hr = WindowsShell.ActivateToast(Guid.Parse(clsid), id, $"type=reply&tag={tag}", ("reply", "typed ✓"));
-        Check("an activation with a reply raises Reply with its text", hr == 0 && Eventually(() => events.Contains("reply typed ✓"), step), $"0x{hr:X8} {string.Join(",", events)}");
+        if (!toastsOn) Skip("an activation with a reply raises Reply with its text");
+        else Check("an activation with a reply raises Reply with its text", hr == 0 && Eventually(() => events.Contains("reply typed ✓"), step), $"0x{hr:X8} {string.Join(",", events)}");
+        // Activations arrive on the COM server's thread after ActivateToast returns.
         Check("HandleActivation hears every activation with its details",
-            activation is { Type: "reply", Reply: "typed ✓" } && activation.UserInputs?.GetValueOrDefault("reply") == "typed ✓", activation?.ToString());
+            Eventually(() => activation is { Type: "reply", Reply: "typed ✓" } && activation.UserInputs?.GetValueOrDefault("reply") == "typed ✓", step), activation?.ToString());
 
         Oriel.Cef.CefThread.InvokeOnUi(() => { n.Close(); return 0; });
-        Check("Close removes it from the Action Center", Eventually(() => !(shown = PowerShell(string.Format(history, id))).Contains(tag), step), shown);
+        if (!toastsOn) Skip("Close removes it from the Action Center");
+        else Check("Close removes it from the Action Center", Eventually(() => !(shown = PowerShell(string.Format(history, id))).Contains(tag), step), shown);
         await Task.Delay(1000);
         Check("Close raises no Closed, as Electron's close() on Windows", !events.Any(e => e.StartsWith("closed", StringComparison.Ordinal)) && !n.IsShown, string.Join(",", events));
 
@@ -5842,13 +5890,15 @@ async Task NotificationAsync()
 
         var custom2 = new Notification { ToastXml = $"<toast><visual><binding template=\"ToastGeneric\"><text>{tag} custom</text></binding></visual><audio silent=\"true\"/></toast>" };
         Oriel.Cef.CefThread.InvokeOnUi(() => { custom2.Show(); return 0; });
-        Check("ToastXml is shown as given", Eventually(() => (shown = PowerShell(string.Format(history, id))).Contains(tag + " custom"), step), shown);
+        if (!toastsOn) Skip("ToastXml is shown as given");
+        else Check("ToastXml is shown as given", Eventually(() => (shown = PowerShell(string.Format(history, id))).Contains(tag + " custom"), step), shown);
         Oriel.Cef.CefThread.InvokeOnUi(() => { custom2.Close(); return 0; });
 
         var imaged = Oriel.Cef.CefThread.InvokeOnUi(() => new Notification { Id = tag + "-img", Title = "Oriel image", Silent = true, IconImage = NativeImage.CreateFromPath(OverlayPng()) });
         Oriel.Cef.CefThread.InvokeOnUi(() => { imaged.Show(); return 0; });
         var imageSrc = "";
-        Check("an IconImage (NativeImage) is shown as a PNG copy in the scoped_dir temporary directory",
+        if (!toastsOn) Skip("an IconImage (NativeImage) is shown as a PNG copy in the scoped_dir temporary directory");
+        else Check("an IconImage (NativeImage) is shown as a PNG copy in the scoped_dir temporary directory",
             Eventually(() =>
             {
                 shown = PowerShell(string.Format(history, id));
@@ -5949,9 +5999,10 @@ async Task AppWindowsAsync()
     }
     finally { app.SetJumpList(null); }
 
-    // The shell only records recent documents when the user allows it. ClearRecentDocuments is not called: like
-    // Electron's, it empties the user's whole Recent list.
-    var recentFile = Path.Combine(Path.GetTempPath(), tag + ".txt");
+    // The shell only records recent documents when the user allows it, and on some machines never from %TEMP%.
+    // ClearRecentDocuments is not called: like Electron's, it empties the user's whole Recent list.
+    var recentDir = Directory.CreateDirectory(Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "Oriel.WindowTest")).FullName;
+    var recentFile = Path.Combine(recentDir, tag + ".txt");
     File.WriteAllText(recentFile, "recent");
     var recentFolder = Environment.GetFolderPath(Environment.SpecialFolder.Recent);
     var recentLink = Path.Combine(recentFolder, tag + ".txt.lnk");
@@ -5971,6 +6022,7 @@ async Task AppWindowsAsync()
         File.Delete(recentFile);
         if (File.Exists(recentLink)) File.Delete(recentLink);
         if (File.Exists(ownLink)) File.Delete(ownLink);
+        if (!Directory.EnumerateFileSystemEntries(recentDir).Any()) Directory.Delete(recentDir);
     }
     // The protocol and login-item keys are read back through the registry directly and Windows' merged HKCR view.
     var exePath = Environment.ProcessPath!;

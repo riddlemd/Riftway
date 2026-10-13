@@ -94,7 +94,8 @@ public static unsafe class LinuxLibsecret
     /// or created with a new random password. Null when any step fails.</summary>
     public static byte[]? GetOsCryptPassword(string appName)
     {
-        if (!s_loaded.Value || !LibsecretIsAvailable()) return null;
+        // CanUseLibsecret: a keyring whose default collection does not answer would block every call below.
+        if (!s_loaded.Value || !LinuxSecretServiceProbe.DefaultCollectionAnswers(aliasMustAnswer: false) || !LibsecretIsAvailable()) return null;
         EnsureKeyringUnlocked();
 
         using var attributes = new Attributes(("application", appName));
@@ -135,7 +136,8 @@ public static unsafe class LinuxLibsecret
     /// an item labelled <paramref name="keyName"/> is created with a new random secret. Null when any step fails.</summary>
     public static byte[]? GetDefaultCollectionSecret(string appName, string keyName)
     {
-        if (!s_loaded.Value) return null;
+        // kGnomeKeyringDeadlock and kReadAliasFailed: the provider gives up, leaving "v10".
+        if (!s_loaded.Value || !LinuxSecretServiceProbe.DefaultCollectionAnswers(aliasMustAnswer: true)) return null;
         nint error = 0;
         var service = secret_service_get_sync(ServiceOpenSession, 0, &error);
         if (error != 0 || service == 0) return Fail(error, service);
