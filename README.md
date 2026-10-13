@@ -65,6 +65,8 @@ Renderers run in Chromium's sandbox, as in Electron. Only CEF's `bootstrap.exe` 
 
 `dotnet run`, and `eng/layout-windows.ps1 <publish-dir> -Subprocess <Oriel.Subprocess.exe>` (built by `src/Oriel.Subprocess.Native/build.ps1`), keep the unsandboxed apphost layout: the app's own `.exe`, with `Oriel.Subprocess.exe` for the children.
 
+For Windows on Arm, pass `windowsarm64` to the build and layout scripts and publish with `-r win-arm64`; it cross-builds from x64 too, with the "MSVC ARM64 build tools" component installed. Not yet run on Arm hardware.
+
 ## Known issues
 
 ### Video crashes the renderer on Linux arm64 VMs on Apple M4+ (worked around)

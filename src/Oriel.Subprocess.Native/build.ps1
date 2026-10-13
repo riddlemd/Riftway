@@ -21,12 +21,15 @@ if (-not (Test-Path (Join-Path $cef '.complete'))) {
 $version = [regex]::Match((Get-Content (Join-Path $repo 'src\Oriel.Cef\Interop\CefApiVersion.cs') -Raw), 'Version = (\d+)').Groups[1].Value
 
 $vswhere = Join-Path ${env:ProgramFiles(x86)} 'Microsoft Visual Studio\Installer\vswhere.exe'
-$vs = & $vswhere -latest -products * -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath
-if (-not $vs) { throw 'No Visual Studio with the C++ workload found.' }
+$tools = $arch -eq 'arm64' ? 'Microsoft.VisualStudio.Component.VC.Tools.ARM64' : 'Microsoft.VisualStudio.Component.VC.Tools.x86.x64'
+$vs = & $vswhere -latest -products * -requires $tools -property installationPath
+if (-not $vs) { throw "No Visual Studio with $tools found (the C++ workload, plus 'MSVC ARM64 build tools' for windowsarm64)." }
+# OSArchitecture, not the process's: an x64 PowerShell on an arm64 host would otherwise pick emulated x64 tools.
+$hostArch = [Runtime.InteropServices.RuntimeInformation]::OSArchitecture -eq 'Arm64' ? 'arm64' : 'amd64'
 # VsDevCmd calls vswhere by name and prints an error when the Installer folder isn't on PATH.
 $env:PATH = "$(Split-Path $vswhere);$env:PATH"
 Import-Module (Join-Path $vs 'Common7\Tools\Microsoft.VisualStudio.DevShell.dll')
-Enter-VsDevShell -VsInstallPath $vs -Arch $arch -HostArch amd64 -SkipAutomaticLocation | Out-Null
+Enter-VsDevShell -VsInstallPath $vs -Arch $arch -HostArch $hostArch -SkipAutomaticLocation | Out-Null
 
 $Out = [IO.Path]::GetFullPath($Out, (Get-Location).Path)
 $obj = Join-Path ([IO.Path]::GetDirectoryName($Out)) 'obj'

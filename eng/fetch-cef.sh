@@ -18,6 +18,8 @@ if [ -z "$platform" ]; then
     Darwin-x86_64) platform=macosx64 ;;
     Linux-x86_64) platform=linux64 ;;
     Linux-aarch64) platform=linuxarm64 ;;
+    MINGW*-x86_64 | MSYS*-x86_64) platform=windows64 ;;
+    MINGW*-aarch64 | MSYS*-aarch64) platform=windowsarm64 ;;
     *) echo "unknown platform; pass one explicitly" >&2; exit 1 ;;
   esac
 fi
