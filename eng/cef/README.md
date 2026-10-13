@@ -97,7 +97,15 @@ build.sh --no-update --force-build
 On Linux, a non-official build needs `use_partition_alloc_as_malloc=false enable_backup_ref_ptr_support=false` in
 `GN_DEFINES`. CEF's `gn_args.py` adds them for official builds only, and without them libcef crashes in the .NET host,
 which mixes glibc and PartitionAlloc heaps (CEF issues #3061, #3095). Build `--build-target=libcef`: the default
-`cefclient` target needs GTK headers the arm64 sysroot lacks, and the minimal distribution doesn't use it.
+`cefclient` target needs GTK headers the arm64 sysroot lacks, and the minimal distribution doesn't use it. On x64,
+add `use_sysroot=true` too: `gn_args.py` turns the sysroot off for local builds, and `gn gen` then fails on host
+packages such as `libpipewire-0.3`.
+
+Every non-official build also needs `disable_fieldtrial_testing_config=true` in `GN_DEFINES` (`gn_args.py` sets it
+for official builds only). Without it Chromium applies `testing/variations/fieldtrial_testing_config.json`, which the
+stock download and Electron don't: on Windows its `BrowserDynamicCodeDisabled` stops the .NET JIT in the browser
+process, and `cef_initialize` fails with a CLR "Out of memory" (0xE0434352) or a stack overflow (0xC00000FD). Oriel
+passes `--disable-field-trial-config` itself, which has the same effect on a libcef built without it.
 
 Before updating the checkout (a new CEF commit or Chromium), run `eng/cef/apply-patches.sh <download-dir> --revert`:
 automate-git runs `version_manager.py -a` after a Chromium change on a release branch, and that refuses `CEF_NEXT` in
