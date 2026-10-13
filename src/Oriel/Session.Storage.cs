@@ -151,8 +151,11 @@ public sealed partial class Session
         _ = StartDownloadAsync(url, headers);
     }
 
-    private readonly Queue<(string Url, Dictionary<string, string> Headers)> _pendingHeaders = [];
-    private bool _interceptingDownloads;
+    // A request DevTools never pauses (a scheme it does not intercept, a failed start) must not hold the others' headers.
+    private readonly DownloadHeaderMatcher _downloadHeaders = new(TimeSpan.FromMinutes(1));
+    // Every download with headers waits for the one Fetch.enable, not only the first to ask: until it completes
+    // DevTools lets requests through untouched.
+    private Task? _interception;
 
     private async Task StartDownloadAsync(string url, Dictionary<string, string>? headers)
     {
@@ -163,7 +166,8 @@ public sealed partial class Session
             if (headers is not null) await InterceptAsync(helper).ConfigureAwait(false);
             CefThread.RunOnUi(() =>
             {
-                if (headers is not null) _pendingHeaders.Enqueue((url, headers));
+                // Header-less downloads are expected too, so one to the same URL cannot take another's headers.
+                if (_interception is not null) _downloadHeaders.Expect(url, headers, DateTime.UtcNow);
                 helper.StartDownload(url);
             });
         }
@@ -171,29 +175,25 @@ public sealed partial class Session
     }
 
     // Fetch interception stays on once used: switching it off could drop a download's paused request.
-    private async Task InterceptAsync(SessionHelperPage helper)
+    private Task InterceptAsync(SessionHelperPage helper) => CefThread.InvokeOnUi(() =>
     {
-        var start = CefThread.InvokeOnUi(() =>
+        if (_interception is not null) return _interception;
+        helper.EventReceived += (method, args) =>
         {
-            if (_interceptingDownloads) return false;
-            _interceptingDownloads = true;
-            helper.EventReceived += (method, args) =>
-            {
-                if (method == "Fetch.requestPaused") OnDownloadRequestPaused(helper, args);
-            };
-            return true;
-        });
-        if (start) await helper.SendAsync("Fetch.enable").ConfigureAwait(false);
-    }
+            if (method == "Fetch.requestPaused") OnDownloadRequestPaused(helper, args);
+        };
+        return _interception = helper.SendAsync("Fetch.enable");
+    });
 
     // UI thread. DownloadUrlParameters adds its headers only where the request has none of that name.
     private void OnDownloadRequestPaused(SessionHelperPage helper, JsonElement args)
     {
         var id = args.GetProperty("requestId").GetString()!;
         var request = args.GetProperty("request");
-        var url = request.GetProperty("url").GetString();
-        Dictionary<string, string>? extra = null;
-        if (_pendingHeaders.Count > 0 && _pendingHeaders.Peek().Url == url) extra = _pendingHeaders.Dequeue().Headers;
+        var url = request.GetProperty("url").GetString() ?? "";
+        var networkId = args.TryGetProperty("networkId", out var network) ? network.GetString() : null;
+        var redirectedFrom = args.TryGetProperty("redirectedRequestId", out var redirected) ? redirected.GetString() : null;
+        var extra = _downloadHeaders.Match(url, id, networkId, redirectedFrom, DateTime.UtcNow);
         var merged = request.GetProperty("headers").EnumerateObject().ToDictionary(p => p.Name, p => p.Value.GetString() ?? "", StringComparer.OrdinalIgnoreCase);
         foreach (var (name, value) in DownloadHeaders.Merge(merged, extra)) merged[name] = value;
         _ = helper.SendAsync("Fetch.continueRequest", w =>
@@ -225,6 +225,86 @@ internal static class DownloadHeaders
         foreach (var header in extra)
             if (seen.Add(header.Key)) yield return header;
     }
+}
+
+/// <summary>Pairs <see cref="Session.DownloadUrl"/> calls with the requests DevTools pauses, and keeps each one's headers on
+/// its redirects, as the download's own request (DownloadUrlParameters) keeps its extra headers in Chromium. UI thread.</summary>
+internal sealed class DownloadHeaderMatcher(TimeSpan lifetime)
+{
+    private sealed class Entry(string url, Dictionary<string, string>? headers, DateTime seen)
+    {
+        public string Url { get; } = url;
+        public Dictionary<string, string>? Headers { get; } = headers;
+        public DateTime Seen { get; set; } = seen;
+        public string? FetchId { get; set; }
+        public string? NetworkId { get; set; }
+    }
+
+    private readonly List<Entry> _waiting = [];
+    private readonly List<Entry> _following = [];
+
+    /// <summary>Downloads still waiting for their first request.</summary>
+    internal int Waiting => _waiting.Count;
+
+    /// <summary>Downloads whose redirects are still followed.</summary>
+    internal int Following => _following.Count;
+
+    /// <summary>Expects a request for <paramref name="url"/>, to get <paramref name="headers"/>.</summary>
+    internal void Expect(string url, Dictionary<string, string>? headers, DateTime now)
+    {
+        Prune(now);
+        _waiting.Add(new Entry(Canonical(url), headers is null ? null : new Dictionary<string, string>(headers, StringComparer.OrdinalIgnoreCase), now));
+    }
+
+    /// <summary>The headers the paused request <paramref name="fetchId"/> gains, or null; <paramref name="redirectedFrom"/>
+    /// is Fetch's <c>redirectedRequestId</c>, the paused request this hop follows.</summary>
+    internal IReadOnlyDictionary<string, string>? Match(string url, string fetchId, string? networkId, string? redirectedFrom, DateTime now)
+    {
+        Prune(now);
+        var hop = _following.FirstOrDefault(e => (redirectedFrom is not null && e.FetchId == redirectedFrom) || (networkId is not null && e.NetworkId == networkId));
+        if (hop is not null)
+        {
+            // RedirectUtil::UpdateHttpRequest: a cross-origin hop's Origin becomes the opaque "null", and stays so; the
+            // first hop that leaves the download's origin is the first to differ from it.
+            if (!SameOrigin(hop.Url, url) && hop.Headers!.ContainsKey("Origin")) hop.Headers["Origin"] = "null";
+            hop.FetchId = fetchId;
+            hop.Seen = now;
+            return hop.Headers;
+        }
+
+        var canonical = Canonical(url);
+        var index = _waiting.FindIndex(e => e.Url == canonical);
+        if (index < 0) return null;
+        var entry = _waiting[index];
+        _waiting.RemoveAt(index);
+        if (entry.Headers is null) return null;
+        entry.FetchId = fetchId;
+        entry.NetworkId = networkId;
+        entry.Seen = now;
+        _following.Add(entry);
+        return entry.Headers;
+    }
+
+    private void Prune(DateTime now)
+    {
+        _waiting.RemoveAll(e => now - e.Seen > lifetime);
+        _following.RemoveAll(e => now - e.Seen > lifetime);
+    }
+
+    /// <summary><paramref name="url"/> as DevTools reports a request's: GURL's canonical form, without the fragment.</summary>
+    internal static string Canonical(string url)
+    {
+        if (!Uri.TryCreate(url, UriKind.Absolute, out var uri)) return url;
+        if (uri.HostNameType == UriHostNameType.Unknown) return uri.GetLeftPart(UriPartial.Query);
+        var host = uri.HostNameType == UriHostNameType.IPv6 ? uri.Host : uri.IdnHost;
+        var user = uri.UserInfo.Length > 0 ? uri.UserInfo + "@" : "";
+        var port = uri.IsDefaultPort ? "" : ":" + uri.Port.ToString(System.Globalization.CultureInfo.InvariantCulture);
+        return $"{uri.Scheme}://{user}{host}{port}{uri.PathAndQuery}";
+    }
+
+    private static bool SameOrigin(string a, string b)
+        => Uri.TryCreate(a, UriKind.Absolute, out var x) && Uri.TryCreate(b, UriKind.Absolute, out var y)
+            && x.Scheme == y.Scheme && string.Equals(x.IdnHost, y.IdnHost, StringComparison.OrdinalIgnoreCase) && x.Port == y.Port;
 }
 
 /// <summary>What <see cref="Session.ClearStorageDataAsync"/> clears. Electron's <c>clearStorageData</c> options.</summary>

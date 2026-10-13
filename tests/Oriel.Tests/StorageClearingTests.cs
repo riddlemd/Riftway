@@ -162,6 +162,102 @@ public sealed class StorageClearingTests
     [Fact]
     public void DownloadHeaders_NoneAsked() => Assert.Empty(DownloadHeaders.Merge(new Dictionary<string, string> { ["Accept"] = "*/*" }, null));
 
+    [Theory]
+    [InlineData("https://h.example/f.zip#x", "https://h.example/f.zip")]
+    [InlineData("https://h.example", "https://h.example/")]
+    [InlineData("HTTPS://H.Example:443/a?b#c", "https://h.example/a?b")]
+    [InlineData("http://h.example:8080/a", "http://h.example:8080/a")]
+    [InlineData("https://b\u00fccher.example/x", "https://xn--bcher-kva.example/x")]
+    [InlineData("http://[::1]:81/a", "http://[::1]:81/a")]
+    [InlineData("http://h.example/a b", "http://h.example/a%20b")]
+    [InlineData("file:///tmp/a.bin#x", "file:///tmp/a.bin")]
+    [InlineData("data:text/plain,hi#x", "data:text/plain,hi")]
+    [InlineData("not a url", "not a url")]
+    public void DownloadHeaderMatcher_CanonicalIsDevToolsRequestUrl(string url, string canonical)
+        => Assert.Equal(canonical, DownloadHeaderMatcher.Canonical(url));
+
+    private static readonly DateTime T0 = new(2026, 1, 1, 0, 0, 0, DateTimeKind.Utc);
+    private static Dictionary<string, string> Token(string value) => new() { ["X-Token"] = value };
+
+    [Fact]
+    public void DownloadHeaderMatcher_MatchesTheCanonicalUrl()
+    {
+        var matcher = new DownloadHeaderMatcher(TimeSpan.FromMinutes(1));
+        matcher.Expect("https://b\u00fccher.example#top", Token("a"), T0);
+        Assert.Equal("a", matcher.Match("https://xn--bcher-kva.example/", "f1", "n1", null, T0)?["X-Token"]);
+    }
+
+    [Fact]
+    public void DownloadHeaderMatcher_AnUnmatchedDownloadBlocksNoOther()
+    {
+        var matcher = new DownloadHeaderMatcher(TimeSpan.FromMinutes(1));
+        matcher.Expect("x-never://nothing", Token("lost"), T0);
+        matcher.Expect("https://h.example/a", Token("a"), T0);
+        matcher.Expect("https://h.example/b", Token("b"), T0);
+        Assert.Equal("b", matcher.Match("https://h.example/b", "f1", "n1", null, T0)?["X-Token"]);
+        Assert.Equal("a", matcher.Match("https://h.example/a", "f2", "n2", null, T0)?["X-Token"]);
+        Assert.Equal(1, matcher.Waiting);
+    }
+
+    [Fact]
+    public void DownloadHeaderMatcher_SameUrlKeepsOrder()
+    {
+        var matcher = new DownloadHeaderMatcher(TimeSpan.FromMinutes(1));
+        matcher.Expect("https://h.example/a", null, T0);
+        matcher.Expect("https://h.example/a", Token("second"), T0);
+        Assert.Null(matcher.Match("https://h.example/a", "f1", "n1", null, T0));
+        Assert.Equal("second", matcher.Match("https://h.example/a", "f2", "n2", null, T0)?["X-Token"]);
+        Assert.Null(matcher.Match("https://other.example/hop", "f3", "n1", "f1", T0));
+    }
+
+    [Fact]
+    public void DownloadHeaderMatcher_FollowsRedirectsByRequestId()
+    {
+        var matcher = new DownloadHeaderMatcher(TimeSpan.FromMinutes(1));
+        matcher.Expect("https://h.example/r", Token("a"), T0);
+        matcher.Match("https://h.example/r", "f1", null, null, T0);
+        Assert.Equal("a", matcher.Match("https://h.example/hop", "f2", null, "f1", T0)?["X-Token"]);
+        Assert.Equal("a", matcher.Match("https://h.example/final", "f3", null, "f2", T0)?["X-Token"]);
+        Assert.Null(matcher.Match("https://h.example/other", "f4", null, "f1", T0));
+    }
+
+    [Fact]
+    public void DownloadHeaderMatcher_FollowsRedirectsByNetworkId()
+    {
+        var matcher = new DownloadHeaderMatcher(TimeSpan.FromMinutes(1));
+        matcher.Expect("https://h.example/r", Token("a"), T0);
+        matcher.Match("https://h.example/r", "f1", "n1", null, T0);
+        Assert.Equal("a", matcher.Match("https://h.example/final", "f2", "n1", null, T0)?["X-Token"]);
+        Assert.Null(matcher.Match("https://h.example/final", "f3", "n2", null, T0));
+    }
+
+    [Fact]
+    public void DownloadHeaderMatcher_CrossOriginHopNullsOrigin()
+    {
+        var matcher = new DownloadHeaderMatcher(TimeSpan.FromMinutes(1));
+        matcher.Expect("https://a.example/r", new Dictionary<string, string> { ["Origin"] = "https://a.example", ["X-Token"] = "t" }, T0);
+        matcher.Match("https://a.example/r", "f1", "n1", null, T0);
+        Assert.Equal("https://a.example", matcher.Match("https://a.example/same", "f2", "n1", null, T0)?["Origin"]);
+        var cross = matcher.Match("https://b.example/final", "f3", "n1", null, T0);
+        Assert.Equal(("null", "t"), (cross?["Origin"], cross?["X-Token"]));
+    }
+
+    [Fact]
+    public void DownloadHeaderMatcher_ExpiresWhatNeverComes()
+    {
+        var matcher = new DownloadHeaderMatcher(TimeSpan.FromMinutes(1));
+        matcher.Expect("https://h.example/a", Token("a"), T0);
+        Assert.Null(matcher.Match("https://h.example/a", "f1", "n1", null, T0.AddMinutes(2)));
+        Assert.Equal(0, matcher.Waiting);
+        matcher.Expect("https://h.example/b", Token("b"), T0);
+        Assert.NotNull(matcher.Match("https://h.example/b", "f2", "n2", null, T0.AddSeconds(60)));
+        // Each hop restarts the minute, so a slow redirect chain keeps its headers.
+        Assert.NotNull(matcher.Match("https://h.example/hop1", "f3", "n2", null, T0.AddSeconds(60 + 59)));
+        Assert.NotNull(matcher.Match("https://h.example/hop2", "f4", "n2", null, T0.AddSeconds(60 + 59 + 59)));
+        Assert.Null(matcher.Match("https://h.example/c", "f5", "n2", null, T0.AddSeconds(60 + 59 + 59 + 61)));
+        Assert.Equal(0, matcher.Following);
+    }
+
     [Fact]
     public void CacheBytes_CountsEntryFilesOnly()
     {

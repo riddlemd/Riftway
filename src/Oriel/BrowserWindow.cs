@@ -208,17 +208,51 @@ public sealed unsafe partial class BrowserWindow : BaseWindow
             _opener = opener;
             return;
         }
-        // CEF refuses a browser view while its profile is still loading (cef_browser_view_create returns null), which a
-        // new on-disk session's is for a moment.
+        // CEF refuses a browser view while its profile loads (cef_browser_view_create returns null), and the UI thread
+        // cannot wait for that: the window opens at once, as Electron's, and its page joins once the profile has loaded.
         var profile = WebContents.Session;
         profile.WaitUntilInitialized();
         CefThread.InvokeOnUi(() =>
         {
             ThrowIfParentClosed();
-            if (profile.Initialized.IsCompleted) CreateNative();
-            else profile.Initialized.ContinueWith(_ => CefThread.RunOnUi(CreateNative), TaskScheduler.Default);
+            if (profile.Initialized.IsCompleted)
+            {
+                if (!CreateBrowserView())
+                {
+                    ReleaseName();
+                    throw new InvalidOperationException("CEF could not create the window's page.");
+                }
+                OpenWindow();
+                return true;
+            }
+            _page = PageState.Pending;
+            OpenWindow();
+            profile.Initialized.ContinueWith(_ =>
+            {
+                try { CefThread.RunOnUi(AttachPendingPage); }
+                catch (Exception e) { Console.Error.WriteLine($"[Oriel] Window {Id} could not get its page: {e}"); }
+            }, TaskScheduler.Default);
             return true;
         });
+    }
+
+    // A new on-disk session's window opens before its page, which waits for the profile; UI thread only.
+    private PageState _page;
+
+    private enum PageState { Created, Pending, Abandoned }
+
+    private void AttachPendingPage()
+    {
+        if (_page != PageState.Pending || _window is null) return;
+        if (!CreateBrowserView())
+        {
+            // Electron would have thrown from the constructor; the window cannot exist without its page.
+            Console.Error.WriteLine($"[Oriel] Window {Id}: CEF could not create the window's page.");
+            Destroy();
+            return;
+        }
+        _page = PageState.Created;
+        ApplyBackgroundColor(_window);
     }
 
     // Runs before the base constructor claims the window's name, so a rejected window leaves it free.
@@ -237,7 +271,7 @@ public sealed unsafe partial class BrowserWindow : BaseWindow
 
     private BrowserWindowOptions BrowserOptions => (BrowserWindowOptions)_options;
 
-    private void CreateNative()
+    private bool CreateBrowserView()
     {
         var settings = new cef_browser_settings_t
         {
@@ -255,10 +289,11 @@ public sealed unsafe partial class BrowserWindow : BaseWindow
         // Null is the global context, which the default session wraps.
         var context = WebContents.Session.IsDefault ? null : WebContents.Session.AddRefNative();
         _browserView = CefNative.cef_browser_view_create(_client.Native, &url, &settings, null, context, _viewDelegate.Native);
-        _pageView.SetNative(_browserView);
         CefString.Clear(&url);
         ClearWebPreferenceStrings(&settings);
-        OpenWindow();
+        if (_browserView is null) return false;
+        _pageView.SetNative(_browserView);
+        return true;
     }
 
     // UI thread, inside CEF's on_before_popup: asks the page's handler, then prepares the window CEF's popup will live in.
@@ -530,6 +565,7 @@ public sealed unsafe partial class BrowserWindow : BaseWindow
     // No beforeunload: the page closes at once, and _destroying keeps the can_close that follows from raising Closing.
     private protected override void DestroyContents()
     {
+        if (_page == PageState.Pending) _page = PageState.Abandoned;
         var browser = WebContents.Browser;
         if (browser is null) return;
         var host = browser->get_host(browser);
@@ -537,12 +573,19 @@ public sealed unsafe partial class BrowserWindow : BaseWindow
         NativeObject.Release(host);
     }
 
-    private protected override bool CloseApproved => WebContents.Browser is null;
+    // A page still waiting for its profile has not approved anything: the close goes to Closing first.
+    private protected override bool CloseApproved => WebContents.Browser is null && _page != PageState.Pending;
 
     // Lets the page run beforeunload first; the window closes once the browser has gone.
     private protected override bool ContinueClose()
     {
         var browser = WebContents.Browser;
+        // A page still waiting for its profile has no beforeunload to run, and is never made.
+        if (browser is null)
+        {
+            _page = PageState.Abandoned;
+            return true;
+        }
         var host = browser->get_host(browser);
         var canClose = host->try_close_browser(host) != 0;
         NativeObject.Release(host);
@@ -558,6 +601,12 @@ public sealed unsafe partial class BrowserWindow : BaseWindow
     {
         NativeObject.Release(_browserView);
         _browserView = null;
+        // A page that was never made still ends with its window, as Electron's web contents do.
+        if (_page != PageState.Created)
+        {
+            _page = PageState.Abandoned;
+            WebContents.OnBrowserDestroyed();
+        }
     }
 
     private protected override void DetachFromOpener() => _opener?.Popups.Remove(this);

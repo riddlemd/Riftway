@@ -253,6 +253,7 @@ async Task RunAsync()
     Check("a window opened at once in a new on-disk Session object exists when the constructor returns, and loads", freshObjectLoad is null && freshObjectWin.WebContents.GetUrl() == Site
         && freshObjectBounds.Width == 640 && freshObjectBounds.Height == 480, $"{freshObjectLoad?.GetType().Name} {freshObjectBounds}");
     freshObjectWin.Close();
+    await UiThreadFreshSessionChecks();
     await win.LoadUrl(Site);
     var seen = (await win.WebContents.ExecuteJavaScriptAsync("document.cookie"))?.ToString();
     Check("the page sees its session's cookies only", seen == "inMemory=2", seen);
@@ -593,6 +594,8 @@ async Task RunAsync()
     var afterHeaders = await Download(() => downloads.DownloadUrl(Site + "report.txt"), e => e.Item.SetSavePath(Path.Combine(downloadDir, "after.txt")));
     Check("a later Session.DownloadUrl without headers sends none", afterHeaders.State == DownloadState.Completed && downloadHeader is null,
         $"{afterHeaders.State} {downloadHeader}");
+    // A session of their own, so their first calls race interception being switched on.
+    await DownloadUrlHeaderChecks(Session.FromPartition("download-headers"), downloadDir);
     downloadWin.Destroy();
     Directory.Delete(downloadDir, recursive: true);
     await StorageChecks();
@@ -2225,6 +2228,144 @@ static async Task<T?> WaitFor<T>(Func<T?> probe) where T : class
     return null;
 }
 
+// A window made on the UI thread in a brand-new on-disk session, which the UI thread cannot wait for: as Electron's, it
+// exists when the constructor returns and takes calls, and a close before the profile loads ends it for good.
+async Task UiThreadFreshSessionChecks()
+{
+    static bool Loading(Session session) => typeof(Session).GetProperty("Initialized", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance)!.GetValue(session) is Task { IsCompleted: false };
+    var wanted = new Oriel.Rectangle(100, 120, 520, 340);
+    var early = Oriel.Cef.CefThread.InvokeOnUi(() =>
+    {
+        var session = Session.FromPartition("persist:fresh-ui");
+        var loading = Loading(session);
+        var window = new BrowserWindow(new BrowserWindowOptions { Show = false, Width = 400, Height = 300, Title = "options title", WebPreferences = new WebPreferences { Session = session } });
+        var destroyedAtOnce = window.IsDestroyed;
+        var optionsTitle = window.GetTitle();
+        window.SetTitle("early title");
+        window.SetBounds(wanted);
+        return (Window: window, Loading: loading, DestroyedAtOnce: destroyedAtOnce, OptionsTitle: optionsTitle, Title: window.GetTitle(), Bounds: window.GetBounds(),
+            Listed: BrowserWindow.GetAllWindows().Contains(window));
+    });
+    Check("a window made on the UI thread while its new session loads exists at once, as Electron's",
+        early.Loading && !early.DestroyedAtOnce && early.Listed && early.OptionsTitle == "options title",
+        $"loading={early.Loading} destroyed={early.DestroyedAtOnce} listed={early.Listed} {early.OptionsTitle}");
+    Check("SetTitle and SetBounds right after that constructor take effect", early.Title == "early title" && early.Bounds == wanted, $"{early.Title} {early.Bounds}");
+    // The profile's load is inside this wait, which the windows made off the UI thread wait for separately.
+    var earlyLoad = await Throws(() => early.Window.LoadUrl("data:text/html,<title>late</title>late").WaitAsync(TimeSpan.FromSeconds(20)));
+    var laterBounds = early.Window.GetBounds();
+    Check("its page joins once the profile loads, and the early bounds stay", earlyLoad is null && early.Window.WebContents.GetUrl().StartsWith("data:text/html", StringComparison.Ordinal)
+        && laterBounds == wanted && !early.Window.IsDestroyed, $"{earlyLoad?.GetType().Name} {laterBounds}");
+    var content = early.Window.GetContentBounds();
+    var pageSize = (await early.Window.WebContents.ExecuteJavaScriptAsync("innerWidth + 'x' + innerHeight"))?.ToString();
+    Check("the late page fills the content area", pageSize == $"{content.Width}x{content.Height}", $"{pageSize} vs {content.Width}x{content.Height}");
+    early.Window.Destroy();
+
+    foreach (var destroy in new[] { false, true })
+    {
+        var closed = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var pageGone = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var closing = 0;
+        var (window, loading) = Oriel.Cef.CefThread.InvokeOnUi(() =>
+        {
+            var session = Session.FromPartition(destroy ? "persist:fresh-ui-destroy" : "persist:fresh-ui-close");
+            var loading = Loading(session);
+            var window = new BrowserWindow(new BrowserWindowOptions { WebPreferences = new WebPreferences { Session = session } });
+            window.Closing += (_, _) => Interlocked.Increment(ref closing);
+            window.Closed += (_, _) => closed.TrySetResult();
+            window.WebContents.Destroyed += (_, _) => pageGone.TrySetResult();
+            if (destroy) window.Destroy();
+            else window.Close();
+            return (window, loading);
+        });
+        var closedInTime = await closed.Task.WaitAsync(TimeSpan.FromSeconds(10)).ContinueWith(t => t.IsCompletedSuccessfully);
+        var pageGoneInTime = await pageGone.Task.WaitAsync(TimeSpan.FromSeconds(10)).ContinueWith(t => t.IsCompletedSuccessfully);
+        // Long enough for the profile to load and a page to have been made.
+        await Task.Delay(2000);
+        var name = destroy ? "Destroy" : "Close";
+        Check($"{name} before the new session loads raises Closed{(destroy ? " and no Closing" : " after Closing")}, and the window never comes back",
+            loading && closedInTime && closing == (destroy ? 0 : 1) && window.IsDestroyed && !window.IsVisible && !BrowserWindow.GetAllWindows().Contains(window),
+            $"loading={loading} closed={closedInTime} closing={closing} destroyed={window.IsDestroyed} visible={window.IsVisible}");
+        Check($"{name} before the new session loads destroys the page that was never made", pageGoneInTime && window.WebContents.IsDestroyed(), $"{pageGoneInTime}");
+    }
+}
+
+// Session.DownloadUrl's headers over real HTTP: DevTools reports a request's URL canonical and without its fragment, and
+// redirect hops and requests that never come must not cost other downloads their headers.
+async Task DownloadUrlHeaderChecks(Session downloads, string downloadDir)
+{
+    using var listener = new TcpListener(IPAddress.Loopback, 0);
+    listener.Start();
+    var port = ((IPEndPoint)listener.LocalEndpoint).Port;
+    var seen = new System.Collections.Concurrent.ConcurrentQueue<(string Host, string Path, string? Value)>();
+    _ = ServeHeaderDownloads(listener, port, seen);
+    var done = 0;
+    void OnWillDownload(object? _, WillDownloadEventArgs e)
+    {
+        e.Item.SetSavePath(Path.Combine(downloadDir, $"headers-{Guid.NewGuid():N}.bin"));
+        e.Item.Done += (_, _) => Interlocked.Increment(ref done);
+    }
+    downloads.WillDownload += OnWillDownload;
+    var origin = $"http://127.0.0.1:{port}";
+    DownloadUrlOptions Marked(string value) => new() { Headers = new Dictionary<string, string> { ["X-Download"] = value } };
+    downloads.DownloadUrl("x-never://nothing", Marked("never"));
+    downloads.DownloadUrl(origin + "/frag.bin#part", Marked("frag"));
+    downloads.DownloadUrl(origin, Marked("root"));
+    downloads.DownloadUrl($"http://b\u00fccher.localhost:{port}/idn.bin", Marked("idn"));
+    downloads.DownloadUrl(origin + "/redirect", Marked("redirect"));
+    downloads.DownloadUrl(origin + "/cross", Marked("cross"));
+    downloads.DownloadUrl(origin + "/one.bin", Marked("one"));
+    downloads.DownloadUrl(origin + "/two.bin", Marked("two"));
+    // Seven downloads, two of them redirected; the one that never comes may still end as a failed download.
+    const int Expected = 7, Requests = 9;
+    for (var i = 0; i < 200 && (Volatile.Read(ref done) < Expected || seen.Count < Requests); i++) await Task.Delay(100);
+    downloads.WillDownload -= OnWillDownload;
+    bool Saw(string path, string value, string? host = null) => seen.Any(r => r.Path == path && r.Value == value && (host is null || r.Host == host));
+    var all = string.Join(" ", seen.Select(r => $"{r.Host}{r.Path}={r.Value}"));
+    Check("Session.DownloadUrl's headers reach a URL with a fragment", Saw("/frag.bin", "frag"), all);
+    Check("Session.DownloadUrl's headers reach a host given without its slash", Saw("/", "root"), all);
+    Check("Session.DownloadUrl's headers reach an IDN host", Saw("/idn.bin", "idn", $"xn--bcher-kva.localhost:{port}"), all);
+    Check("Session.DownloadUrl's headers stay on a same-origin redirect, as Chromium keeps a download's extra headers",
+        Saw("/redirect", "redirect") && Saw("/final.bin", "redirect"), all);
+    Check("Session.DownloadUrl's headers stay on a cross-origin redirect, which downloads follow", Saw("/cross", "cross") && Saw("/cross-final.bin", "cross", $"localhost:{port}"), all);
+    Check("two concurrent Session.DownloadUrl calls each send their own headers", Saw("/one.bin", "one") && Saw("/two.bin", "two"), all);
+    Check("a Session.DownloadUrl whose request never comes costs the others nothing", Volatile.Read(ref done) >= Expected && seen.All(r => r.Value != "never"), $"done={done} {all}");
+    listener.Stop();
+}
+
+static async Task ServeHeaderDownloads(TcpListener listener, int port, System.Collections.Concurrent.ConcurrentQueue<(string Host, string Path, string? Value)> seen)
+{
+    while (true)
+    {
+        TcpClient client;
+        try { client = await listener.AcceptTcpClientAsync(); }
+        catch (Exception) { return; }
+        _ = Task.Run(async () =>
+        {
+            using var _ = client;
+            var stream = client.GetStream();
+            var head = new StringBuilder();
+            var buffer = new byte[4096];
+            while (!head.ToString().Contains("\r\n\r\n"))
+            {
+                var read = await stream.ReadAsync(buffer);
+                if (read == 0) return;
+                head.Append(Encoding.ASCII.GetString(buffer, 0, read));
+            }
+            var lines = head.ToString().Split("\r\n");
+            var path = lines[0].Split(' ')[1];
+            string? Header(string name) => lines.Skip(1).Select(l => l.Split(':', 2)).Where(p => p.Length == 2 && p[0].Trim().Equals(name, StringComparison.OrdinalIgnoreCase)).Select(p => p[1].Trim()).FirstOrDefault();
+            seen.Enqueue((Header("Host") ?? "", path, Header("X-Download")));
+            var response = path switch
+            {
+                "/redirect" => "HTTP/1.1 302 Found\r\nLocation: /final.bin\r\nContent-Length: 0\r\nConnection: close\r\n\r\n",
+                "/cross" => $"HTTP/1.1 302 Found\r\nLocation: http://localhost:{port}/cross-final.bin\r\nContent-Length: 0\r\nConnection: close\r\n\r\n",
+                _ => "HTTP/1.1 200 OK\r\nContent-Type: application/octet-stream\r\nContent-Disposition: attachment; filename=\"d.bin\"\r\nContent-Length: 4\r\nConnection: close\r\n\r\nbody",
+            };
+            await stream.WriteAsync(Encoding.ASCII.GetBytes(response));
+        });
+    }
+}
+
 // Serves "tls ok" over TLS with the given certificate, to every connection; with requireClient, says which client
 // certificate came.
 static async Task ServeTls(TcpListener listener, System.Security.Cryptography.X509Certificates.X509Certificate2 certificate, bool requireClient = false,
@@ -3069,7 +3210,7 @@ var staleDisk = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder
 if (!mediaChild)
 {
     if (Directory.Exists(staleDisk)) Directory.Delete(staleDisk, recursive: true);
-    foreach (var name in new[] { "fresh", "fresh-object", "cache" })
+    foreach (var name in new[] { "fresh", "fresh-object", "cache", "fresh-ui", "fresh-ui-close", "fresh-ui-destroy" })
     {
         var freshDir = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "Oriel.SessionTest", "Partition " + name);
         if (Directory.Exists(freshDir)) Directory.Delete(freshDir, recursive: true);
