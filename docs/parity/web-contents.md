@@ -142,7 +142,7 @@ Percentages are over the non-n/a items; the second counts a partial item as half
 | `insertCSS()` | `InsertCssAsync` | partial | Inspector sheet; `user` origin applied as author (C25). |
 | `removeInsertedCSS()` | `RemoveInsertedCssAsync` | done |  |
 | `executeJavaScriptInIsolatedWorld()` | `ExecuteJavaScriptInIsolatedWorldAsync` | partial | DevTools-named worlds, JSON results (C26). |
-| `setIgnoreMenuShortcuts()` | `SetIgnoreMenuShortcuts` | partial | Windows and Linux (C34). |
+| `setIgnoreMenuShortcuts()` | `SetIgnoreMenuShortcuts` | partial | Windows and Linux; macOS written, not yet run (C34). |
 | `setAudioMuted()` | `SetAudioMuted` | done |  |
 | `isAudioMuted()` | `IsAudioMuted` | done |  |
 | `isCurrentlyAudible()` | — | missing | CEF never reports audio for Chrome-style browsers (C23). |
