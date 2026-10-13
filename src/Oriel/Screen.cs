@@ -169,7 +169,7 @@ public static unsafe partial class Screen
     {
         var p = new cef_point_t { x = point.X, y = point.Y };
         var display = CefNative.cef_display_get_nearest_point(&p, 0);
-        display->convert_point_to_pixels(display, &p);
+        p = ToPixels(display, p);
         NativeObject.Release(display);
         return new Point(p.x, p.y);
     });
@@ -192,28 +192,55 @@ public static unsafe partial class Screen
         var display = CefNative.cef_display_get_matching_bounds(&match, window is null && !toPixels ? 1 : 0);
         var topLeft = new cef_point_t { x = rect.X, y = rect.Y };
         var bottomRight = new cef_point_t { x = rect.X + rect.Width, y = rect.Y + rect.Height };
-        if (toPixels)
-        {
-            display->convert_point_to_pixels(display, &topLeft);
-            display->convert_point_to_pixels(display, &bottomRight);
-        }
-        else
-        {
-            display->convert_point_from_pixels(display, &topLeft);
-            display->convert_point_from_pixels(display, &bottomRight);
-        }
+        topLeft = toPixels ? ToPixels(display, topLeft) : FromPixels(display, topLeft);
+        bottomRight = toPixels ? ToPixels(display, bottomRight) : FromPixels(display, bottomRight);
         NativeObject.Release(display);
         return new Rectangle(topLeft.x, topLeft.y, bottomRight.x - topLeft.x, bottomRight.y - topLeft.y);
     }
 
-    // Per display: CEF's screen-wide converters only convert on Windows.
     private static Point FromPixels(Point point)
     {
         var p = new cef_point_t { x = point.X, y = point.Y };
         var display = CefNative.cef_display_get_nearest_point(&p, 1);
-        display->convert_point_from_pixels(display, &p);
+        p = FromPixels(display, p);
         NativeObject.Release(display);
         return new Point(p.x, p.y);
+    }
+
+    // A display's own converters only scale. On Windows Chromium lays mixed-DPI displays out in DIPs its own way, so a
+    // display's DIP origin need not be its pixel origin over its scale: the origin goes through the screen converters,
+    // which convert only on Windows, and the offset from it through the display's scale.
+    internal static cef_point_t ToPixels(cef_display_t* display, cef_point_t point)
+    {
+        if (!OperatingSystem.IsWindows())
+        {
+            display->convert_point_to_pixels(display, &point);
+            return point;
+        }
+        var (origin, pixelOrigin) = Origins(display);
+        var offset = new cef_point_t { x = point.x - origin.x, y = point.y - origin.y };
+        display->convert_point_to_pixels(display, &offset);
+        return new cef_point_t { x = pixelOrigin.x + offset.x, y = pixelOrigin.y + offset.y };
+    }
+
+    internal static cef_point_t FromPixels(cef_display_t* display, cef_point_t point)
+    {
+        if (!OperatingSystem.IsWindows())
+        {
+            display->convert_point_from_pixels(display, &point);
+            return point;
+        }
+        var (origin, pixelOrigin) = Origins(display);
+        var offset = new cef_point_t { x = point.x - pixelOrigin.x, y = point.y - pixelOrigin.y };
+        display->convert_point_from_pixels(display, &offset);
+        return new cef_point_t { x = origin.x + offset.x, y = origin.y + offset.y };
+    }
+
+    private static (cef_point_t Dip, cef_point_t Pixels) Origins(cef_display_t* display)
+    {
+        var bounds = display->get_bounds(display);
+        var origin = new cef_point_t { x = bounds.x, y = bounds.y };
+        return (origin, CefNative.cef_display_convert_screen_point_to_pixels(&origin));
     }
 
     private static IReadOnlyList<Display> AllDisplays()

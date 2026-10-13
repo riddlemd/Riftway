@@ -76,8 +76,7 @@ public static unsafe partial class Screen
         if (!OperatingSystem.IsWindows()) return display;
         EnsureObserver();
         var monitors = s_monitors ??= WindowsDisplay.Monitors();
-        var centre = new cef_point_t { x = display.Bounds.X + display.Bounds.Width / 2, y = display.Bounds.Y + display.Bounds.Height / 2 };
-        native->convert_point_to_pixels(native, &centre);
+        var centre = ToPixels(native, new cef_point_t { x = display.Bounds.X + display.Bounds.Width / 2, y = display.Bounds.Y + display.Bounds.Height / 2 });
         var (x, y) = (centre.x, centre.y);
         var monitor = monitors.FirstOrDefault(m => x >= m.Left && x < m.Right && y >= m.Top && y < m.Bottom);
         if (monitor is null) return display;

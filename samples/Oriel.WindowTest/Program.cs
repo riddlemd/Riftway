@@ -1077,6 +1077,13 @@ async Task WindowsDisplayAsync(BrowserWindow win)
     var firstInternal = probes.FirstOrDefault(p => InternalTech(p.Monitor.OutputTechnology)).Display;
     string Describe(Func<(Display Display, WindowsDisplayProbe.Monitor Monitor), object?> pick) => string.Join("; ", probes.Select(p => $"{p.Monitor.Device}: {pick(p)}"));
 
+    // Chromium lays mixed-DPI displays out in DIPs its own way, so a display's DIP origin need not be its pixel origin.
+    static Point Centre(Rectangle r) => new(r.X + r.Width / 2, r.Y + r.Height / 2);
+    Check("Windows: DipToScreenPoint takes each display's centre onto its own monitor, and ScreenToDipPoint back",
+        probes.Select(p => p.Monitor.Device).Distinct().Count() == displays.Count
+        && probes.All(p => p.Monitor.Device is { Length: > 0 } && Screen.ScreenToDipPoint(Screen.DipToScreenPoint(Centre(p.Display.Bounds))) == Centre(p.Display.Bounds)),
+        Describe(p => $"{p.Display.Bounds} -> {Screen.DipToScreenPoint(Centre(p.Display.Bounds))}"));
+
     Check("Windows: Display.Label is DisplayConfig's EDID friendly name (empty without one)", probes.All(p => p.Display.Label == (p.Monitor.EdidName ?? "")),
         Describe(p => $"'{p.Display.Label}' vs '{p.Monitor.EdidName}'"));
     var wmiNames = WindowsDisplayProbe.Wmi("Get-CimInstance -Namespace root/wmi -ClassName WmiMonitorID | ForEach-Object { -join ($_.UserFriendlyName | Where-Object { $_ -ne 0 } | ForEach-Object { [char]$_ }) }");
@@ -1085,7 +1092,9 @@ async Task WindowsDisplayAsync(BrowserWindow win)
     Check("Windows: Display.DisplayFrequency is EnumDisplaySettings' dmDisplayFrequency", probes.All(p => p.Display.DisplayFrequency == p.Monitor.Frequency && p.Monitor.Frequency > 0),
         Describe(p => $"{p.Display.DisplayFrequency} vs {p.Monitor.Frequency}"));
     var wmiRates = WindowsDisplayProbe.Wmi("Get-CimInstance Win32_VideoController | ForEach-Object { $_.CurrentRefreshRate }");
-    Check("Windows: the refresh rates agree with WMI's Win32_VideoController.CurrentRefreshRate", probes.All(p => wmiRates.Contains(p.Display.DisplayFrequency.ToString(System.Globalization.CultureInfo.InvariantCulture))),
+    // WMI has one rate per adapter, not per monitor, so with more monitors than adapters some displays have none there.
+    Check("Windows: the refresh rates agree with WMI's Win32_VideoController.CurrentRefreshRate",
+        wmiRates.Any(r => r is not ("" or "0")) && wmiRates.Where(r => r is not ("" or "0")).All(r => probes.Any(p => p.Display.DisplayFrequency.ToString(System.Globalization.CultureInfo.InvariantCulture) == r)),
         $"{Describe(p => p.Display.DisplayFrequency)} vs WMI [{string.Join(", ", wmiRates)}]");
     Check("Windows: Display.Internal marks the first internal or embedded output (DisplayConfig output technology)",
         probes.All(p => p.Display.Internal == (firstInternal is not null && p.Display.Id == firstInternal.Id)), Describe(p => $"{p.Display.Internal} tech 0x{p.Monitor.OutputTechnology:X}"));
@@ -2218,7 +2227,8 @@ async Task WebContentsMethodsAsync()
         ViewSize = (300, 200),
         DeviceScaleFactor = 2,
     });
-    const string emulated = "[innerWidth, innerHeight, devicePixelRatio, screen.width, screen.height, screenX, screenY]";
+    // Chromium derives the ratio in float from the display's own scale: 2.0000000596 on a 150% display.
+    const string emulated = "[innerWidth, innerHeight, Math.round(devicePixelRatio * 1e6) / 1e6, screen.width, screen.height, screenX, screenY]";
     Check("EnableDeviceEmulation emulates the view size, scale factor, screen and view position",
         Eventually(() => Js(w, emulated).Result is "[300,200,2,400,800,10,20]", step), Js(w, emulated).Result);
     wc.EnableDeviceEmulation(new DeviceEmulationParameters { ScreenPosition = EmulatedScreenPosition.Mobile, ViewSize = (300, 200) });
@@ -4835,7 +4845,9 @@ async Task TitleBarAsync(BrowserWindow win)
     await framed.LoadUrl("data:text/html," + Page);
     await Task.Delay(500);
     var page = framed.GetContentBounds();
-    Check("a framed window ignores drag regions", WindowsShell.HitTest(framed.GetNativeWindowHandle(), page.X + 200, page.Y + 20) == HtClient, WindowsShell.HitTest(framed.GetNativeWindowHandle(), page.X + 200, page.Y + 20));
+    // Content bounds are DIPs; hit tests take screen pixels.
+    var inDrag = Screen.DipToScreenPoint(new Point(page.X + 200, page.Y + 20));
+    Check("a framed window ignores drag regions", WindowsShell.HitTest(framed.GetNativeWindowHandle(), inDrag.X, inDrag.Y) == HtClient, WindowsShell.HitTest(framed.GetNativeWindowHandle(), inDrag.X, inDrag.Y));
     framed.Destroy();
 
     // TitleBarStyle.Hidden without an overlay: no title bar, the page fills the window.
@@ -4863,8 +4875,11 @@ async Task TitleBarAsync(BrowserWindow win)
     var box = overlaid.GetTitleBarOverlayBounds();
     // Electron's buttons: 45 DIPs, the second and third one DIP wider for the spacing on their left.
     Check("the overlay sits at the top right, 45 + 46 + 46 DIPs wide, at the height asked", box == new Rectangle(500 - 137, 0, 137, 40), box);
-    int ButtonLeft(int index) { var (x, _, w, _) = WindowsShell.Bounds(oh); return x + w - 137 + (index == 0 ? 0 : 45 + (index - 1) * 46); }
-    (int X, int Y) Button(int index, int dy = 0) => (ButtonLeft(index) + 6, WindowsShell.Bounds(oh).Y + 6 + dy);
+    // The layout is in DIPs and the probes in screen pixels, which differ off 100% scaling.
+    var overlayScale = Screen.GetDisplayMatching(overlaid.GetBounds()).ScaleFactor;
+    int Px(int dip) => (int)Math.Round(dip * overlayScale);
+    int ButtonLeft(int index) { var (x, _, w, _) = WindowsShell.Bounds(oh); return x + w - Px(index switch { 0 => 137, 1 => 92, _ => 46 }); }
+    (int X, int Y) Button(int index, int dy = 0) => (ButtonLeft(index) + Px(6), WindowsShell.Bounds(oh).Y + Px(6 + dy));
     var resting = WindowsShell.ScreenPixel(Button(0).X, Button(0).Y);
     Check("the overlay has its colour", IsBlue(resting), Rgb(resting));
     var under = WindowsShell.ScreenPixel(Button(0).X, Button(0, 40).Y);
@@ -4879,18 +4894,25 @@ async Task TitleBarAsync(BrowserWindow win)
     static bool Between((byte R, byte G, byte B) c, (byte R, byte G, byte B) a, (byte R, byte G, byte B) b)
         => !Near(c, a, 12) && !Near(c, b, 12) && c.R >= Math.Min(a.R, b.R) - 6 && c.R <= Math.Max(a.R, b.R) + 6 && c.B >= Math.Min(a.B, b.B) - 6 && c.B <= Math.Max(a.B, b.B) + 6;
     var closeResting = WindowsShell.ScreenPixel(Button(2).X, Button(2).Y);
-    WindowsShell.MovePointer(Button(2).X, Button(2).Y + 10);
+    WindowsShell.MovePointer(Button(2).X, Button(2, 10).Y);
     var fadeIn = Samples(400, Button(2).X, Button(2).Y);
     var red = fadeIn[^1];
     Check("the close button turns red under the pointer", Eventually(() => IsRed(WindowsShell.ScreenPixel(Button(2).X, Button(2).Y)), step), Rgb(WindowsShell.ScreenPixel(Button(2).X, Button(2).Y)));
     Check("the close button fades to red: in-between colours show on the way", IsRed(red) && fadeIn.Any(c => Between(c, closeResting, red)), string.Join(" ", fadeIn.Select(Rgb).Distinct()));
     var gap = WindowsShell.ScreenPixel(ButtonLeft(2), Button(2).Y);
-    var firstFilled = WindowsShell.ScreenPixel(ButtonLeft(2) + 1, Button(2).Y);
-    Check("the close button's one-DIP spacing stays the overlay colour while its background turns red", Near(gap, closeResting, 12) && IsRed(firstFilled), $"gap {Rgb(gap)} next {Rgb(firstFilled)} resting {Rgb(closeResting)}");
-    WindowsShell.MovePointer(Button(0).X, Button(0).Y + 120);
+    // At a fractional scale the one-DIP spacing is a fractional pixel run that the window edge's rounding hides (at 150%
+    // red starts 3 px in with it and 1 px in without), so only whole scales can tell.
+    if (overlayScale == Math.Floor(overlayScale))
+    {
+        var firstFilled = WindowsShell.ScreenPixel(ButtonLeft(2) + (int)overlayScale, Button(2).Y);
+        Check("the close button's one-DIP spacing stays the overlay colour while its background turns red", Near(gap, closeResting, 12) && IsRed(firstFilled),
+            $"gap {Rgb(gap)} next {Rgb(firstFilled)} resting {Rgb(closeResting)}");
+    }
+    else Console.WriteLine($"SKIP  the close button's one-DIP spacing: at scale {overlayScale} it is a fractional pixel run that rounding hides");
+    WindowsShell.MovePointer(Button(0).X, Button(0, 120).Y);
     var fadeOut = Samples(400, Button(2).X, Button(2).Y);
     Check("leaving the close button fades it back", Near(fadeOut[^1], closeResting, 12) && fadeOut.Any(c => Between(c, red, closeResting)), string.Join(" ", fadeOut.Select(Rgb).Distinct()));
-    WindowsShell.Hover(Button(0).X, Button(0).Y + 10);
+    WindowsShell.Hover(Button(0).X, Button(0, 10).Y);
     // Electron: the caption foreground (black on a light frame, white on a dark one) at 0x1A x 1.3 over an opaque colour.
     var foreground = TitleBar.CaptionForeground(TitleBar.DefaultFrame(WindowsWindowStyle.AppsUseDarkTheme())) & 0xFF;
     byte Toward(byte from) => (byte)Math.Round(from + (foreground - from) * 0x22 / 255.0);
@@ -4899,7 +4921,7 @@ async Task TitleBarAsync(BrowserWindow win)
     Check("a hovered button lays the caption foreground at alpha 0x22 over its colour", Eventually(() => Near(WindowsShell.ScreenPixel(Button(0).X, Button(0).Y), tinted), step),
         $"{Rgb(resting)} -> {Rgb(WindowsShell.ScreenPixel(Button(0).X, Button(0).Y))}, expected {Rgb(tinted)}");
     overlaid.SetTitleBarOverlay(new TitleBarOverlayOptions { Color = "#20A050", Height = 32 });
-    WindowsShell.Hover(Button(0).X, Button(0).Y + 120);
+    WindowsShell.Hover(Button(0).X, Button(0, 120).Y);
     Check("SetTitleBarOverlay changes the colour and height", Eventually(() => IsGreen(WindowsShell.ScreenPixel(Button(0).X, Button(0).Y)) && overlaid.GetTitleBarOverlayBounds().Height == 32, step),
         $"{Rgb(WindowsShell.ScreenPixel(Button(0).X, Button(0).Y))} {overlaid.GetTitleBarOverlayBounds()}");
     var shrunk = WindowsShell.ScreenPixel(Button(0).X, Button(0, 30).Y);
@@ -4922,50 +4944,50 @@ async Task TitleBarAsync(BrowserWindow win)
     await Task.Delay(500);
     // Snap layouts: Windows asks what is under the pointer, and the drawn maximize button answers HTMAXBUTTON.
     const int HtMaxButton = 9;
-    var (mx, my) = (Button(1).X + 17, Button(1).Y + 8);
-    Check("the maximize button answers HTMAXBUTTON, its neighbours do not", WindowsShell.HitTest(oh, mx, my) == HtMaxButton && WindowsShell.HitTest(oh, Button(0).X + 17, my) == HtClient,
-        $"{WindowsShell.HitTest(oh, mx, my)} {WindowsShell.HitTest(oh, Button(0).X + 17, my)}");
+    var (mx, my) = (Button(1).X + Px(17), Button(1, 8).Y);
+    Check("the maximize button answers HTMAXBUTTON, its neighbours do not", WindowsShell.HitTest(oh, mx, my) == HtMaxButton && WindowsShell.HitTest(oh, Button(0).X + Px(17), my) == HtClient,
+        $"{WindowsShell.HitTest(oh, mx, my)} {WindowsShell.HitTest(oh, Button(0).X + Px(17), my)}");
     var maxResting = WindowsShell.ScreenPixel(Button(1).X, Button(1).Y);
-    var below = (X: mx, Y: WindowsShell.Bounds(oh).Y + 150);
+    var below = (X: mx, Y: WindowsShell.Bounds(oh).Y + Px(150));
     static bool IsYellow((byte R, byte G, byte B) c) => c.R > 200 && c.G > 200 && c.B < 100;
     // Windows offers snap layouts to the foreground window only, and a load no longer activates a window, so a click does.
     WindowsShell.Click(below.X, below.Y);
     await Task.Delay(300);
     var pageBelow = WindowsShell.ScreenPixel(below.X, below.Y);
-    WindowsShell.Hover(mx - 4, my);
+    WindowsShell.Hover(mx - Px(4), my);
     WindowsShell.Hover(mx, my);
     var maxHovered = WindowsShell.ScreenPixel(Button(1).X, Button(1).Y);
     Check("the maximize button shows its hover through HTMAXBUTTON", maxHovered.R > maxResting.R + 8 && maxHovered.G > maxResting.G + 8, $"{Rgb(maxResting)} -> {Rgb(maxHovered)}");
     Check("hovering it opens Windows 11's snap layouts over the page", IsYellow(pageBelow) && Eventually(() => !IsYellow(WindowsShell.ScreenPixel(below.X, below.Y)), TimeSpan.FromSeconds(4)),
         $"{Rgb(pageBelow)} -> {Rgb(WindowsShell.ScreenPixel(below.X, below.Y))}");
-    WindowsShell.Hover(WindowsShell.Bounds(oh).X + 60, WindowsShell.Bounds(oh).Y + 200);
+    WindowsShell.Hover(WindowsShell.Bounds(oh).X + Px(60), WindowsShell.Bounds(oh).Y + Px(200));
     await Task.Delay(800);
 
     // The buttons follow the window's flags: a disabled one takes no clicks and offers no snap layouts.
     overlaid.SetMaximizable(false);
     await Task.Delay(300);
-    WindowsShell.Click(Button(1).X, Button(1).Y + 8);
+    WindowsShell.Click(Button(1).X, Button(1, 8).Y);
     Check("SetMaximizable(false) disables the maximize button", WindowsShell.HitTest(oh, mx, my) != HtMaxButton && !overlaid.IsMaximized, $"hit={WindowsShell.HitTest(oh, mx, my)} maximized={overlaid.IsMaximized}");
     overlaid.SetMaximizable(true);
     overlaid.SetMinimizable(false);
     await Task.Delay(300);
-    WindowsShell.Click(Button(0).X, Button(0).Y + 8);
+    WindowsShell.Click(Button(0).X, Button(0, 8).Y);
     Check("SetMinimizable(false) disables the minimize button", !overlaid.IsMinimized);
     overlaid.SetMinimizable(true);
     overlaid.SetClosable(false);
     await Task.Delay(300);
-    WindowsShell.Click(Button(2).X, Button(2).Y + 8);
+    WindowsShell.Click(Button(2).X, Button(2, 8).Y);
     await Task.Delay(500);
     Check("SetClosable(false) disables the close button", !closed && !overlaid.IsDestroyed);
     overlaid.SetClosable(true);
     await Task.Delay(300);
 
-    WindowsShell.Click(Button(1).X, Button(1).Y + 8);
+    WindowsShell.Click(Button(1).X, Button(1, 8).Y);
     Check("the maximize button maximizes", Eventually(() => overlaid.IsMaximized, step));
-    WindowsShell.Click(Button(1).X, Button(1).Y + 8);
+    WindowsShell.Click(Button(1).X, Button(1, 8).Y);
     Check("the same button then restores", Eventually(() => !overlaid.IsMaximized, step));
     await Task.Delay(500);
-    WindowsShell.Click(Button(0).X, Button(0).Y + 8);
+    WindowsShell.Click(Button(0).X, Button(0, 8).Y);
     Check("the minimize button minimizes", Eventually(() => overlaid.IsMinimized, step));
     overlaid.Restore();
     await Task.Delay(800);
@@ -4976,7 +4998,7 @@ async Task TitleBarAsync(BrowserWindow win)
     Check("the overlay hides in full screen", Eventually(() => overlaid.IsFullScreen, step) && !IsGreen(fullscreenCorner), Rgb(fullscreenCorner));
     overlaid.SetFullScreen(false);
     await Task.Delay(1500);
-    WindowsShell.Click(Button(2).X, Button(2).Y + 8);
+    WindowsShell.Click(Button(2).X, Button(2, 8).Y);
     Check("the close button closes the window", Eventually(() => closed, step));
     Menu.SetApplicationMenu(appMenu);
 
