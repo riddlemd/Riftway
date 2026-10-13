@@ -19,7 +19,7 @@ The 67 rows include `BrowserView` (deprecated, never implemented; counted as not
 | [BrowserWindow](parity/browser-window.md) (with `BaseWindow`) | 294 | 168 | 55 | 71 | 57.1% | 66.5% |
 | [webContents](parity/web-contents.md) (with `navigationHistory`, `WebFrameMain`) | 230 | 111 | 70 | 49 | 48.3% | 63.5% |
 | [DownloadItem](parity/download-item.md) (with the session's download API) | 31 | 20 | 10 | 1 | 64.5% | 80.6% |
-| [app](parity/app.md) (with `app.dock` as one item) | 114 | 64 | 33 | 17 | 56.1% | 70.6% |
+| [app](parity/app.md) (with `app.dock` as one item) | 114 | 67 | 30 | 17 | 58.8% | 71.9% |
 | [session](parity/session.md) (module and `Session`; other modules' members n/a) | 75 | 24 | 16 | 35 | 32.0% | 42.7% |
 
 **Source** — where the implementation comes from:
@@ -38,7 +38,7 @@ Where an implemented module differs from Electron, the difference and its reason
 
 | Electron | Oriel | Source | Wave | Status |
 |---|---|---|---|---|
-| `app` | `OrielApp` | CEF + OS | M2 | partial: 64 of 114 applicable items done (56.1%), see parity/app.md; lifecycle, paths, locale, protocol client, login items and recent documents (Windows, macOS; protocol client on Linux), the macOS app delegate's events, badge, jump list, metrics, single-instance lock over CEF's profile lock (A2), GPU status and info from a hidden chrome://gpu page (A27); `setProxy` through the global proxy preference; `child-process-gone`, the accessibility mode and `resolveProxy` with Oriel's CEF patches 0007-0009 (A28, A31, A35); no Handoff, NSS imports (see DRIFT.md) |
+| `app` | `OrielApp` | CEF + OS | M2 | partial: 67 of 114 applicable items done (58.8%), see parity/app.md; lifecycle, paths, locale, protocol client, login items and recent documents (Windows, macOS; protocol client on Linux), the macOS app delegate's events, badge, jump list, metrics, single-instance lock over CEF's profile lock (A2), GPU status and info from a hidden chrome://gpu page (A27); `setProxy` through the global proxy preference; `child-process-gone`, the accessibility mode and `resolveProxy` with Oriel's CEF patches 0007-0009 (A28, A31, A35); no Handoff, NSS imports (see DRIFT.md) |
 | `process` | `OrielProcess` | .NET + CEF | M2 | partial: `type`, `versions` (`chrome`, `oriel`), `getCreationTime`, `getCPUUsage`, `getSystemMemoryInfo`, `getSystemVersion`, `setFdLimit`, `getProcessMemoryInfo` (`shared` is 0, P8), `windowsStore` (P10), `resourcesPath` (P17), `crash`, `hang` (P18); no `mas`; V8/Blink-only members are P7 |
 | `CommandLine` (`app.commandLine`) | `OrielApp.CommandLine` | CEF | M2 | done: `appendSwitch`, `appendArgument`, `hasSwitch`, `getSwitchValue`, `removeSwitch`, in Chromium's switch syntax, applied before Chromium starts (DRIFT A19) |
 | Command-line switches | same switches | CEF | M2 | partial: Chromium's switches pass through from the process's arguments and `CommandLine`; `--enable-logging`, `--log-file`, `--log-level` work (DRIFT A6); Node's (`--inspect`, ...) do not apply; the rest not checked one by one |

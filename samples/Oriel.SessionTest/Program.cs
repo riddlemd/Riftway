@@ -1411,12 +1411,17 @@ async Task RunAsync()
         // locale(1) resolves LC_ALL, the category and LANG as setlocale does.
         string Category(string name) => Output("/usr/bin/locale").Split('\n').First(l => l.StartsWith(name + "=", StringComparison.Ordinal))[(name.Length + 1)..].Trim('"');
         var messages = Category("LC_MESSAGES");
-        var time = Category("LC_TIME").Split('.')[0];
+        var timeName = Category("LC_TIME");
+        // The C library falls back to C for a locale it does not have; locale -a lists codesets as glibc normalises them.
+        static string Normalised(string name) => name.IndexOf('.') is var dot and >= 0
+            ? name[..dot] + "." + new string(name[(dot + 1)..].Where(char.IsLetterOrDigit).Select(char.ToLowerInvariant).ToArray()) : name;
+        var installed = Output("/usr/bin/locale", "-a").Split('\n').Select(Normalised).Contains(Normalised(timeName));
+        var time = installed ? timeName.Split('.')[0] : "C";
         var region = time.Contains('_') ? time[(time.IndexOf('_') + 1)..] : "";
         var expectedLocale = messages is "C" or "POSIX" || messages.StartsWith("C.", StringComparison.Ordinal) ? "en-US@posix" : messages.Split('.')[0].Replace('_', '-');
         Check("The locale getters follow the C library's locale on Linux", systemLocale == expectedLocale && countryCode == (region.Length == 2 ? region : "")
             && (Environment.GetEnvironmentVariable("LANGUAGE") is { Length: > 0 } || languages.Split(',', StringSplitOptions.RemoveEmptyEntries).FirstOrDefault() == (expectedLocale == "en-US@posix" ? null : expectedLocale)),
-            $"{languages}|{systemLocale}|{countryCode} vs LC_MESSAGES={messages} LC_TIME={time}");
+            $"{languages}|{systemLocale}|{countryCode} vs LC_MESSAGES={messages} LC_TIME={timeName} installed={installed}");
     }
 
     if (OperatingSystem.IsWindows())

@@ -32,13 +32,55 @@ public sealed class AppLocaleTests
     }
 
     [Fact]
-    public void LinuxRegion_ReadsTimeLocale()
+    public void LinuxTimeLocale_ReadsLcAllThenLcTimeThenLang()
     {
-        Assert.Equal("US", OrielApp.LinuxRegion(Env(("LANG", "en_US.UTF-8"))));
-        Assert.Equal("GB", OrielApp.LinuxRegion(Env(("LANG", "en_US"), ("LC_TIME", "en_GB"))));
-        Assert.Equal("JP", OrielApp.LinuxRegion(Env(("LC_ALL", "ja_JP"), ("LC_TIME", "en_GB"))));
-        Assert.Equal("", OrielApp.LinuxRegion(Env(("LANG", "C"))));
-        Assert.Equal("", OrielApp.LinuxRegion(Env(("LANG", "en_"))));
+        Assert.Equal("en_US.UTF-8", OrielApp.LinuxTimeLocale(Env(("LANG", "en_US.UTF-8"))));
+        Assert.Equal("en_GB", OrielApp.LinuxTimeLocale(Env(("LANG", "en_US"), ("LC_TIME", "en_GB"))));
+        Assert.Equal("ja_JP", OrielApp.LinuxTimeLocale(Env(("LC_ALL", "ja_JP"), ("LC_TIME", "en_GB"))));
+        Assert.Equal("C", OrielApp.LinuxTimeLocale(Env()));
+    }
+
+    [Fact]
+    public void LinuxRegion_IsTheTerritory()
+    {
+        Assert.Equal("US", OrielApp.LinuxRegion("en_US.UTF-8"));
+        Assert.Equal("GB", OrielApp.LinuxRegion("en_GB"));
+        Assert.Equal("", OrielApp.LinuxRegion("C"));
+        Assert.Equal("", OrielApp.LinuxRegion("C.UTF-8"));
+        Assert.Equal("", OrielApp.LinuxRegion("en_"));
+    }
+
+    [Fact]
+    public void LinuxLanguages_UnaliasEachEntryFirst()
+    {
+        var aliases = new Dictionary<string, string> { ["english"] = "en_US.ISO-8859-1", ["deutsch"] = "de_DE.ISO-8859-1" };
+        Assert.Equal(["en-US", "en-US", "en", "en", "fr"],
+            OrielApp.LinuxLanguages(Env(("LANGUAGE", "english:fr")), a => aliases.GetValueOrDefault(a)));
+        Assert.Equal(["de-DE", "de-DE", "de", "de"], OrielApp.LinuxLanguages(Env(("LANG", "deutsch")), a => aliases.GetValueOrDefault(a)));
+    }
+
+    [Fact]
+    public void Unalias_FollowsTheChainButStopsOnALoop()
+    {
+        var chain = new Dictionary<string, string> { ["a"] = "b", ["b"] = "c", ["c"] = "c" };
+        Assert.Equal("c", OrielApp.Unalias("a", k => chain.GetValueOrDefault(k)));
+        Assert.Equal("z", OrielApp.Unalias("z", k => chain.GetValueOrDefault(k)));
+        var loop = new Dictionary<string, string> { ["x"] = "y", ["y"] = "x" };
+        Assert.Contains(OrielApp.Unalias("x", k => loop.GetValueOrDefault(k)), new[] { "x", "y" });
+    }
+
+    [Fact]
+    public void ReadAliases_TakesTheFirstEntryAndSkipsComments()
+    {
+        var path = Path.GetTempFileName();
+        try
+        {
+            File.WriteAllText(path, "# comment\nenglish\ten_US.ISO-8859-1\n\nenglish en_GB\nbad\nfrench   fr_FR.ISO-8859-1  \n");
+            var aliases = OrielApp.ReadAliases(path);
+            Assert.Equal(new Dictionary<string, string> { ["english"] = "en_US.ISO-8859-1", ["french"] = "fr_FR.ISO-8859-1" }, aliases);
+        }
+        finally { File.Delete(path); }
+        Assert.Empty(OrielApp.ReadAliases(path));
     }
 
     [Fact]
