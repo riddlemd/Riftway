@@ -2469,9 +2469,17 @@ async Task PermissionChecks(bool mediaOnly = false)
             catch (Exception e) when (e is IOException or UnauthorizedAccessException) { await Task.Delay(250); }
         }    }
 
+    // With Windows' location access off, its provider fails every request as PERMISSION_DENIED, granted or not
+    // (LocationProviderWinrt::OnStatusChanged), so a grant shows only in what the handler was asked.
+#pragma warning disable CA1416
+    static bool WindowsLocationOff() => OperatingSystem.IsWindows() && new[] { Microsoft.Win32.Registry.CurrentUser, Microsoft.Win32.Registry.LocalMachine }.Any(hive =>
+        hive.OpenSubKey(@"Software\Microsoft\Windows\CurrentVersion\CapabilityAccessManager\ConsentStore\location")?.GetValue("Value") as string == "Deny");
+#pragma warning restore CA1416
+    var locationOff = WindowsLocationOff();
     var byDefault = await Open(Session.FromPartition("perm-default"));
     var grantedByDefault = await Run(byDefault, Geolocation);
-    Check("with no permission handler, a permission is granted, as Electron", grantedByDefault is "granted" or "ok", grantedByDefault);
+    if (locationOff) Console.WriteLine($"SKIP  with no permission handler, a permission is granted: Windows location access is off, so a grant reads as denied ({grantedByDefault})");
+    else Check("with no permission handler, a permission is granted, as Electron", grantedByDefault is "granted" or "ok", grantedByDefault);
     var queriedByDefault = await Run(byDefault, Query("{ name: 'camera' }"));
     Check("with no check handler, navigator.permissions.query is granted, as Electron", queriedByDefault == "granted", queriedByDefault);
     byDefault.Destroy();
@@ -2495,7 +2503,8 @@ async Task PermissionChecks(bool mediaOnly = false)
     var granted = await Run(grantingWin, Geolocation);
     var grantedAgain = await Run(grantingWin, Geolocation);
     Check("a permission handler that grants allows it; Chromium then remembers the grant for the origin (drift E29)",
-        granted is "granted" or "ok" && grantedAgain is "granted" or "ok" && grants.Count == 1, $"{granted} {grantedAgain} {Seen(grants)}");
+        (locationOff ? granted is not (null or "timeout") && grantedAgain is not (null or "timeout") : granted is "granted" or "ok" && grantedAgain is "granted" or "ok") && grants.Count == 1,
+        $"{granted} {grantedAgain} {Seen(grants)}{(locationOff ? " (Windows location access off: outcomes read as denied)" : "")}");
     grantingWin.Destroy();
 
     // Notifications: Chromium refuses them unasked in an in-memory profile, so these sessions are on disk. A grant from an
@@ -2588,16 +2597,22 @@ async Task PermissionChecks(bool mediaOnly = false)
             Check($"a display media handler's loopback audio gives {loopbackKinds}", withAudio == loopbackKinds, withAudio);
         }
 
-        // A desktopCapturer id as chromeMediaSourceId: CEF parses it as a DesktopMediaID and captures that source.
+        // A desktopCapturer id as chromeMediaSourceId: CEF parses it as a DesktopMediaID and captures that source. Its device
+        // carries no DisplayMediaInformation, so the track has no displaySurface (drift E30).
         var sources = await DesktopCapturer.GetSourcesAsync(new SourcesOptions { Types = ["screen", "window"], ThumbnailSize = new System.Drawing.Size(0, 0) });
         foreach (var source in new[] { sources.FirstOrDefault(s => s.Id.StartsWith("screen:", StringComparison.Ordinal)), sources.FirstOrDefault(s => s.Id.StartsWith("window:", StringComparison.Ordinal)) })
         {
             if (source is null) continue;
             streams = new() { Video = source };
             var legacy = await Run(mediaWin, "navigator.mediaDevices.getUserMedia({ video: { mandatory: { chromeMediaSource: 'desktop', chromeMediaSourceId: "
-                + System.Text.Json.JsonSerializer.Serialize(source.Id) + " } } }).then(s => { const v = s.getVideoTracks()[0]; const surface = v.getSettings().displaySurface; s.getTracks().forEach(t => t.stop()); return surface; }, e => e.name)", gesture: true);
-            var expected = source.Id.StartsWith("screen:", StringComparison.Ordinal) ? "monitor" : "window";
-            Check($"getUserMedia with a desktopCapturer {expected} id as chromeMediaSourceId captures that kind of surface", legacy == expected, $"{source.Id} {legacy}");
+                + System.Text.Json.JsonSerializer.Serialize(source.Id) + " } } }).then(s => new Promise(resolve => { const v = s.getVideoTracks()[0]; const settings = v.getSettings();"
+                + " const el = document.createElement('video'); el.muted = true; el.srcObject = s; let done = false;"
+                + " const finish = () => { if (done) return; done = true; s.getTracks().forEach(t => t.stop()); resolve(`${settings.deviceId} ${settings.displaySurface ?? 'none'} ${el.videoWidth}x${el.videoHeight}`); };"
+                + " el.onloadeddata = finish; setTimeout(finish, 4000); el.play().catch(() => {}); }), e => e.name)", gesture: true);
+            var kind = source.Id.StartsWith("screen:", StringComparison.Ordinal) ? "screen" : "window";
+            var parts = legacy?.Split(' ') ?? [];
+            Check($"getUserMedia with a desktopCapturer {kind} id as chromeMediaSourceId captures that source, with no displaySurface (drift E30)",
+                parts is [var deviceId, "none", var size] && deviceId == source.Id && size != "0x0", $"{source.Id}: {legacy}");
         }
     }
     streams = null;
