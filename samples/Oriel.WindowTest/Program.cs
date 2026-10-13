@@ -278,6 +278,31 @@ async Task RunAsync(BrowserWindow win, BrowserWindow simple)
             win.EnteredFullScreen -= onEnter;
             win.LeftFullScreen -= onLeave;
         }
+
+        Eventually(() => !win.IsFullScreen && win.GetBounds() is { Width: 700, Height: 500 }, step);
+        var order = new System.Collections.Concurrent.ConcurrentQueue<string>();
+        EventHandler leaveAtOnce = (_, _) =>
+        {
+            order.Enqueue("entered");
+            win.SetFullScreen(false);
+        };
+        EventHandler onLeft = (_, _) => order.Enqueue("left");
+        win.EnteredFullScreen += leaveAtOnce;
+        win.LeftFullScreen += onLeft;
+        try
+        {
+            win.SetFullScreen(true);
+            await Task.Delay(1500);
+            Check("Windows: a handler that calls SetFullScreen(false) inside EnteredFullScreen gets exactly Entered then Left",
+                order.ToArray() is ["entered", "left"], string.Join(",", order));
+        }
+        finally
+        {
+            win.EnteredFullScreen -= leaveAtOnce;
+            win.LeftFullScreen -= onLeft;
+            win.SetFullScreen(false);
+            Eventually(() => !win.IsFullScreen, step);
+        }
     }
 
     // Window managers restore the bounds after reporting the state change.
