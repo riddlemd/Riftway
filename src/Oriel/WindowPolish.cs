@@ -30,7 +30,7 @@ public enum ResizeEdge
     BottomLeft,
 }
 
-/// <summary>Arguments for <see cref="BrowserWindow.WillResize"/>; cancel to keep the current size.</summary>
+/// <summary>Arguments for <see cref="BaseWindow.WillResize"/>; cancel to keep the current size.</summary>
 public sealed class WillResizeEventArgs(Rectangle newBounds, ResizeEdge edge) : CancelEventArgs
 {
     /// <summary>The bounds the window is about to take, in DIPs. Electron's <c>newBounds</c>.</summary>
@@ -40,14 +40,14 @@ public sealed class WillResizeEventArgs(Rectangle newBounds, ResizeEdge edge) : 
     public ResizeEdge Edge { get; } = edge;
 }
 
-/// <summary>Arguments for <see cref="BrowserWindow.WillMove"/>; cancel to keep the window where it is.</summary>
+/// <summary>Arguments for <see cref="BaseWindow.WillMove"/>; cancel to keep the window where it is.</summary>
 public sealed class WillMoveEventArgs(Rectangle newBounds) : CancelEventArgs
 {
     /// <summary>The bounds the window is about to take, in DIPs. Electron's <c>newBounds</c>.</summary>
     public Rectangle NewBounds { get; } = newBounds;
 }
 
-/// <summary>Options for <see cref="BrowserWindow.SetIgnoreMouseEvents"/>; Electron's <c>options</c>.</summary>
+/// <summary>Options for <see cref="BaseWindow.SetIgnoreMouseEvents"/>; Electron's <c>options</c>.</summary>
 public sealed record IgnoreMouseEventsOptions
 {
     /// <summary>Still deliver mouse moves to the page while ignoring clicks; applies only when ignoring. Windows only for

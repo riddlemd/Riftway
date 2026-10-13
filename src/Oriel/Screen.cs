@@ -177,15 +177,15 @@ public static unsafe partial class Screen
     /// <summary>Converts a rectangle in physical screen pixels to DIPs, by the scale of <paramref name="window"/>'s display,
     /// or of the display the rectangle overlaps most. Electron's <c>screen.screenToDipRect()</c>.</summary>
     /// <exception cref="InvalidOperationException">Before <see cref="OrielApp.Ready"/>.</exception>
-    public static Rectangle ScreenToDipRect(BrowserWindow? window, Rectangle rect) => OnUi(() => ConvertRect(window, rect, toPixels: false));
+    public static Rectangle ScreenToDipRect(BaseWindow? window, Rectangle rect) => OnUi(() => ConvertRect(window, rect, toPixels: false));
 
     /// <summary>Converts a rectangle in screen DIPs to physical pixels, by the scale of <paramref name="window"/>'s display,
     /// or of the display the rectangle overlaps most. Electron's <c>screen.dipToScreenRect()</c>.</summary>
     /// <exception cref="InvalidOperationException">Before <see cref="OrielApp.Ready"/>.</exception>
-    public static Rectangle DipToScreenRect(BrowserWindow? window, Rectangle rect) => OnUi(() => ConvertRect(window, rect, toPixels: true));
+    public static Rectangle DipToScreenRect(BaseWindow? window, Rectangle rect) => OnUi(() => ConvertRect(window, rect, toPixels: true));
 
     // Both corners through one display, so the rectangle keeps a single scale even where it spans displays.
-    private static Rectangle ConvertRect(BrowserWindow? window, Rectangle rect, bool toPixels)
+    private static Rectangle ConvertRect(BaseWindow? window, Rectangle rect, bool toPixels)
     {
         var key = window?.GetBounds() is { Width: > 0 } bounds ? bounds : rect;
         var match = new cef_rect_t { x = key.X, y = key.Y, width = key.Width, height = key.Height };

@@ -163,7 +163,7 @@ public sealed record ContextMenuParams
 public sealed record PopupOptions
 {
     /// <summary>The window to show the menu in; defaults to the focused window.</summary>
-    public BrowserWindow? Window { get; init; }
+    public BaseWindow? Window { get; init; }
 
     /// <summary>Horizontal position in the window's page, in DIPs; with <see cref="Y"/>. Defaults to the pointer.</summary>
     public int? X { get; init; }

@@ -5,7 +5,7 @@ using Oriel.Cef.Platform;
 
 namespace Oriel;
 
-public sealed partial record BrowserWindowOptions
+public partial record BaseWindowOptions
 {
     /// <summary>Identifies the window to Oriel, for <see cref="WindowStatePersistence"/>; not its title. Unique among
     /// open windows, and free again once the window is closed. Electron's <c>name</c>.</summary>
@@ -18,7 +18,7 @@ public sealed partial record BrowserWindowOptions
     public WindowStatePersistence? WindowStatePersistence { get; init; }
 }
 
-public sealed unsafe partial class BrowserWindow
+public unsafe partial class BaseWindow
 {
     // Names of windows not yet destroyed (Electron's WindowList), guarded by s_openGate.
     private static readonly HashSet<string> s_names = new(StringComparer.Ordinal);
@@ -37,7 +37,7 @@ public sealed unsafe partial class BrowserWindow
     private int _saveGeneration;
     private bool _fullscreenTransitioning;
 
-    /// <summary>The window's <see cref="BrowserWindowOptions.Name"/>, or null.</summary>
+    /// <summary>The window's <see cref="BaseWindowOptions.Name"/>, or null.</summary>
     public string? Name => _options.Name is { Length: > 0 } name ? name : null;
 
     /// <summary>Raised after the saved bounds and display mode were applied to a new window (the display mode lands on
@@ -90,7 +90,7 @@ public sealed unsafe partial class BrowserWindow
         Resized += DebouncedSave;
     }
 
-    private void ReleaseName()
+    private protected void ReleaseName()
     {
         if (Name is { } name)
             lock (s_openGate) s_names.Remove(name);

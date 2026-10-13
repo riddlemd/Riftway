@@ -46,6 +46,15 @@ public unsafe class View
     /// <summary>The native panel, holding one reference of this object's.</summary>
     internal cef_view_t* NativeView { get; private set; }
 
+    /// <summary>UI thread: drops this object's reference to the panel, for a view no window will ever hold.</summary>
+    internal void ReleaseNative()
+    {
+        if (NativeView is null) return;
+        NativeObject.Release(NativeView);
+        NativeView = null;
+        _panel = null;
+    }
+
     // Native child indexes count the page first.
     private int Offset => _page is null ? 0 : 1;
 
@@ -71,8 +80,17 @@ public unsafe class View
     /// <summary>The view this one is a child of.</summary>
     internal View? Parent { get; private set; }
 
-    /// <summary>Whether this view always fills its parent instead of keeping its own bounds: a window's own page.</summary>
+    /// <summary>Whether this view always fills its parent instead of keeping its own bounds: a window's own page and its
+    /// content view.</summary>
     internal bool FillsParent { get; set; }
+
+    /// <summary>UI thread: a view that filled its parent keeps the bounds it has, as a view placed there would.</summary>
+    internal void StopFilling()
+    {
+        if (!FillsParent) return;
+        FillsParent = false;
+        if (NativeView is not null) _requested = BrowserWindow.ToRectangle(NativeView->get_bounds(NativeView));
+    }
 
     /// <summary>The view's bounds changed, by <see cref="SetBounds"/> or a layout. Raised on the UI thread.
     /// Electron's <c>bounds-changed</c> event.</summary>
@@ -99,7 +117,13 @@ public unsafe class View
             lock (_children) count = _children.Count - (view.Parent == this ? 1 : 0);
             if (index < 0) throw new ArgumentOutOfRangeException(nameof(index));
             var at = Math.Min(index ?? count, count);
-            view.Parent?.RemoveChild(view);
+            if (view.Parent is { } previous && previous != this)
+            {
+                previous.RemoveChild(view);
+                // Only a window fills its content view; anywhere else a view keeps its own bounds.
+                view.StopFilling();
+            }
+            else view.Parent?.RemoveChild(view);
             InsertChild(view, at);
             return true;
         });
@@ -167,6 +191,9 @@ public unsafe class View
         _backgroundColor = argb;
         ApplyBackgroundColor();
     }
+
+    /// <summary>The background colour CEF has for the view, as ARGB. For tests.</summary>
+    internal uint NativeBackgroundColor() => CefThread.InvokeOnUi(() => NativeView is null ? 0 : NativeView->get_background_color(NativeView));
 
     /// <summary>Whether CEF's children are exactly <see cref="Children"/>, in order. For tests.</summary>
     internal bool NativeChildrenMatch() => CefThread.InvokeOnUi(() =>

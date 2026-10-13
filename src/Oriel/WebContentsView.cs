@@ -16,7 +16,7 @@ public sealed record WebContentsViewOptions
     public WebContents? WebContents { get; init; }
 }
 
-/// <summary>A view showing a page, placed inside a window's <see cref="BrowserWindow.ContentView"/> or another
+/// <summary>A view showing a page, placed inside a window's <see cref="BaseWindow.ContentView"/> or another
 /// <see cref="View"/>. Electron's <c>WebContentsView</c>.</summary>
 /// <remarks>The page loads once the view is first added to a window, and fills the view below any child views. It is an
 /// Alloy-style browser: a window hosts one Chrome-style page, its own (DRIFT V2). As Electron, the view stays where it is

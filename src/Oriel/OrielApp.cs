@@ -305,7 +305,7 @@ public sealed unsafe partial class OrielApp
     /// <summary>Ends <see cref="Run"/> once open windows have closed. Electron's <c>app.quit()</c>.</summary>
     /// <remarks>May be called from any thread once the application is ready.</remarks>
     /// <remarks>As Electron: raises <see cref="BeforeQuit"/>, closes every window (each may still cancel with
-    /// <see cref="BrowserWindow.Closing"/>, which cancels the quit), then raises <see cref="WillQuit"/>.</remarks>
+    /// <see cref="BaseWindow.Closing"/>, which cancels the quit), then raises <see cref="WillQuit"/>.</remarks>
     public void Quit()
     {
         // CEF only quits from the UI thread; called anywhere else, cef_quit_message_loop does nothing.
@@ -334,7 +334,7 @@ public sealed unsafe partial class OrielApp
         BeforeQuit?.Invoke(this, before);
         if (before.Cancel) return;
         _quitting = true;
-        var windows = BrowserWindow.GetAllWindows();
+        var windows = BaseWindow.GetAllWindows();
         if (windows.Count == 0) FinishQuit();
         else foreach (var window in windows) window.Close();
     }
@@ -400,7 +400,7 @@ public sealed unsafe partial class OrielApp
     {
         var (line, data) = TakeAdditionalData(commandLine);
         if (SecondInstance is { } handler) handler(this, new SecondInstanceEventArgs(line, workingDirectory, data));
-        else BrowserWindow.FocusAll();
+        else BaseWindow.FocusAll();
     }
 
     private void OnContextInitialized()

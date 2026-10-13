@@ -75,7 +75,7 @@ public enum SaveDialogProperties
     DontAddToRecent = 1 << 4,
 }
 
-/// <summary>Options for <see cref="Dialog.ShowOpenDialogAsync(BrowserWindow?, OpenDialogOptions)"/>; Electron's
+/// <summary>Options for <see cref="Dialog.ShowOpenDialogAsync(BaseWindow?, OpenDialogOptions)"/>; Electron's
 /// <c>showOpenDialog</c> options.</summary>
 public sealed record OpenDialogOptions
 {
@@ -104,7 +104,7 @@ public sealed record OpenDialogOptions
     public bool SecurityScopedBookmarks { get; init; }
 }
 
-/// <summary>Options for <see cref="Dialog.ShowSaveDialogAsync(BrowserWindow?, SaveDialogOptions)"/>; Electron's
+/// <summary>Options for <see cref="Dialog.ShowSaveDialogAsync(BaseWindow?, SaveDialogOptions)"/>; Electron's
 /// <c>showSaveDialog</c> options.</summary>
 public sealed record SaveDialogOptions
 {
@@ -163,8 +163,9 @@ public sealed record SaveDialogReturnValue(bool Canceled, string FilePath)
 /// <summary>File open and save dialogs; Electron's <c>dialog</c> (message boxes come later).</summary>
 /// <remarks>On macOS these are AppKit's NSOpenPanel and NSSavePanel, set up as Electron's: a sheet on the window
 /// given, else a free-standing panel. Windows shows the shell's file dialog on a thread of its own, owned by the window
-/// given or by none, as Electron does. On Linux CEF shows its dialogs through a window's browser, so a dialog needs an
-/// open window: the one given, else the focused window, else any. Use after <see cref="OrielApp.Ready"/>, from any thread.</remarks>
+/// given or by none, as Electron does. On Linux CEF shows its dialogs through a page's browser, so a dialog needs an open
+/// page: the given window's own or, for a <see cref="BaseWindow"/>, the first in its views; with no window given, the
+/// focused window's, else any window's. Use after <see cref="OrielApp.Ready"/>, from any thread.</remarks>
 public static unsafe partial class Dialog
 {
     /// <summary>Asks the user for files or a directory. Electron's <c>dialog.showOpenDialog()</c>.</summary>
@@ -172,7 +173,7 @@ public static unsafe partial class Dialog
     /// <exception cref="NotSupportedException">On Linux, an option CEF's dialog cannot honour, such as
     /// <see cref="OpenDialogOptions.ButtonLabel"/>, or directories with <see cref="OpenDialogProperties.MultiSelections"/>
     /// or with <see cref="OpenDialogProperties.OpenFile"/>.</exception>
-    public static Task<OpenDialogReturnValue> ShowOpenDialogAsync(BrowserWindow? window, OpenDialogOptions options)
+    public static Task<OpenDialogReturnValue> ShowOpenDialogAsync(BaseWindow? window, OpenDialogOptions options)
     {
         ArgumentNullException.ThrowIfNull(options);
         if (OperatingSystem.IsMacOS()) return MacOpenAsync(window, options);
@@ -182,14 +183,14 @@ public static unsafe partial class Dialog
             .ContinueWith(t => new OpenDialogReturnValue(t.Result.Count == 0, t.Result), TaskScheduler.Default);
     }
 
-    /// <inheritdoc cref="ShowOpenDialogAsync(BrowserWindow?, OpenDialogOptions)"/>
+    /// <inheritdoc cref="ShowOpenDialogAsync(BaseWindow?, OpenDialogOptions)"/>
     public static Task<OpenDialogReturnValue> ShowOpenDialogAsync(OpenDialogOptions options) => ShowOpenDialogAsync(null, options);
 
     /// <summary>Asks the user where to save a file. Electron's <c>dialog.showSaveDialog()</c>.</summary>
     /// <exception cref="InvalidOperationException">Before <see cref="OrielApp.Ready"/>; or, on Linux, no window is open.</exception>
     /// <exception cref="NotSupportedException">On Linux, an option CEF's dialog cannot honour, such as
     /// <see cref="SaveDialogOptions.ButtonLabel"/>.</exception>
-    public static Task<SaveDialogReturnValue> ShowSaveDialogAsync(BrowserWindow? window, SaveDialogOptions options)
+    public static Task<SaveDialogReturnValue> ShowSaveDialogAsync(BaseWindow? window, SaveDialogOptions options)
     {
         ArgumentNullException.ThrowIfNull(options);
         if (OperatingSystem.IsMacOS()) return MacSaveAsync(window, options);
@@ -199,7 +200,7 @@ public static unsafe partial class Dialog
             .ContinueWith(t => new SaveDialogReturnValue(t.Result.Count == 0, t.Result.Count == 0 ? string.Empty : t.Result[0]), TaskScheduler.Default);
     }
 
-    /// <inheritdoc cref="ShowSaveDialogAsync(BrowserWindow?, SaveDialogOptions)"/>
+    /// <inheritdoc cref="ShowSaveDialogAsync(BaseWindow?, SaveDialogOptions)"/>
     public static Task<SaveDialogReturnValue> ShowSaveDialogAsync(SaveDialogOptions options) => ShowSaveDialogAsync(null, options);
 
     /// <summary>Asks for files or a directory and waits for the answer: the chosen paths, or null when cancelled.
@@ -210,8 +211,8 @@ public static unsafe partial class Dialog
     /// is up, as in a modal dialog's loop.</remarks>
     /// <exception cref="InvalidOperationException">Before <see cref="OrielApp.Ready"/>; or, on Linux, called on the
     /// UI thread, which must stay free to run the dialog, or no window is open.</exception>
-    /// <exception cref="NotSupportedException">See <see cref="ShowOpenDialogAsync(BrowserWindow?, OpenDialogOptions)"/>.</exception>
-    public static IReadOnlyList<string>? ShowOpenDialogSync(BrowserWindow? window, OpenDialogOptions options)
+    /// <exception cref="NotSupportedException">See <see cref="ShowOpenDialogAsync(BaseWindow?, OpenDialogOptions)"/>.</exception>
+    public static IReadOnlyList<string>? ShowOpenDialogSync(BaseWindow? window, OpenDialogOptions options)
     {
         if (OperatingSystem.IsMacOS()) return MacOpenSync(window, options);
         if (!OperatingSystem.IsWindows()) RequireOffUiThread();
@@ -222,11 +223,11 @@ public static unsafe partial class Dialog
 
     /// <summary>Asks where to save and waits for the answer: the path, or null when cancelled.
     /// Electron's <c>dialog.showSaveDialogSync()</c>.</summary>
-    /// <remarks>See <see cref="ShowOpenDialogSync(BrowserWindow?, OpenDialogOptions)"/>.</remarks>
+    /// <remarks>See <see cref="ShowOpenDialogSync(BaseWindow?, OpenDialogOptions)"/>.</remarks>
     /// <exception cref="InvalidOperationException">Before <see cref="OrielApp.Ready"/>; or, on Linux, called on the
     /// UI thread, which must stay free to run the dialog, or no window is open.</exception>
-    /// <exception cref="NotSupportedException">See <see cref="ShowSaveDialogAsync(BrowserWindow?, SaveDialogOptions)"/>.</exception>
-    public static string? ShowSaveDialogSync(BrowserWindow? window, SaveDialogOptions options)
+    /// <exception cref="NotSupportedException">See <see cref="ShowSaveDialogAsync(BaseWindow?, SaveDialogOptions)"/>.</exception>
+    public static string? ShowSaveDialogSync(BaseWindow? window, SaveDialogOptions options)
     {
         if (OperatingSystem.IsMacOS()) return MacSaveSync(window, options);
         if (!OperatingSystem.IsWindows()) RequireOffUiThread();
@@ -330,10 +331,10 @@ public static unsafe partial class Dialog
 
     private static string AppPath(string name) => OrielApp.CurrentOrNull?.GetPath(name) ?? OrielApp.DefaultPath(name, string.Empty)!;
 
-    private static nint ContentViewOf(BrowserWindow? window) => window is null || window.IsDestroyed ? 0 : window.GetNativeWindowHandle();
+    private static nint ContentViewOf(BaseWindow? window) => window is null || window.IsDestroyed ? 0 : window.GetNativeWindowHandle();
 
     [SupportedOSPlatform("macos")]
-    private static IReadOnlyList<string>? MacOpenSync(BrowserWindow? window, OpenDialogOptions options)
+    private static IReadOnlyList<string>? MacOpenSync(BaseWindow? window, OpenDialogOptions options)
     {
         ArgumentNullException.ThrowIfNull(options);
         RequireReady();
@@ -347,7 +348,7 @@ public static unsafe partial class Dialog
     }
 
     [SupportedOSPlatform("macos")]
-    private static string? MacSaveSync(BrowserWindow? window, SaveDialogOptions options)
+    private static string? MacSaveSync(BaseWindow? window, SaveDialogOptions options)
     {
         ArgumentNullException.ThrowIfNull(options);
         RequireReady();
@@ -361,7 +362,7 @@ public static unsafe partial class Dialog
     }
 
     [SupportedOSPlatform("macos")]
-    private static Task<OpenDialogReturnValue> MacOpenAsync(BrowserWindow? window, OpenDialogOptions options)
+    private static Task<OpenDialogReturnValue> MacOpenAsync(BaseWindow? window, OpenDialogOptions options)
     {
         RequireReady();
         var settings = MacOpenSettingsOf(options, Directory.Exists, DefaultDialogFolder);
@@ -375,7 +376,7 @@ public static unsafe partial class Dialog
     }
 
     [SupportedOSPlatform("macos")]
-    private static Task<SaveDialogReturnValue> MacSaveAsync(BrowserWindow? window, SaveDialogOptions options)
+    private static Task<SaveDialogReturnValue> MacSaveAsync(BaseWindow? window, SaveDialogOptions options)
     {
         RequireReady();
         var settings = MacSaveSettingsOf(options, Directory.Exists, DefaultDialogFolder, async: true);
@@ -386,7 +387,7 @@ public static unsafe partial class Dialog
     }
 
     [SupportedOSPlatform("macos")]
-    private static Task<T> MacBegin<T>(BrowserWindow? window, Func<nint> create, Func<nint, bool, T> read)
+    private static Task<T> MacBegin<T>(BaseWindow? window, Func<nint> create, Func<nint, bool, T> read)
     {
         var done = new TaskCompletionSource<T>(TaskCreationOptions.RunContinuationsAsynchronously);
         CefThread.RunOnUi(() =>
@@ -457,22 +458,25 @@ public static unsafe partial class Dialog
             .Where(f => f.Extensions.Count > 0 && !f.Extensions.Contains("*"))
             .Select(f => $"{f.Name}|{string.Join(';', f.Extensions.Select(e => "." + e.TrimStart('.').ToLowerInvariant()))}")];
 
-    private static Task<IReadOnlyList<string>> Run(BrowserWindow? window, cef_file_dialog_mode_t mode, string? title, string? defaultPath,
+    private static Task<IReadOnlyList<string>> Run(BaseWindow? window, cef_file_dialog_mode_t mode, string? title, string? defaultPath,
         IReadOnlyList<FileFilter> filters)
     {
         RequireReady();
-        var owner = window ?? BrowserWindow.GetFocusedWindow() ?? BrowserWindow.GetAllWindows().FirstOrDefault()
-            ?? throw new InvalidOperationException("A file dialog needs an open window: CEF shows it through a window's browser.");
+        // A window without a page of its own lends one of its views' pages; with no window given, any window's will do.
+        IReadOnlyList<BaseWindow> owners = window is not null ? [window]
+            : [.. new[] { BaseWindow.GetFocusedWindow() }.OfType<BaseWindow>(), .. BaseWindow.GetAllWindows()];
+        if (owners.Count == 0) throw new InvalidOperationException("A file dialog needs an open window: CEF shows it through a window's browser.");
         var accept = AcceptFiltersOf(filters);
         var done = new TaskCompletionSource<IReadOnlyList<string>>(TaskCreationOptions.RunContinuationsAsynchronously);
         CefThread.RunOnUi(() =>
         {
-            var browser = owner.WebContents.Browser;
-            if (browser is null)
+            var page = owners.Select(o => o.DialogPage()).FirstOrDefault(p => p is not null);
+            if (page is null)
             {
-                done.TrySetException(new InvalidOperationException("The window closed before its file dialog opened."));
+                done.TrySetException(new InvalidOperationException("No open page to show the file dialog through: the window closed, or it has none in its views."));
                 return;
             }
+            var browser = page.Browser;
             StartIn(defaultPath);
             var callback = new RunFileDialogCallback(paths => done.TrySetResult(paths));
             cef_string_utf16_t titleString = default, pathString = default;

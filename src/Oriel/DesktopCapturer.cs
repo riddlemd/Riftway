@@ -81,12 +81,12 @@ public static class DesktopCapturer
     {
         await Task.Yield();
         // ScreenCaptureKit flips a non-resizable window's style mask the first time it captures it; Electron puts it back.
-        var resizable = OperatingSystem.IsMacOS() ? BrowserWindow.GetAllWindows().ToDictionary(w => w.Id, w => w.IsResizable) : null;
+        var resizable = OperatingSystem.IsMacOS() ? BaseWindow.GetAllWindows().ToDictionary(w => w.Id, w => w.IsResizable) : null;
         try { return await CollectAsync(key).ConfigureAwait(false); }
         finally
         {
             if (resizable is not null)
-                foreach (var window in BrowserWindow.GetAllWindows())
+                foreach (var window in BaseWindow.GetAllWindows())
                     if (resizable.TryGetValue(window.Id, out var was) && window.IsResizable != was) window.SetResizable(was);
         }
     }

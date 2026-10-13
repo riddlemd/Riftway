@@ -4,7 +4,7 @@ using Oriel.Cef.Platform;
 namespace Oriel;
 
 // Windows: minimize, restore, maximize and unmaximize come from WM_SIZE, as Electron raises them, instead of the poll.
-public sealed unsafe partial class BrowserWindow
+public unsafe partial class BaseWindow
 {
     // Set once the window is subclassed; null elsewhere and on failure, where the 250 ms poll raises these events.
     private WindowSizeState? _sizeState;

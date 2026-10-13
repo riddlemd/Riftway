@@ -171,26 +171,13 @@ internal static class MenuRoles
         _ => null,
     };
 
-    /// <summary>Runs <paramref name="role"/>; false when it has no action here, so the item's click runs instead.</summary>
-    internal static bool Execute(MenuItemRole role, BrowserWindow? window)
+    /// <summary>Runs <paramref name="role"/>; false when it has no action here, or a page role finds no focused page, so the
+    /// item's click runs instead. Page roles act on <see cref="WebContents.GetFocusedWebContents"/>, as Electron's.</summary>
+    internal static bool Execute(MenuItemRole role, BaseWindow? window)
     {
-        var page = window?.WebContents;
+        if (IsPageRole(role)) return WebContents.GetFocusedWebContents() is { } page && ExecuteOnPage(role, page);
         switch (role)
         {
-            case MenuItemRole.Undo: page?.Undo(); return true;
-            case MenuItemRole.Redo: page?.Redo(); return true;
-            case MenuItemRole.Cut: page?.Cut(); return true;
-            case MenuItemRole.Copy: page?.Copy(); return true;
-            case MenuItemRole.Paste: page?.Paste(); return true;
-            case MenuItemRole.PasteAndMatchStyle: page?.PasteAndMatchStyle(); return true;
-            case MenuItemRole.Delete: page?.Delete(); return true;
-            case MenuItemRole.SelectAll: page?.SelectAll(); return true;
-            case MenuItemRole.Reload: page?.Reload(); return true;
-            case MenuItemRole.ForceReload: page?.ReloadIgnoringCache(); return true;
-            case MenuItemRole.ToggleDevTools: page?.ToggleDevTools(); return true;
-            case MenuItemRole.ResetZoom: page?.SetZoomLevel(0); return true;
-            case MenuItemRole.ZoomIn: page?.SetZoomLevel(page.GetZoomLevel() + 0.5); return true;
-            case MenuItemRole.ZoomOut: page?.SetZoomLevel(page.GetZoomLevel() - 0.5); return true;
             case MenuItemRole.ToggleFullScreen: window?.SetFullScreen(!window.IsFullScreen); return true;
             case MenuItemRole.Minimize: window?.Minimize(); return true;
             case MenuItemRole.Close: window?.Close(); return true;
@@ -200,10 +187,35 @@ internal static class MenuRoles
                 else window.Maximize();
                 return true;
             case MenuItemRole.Quit: OrielApp.CurrentOrNull?.Quit(); return true;
+            default: return false;
+        }
+    }
+
+    private static bool IsPageRole(MenuItemRole role) => role is MenuItemRole.Undo or MenuItemRole.Redo or MenuItemRole.Cut
+        or MenuItemRole.Copy or MenuItemRole.Paste or MenuItemRole.PasteAndMatchStyle or MenuItemRole.Delete or MenuItemRole.SelectAll
+        or MenuItemRole.Reload or MenuItemRole.ForceReload or MenuItemRole.ToggleDevTools or MenuItemRole.ResetZoom
+        or MenuItemRole.ZoomIn or MenuItemRole.ZoomOut or MenuItemRole.ToggleSpellChecker;
+
+    private static bool ExecuteOnPage(MenuItemRole role, WebContents page)
+    {
+        switch (role)
+        {
+            case MenuItemRole.Undo: page.Undo(); return true;
+            case MenuItemRole.Redo: page.Redo(); return true;
+            case MenuItemRole.Cut: page.Cut(); return true;
+            case MenuItemRole.Copy: page.Copy(); return true;
+            case MenuItemRole.Paste: page.Paste(); return true;
+            case MenuItemRole.PasteAndMatchStyle: page.PasteAndMatchStyle(); return true;
+            case MenuItemRole.Delete: page.Delete(); return true;
+            case MenuItemRole.SelectAll: page.SelectAll(); return true;
+            case MenuItemRole.Reload: page.Reload(); return true;
+            case MenuItemRole.ForceReload: page.ReloadIgnoringCache(); return true;
+            case MenuItemRole.ToggleDevTools: page.ToggleDevTools(); return true;
+            case MenuItemRole.ResetZoom: page.SetZoomLevel(0); return true;
+            case MenuItemRole.ZoomIn: page.SetZoomLevel(page.GetZoomLevel() + 0.5); return true;
+            case MenuItemRole.ZoomOut: page.SetZoomLevel(page.GetZoomLevel() - 0.5); return true;
             case MenuItemRole.ToggleSpellChecker:
-                // The focused page's session, else the default session, as Electron's.
-                var session = page?.Session ?? Session.DefaultSession;
-                session.SetSpellCheckerEnabled(!session.IsSpellCheckerEnabled());
+                page.Session.SetSpellCheckerEnabled(!page.Session.IsSpellCheckerEnabled());
                 return true;
             default: return false;
         }

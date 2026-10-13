@@ -38,6 +38,12 @@ static class WindowStatePersistenceChecks
         var loaded = await Child(dir, "load", "on");
         check("Persistence: the bounds come back on the next run, and persisted-state-restored is raised",
             savedBounds is not null && BoundsOf(loaded) == savedBounds && loaded.Contains("restored=True") && loaded.Contains("max=False"), $"{saved} -> {loaded}");
+        DeleteUserData(dir);
+        dir = NewUserData();
+        saved = await Child(dir, "save-now", "base");
+        loaded = await Child(dir, "load", "base");
+        check("Persistence: a named BaseWindow keeps its bounds too",
+            BoundsOf(saved) is { } baseBounds && Entry(dir, "persisted") is not null && BoundsOf(loaded) == baseBounds && loaded.Contains("restored=True"), $"{saved} -> {loaded}");
 
         // Maximized, over the normal bounds saved before it; destroyed within the 200 ms, so only the save on close keeps it.
         dir = NewUserData();
@@ -106,6 +112,17 @@ static class WindowStatePersistenceChecks
         try { again = new BrowserWindow(new BrowserWindowOptions { Name = "named", Show = false }); }
         catch (ArgumentException e) { error = e.Message; }
         check("Name: free again once the window is destroyed", again is not null && again.Name == "named", error);
+
+        // A window refused for its other options must not keep the name it would have taken.
+        string? pageError = null, iconError = null;
+        try { _ = new BrowserWindow(new BrowserWindowOptions { Name = "refused-page", Show = false, WebContents = again?.WebContents }); }
+        catch (NotSupportedException e) { pageError = e.Message; }
+        check("Name: a window refused for a page it cannot adopt leaves its name free",
+            pageError is not null && NameIsFree("refused-page"), pageError);
+        try { _ = new BrowserWindow(new BrowserWindowOptions { Name = "refused-icon", Show = false, Icon = Path.Combine(Path.GetTempPath(), "oriel-no-such-icon.png") }); }
+        catch (IOException e) { iconError = e.Message; }
+        check("Name: a window refused for a missing icon file leaves its name free",
+            iconError is not null && NameIsFree("refused-icon"), iconError);
         again?.Destroy();
 
         // Electron keeps restore_display_mode_ without a name, and with it skips the fullscreen option.
@@ -164,7 +181,9 @@ static class WindowStatePersistenceChecks
                 "noname" => options with { WindowStatePersistence = true },
                 _ => options with { Name = "persisted" },
             };
-            var win = new BrowserWindow(options);
+            BaseWindow win = spec == "base"
+                ? new BaseWindow(new BaseWindowOptions { Title = options.Title, Width = DefaultWidth, Height = DefaultHeight, Name = "persisted", WindowStatePersistence = true })
+                : new BrowserWindow(options);
             var restored = false;
             win.PersistedStateRestored += (_, _) => restored = true;
             _ = Task.Run(async () =>
@@ -196,6 +215,13 @@ static class WindowStatePersistenceChecks
             });
         };
         return app.Run();
+    }
+
+    private static bool NameIsFree(string name)
+    {
+        try { new BrowserWindow(new BrowserWindowOptions { Name = name, Show = false }).Destroy(); }
+        catch (ArgumentException) { return false; }
+        return true;
     }
 
     private static string Format(Rectangle r) => $"{r.X},{r.Y},{r.Width},{r.Height}";

@@ -74,14 +74,14 @@ public enum MenuItemRole
     /// <summary>Zoom level −0.5 on the focused window.</summary>
     ZoomOut,
 
-    /// <summary>Toggles the focused window's full screen, honouring <see cref="BrowserWindowOptions.SimpleFullScreen"/>.
+    /// <summary>Toggles the focused window's full screen, honouring <see cref="BaseWindowOptions.SimpleFullScreen"/>.
     /// Electron's <c>togglefullscreen</c>.</summary>
     ToggleFullScreen,
 
     /// <summary>Minimizes the focused window.</summary>
     Minimize,
 
-    /// <summary>Closes the focused window, as <see cref="BrowserWindow.Close"/>.</summary>
+    /// <summary>Closes the focused window, as <see cref="BaseWindow.Close"/>.</summary>
     Close,
 
     /// <summary>Maximizes the focused window, or restores it if maximized. Electron's <c>zoom</c> (macOS).</summary>
@@ -295,7 +295,7 @@ public sealed class MenuItem
 
     /// <summary>Chooses the item as a click or accelerator would: toggles checkbox and radio state, then runs
     /// the role or <see cref="Click"/>.</summary>
-    internal void Activate(BrowserWindow? focusedWindow, KeyboardEvent? keys = null)
+    internal void Activate(BaseWindow? focusedWindow, KeyboardEvent? keys = null)
     {
         if (!Enabled) return;
         Run(focusedWindow, keys);
@@ -303,15 +303,16 @@ public sealed class MenuItem
 
     /// <summary>Electron's <c>menuItem.click</c> as <c>Menu._executeCommand</c> calls it, which does not ask whether the
     /// item is enabled: what a DBusMenu <c>Event</c> runs.</summary>
-    internal void Run(BrowserWindow? focusedWindow, KeyboardEvent? keys = null)
+    internal void Run(BaseWindow? focusedWindow, KeyboardEvent? keys = null)
     {
         if (Type == MenuItemType.Checkbox) Checked = !Checked;
         else if (Type == MenuItemType.Radio && Parent is { } parent) parent.CheckRadio(this);
-        if (!MenuRoles.Execute(Role, focusedWindow)) Click?.Invoke(this, focusedWindow, keys ?? new KeyboardEvent());
+        // Click names only a BrowserWindow (DRIFT V15); a role acts on any window.
+        if (!MenuRoles.Execute(Role, focusedWindow)) Click?.Invoke(this, focusedWindow as BrowserWindow, keys ?? new KeyboardEvent());
     }
 
     /// <summary>Chooses the item from its accelerator: the accelerator's modifiers were held. UI thread.</summary>
-    internal void ActivateByAccelerator(BrowserWindow? focusedWindow)
+    internal void ActivateByAccelerator(BaseWindow? focusedWindow)
         => Activate(focusedWindow, KeyboardEvent.ForAccelerator(Accelerator));
 }
 
@@ -516,14 +517,14 @@ public sealed class Menu : IEnumerable<MenuItem>
     {
         if (options is not null && options.X.HasValue != options.Y.HasValue)
             throw new ArgumentException("Set both X and Y, or neither.", nameof(options));
-        var window = options?.Window ?? BrowserWindow.GetFocusedWindow()
+        var window = options?.Window ?? BaseWindow.GetFocusedWindow()
             ?? throw new InvalidOperationException("No window to show the menu in: set PopupOptions.Window or focus a window.");
         window.ShowPopup(this, options?.X, options?.Y, options?.Closed);
     }
 
     /// <summary>Closes this menu's popup in <paramref name="window"/>, by default the focused window.
     /// Electron's <c>menu.closePopup()</c>.</summary>
-    public void ClosePopup(BrowserWindow? window = null) => (window ?? BrowserWindow.GetFocusedWindow())?.ClosePopup();
+    public void ClosePopup(BaseWindow? window = null) => (window ?? BaseWindow.GetFocusedWindow())?.ClosePopup();
 
     /// <summary>The first item, here or in a submenu, whose <see cref="MenuItem.Id"/> is <paramref name="id"/>.
     /// Electron's <c>menu.getMenuItemById()</c>.</summary>
@@ -581,7 +582,7 @@ public sealed class Menu : IEnumerable<MenuItem>
     IEnumerator IEnumerable.GetEnumerator() => GetEnumerator();
 
     /// <summary>Sets the application menu: on macOS the menu bar at the top of the screen, elsewhere the menu
-    /// bar of every window without its own (<see cref="BrowserWindow.SetMenu"/>). Null removes it.
+    /// bar of every window without its own (<see cref="BaseWindow.SetMenu"/>). Null removes it.
     /// Electron's <c>Menu.setApplicationMenu()</c>.</summary>
     /// <remarks>On macOS the first item becomes the application menu, titled with the app's name whatever
     /// its label. If none is set by the end of <see cref="OrielApp.Ready"/>, macOS gets a default menu

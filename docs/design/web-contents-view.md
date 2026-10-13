@@ -33,8 +33,10 @@ Design for Electron's `BaseWindow`, `View` and `WebContentsView` (v44) on CEF 15
 - `AddChildView(view, index?)`: removes the view from a previous parent; an existing child is moved to the top with
   `reorder_child_view`; else `add_child_view_at`. `Children` mirrors the panel in a managed list.
 - `SetBounds` stores the requested bounds and applies them; the parent's `on_layout_changed` re-applies them. Null
-  requested bounds means "fill" (the window's own page, `ContentView.Children[0]`).
-- Windows/Linux menu bar: the window is a vertical box of `[menu bar, content view (flex 1)]`.
+  requested bounds means "fill" (a `BrowserWindow`'s page and `ContentView`, in the contents view).
+- The window holds a contents view (Electron's `GetContentsView`, internal): `[page, ContentView]` for a `BrowserWindow`,
+  `[ContentView]` for a `BaseWindow`, each filling it. The page is not one of `ContentView.Children`.
+- Windows/Linux menu bar: the window is a vertical box of `[menu bar, contents view (flex 1)]`.
 - `BoundsChanged` from `on_layout_changed`, only on change. `SetBackgroundColor` re-applied in `on_theme_changed`.
 
 ## WebContents
@@ -85,8 +87,19 @@ under a `WebContentsView`; no `new WebContentsView({ webContents })`; views don'
 
 - A `WebContentsView` is a panel holding its page (a browser view, below and filling it) and any child views, as
   Electron's `WebContentsView` is a `View`. Closing the page removes only the page; the view stays.
-- A window's views outlive it: when the window's own page is destroyed (its window is torn down next, without asking
-  `can_close` again), the views are removed from `ContentView`, so their pages live on until closed or quit.
+- A window's views outlive it: once its close is approved, or its own page is destroyed (its window is torn down next,
+  without asking `can_close` again), `ContentView` leaves the window with its children, so their pages live on until
+  closed or quit.
 - An Alloy page's unhandled keys reach the window delegate, so Alt and mnemonics work from view pages with no handler.
 - Chromium lays a resized panel out later; Linux may never, so Oriel lays out a view's own panel when it resizes it.
 - `addChildView` clamps an index past the end, as Electron (`std::min`).
+
+## Electron's layout (2026-10-12)
+
+- As Electron (`electron_api_browser_window.cc`, PR 41256), a `BrowserWindow`'s page is a sibling of `ContentView`, below
+  it in the contents view, so a new window's `ContentView.Children` is empty and `ContentView` paints over the page.
+- An empty part of `ContentView` does not take the page's input: a real click there (xdotool, Linux) reaches the page,
+  and one on a child `WebContentsView` reaches only that view's page. A browser is a native view, which the toolkit
+  targets before the Views tree around it (Aura on Windows and Linux, AppKit on macOS; macOS unchecked).
+- The colour under the page goes on the contents view, so a colour set on `ContentView` is kept.
+- `ContentView` detached from a closing window keeps its children and their pages (checked on Linux).

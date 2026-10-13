@@ -19,15 +19,17 @@ Counted from the Checklist at the end: `BaseWindow` and `BrowserWindow` are one 
 |---|---|---|---|---|---|---|---|
 | BaseWindow + BrowserWindow options | 54 | 32 | 12 | 10 | 0 | 59.3% | 70.4% |
 | webPreferences | 46 | 12 | 4 | 23 | 7 | 30.8% | 35.9% |
-| Instance methods | 143 | 88 | 25 | 24 | 6 | 64.2% | 73.4% |
+| Instance methods | 143 | 89 | 25 | 23 | 6 | 65.0% | 74.1% |
 | Instance properties | 24 | 13 | 4 | 7 | 0 | 54.2% | 62.5% |
 | Events | 35 | 18 | 10 | 7 | 0 | 51.4% | 65.7% |
-| Static methods | 6 | 5 | 0 | 0 | 1 | 100.0% | 100.0% |
-| **Total** | 308 | 168 | 55 | 71 | 14 | 57.1% | 66.5% |
+| Static methods | 7 | 6 | 0 | 0 | 1 | 100.0% | 100.0% |
+| **Total** | 309 | 170 | 55 | 70 | 14 | 57.6% | 66.9% |
 
 ## Done since the audit
 
 - Lookup: `Id`, `GetAllWindows`, `GetFocusedWindow`, `FromWebContents`, `FromId`.
+- `BaseWindow`: public, a window with no page of its own; `SetContentView`; a `BrowserWindow`'s page lies below
+  `ContentView`, which a new window has empty, as Electron's.
 - Runtime setters/getters: resizable, minimizable, maximizable, closable (+ `Closable` option; code can still close),
   minimum/maximum size.
 - Sizes: `GetSize`, `GetPosition`, `Get/SetContentBounds`, `Get/SetContentSize`, `UseContentSize`, `Center` options.
@@ -310,7 +312,7 @@ Parameters in brackets are optional in Electron. `webContents` members are in [w
 
 | Electron | Oriel | Status | Note |
 |---|---|---|---|
-| `setContentView(view)` | — | missing | DRIFT V9 (with `BaseWindow`) |
+| `setContentView(view)` | `SetContentView` | done | A `BrowserWindow`'s page stays below the new view; another window's content view moves, as Electron's |
 | `getContentView()` | `ContentView` | done | A property, as Electron's `contentView` |
 | `destroy()` | `Destroy` | done |  |
 | `close()` | `Close` | done |  |
@@ -460,7 +462,7 @@ Parameters in brackets are optional in Electron. `webContents` members are in [w
 |---|---|---|---|
 | `webContents` | `WebContents` | done |  |
 | `id` | `Id` | done |  |
-| `contentView` | `ContentView` | done | First child is the window's page (Chrome style); views added over it are Alloy style (DRIFT V2) |
+| `contentView` | `ContentView` | done | Empty in a new window; a `BrowserWindow`'s page (Chrome style) lies below it, as Electron's; views added to it are Alloy style (DRIFT V2) |
 | `tabbingIdentifier` | — | missing |  |
 | `autoHideMenuBar` | `AutoHideMenuBar` | done |  |
 | `simpleFullScreen` | `SetSimpleFullScreen / IsSimpleFullScreen` | done |  |
@@ -527,9 +529,10 @@ Parameters in brackets are optional in Electron. `webContents` members are in [w
 
 | Electron | Oriel | Status | Note |
 |---|---|---|---|
-| `getAllWindows()` | `GetAllWindows` | done |  |
-| `getFocusedWindow()` | `GetFocusedWindow` | done |  |
-| `fromId(id)` | `FromId` | done |  |
+| `new BaseWindow([options])` | `new BaseWindow(BaseWindowOptions?)` | done | A top-level window with an empty `ContentView` and no page |
+| `getAllWindows()` | `GetAllWindows` | done | `BaseWindow`'s lists every window; `BrowserWindow`'s only `BrowserWindow`s, as Electron's |
+| `getFocusedWindow()` | `GetFocusedWindow` | done | `BaseWindow`'s finds any window; `BrowserWindow`'s only a `BrowserWindow` |
+| `fromId(id)` | `FromId` | done | `BrowserWindow.FromId` of a `BaseWindow`'s id is null, as Electron's |
 | `fromWebContents(webContents)` | `FromWebContents` | done |  |
 | `fromBrowserView(browserView)` | — | n/a | Deprecated. |
 | `clearPersistedState(name)` | `BrowserWindow.ClearPersistedState` | done |  |

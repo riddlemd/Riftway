@@ -561,7 +561,7 @@ internal sealed unsafe class TrayMenu
         var run = _run = new MenuRun(menu);
         var popupDelegate = new MenuModelDelegate
         {
-            CommandExecuted = (id, flags) => menu.FindByCommandId(id)?.Activate(BrowserWindow.GetFocusedWindow(), KeyboardEvent.FromCefFlags(flags)),
+            CommandExecuted = (id, flags) => menu.FindByCommandId(id)?.Activate(BaseWindow.GetFocusedWindow(), KeyboardEvent.FromCefFlags(flags)),
             WillShow = run.WillShow,
             // Posted: CEF is still inside the window's menu code when it reports the close.
             Closed = model => { if (run.Closed(model)) CefThread.PostUi(() => { if ((nint)_window == handle) Close(); }); },
