@@ -141,13 +141,18 @@ static int is_child_process(void) {
 // bootstrap.exe and libcef must agree on the sandbox ABI, as CEF's scoped library loader checks.
 static int bootstrap_matches(const cef_version_info_t* info) {
   if (!info || info->size < CEF_VERSION_INFO_SIZE_WITH_SANDBOX_HASH) return 0;
-  return strcmp(info->sandbox_compat_hash, cef_api_hash(CEF_API_VERSION, 3)) == 0;
+  const char* hash = cef_api_hash(cef_api_version(), 3);
+  return hash && strcmp(info->sandbox_compat_hash, hash) == 0;
 }
 
 int RunWinMain(HINSTANCE instance, LPWSTR command_line, int show, void* sandbox_info,
                cef_version_info_t* version_info) {
   (void)command_line; (void)show;
-  if (!check_api_hash()) { report_error(L"libcef.dll is not the CEF release Oriel was built for."); return 1; }
+  int child = is_child_process();
+  // The first cef_api_hash call fixes the process's API version. The browser process must fix the next version, which
+  // CefRuntime.Load probes to detect Oriel's CEF patches (and then checks); a stock libcef serves it as 15400.
+  int api_ok = child ? check_api_hash() : cef_api_hash(CEF_API_VERSION_NEXT, 0) != NULL || check_api_hash();
+  if (!api_ok) { report_error(L"libcef.dll is not the CEF release Oriel was built for."); return 1; }
   if (!bootstrap_matches(version_info)) {
     report_error(L"The exe (CEF's bootstrap.exe) and libcef.dll come from different CEF releases.");
     return 1;
@@ -160,7 +165,7 @@ int RunWinMain(HINSTANCE instance, LPWSTR command_line, int show, void* sandbox_
     return 1;
   }
 
-  if (is_child_process()) {
+  if (child) {
     set_crash_keys(windows_switch(CRASH_KEYS_SWITCH));
     cef_main_args_t args = {instance};
     return cef_execute_process(&args, app_for(windows_switch(SCHEME_SWITCH)), sandbox_info);

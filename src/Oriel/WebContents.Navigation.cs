@@ -88,6 +88,7 @@ public sealed partial class WebContents
         var frame = FrameOfPath(request.FramePath);
         var isMain = request.FramePath.Count == 1;
         NavigationEventArgs Args() => new(request.Url, false, isMain, frame);
+        if (isMain) _loadStartedUrl = request.Url;
         if (request.IsRedirect)
         {
             var redirect = Args();

@@ -8,6 +8,12 @@ using Oriel;
 // harness can decrypt them independently; ORIEL_SS_ASYNC_FIRST=1 starts with the asynchronous API. The exit code is the number of failures.
 [assembly: SupportedOSPlatform("linux")]
 
+if (!OperatingSystem.IsLinux())
+{
+    Console.WriteLine("RESULT: Linux only");
+    return 0;
+}
+
 var expected = Environment.GetEnvironmentVariable("ORIEL_SS_EXPECT") ?? "basic_text";
 var outFile = Environment.GetEnvironmentVariable("ORIEL_SS_OUT");
 const string Text = "Oriel ✓ safeStorage";

@@ -1355,12 +1355,17 @@ async Task RunAsync()
     }
     if (OperatingSystem.IsLinux())
     {
-        var userDirs =Path.Combine(app.GetPath("appData"), "user-dirs.dirs");
+        // Paths are cached as by PathService, and the default session has already asked for downloads; any override clears it.
+        void ClearPathCache() => app.SetPath("temp", app.GetPath("temp"));
+        var userDirs = Path.Combine(app.GetPath("appData"), "user-dirs.dirs");
         File.WriteAllText(userDirs, "XDG_DOWNLOAD_DIR=\"$HOME/Fetched\"\n");
+        ClearPathCache();
         var downloadsDir = app.GetPath("downloads");
         File.Delete(userDirs);
+        ClearPathCache();
+        var plainDownloadsDir = app.GetPath("downloads");
         Check("GetPath(downloads) follows the XDG user directories on Linux", downloadsDir == Path.Combine(app.GetPath("home"), "Fetched")
-            && app.GetPath("downloads") == Path.Combine(app.GetPath("home"), "Downloads"), downloadsDir);
+            && plainDownloadsDir == Path.Combine(app.GetPath("home"), "Downloads"), $"{downloadsDir} then {plainDownloadsDir}");
     }
     var unknownPath = await Throws(() => Task.FromResult(app.GetPath("nope")));
     var originalLogs = app.GetPath("logs");
@@ -1636,7 +1641,11 @@ async Task RunAsync()
     // Every CPU busy: the percent is of all of them, so it nears 100 only when divided by their count.
     var spinUntil = DateTime.UtcNow + TimeSpan.FromMilliseconds(400);
     var spins = 0L;
-    Parallel.For(0, Environment.ProcessorCount, _ => { while (DateTime.UtcNow < spinUntil) Interlocked.Increment(ref spins); });
+    // Threads of their own: the thread pool adds threads too slowly to busy every CPU of a large machine in 400 ms.
+    var spinners = Enumerable.Range(0, Environment.ProcessorCount)
+        .Select(_ => new Thread(() => { while (DateTime.UtcNow < spinUntil) Interlocked.Increment(ref spins); })).ToList();
+    spinners.ForEach(t => t.Start());
+    spinners.ForEach(t => t.Join());
     var usage = OrielProcess.GetCPUUsage();
     Check("GetCPUUsage measures since the previous call, across all CPUs, with the running total", usage.PercentCPUUsage > 50
         && usage.PercentCPUUsage <= 110 && usage.CumulativeCPUUsage > 0.3 && (OperatingSystem.IsWindows() ? usage.IdleWakeupsPerSecond == 0 : usage.IdleWakeupsPerSecond > 0), $"{usage} spins={spins}");
@@ -1749,7 +1758,8 @@ async Task RunAsync()
     await proxied.SetProxyAsync(new ProxyConfig { ProxyRules = $"http=127.0.0.1:{port}", ProxyBypassRules = "proxied.test" });
     await proxied.CloseAllConnectionsAsync();
     var bypassLoad = await Throws(() => proxyWin.LoadUrl("http://proxied.test/bypassed").WaitAsync(TimeSpan.FromSeconds(10)));
-    Check("ProxyBypassRules sends the host direct", bypassLoad is LoadFailedException && !bypassed.IsCompleted, bypassLoad?.Message);
+    Check("ProxyBypassRules sends the host direct", bypassLoad is LoadFailedException && !bypassed.IsCompleted,
+        $"{bypassLoad?.GetType().Name} {bypassLoad?.Message} proxied={bypassed.IsCompleted} url={proxyWin.WebContents.GetUrl()}");
     await proxied.SetProxyAsync(new ProxyConfig { Mode = ProxyMode.FixedServers, ProxyBypassRules = "<local>" });
     var noRules = await Throws(() => proxyWin.LoadUrl("http://proxied.test/norules").WaitAsync(TimeSpan.FromSeconds(10)));
     Check("FixedServers without ProxyRules is direct", noRules is LoadFailedException && !bypassed.IsCompleted, noRules?.Message);
@@ -2332,8 +2342,9 @@ static async Task ServeDownloads(TcpListener listener, DownloadServer state)
                     {
                         if (drop && offset >= body.Length / 2)
                         {
-                            // An RST, not a FIN: Chromium calls that a network failure, which only the user resumes.
-                            client.LingerState = new LingerOption(true, 0);
+                            // An RST, not a FIN: Chromium calls that a network failure, which only the user resumes; a FIN is
+                            // a length mismatch it resumes itself. Disposing the TcpClient would shut the stream down (a FIN) first.
+                            client.Client.Close(0);
                             return;
                         }
                         await stream.WriteAsync(body.AsMemory((int)offset, (int)Math.Min(Chunk, body.Length - offset)));
@@ -2458,9 +2469,17 @@ async Task PermissionChecks(bool mediaOnly = false)
             catch (Exception e) when (e is IOException or UnauthorizedAccessException) { await Task.Delay(250); }
         }    }
 
+    // With Windows' location access off, its provider fails every request as PERMISSION_DENIED, granted or not
+    // (LocationProviderWinrt::OnStatusChanged), so a grant shows only in what the handler was asked.
+#pragma warning disable CA1416
+    static bool WindowsLocationOff() => OperatingSystem.IsWindows() && new[] { Microsoft.Win32.Registry.CurrentUser, Microsoft.Win32.Registry.LocalMachine }.Any(hive =>
+        hive.OpenSubKey(@"Software\Microsoft\Windows\CurrentVersion\CapabilityAccessManager\ConsentStore\location")?.GetValue("Value") as string == "Deny");
+#pragma warning restore CA1416
+    var locationOff = WindowsLocationOff();
     var byDefault = await Open(Session.FromPartition("perm-default"));
     var grantedByDefault = await Run(byDefault, Geolocation);
-    Check("with no permission handler, a permission is granted, as Electron", grantedByDefault is "granted" or "ok", grantedByDefault);
+    if (locationOff) Console.WriteLine($"SKIP  with no permission handler, a permission is granted: Windows location access is off, so a grant reads as denied ({grantedByDefault})");
+    else Check("with no permission handler, a permission is granted, as Electron", grantedByDefault is "granted" or "ok", grantedByDefault);
     var queriedByDefault = await Run(byDefault, Query("{ name: 'camera' }"));
     Check("with no check handler, navigator.permissions.query is granted, as Electron", queriedByDefault == "granted", queriedByDefault);
     byDefault.Destroy();
@@ -2484,7 +2503,8 @@ async Task PermissionChecks(bool mediaOnly = false)
     var granted = await Run(grantingWin, Geolocation);
     var grantedAgain = await Run(grantingWin, Geolocation);
     Check("a permission handler that grants allows it; Chromium then remembers the grant for the origin (drift E29)",
-        granted is "granted" or "ok" && grantedAgain is "granted" or "ok" && grants.Count == 1, $"{granted} {grantedAgain} {Seen(grants)}");
+        (locationOff ? granted is not (null or "timeout") && grantedAgain is not (null or "timeout") : granted is "granted" or "ok" && grantedAgain is "granted" or "ok") && grants.Count == 1,
+        $"{granted} {grantedAgain} {Seen(grants)}{(locationOff ? " (Windows location access off: outcomes read as denied)" : "")}");
     grantingWin.Destroy();
 
     // Notifications: Chromium refuses them unasked in an in-memory profile, so these sessions are on disk. A grant from an
@@ -2577,16 +2597,22 @@ async Task PermissionChecks(bool mediaOnly = false)
             Check($"a display media handler's loopback audio gives {loopbackKinds}", withAudio == loopbackKinds, withAudio);
         }
 
-        // A desktopCapturer id as chromeMediaSourceId: CEF parses it as a DesktopMediaID and captures that source.
+        // A desktopCapturer id as chromeMediaSourceId: CEF parses it as a DesktopMediaID and captures that source. Its device
+        // carries no DisplayMediaInformation, so the track has no displaySurface (drift E30).
         var sources = await DesktopCapturer.GetSourcesAsync(new SourcesOptions { Types = ["screen", "window"], ThumbnailSize = new System.Drawing.Size(0, 0) });
         foreach (var source in new[] { sources.FirstOrDefault(s => s.Id.StartsWith("screen:", StringComparison.Ordinal)), sources.FirstOrDefault(s => s.Id.StartsWith("window:", StringComparison.Ordinal)) })
         {
             if (source is null) continue;
             streams = new() { Video = source };
             var legacy = await Run(mediaWin, "navigator.mediaDevices.getUserMedia({ video: { mandatory: { chromeMediaSource: 'desktop', chromeMediaSourceId: "
-                + System.Text.Json.JsonSerializer.Serialize(source.Id) + " } } }).then(s => { const v = s.getVideoTracks()[0]; const surface = v.getSettings().displaySurface; s.getTracks().forEach(t => t.stop()); return surface; }, e => e.name)", gesture: true);
-            var expected = source.Id.StartsWith("screen:", StringComparison.Ordinal) ? "monitor" : "window";
-            Check($"getUserMedia with a desktopCapturer {expected} id as chromeMediaSourceId captures that kind of surface", legacy == expected, $"{source.Id} {legacy}");
+                + System.Text.Json.JsonSerializer.Serialize(source.Id) + " } } }).then(s => new Promise(resolve => { const v = s.getVideoTracks()[0]; const settings = v.getSettings();"
+                + " const el = document.createElement('video'); el.muted = true; el.srcObject = s; let done = false;"
+                + " const finish = () => { if (done) return; done = true; s.getTracks().forEach(t => t.stop()); resolve(`${settings.deviceId} ${settings.displaySurface ?? 'none'} ${el.videoWidth}x${el.videoHeight}`); };"
+                + " el.onloadeddata = finish; setTimeout(finish, 4000); el.play().catch(() => {}); }), e => e.name)", gesture: true);
+            var kind = source.Id.StartsWith("screen:", StringComparison.Ordinal) ? "screen" : "window";
+            var parts = legacy?.Split(' ') ?? [];
+            Check($"getUserMedia with a desktopCapturer {kind} id as chromeMediaSourceId captures that source, with no displaySurface (drift E30)",
+                parts is [var deviceId, "none", var size] && deviceId == source.Id && size != "0x0", $"{source.Id}: {legacy}");
         }
     }
     streams = null;
@@ -2795,9 +2821,11 @@ static bool InstallClientCertificates()
 }
 
 // Answers one proxied request and reports its request line.
-static async Task<string> ServeOneProxyRequest(TcpListener listener)
+static async Task<string> ServeOneProxyRequest(TcpListener listener) => await AnswerRequest(await listener.AcceptTcpClientAsync());
+
+static async Task<string> AnswerRequest(TcpClient connection)
 {
-    using var client = await listener.AcceptTcpClientAsync();
+    using var client = connection;
     var stream = client.GetStream();
     var reader = new StreamReader(stream, Encoding.ASCII);
     var first = await reader.ReadLineAsync() ?? "";
@@ -2827,7 +2855,8 @@ async Task SessionAuditChecks()
     var url = $"http://127.0.0.1:{((IPEndPoint)listener.LocalEndpoint).Port}/";
     var serving = Task.Run(async () =>
     {
-        try { while (true) await ServeOneProxyRequest(listener); }
+        // Chromium may open a socket it never sends on (a preconnect), so each connection is answered on its own.
+        try { while (true) { var client = await listener.AcceptTcpClientAsync(); _ = AnswerRequest(client).ContinueWith(_ => { }); } }
         catch (Exception e) when (e is SocketException or ObjectDisposedException or IOException) { }
     });
     memory.EnableNetworkEmulation(new NetworkEmulationOptions { Offline = true });
@@ -2836,10 +2865,12 @@ async Task SessionAuditChecks()
     Check("EnableNetworkEmulation(offline) reaches a page made after it: loads fail with ERR_INTERNET_DISCONNECTED",
         offline is LoadFailedException { ErrorCode: -106 }, offline?.Message);
     var otherWin = new BrowserWindow(new BrowserWindowOptions { Show = false, WebPreferences = new WebPreferences { Session = Session.FromPartition("audit-other") } });
-    Check("another session is not emulated", await Throws(() => otherWin.LoadUrl(url).WaitAsync(TimeSpan.FromSeconds(10))) is null);
+    var other = await Throws(() => otherWin.LoadUrl(url).WaitAsync(TimeSpan.FromSeconds(10)));
+    Check("another session is not emulated", other is null, $"{other?.GetType().Name} {other?.Message}");
     otherWin.Destroy();
     memory.DisableNetworkEmulation();
-    Check("DisableNetworkEmulation lets the open page load again", await Throws(() => emulatedWin.LoadUrl(url).WaitAsync(TimeSpan.FromSeconds(10))) is null);
+    var again = await Throws(() => emulatedWin.LoadUrl(url).WaitAsync(TimeSpan.FromSeconds(10)));
+    Check("DisableNetworkEmulation lets the open page load again", again is null, $"{again?.GetType().Name} {again?.Message}");
     memory.EnableNetworkEmulation(new NetworkEmulationOptions { Latency = 1500 });
     var timer = System.Diagnostics.Stopwatch.StartNew();
     var slow = await Throws(() => emulatedWin.LoadUrl(url + "slow").WaitAsync(TimeSpan.FromSeconds(15)));

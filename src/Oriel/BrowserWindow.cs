@@ -1405,8 +1405,10 @@ public sealed unsafe partial class BrowserWindow
     /// Electron's <c>win.getNormalBounds()</c>.</summary>
     public Rectangle GetNormalBounds() => Query(w =>
     {
+        // A minimized window sits off every display, so the scale comes from the restored bounds, the monitor
+        // MonitorFromWindow gives Electron's ScreenToDIPRect for an iconic window.
         if (OperatingSystem.IsWindows() && WindowsWindowStyle.GetNormalBounds(Hwnd(w)) is var (x, y, width, height))
-            return Screen.ScreenToDipRect(this, new Rectangle(x, y, width, height));
+            return Screen.ScreenToDipRect(null, new Rectangle(x, y, width, height));
         return IsNormal(w) ? ToRectangle(w->@base.@base.get_bounds_in_screen(&w->@base.@base)) : _normalBounds;
     }, default);
 
@@ -1953,8 +1955,7 @@ public sealed unsafe partial class BrowserWindow
     {
         var bounds = w->@base.@base.get_bounds_in_screen(&w->@base.@base);
         var display = CefNative.cef_display_get_matching_bounds(&bounds, 0);
-        var origin = new cef_point_t { x = region.X, y = region.Y };
-        display->convert_point_to_pixels(display, &origin);
+        var origin = Screen.ToPixels(display, new cef_point_t { x = region.X, y = region.Y });
         var scale = display->get_device_scale_factor(display);
         NativeObject.Release(display);
         return AppDetails.ClipToPixels(region, scale, (origin.x, origin.y));

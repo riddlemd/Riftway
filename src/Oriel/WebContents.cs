@@ -96,7 +96,8 @@ public sealed unsafe partial class WebContents
                     _devTools.Send("Page.resetNavigationHistory");
                 }
                 Raise(DidFinishLoad);
-                if (_navigated) CompleteLoad(null);
+                // A failed load's error page can end after LoadUrl started the next load, which it must not settle.
+                if (_navigated && (GetUrl() != _failedUrl || _loadStartedUrl == _failedUrl)) CompleteLoad(null);
             },
             LoadFailed = (isMain, code, text, url) =>
             {
@@ -117,7 +118,11 @@ public sealed unsafe partial class WebContents
                 {
                     // After the events, as Electron's loadURL rejects from its own did-fail-load listener, added after the app's.
                     // An aborted load was superseded by a newer one, whose task stays pending; LoadUrl already failed the old one.
-                    if (isMain && code != AbortedError) CompleteLoad(failing, new LoadFailedException(code, text, url));
+                    if (isMain && code != AbortedError)
+                    {
+                        _failedUrl = url;
+                        CompleteLoad(failing, new LoadFailedException(code, text, url));
+                    }
                 }
             },
         };
@@ -733,6 +738,7 @@ public sealed unsafe partial class WebContents
         {
             CompleteLoad(new LoadFailedException(AbortedError, "ERR_ABORTED", url));
             _loadDone = done;
+            _loadStartedUrl = null;
             _pendingUnloadUrl = url;
             if (userAgent is not null) ApplyUserAgent(userAgent);
             Navigate(url, load);
@@ -767,6 +773,12 @@ public sealed unsafe partial class WebContents
 
     // The task of the latest LoadUrl, until its page finishes or fails; UI thread only.
     private TaskCompletionSource? _loadDone;
+
+    // The main frame's URL as of its latest navigation start or redirect since LoadUrl; about:blank has none. UI thread only.
+    private string? _loadStartedUrl;
+
+    // The URL of the latest main-frame load that failed, whose error page shows it; UI thread only.
+    private string? _failedUrl;
 
     /// <summary>Whether loading <paramref name="target"/> from <paramref name="current"/> only moves to a fragment,
     /// keeping the document: the same URL apart from a fragment, which the target has.</summary>
