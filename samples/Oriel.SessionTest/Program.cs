@@ -2732,9 +2732,10 @@ async Task PermissionChecks(bool mediaOnly = false)
         lock (displayRequests) displayRequests.Add(request);
         return Task.FromResult<DisplayMediaStreams?>(streams);
     });
-    // Chromium's X11 desktop capturer dies with SIGILL under the Docker Xvfb (linux-todo: verify on a real X server).
-    if (Environment.GetEnvironmentVariable("ORIEL_XVFB") == "1")
-        Console.WriteLine("SKIP  display media capture checks: Chromium's desktop capturer crashes under Xvfb");
+    // Chromium's X11 desktop capturer dies with SIGILL under the Docker Xvfb on arm64 only; x64 captures there.
+    if (Environment.GetEnvironmentVariable("ORIEL_XVFB") == "1"
+        && System.Runtime.InteropServices.RuntimeInformation.ProcessArchitecture == System.Runtime.InteropServices.Architecture.Arm64)
+        Console.WriteLine("SKIP  display media capture checks: Chromium's desktop capturer crashes under arm64 Xvfb");
     // Without Screen Recording consent, or while the screen is locked, macOS never starts the capture and it hangs.
     else if (OperatingSystem.IsMacOS() && (!MacMediaConsent.ScreenCapture() || MacMediaConsent.ScreenLocked()))
         Console.WriteLine($"SKIP  display media capture checks: macOS screen capture consent={MacMediaConsent.ScreenCapture()} locked={MacMediaConsent.ScreenLocked()}");

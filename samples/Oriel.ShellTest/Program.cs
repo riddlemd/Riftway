@@ -39,7 +39,8 @@ const string Script = """
 foreach (var tool in (string[])["xdg-open", "xdg-email", "gio"])
 {
     var path = Path.Combine(fakes, tool);
-    File.WriteAllText(path, Script);
+    // A Windows checkout gives the literal CRLF, and "#!/bin/sh\r" cannot exec.
+    File.WriteAllText(path, Script.ReplaceLineEndings("\n"));
     File.SetUnixFileMode(path, UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
 }
 var originalPath = Native.GetEnv("PATH") ?? "/usr/bin:/bin";
