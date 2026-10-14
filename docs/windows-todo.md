@@ -20,7 +20,9 @@ General items: [todo.md](todo.md). Windows work runs on the Windows laptop.
           (2026-10-14, d07986c, Wojtek). Still a prototype: it needs `pwsh` and a C++ toolchain on the publishing machine
   - [ ] The shell caches an exe path's FileDescription (MuiCache) on first launch: installers must lay out before
         any run, or the taskbar keeps "CEF Bootstrap Application"
-  - [ ] getAppMetrics `sandboxed`/`integrityLevel` per child once the Windows process walk lands (A18)
+  - [x] getAppMetrics `sandboxed`/`integrityLevel` per child (A18): SessionTest "each process's integrityLevel is its
+        token's, and sandboxed means below medium" passes; browser and network service medium, GPU and one utility
+        low, renderers untrusted (2026-10-13, d07986c, Wojtek, default layout)
 - [x] Re-run Oriel.ProtocolTest on Windows: the 2 checks added since (video blob control, video paints frames)
 - [x] Confirm the startup `observer_list.h:192` lines are gone on Windows (fixed in 86c2ae3, verified on macOS)
 - [x] Run Oriel.WindowTest on Windows: 90/91 (3 checks are macOS-only). DevTools, F12, webPreferences and
@@ -29,19 +31,29 @@ General items: [todo.md](todo.md). Windows work runs on the Windows laptop.
       SetForegroundWindow on a disabled window). Fix: focus the innermost visible modal child instead; merged
       (d5e0b6b). Its `is_visible` filter has no covering check.
 - [x] Run the window-menu and context-menu checks on Windows (pass, after the menu-bar reference fix)
-- [ ] Run WindowTest `NativeImageAsync`'s `createThumbnailFromPath` check (branch `image-screen`; never built for or run
-      on Windows): the thumbnail cache, `IconUtil`'s conversion and the per-step rejections
+- [x] Run WindowTest `NativeImageAsync`'s `createThumbnailFromPath` check: "Windows: createThumbnailFromPath of a PNG is
+      one 1x bitmap from the thumbnail cache" and the six `.ico` checks (LoadImage's conversion, pixel for pixel) pass
+      (2026-10-13, d07986c, Wojtek). The per-step rejection checks are macOS-only; Windows has none
 - [ ] windows-arm64: the unsandboxed layout builds, publishes and lays out from x64 with every native binary ARM64
       (2026-10-10); the sandboxed layout's host DLL is not yet built for arm64; nothing has run on Arm hardware
 - [x] Run the Alt-key menu checks on Windows (Alt toggles an auto-hidden bar, Alt+F opens File): all 7 pass in a
       default WindowTest run (2026-10-10, 01e9524: WindowTest 235/235, ProtocolTest 34/34, IpcTest 11/11,
       SessionTest 42/42, unit 381 + 3 macOS skips; at 100% scaling over RDP)
-- [ ] Screen checks at 125% scaling: not yet run on Windows
-- [ ] Run the menu-event checks on Windows (WindowTest `MenuEventsAsync` popup and bar, the tray's Views menu)
-- [ ] `desktopCapturer` (branch `desktop-capturer`): written on macOS, never built for or run on Windows. Run WindowTest
-      `DesktopCapturerChecks` (webrtc's window rules with this process's windows merged by z-order, `EnumDisplayDevices`
-      screens and their hashed `display_id`, GDI thumbnails, `WM_GETICON` icons) and SessionTest's `chromeMediaSourceId`
-      checks; DXGI and WGC capture are DRIFT DC3
+- [ ] Screen checks at 125% scaling: not yet run on Windows. At 150% (primary display, 2026-10-13) the DIP and pixel
+      conversions pass (DipToScreenPoint/Rect, ScreenToDipPoint/Rect, GetCursorScreenPoint); 150% converts exactly, so
+      the flooring a fractional 125% needs is still untested
+- [x] Run the menu-event checks on Windows: WindowTest `MenuEventsAsync`'s popup and menu-bar checks (6) and the tray's
+      Views menu ("the tray menu raises MenuWillShow and MenuWillClose each time it opens and closes") pass
+      (2026-10-13, d07986c, Wojtek). The submenu, Escape and nested-menu checks drive xdotool and run on Linux only
+- [ ] `desktopCapturer`: WindowTest `DesktopCapturerChecks` passes on Windows (13 checks: the window listed by title,
+      its thumbnail's aspect and pixels, `fetchWindowIcons` app icons, one screen per display, `display_id` equal to
+      `Screen.GetAllDisplays`, Chromium's names; 2026-10-13, d07986c, Wojtek). Still open: no check covers the
+      Windows-specific rules (z-order merge of this process's windows, `EnumDisplayDevices`, GDI thumbnails, `WM_GETICON`)
+      beyond those, and SessionTest's two `chromeMediaSourceId` checks fail on main (empty `displaySurface`, fixed on
+      `win-fixes`); DXGI and WGC capture are DRIFT DC3
 - [ ] `app` audit (branch `app-audit`): port `showEmojiPanel` (Win+. through `SendInput`, DRIFT A25) and the
       singleton's WM_COPYDATA client for `requestSingleInstanceLock` data (A29); run SessionTest `AppAuditChecks`, the
       about panel's message box and `runningUnderARM64Translation` (`IsWow64Process2`)
+  - [x] SessionTest `AppAuditChecks`: all 24 pass on Windows (2026-10-13, d07986c, Wojtek)
+  - [ ] The about panel's message box: no check shows it (the unit test covers only its text)
+  - [ ] `runningUnderARM64Translation`: no check; needs an arm64 device (x64 answers false either way)
