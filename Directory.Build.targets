@@ -8,4 +8,6 @@
     </PropertyGroup>
     <RemoveDir Directories="$(_DeepCleanOutput);$(_DeepCleanIntermediate)" />
   </Target>
+
+  <Import Project="eng/windows-layout.targets" Condition="'$(OrielWindowsLayout)' == 'true'" />
 </Project>

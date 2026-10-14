@@ -13,8 +13,11 @@ General items: [todo.md](todo.md). Windows work runs on the Windows laptop.
       141/143 (spellcheck flake, getAppMetrics CPU: no Windows children, A18), IpcTest 11/11, ProtocolTest 37/37.
   - [ ] Per-window `sandbox: false`: no CEF hook maps a renderer launch to its browser (DRIFT W13)
   - [ ] Signing: tested unsigned only; exe and DLL must share a certificate (DRIFT P13). Test a mismatch and a real signature
-  - [ ] Packaging (M4): build `Oriel.Host.Native` per RID into the runtime package; an MSBuild target instead of
-        the script; re-check `bootstrap.exe`'s resources and hash on every CEF bump
+  - [ ] Packaging (M4): build `Oriel.Host.Native` per RID into the runtime package; re-check `bootstrap.exe`'s
+        resources and hash on every CEF bump
+    - [x] Opt-in publish target (`-p:OrielWindowsLayout=true`, `eng/windows-layout.targets`) that builds the host and
+          runs `layout-windows.ps1`: IpcTest and Sample lay out file for file as the script does and run sandboxed
+          (2026-10-14, d07986c, Wojtek). Still a prototype: it needs `pwsh` and a C++ toolchain on the publishing machine
   - [ ] The shell caches an exe path's FileDescription (MuiCache) on first launch: installers must lay out before
         any run, or the taskbar keeps "CEF Bootstrap Application"
   - [ ] getAppMetrics `sandboxed`/`integrityLevel` per child once the Windows process walk lands (A18)
