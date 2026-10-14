@@ -384,6 +384,7 @@ async Task RunAsync(BrowserWindow win, BrowserWindow simple)
     await ThemeAsync(win);
     await ViewsAsync();
     await BaseWindowAsync();
+    await WindowsBaseWindowChecks.RunAsync(Check, step);
     await WindowsApisAsync();
     await TransparencyAsync();
     await WindowsStateChecks.RunAsync(Check, step);
