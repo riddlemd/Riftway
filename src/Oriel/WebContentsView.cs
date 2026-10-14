@@ -25,6 +25,9 @@ public sealed unsafe class WebContentsView : View
 {
     // Pages of views with a browser, which CEF needs closed before it shuts down.
     private static readonly HashSet<WebContentsView> s_live = [];
+    // Pages of views never added to a window: no browser to close, but a browser view CEF needs released before it
+    // shuts down (it observes the accessibility mode, which must have no observers left).
+    private static readonly HashSet<WebContentsView> s_unstarted = [];
     private static Action? s_allClosed;
     // Keeps each teardown window's delegate alive until CEF is done with it.
     private static readonly HashSet<WindowDelegate> s_graveyards = [];
@@ -81,6 +84,7 @@ public sealed unsafe class WebContentsView : View
             RuntimeStyle = cef_runtime_style_t.CEF_RUNTIME_STYLE_ALLOY,
             BrowserCreated = browser =>
             {
+                s_unstarted.Remove(this);
                 s_live.Add(this);
                 WebContents.OnBrowserCreated(browser);
                 ApplyPageColor();
@@ -144,6 +148,7 @@ public sealed unsafe class WebContentsView : View
         NativeObject.AddRef(viewDelegate.Native);
         var context = session.IsDefault ? null : session.AddRefNative();
         SetPage((cef_view_t*)CefNative.cef_browser_view_create(client.Native, &url, &settings, null, context, viewDelegate.Native));
+        s_unstarted.Add(this);
         CefString.Clear(&url);
         BrowserWindow.ClearWebPreferenceStrings(&settings);
     }
@@ -180,6 +185,7 @@ public sealed unsafe class WebContentsView : View
     /// <paramref name="done"/>.</summary>
     internal static void CloseAll(Action done)
     {
+        foreach (var view in s_unstarted.ToArray()) view.ClosePage();
         if (s_live.Count == 0)
         {
             done();
@@ -202,6 +208,7 @@ public sealed unsafe class WebContentsView : View
         // A page whose browser never started (the view never joined a window) needs no teardown.
         if (WebContents.Browser is null)
         {
+            s_unstarted.Remove(this);
             NativeObject.Release(TakePage());
             return;
         }
