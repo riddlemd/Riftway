@@ -1173,7 +1173,9 @@ public unsafe partial class BaseWindow
             || WindowTransparency.PageBackgroundColor(_backgroundColor, transparentPage) is not { } page) return;
         w->@base.@base.set_background_color(&w->@base.@base, ParseColor(fill));
         var under = WindowTransparency.BrowserViewColor(ParseColor(page));
-        ApplyPageViewBackground(under);
+        // Blink ignores a translucent default background while the view is transparent, so on Linux, where the window
+        // stays clear, the browser view paints it under the page, as Electron's SetContentBackgroundColor does.
+        ApplyPageViewBackground(_linuxTransparent ? ParseColor(page) : under);
         // The contents view sits between the window and the page; a themed panel colour there would hide a transparent window.
         _contentsView.SetBackgroundArgb(under);
     }
