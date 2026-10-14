@@ -37,11 +37,11 @@ General items: [todo.md](todo.md).
         the compositor colour, which CEF cannot
   - [ ] Electron gives every frameless window on Linux a translucent widget, for its own client-side frame
         (`ElectronFrameViewLinux`); Oriel only transparent ones. Check whether anything visible depends on it
-- [ ] Run the systemPreferences checks in WindowTest's `LinuxThemeAsync` (portal accent and `accent-color-changed`,
-      `gtk-enable-animations`, the members Electron lacks on Linux); branch `system-preferences`
-- [ ] Run WindowTest `LinuxDisplayEventsAsync` under Xvfb (branch `image-screen`): a `_NET_WORKAREA` change and an
-      `xrandr` mode change each raise `display-metrics-changed` within 250 ms, and no poll runs (DRIFT R1). If Xvfb
-      refuses `--newmode`/`--addmode`, use another CRTC change; `xrandr --fb` alone changes no CRTC, so no display
+- [x] The systemPreferences checks in WindowTest's `LinuxThemeAsync` (portal accent and `accent-color-changed`,
+      `gtk-enable-animations`, the members Electron lacks on Linux) pass in Docker on stock CEF
+- [x] WindowTest `LinuxDisplayEventsAsync` passes under Xvfb: a `_NET_WORKAREA` change and an `xrandr` mode change each
+      raise `display-metrics-changed` within 250 ms, and no poll runs (DRIFT R1). The image needs `x11-xserver-utils`
+      for `xrandr`
 - [ ] Listen for the GTK scale change Chromium's `X11ScreenOzone::OnDeviceScaleFactorChanged` hears (DRIFT R1)
 - [ ] Linux sandbox on Ubuntu 24.04+: AppArmor profile, or documented `--no-sandbox` (M4)
 - [ ] Wayland: CEF Views on Wayland is still being fixed upstream; Oriel targets X11/XWayland for now
@@ -77,15 +77,15 @@ General items: [todo.md](todo.md).
         an XEmbed tray for the GTK fallback (Docker has none of them)
 - [ ] `Notification` (branch `linux-notification`): Electron's `LibnotifyNotification` over D-Bus without libnotify
       (DRIFT Q5-Q11); unit tests pass on the host
-  - [ ] Run WindowTest's `LinuxNotificationTest` (fake `org.freedesktop.Notifications`,
-        `samples/Shared/FakeNotificationServer.cs`): Notify's arguments and hints, `show` inside `Show()`, the default
-        action as `click`, no `action` or `reply`, `NotificationClosed` as `close`, `CloseNotification` from `Close()`,
-        a refused Notify as `failed`, `IsSupported`. Written, not yet run
+  - [x] WindowTest's `LinuxNotificationTest` (fake `org.freedesktop.Notifications`,
+        `samples/Shared/FakeNotificationServer.cs`) passes in Docker: Notify's arguments and hints, `show` inside
+        `Show()`, the default action as `click`, no `action` or `reply`, `NotificationClosed` as `close`,
+        `CloseNotification` from `Close()`, a refused Notify as `failed`, `IsSupported`
   - [ ] Check against real servers: GNOME Shell, Plasma, dunst/mako (the default action, `image-data`, `append`)
   - [ ] The click's activation token on the patched libcef (DRIFT Q10), with the tray's
 - [ ] `desktopCapturer` on X11 (branch `desktop-capturer`): Oriel's own enumeration and capture (XQueryTree, `WM_STATE`,
-      `WM_NAME`, XRandR monitors, XComposite + `XGetImage`), separate from Chromium's capturer below. Run WindowTest
-      `DesktopCapturerChecks` under Xvfb and on a real X server; the EDID-based `display_id` needs a real monitor (Xvfb
+      `WM_NAME`, XRandR monitors, XComposite + `XGetImage`), separate from Chromium's capturer below. WindowTest's
+      `DesktopCapturerChecks` pass under Xvfb; run them on a real X server; the EDID-based `display_id` needs a real monitor (Xvfb
       has no EDID, so it falls back to the output's place). SessionTest's `chromeMediaSourceId` check is skipped under
       ORIEL_XVFB with the other capture checks
   - [ ] Wayland: the xdg-desktop-portal ScreenCast picker (DRIFT DC2)
