@@ -1080,6 +1080,18 @@ public sealed unsafe partial class WebContents
         page.Destroyed += (_, _) => PopupPages.Remove(page);
     }
 
+    /// <summary>UI thread: closes the page while it has no browser (a view's page before the view joins a window);
+    /// set by its <see cref="WebContentsView"/>, which decides whether the page can still start.</summary>
+    internal Action? CloseWithoutBrowser { get; set; }
+
+    /// <summary>UI thread: a page closed before its browser ever started is gone, as Electron's destroyed contents.</summary>
+    internal void OnClosedWithoutBrowser()
+    {
+        _destroyed.Cancel();
+        UnregisterLifecycle();
+        Raise(Destroyed, EventArgs.Empty, "destroyed");
+    }
+
     /// <summary>A popup page CEF never created a browser for: gone, without events.</summary>
     internal void DiscardUnborn()
     {

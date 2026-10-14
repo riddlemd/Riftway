@@ -213,6 +213,11 @@ public sealed unsafe partial class WebContents
     /// <c>webContents.close()</c>.</summary>
     public void Close(WebContentsCloseOptions? options = null)
     {
+        // A page that never started has no browser to close; Electron destroys it on a later task, as any closed page.
+        if (CloseWithoutBrowser is { } unstarted) CefThread.PostUi(() =>
+        {
+            if (_browser is null) unstarted();
+        });
         if (!(options?.WaitForBeforeUnload ?? false))
         {
             // Chrome style asks beforeunload even when forced, so the forced close answers it (drift C32).
