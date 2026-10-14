@@ -55,6 +55,8 @@ eng/layout-windows.ps1 artifacts/sample artifacts/host/Oriel.Host.dll OrielSampl
 artifacts/sample/OrielSample.exe
 ```
 
+Or in one step: `dotnet publish samples/Oriel.Sample -r win-x64 -c Release --self-contained -o artifacts/sample -p:OrielWindowsLayout=true -p:OrielExeName=OrielSample` builds the host DLL (once per RID, into `src/Oriel.Host.Native/obj/<rid>/`) and runs the same layout after publishing. `OrielExeName` defaults to the assembly name plus `Run`.
+
 Renderers run in Chromium's sandbox, as in Electron. Only CEF's `bootstrap.exe` can host the Windows sandbox broker, so the layout makes it the app: `bootstrap.exe` is renamed to the exe name you give (`OrielSample.exe`), `Oriel.Host.dll` sits beside it under the same name (`OrielSample.dll`), and the .NET apphost is removed, its version resources and icon copied onto the new exe. Every process starts as that exe. The host DLL runs CEF directly in renderer, GPU and utility processes, and starts .NET (hostfxr from the self-contained publish) and the app's `Main` in the browser process only. So:
 
 - the exe name must differ from the app's assembly name, whose `.dll` stays beside it;

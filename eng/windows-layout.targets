@@ -1,0 +1,34 @@
+<Project>
+  <!-- dotnet publish -r win-x64 -p:OrielWindowsLayout=true: the sandboxed layout eng/layout-windows.ps1 makes, as a
+       publish step. Imported only when OrielWindowsLayout is true (Directory.Build.targets). -->
+  <PropertyGroup>
+    <!-- <Exe>.dll is the native host, so the exe cannot take the managed assembly's name. -->
+    <OrielExeName Condition="'$(OrielExeName)' == ''">$(AssemblyName)Run</OrielExeName>
+    <OrielPwsh Condition="'$(OrielPwsh)' == ''">pwsh</OrielPwsh>
+    <_OrielCefPlatform Condition="'$(RuntimeIdentifier)' == 'win-x64'">windows64</_OrielCefPlatform>
+    <_OrielCefPlatform Condition="'$(RuntimeIdentifier)' == 'win-arm64'">windowsarm64</_OrielCefPlatform>
+    <_OrielRepo>$([MSBuild]::NormalizeDirectory('$(MSBuildThisFileDirectory)', '..'))</_OrielRepo>
+    <_OrielHostDir>$(_OrielRepo)src\Oriel.Host.Native\</_OrielHostDir>
+    <_OrielHostDll>$(_OrielHostDir)obj\$(RuntimeIdentifier)\Oriel.Host.dll</_OrielHostDll>
+  </PropertyGroup>
+
+  <Target Name="OrielWindowsLayout" AfterTargets="Publish"
+          Condition="'$(OS)' == 'Windows_NT' and $(RuntimeIdentifier.StartsWith('win-'))"
+          DependsOnTargets="_OrielCheckWindowsLayout;OrielBuildWindowsHost">
+    <Exec Command="&quot;$(OrielPwsh)&quot; -NoProfile -NonInteractive -ExecutionPolicy Bypass -File &quot;$(_OrielRepo)eng\layout-windows.ps1&quot; &quot;$(PublishDir.TrimEnd('\'))&quot; &quot;$(_OrielHostDll)&quot; &quot;$(OrielExeName)&quot; -App &quot;$(AssemblyName)&quot; -Platform $(_OrielCefPlatform)" />
+  </Target>
+
+  <Target Name="_OrielCheckWindowsLayout">
+    <Error Condition="'$(_OrielCefPlatform)' == ''" Text="OrielWindowsLayout needs RuntimeIdentifier win-x64 or win-arm64, not '$(RuntimeIdentifier)'." />
+    <Error Condition="'$(SelfContained)' != 'true'" Text="OrielWindowsLayout needs a self-contained publish (--self-contained): bootstrap.exe starts .NET through hostfxr beside it." />
+    <Error Condition="'$(PublishSingleFile)' == 'true'" Text="OrielWindowsLayout cannot lay out a single-file publish." />
+    <Error Condition="'$(OrielExeName)' == '$(AssemblyName)'" Text="OrielExeName '$(OrielExeName)' is the managed assembly's name; $(OrielExeName).dll must be the native host." />
+  </Target>
+
+  <!-- Once per RID, shared by every app; rebuilt only when its sources or the pinned CEF change. -->
+  <Target Name="OrielBuildWindowsHost"
+          Inputs="$(_OrielHostDir)host.c;$(_OrielHostDir)build.ps1;$(_OrielRepo)eng\cef.json;$(_OrielRepo)src\Oriel.Cef\Interop\CefApiVersion.cs"
+          Outputs="$(_OrielHostDll)">
+    <Exec Command="&quot;$(OrielPwsh)&quot; -NoProfile -NonInteractive -ExecutionPolicy Bypass -File &quot;$(_OrielHostDir)build.ps1&quot; &quot;$(_OrielHostDll)&quot; $(_OrielCefPlatform)" />
+  </Target>
+</Project>
