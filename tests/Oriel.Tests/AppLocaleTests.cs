@@ -19,6 +19,15 @@ public sealed class AppLocaleTests
     }
 
     [Fact]
+    public void WithLinuxLang_StandsInForLcAllOnly()
+    {
+        Assert.Equal(["de-DE"], OrielApp.LinuxLanguages(OrielApp.WithLinuxLang(Env(("LC_ALL", "en_US"), ("LANG", "fr_FR")), "de-DE")));
+        Assert.Equal(["fr-FR", "fr"], OrielApp.LinuxLanguages(OrielApp.WithLinuxLang(Env(("LANGUAGE", "fr_FR")), "de-DE")));
+        Assert.Equal(["en-US", "en"], OrielApp.LinuxLanguages(OrielApp.WithLinuxLang(Env(("LC_ALL", "en_US")), "")));
+        Assert.Equal("fr_FR", OrielApp.WithLinuxLang(Env(("LANG", "fr_FR")), "de-DE")("LANG"));
+    }
+
+    [Fact]
     public void LinuxConfiguredLocale_PrintsIcuDefault()
     {
         Assert.Equal("en-US", OrielApp.LinuxConfiguredLocale(Env(("LANG", "en_US.UTF-8"))));

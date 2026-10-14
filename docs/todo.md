@@ -64,7 +64,7 @@ Cross-platform work. Platform-specific items: [linux-todo.md](linux-todo.md), [w
       as `CefSettings.locale` (A30); a relauncher mode (A21)
 - [ ] CEF patches 0007-0009 (A31 `child-process-gone`, A35 `resolveProxy`, A28 accessibility mode): build a patched
       libcef and run SessionTest's `patched (0007)`, `(0008)` and `(0009)` checks on each OS; the stock proxy checks
-      (bypass list, fixed servers without rules, `app.SetProxyAsync`) have not run either
+      (bypass list, fixed servers without rules, `app.SetProxyAsync`) pass on Linux, not yet run on macOS and Windows
 
 ## Tests
 
@@ -93,13 +93,13 @@ Cross-platform work. Platform-specific items: [linux-todo.md](linux-todo.md), [w
       pass; the macOS GUI and Linux WindowTest checks are written, not run ([mac-todo.md](mac-todo.md), [linux-todo.md](linux-todo.md))
 - [ ] `DownloadItem` parity (branch `download-item`, [parity/download-item.md](parity/download-item.md)): Chromium's resume
       rules, the save dialog's URL title and Windows filters, `savePath`, `hasUserGesture`/`getETag`/`getLastModifiedTime`
-      (DRIFT E13), pause/cancel before CEF hands a control. Unit tests pass; run the new SessionTest `HTTP:` download checks
-      (local server: redirect, Content-Disposition, ETag, pause/resume, reset and Range resume, 403) on Linux and macOS.
+      (DRIFT E13), pause/cancel before CEF hands a control. Unit tests pass; the SessionTest `HTTP:` download checks
+      (local server: redirect, Content-Disposition, ETag, pause/resume, reset and Range resume, 403) pass on Linux; run them on macOS.
       CEF patch 0005 (in [eng/cef](../eng/cef/README.md)) covers E13 and E40; E14-E16, E39 and E41 still need patches
 - [ ] `Notification`: Windows (branch `notify-storage`) and Linux (branch `linux-notification`, WindowTest checks written,
       not run: [linux-todo.md](linux-todo.md)); macOS not started (DRIFT Q3)
-- [ ] `session.serviceWorkers` / `ServiceWorkerMain` (branch `service-workers`): done over DevTools (DRIFT SW1-SW8); run
-      SessionTest's `ServiceWorkerChecks` (written, never run); `send`, `ipc` and `ipcMainServiceWorker` wait on the
+- [ ] `session.serviceWorkers` / `ServiceWorkerMain` (branch `service-workers`): done over DevTools (DRIFT SW1-SW8); SessionTest's
+      `ServiceWorkerChecks` pass on Linux, not yet run on macOS and Windows; `send`, `ipc` and `ipcMainServiceWorker` wait on the
       service worker patch described after DRIFT SW8
 - [ ] `CrashReporter` on macOS and Linux (branch `crash-reporter-mac-linux`): CrashTest passes on macOS (48 checks);
       the Linux run is pending ([linux-todo.md](linux-todo.md)). Open: CR11 (keys in GPU/utility children), CR16 (.NET
@@ -113,8 +113,8 @@ Cross-platform work. Platform-specific items: [linux-todo.md](linux-todo.md), [w
       Oriel detects a patched libcef by its next-version API hash (`CefRuntime.IsPatched`) and runs unchanged on stock
       CEF. None is built yet: build, check the hashes, run WindowTest on Linux ([linux-todo.md](linux-todo.md)) and
       SessionTest's `patched (0005)` and `patched (0006)` checks
-- [ ] `session` audit (branch `session-audit`, [parity/session.md](parity/session.md)): run SessionTest
-      `SessionAuditChecks` on macOS, Windows and Linux (written, never run): `StoragePath`, `SpellCheckerEnabled`,
+- [ ] `session` audit (branch `session-audit`, [parity/session.md](parity/session.md)): SessionTest
+      `SessionAuditChecks` pass on Linux; run them on macOS and Windows: `StoragePath`, `SpellCheckerEnabled`,
       `EnableNetworkEmulation` offline and latency on open and later pages, another session untouched (DRIFT E43),
       `SetSslConfig` and `AllowNtlmCredentialsForDomains` accepted by Chromium's local state (E44). Not checked: a
       TLS 1.2-only server refused after `MinVersion = tls1.3`, and NTLM credentials sent to an allow-listed server

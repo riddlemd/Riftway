@@ -7,14 +7,41 @@ public sealed unsafe partial class OrielApp
 {
     /// <summary>The locale Chromium runs the app in (its UI strings and the renderers' default locale), or empty before
     /// <see cref="Ready"/>. Electron's <c>app.getLocale()</c>: Chromium's choice is recomputed from its inputs, CEF's
-    /// <c>--lang</c> on macOS and Windows (en-US unless set) and the environment's languages on Linux, against the locale
-    /// files that ship (drift A30).</summary>
+    /// <c>--lang</c> on macOS and Windows (en-US unless set) and the environment's languages on Linux, where a <c>--lang</c>
+    /// stands in for <c>LC_ALL</c> as in Electron, against the locale files that ship (drift A30).</summary>
     public string GetLocale()
     {
         if (!IsReady) return "";
         var lang = GlobalSwitch("lang") ?? "";
-        var candidates = OperatingSystem.IsLinux() ? LinuxLanguages(Environment.GetEnvironmentVariable) : [];
+        var candidates = OperatingSystem.IsLinux() ? LinuxLanguages(WithLinuxLang(Environment.GetEnvironmentVariable, _linuxLang)) : [];
         return ResolveApplicationLocale(OperatingSystem.IsLinux() ? "" : lang, candidates, LocalePakExists);
+    }
+
+    // The app's --lang as Chromium started, empty without one; Linux only.
+    private string _linuxLang = "";
+
+    // .NET's environment is a copy taken at start-up, so it never sees the LC_ALL Chromium started under.
+    internal static Func<string, string?> WithLinuxLang(Func<string, string?> environment, string lang)
+        => name => name == "LC_ALL" && lang.Length > 0 ? lang : environment(name);
+
+    // Chromium on Linux takes its locale only from the environment; Electron sets LC_ALL to --lang while it loads the
+    // resource bundle, which here happens inside cef_initialize.
+    private sealed class LinuxLangScope(string? previous) : IDisposable
+    {
+        public static LinuxLangScope? Begin(string lang)
+        {
+            if (lang.Length == 0) return null;
+            var scope = new LinuxLangScope(Environment.GetEnvironmentVariable("LC_ALL"));
+            _ = setenv("LC_ALL", lang, 1);
+            return scope;
+        }
+
+        // .NET's copy of the environment still holds the value to restore.
+        public void Dispose() => _ = previous is null ? unsetenv("LC_ALL") : setenv("LC_ALL", previous, 1);
+
+        [DllImport("libc", EntryPoint = "setenv")] private static extern int setenv(string name, string value, int overwrite);
+
+        [DllImport("libc", EntryPoint = "unsetenv")] private static extern int unsetenv(string name);
     }
 
     private static unsafe string? GlobalSwitch(string name)

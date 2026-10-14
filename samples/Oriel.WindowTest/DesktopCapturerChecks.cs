@@ -28,6 +28,9 @@ static class DesktopCapturerChecks
         try
         {
             await probe.LoadUrl("data:text/html,<title>" + Uri.EscapeDataString(Title) + "</title><body style='margin:0;background:%2320C040'></body>");
+            // X11 captures what is on screen; Openbox sometimes leaves a new window under the focused one.
+            probe.Focus();
+            for (var waited = 0; !probe.IsFocused && waited < 5000; waited += 100) await Task.Delay(100);
             await Task.Delay(500);
 
             var options = new SourcesOptions { Types = ["window", "screen"], ThumbnailSize = s_box, FetchWindowIcons = true };

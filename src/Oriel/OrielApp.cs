@@ -278,7 +278,9 @@ public sealed unsafe partial class OrielApp
         if (OperatingSystem.IsLinux()) LinuxPortalSettings.Start();
         NativeObject.AddRef(app.Native);
         var crashDumps = OperatingSystem.IsWindows() ? null : CrashReporter.PrepareDatabase(GetPath("crashDumps"));
+        var linuxLang = OperatingSystem.IsLinux() ? LinuxLangScope.Begin(_linuxLang = CommandLine.GetSwitchValue("lang")) : null;
         var initialized = CefNative.cef_initialize((cef_main_args_t*)&args, &settings, app.Native, sandboxInfo) != 0;
+        linuxLang?.Dispose();
         crashDumps?.Dispose();
         CefString.Clear(&settings.user_agent);
         CefString.Clear(&settings.root_cache_path);
@@ -372,6 +374,8 @@ public sealed unsafe partial class OrielApp
         // A non-official libcef otherwise applies Chromium's testing field-trial config, which official CEF and Electron
         // compile out; on Windows its BrowserDynamicCodeDisabled forbids the .NET JIT in the browser process.
         if (processType.Length == 0) AppendSwitch(commandLine, "disable-field-trial-config");
+        // Chrome reloads a failed http(s) page by itself after 1 s and on; Electron's content layer never does.
+        if (processType.Length == 0) AppendSwitch(commandLine, "disable-auto-reload");
         if (processType.Length == 0 && s_current is { } app)
         {
             // After Oriel's own switches, so the app can remove them as an Electron app can Electron's.

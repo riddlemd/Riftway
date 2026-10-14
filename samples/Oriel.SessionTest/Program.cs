@@ -54,6 +54,13 @@ static async Task<Exception?> Throws(Func<Task> act)
     catch (Exception e) { return e; }
 }
 
+// A section that throws fails one check and lets the rest of the run go on.
+async Task Section(string name, Func<Task> run)
+{
+    try { await run(); }
+    catch (Exception e) { Check($"{name} ran to the end", false, e); }
+}
+
 static string Names(IEnumerable<Cookie> cookies) => string.Join(",", cookies.Select(c => c.Name).Order());
 
 const string Site = "https://oriel.test/";
@@ -275,7 +282,7 @@ async Task RunAsync()
     }
     Check("a cookie the page sets lands in its session",
         fromPage == 1 && (await defaultSession.Cookies.GetAsync(new CookieFilter { Name = "fromPage" })).Count == 0, fromPage);
-    await CookieChangeChecks();
+    await Section("CookieChangeChecks", CookieChangeChecks);
 
     // A popup can't change session: CEF gives it the opener's.
     var created = 0;
@@ -349,7 +356,7 @@ async Task RunAsync()
     later.Destroy();
     agentWin.Destroy();
 
-    await PermissionChecks();
+    await Section("PermissionChecks", () => PermissionChecks());
     // Downloads: Session.WillDownload and DownloadItem, as Electron.
     var downloads = Session.FromPartition("downloads");
     var report = Encoding.UTF8.GetBytes("report body " + new string('x', 4000));
@@ -606,8 +613,8 @@ async Task RunAsync()
     await DownloadUrlHeaderChecks(Session.FromPartition("download-headers"), downloadDir);
     downloadWin.Destroy();
     Directory.Delete(downloadDir, recursive: true);
-    await StorageChecks();
-    await ServiceWorkerChecks();
+    await Section("StorageChecks", StorageChecks);
+    await Section("ServiceWorkerChecks", ServiceWorkerChecks);
 
     // webRequest: the session's listeners see, cancel, redirect and change requests, as Electron's.
     var watched = Session.FromPartition("webrequest");
@@ -1374,12 +1381,24 @@ async Task RunAsync()
         // Paths are cached as by PathService, and the default session has already asked for downloads; any override clears it.
         void ClearPathCache() => app.SetPath("temp", app.GetPath("temp"));
         var userDirs = Path.Combine(app.GetPath("appData"), "user-dirs.dirs");
-        File.WriteAllText(userDirs, "XDG_DOWNLOAD_DIR=\"$HOME/Fetched\"\n");
-        ClearPathCache();
-        var downloadsDir = app.GetPath("downloads");
-        File.Delete(userDirs);
-        ClearPathCache();
-        var plainDownloadsDir = app.GetPath("downloads");
+        // A desktop's own user-dirs.dirs is put back afterwards.
+        var savedUserDirs = File.Exists(userDirs) ? File.ReadAllBytes(userDirs) : null;
+        string downloadsDir, plainDownloadsDir;
+        try
+        {
+            File.WriteAllText(userDirs, "XDG_DOWNLOAD_DIR=\"$HOME/Fetched\"\n");
+            ClearPathCache();
+            downloadsDir = app.GetPath("downloads");
+            File.Delete(userDirs);
+            ClearPathCache();
+            plainDownloadsDir = app.GetPath("downloads");
+        }
+        finally
+        {
+            if (savedUserDirs is not null) File.WriteAllBytes(userDirs, savedUserDirs);
+            else File.Delete(userDirs);
+            ClearPathCache();
+        }
         Check("GetPath(downloads) follows the XDG user directories on Linux", downloadsDir == Path.Combine(app.GetPath("home"), "Fetched")
             && plainDownloadsDir == Path.Combine(app.GetPath("home"), "Downloads"), $"{downloadsDir} then {plainDownloadsDir}");
     }
@@ -1392,8 +1411,8 @@ async Task RunAsync()
         unknownPath?.Message.StartsWith("Failed to get 'nope' path") == true && missingDir is null && app.GetPath("logs") == missingLogs
         && !Directory.Exists(missingLogs) && relativeDir is ArgumentException, $"{unknownPath?.Message} | {missingDir?.Message} | {relativeDir?.Message}");
     app.SetPath("logs", originalLogs);
-    await AppAuditChecks();
-    await SessionAuditChecks();
+    await Section("AppAuditChecks", AppAuditChecks);
+    await Section("SessionAuditChecks", SessionAuditChecks);
     var movedTo = Directory.CreateTempSubdirectory("oriel-userdata-").FullName;
     var originalUserData = app.GetPath("userData");
     app.SetPath("userData", movedTo);
@@ -2565,6 +2584,16 @@ async Task PermissionChecks(bool mediaOnly = false)
         var devicesSession = Session.FromPartition("perm-media-devices");
         devicesSession.SetPermissionRequestHandler(Recorder(mediaAsked, () => mediaAllow));
         var mediaWin = await Open(devicesSession);
+        // The main run launches this one with --lang=de-DE; LANGUAGE outranks LC_ALL, as in Electron.
+        if (OperatingSystem.IsLinux() && Environment.GetEnvironmentVariable("LANGUAGE") is { Length: > 0 } outranking)
+            Console.WriteLine($"SKIP  Linux --lang check: LANGUAGE={outranking} outranks it");
+        else if (OperatingSystem.IsLinux())
+        {
+            var language = await Run(mediaWin, "navigator.language");
+            // Chromium's accept list for its locale, so German only if it loaded the de resources (the exact value is A39).
+            Check("Linux: --lang picks the app locale, as Electron's LC_ALL", app.GetLocale() == "de" && language?.StartsWith("de") == true,
+                $"{app.GetLocale()} {language} LC_ALL={Environment.GetEnvironmentVariable("LC_ALL")}");
+        }
         const string Microphone = "navigator.mediaDevices.getUserMedia({ audio: true }).then(s => { s.getTracks().forEach(t => t.stop()); return 'ok'; }, e => e.name)";
         const string CameraAndMicrophone = "navigator.mediaDevices.getUserMedia({ audio: true, video: true }).then(s => { s.getTracks().forEach(t => t.stop()); return 'ok'; }, e => e.name)";
         var heard = await Run(mediaWin, Microphone);
@@ -2596,6 +2625,7 @@ async Task PermissionChecks(bool mediaOnly = false)
     // this run has closed: closing the last one would quit the app.
     var childStart = new System.Diagnostics.ProcessStartInfo(Environment.ProcessPath!) { RedirectStandardOutput = true, RedirectStandardError = true };
     childStart.ArgumentList.Add(MediaChild);
+    if (OperatingSystem.IsLinux()) childStart.ArgumentList.Add("--lang=de-DE");
     using (var child = System.Diagnostics.Process.Start(childStart)!)
     {
         var childErrors = child.StandardError.ReadToEndAsync();

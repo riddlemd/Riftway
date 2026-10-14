@@ -725,6 +725,9 @@ async Task LinuxDisabledInputAsync(BrowserWindow focusAfter)
         + "for(const k in c)addEventListener(k,()=>c[k]++,{capture:true,passive:true})</script>";
     var parent = new BrowserWindow(new BrowserWindowOptions { Title = "Oriel window test: modal parent", Width = 640, Height = 480, X = 100, Y = 100 });
     await parent.LoadUrl(counting);
+    // Openbox's focus-stealing prevention sometimes leaves a new window under the focused one, and xdotool clicks what is on top.
+    parent.Focus();
+    Eventually(() => parent.IsFocused, step);
     await Task.Delay(500);
     var content = parent.GetContentBounds();
     var (px, py) = (content.X + content.Width - 60, content.Y + content.Height - 60);
@@ -3661,6 +3664,19 @@ async Task LoadAndSizeAsync(BrowserWindow win)
     Check("a fragment-only LoadUrl completes", fragment is (true, null), fragment);
     var missing = await Outcome(win.WebContents.LoadUrl(new Uri(Path.Combine(dir, "missing.html")).AbsoluteUri));
     Check("a failed load fails the task with LoadFailedException", missing is (true, LoadFailedException { ErrorCode: < 0 }), missing);
+    var closed = new System.Net.Sockets.TcpListener(System.Net.IPAddress.Loopback, 0);
+    closed.Start();
+    var refusedUrl = $"http://127.0.0.1:{((System.Net.IPEndPoint)closed.LocalEndpoint).Port}/";
+    closed.Stop();
+    var refused = await Outcome(win.WebContents.LoadUrl(refusedUrl));
+    var restarts = 0;
+    EventHandler<NavigationEventArgs> restarted = (_, e) => { if (e.IsMainFrame) Interlocked.Increment(ref restarts); };
+    win.WebContents.DidStartNavigation += restarted;
+    // Chrome's first automatic reload of a failed http page comes after 1 s.
+    await Task.Delay(2500);
+    win.WebContents.DidStartNavigation -= restarted;
+    Check("a failed http page is not reloaded by itself, as Chrome's auto-reload would", refused is (true, LoadFailedException { ErrorCode: -102 }) && restarts == 0,
+        $"{refused} restarts={restarts}");
     var first = win.WebContents.LoadFile(one);
     var second = win.WebContents.LoadFile(two);
     var superseded = await Outcome(first);
