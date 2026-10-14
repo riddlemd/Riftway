@@ -369,6 +369,9 @@ public sealed unsafe partial class OrielApp
         // Chrome style otherwise hands page auth challenges to Chrome's own login prompt and never calls
         // get_auth_credentials, so the login event would not fire.
         if (processType.Length == 0) AppendSwitch(commandLine, "disable-chrome-login-prompt");
+        // A non-official libcef otherwise applies Chromium's testing field-trial config, which official CEF and Electron
+        // compile out; on Windows its BrowserDynamicCodeDisabled forbids the .NET JIT in the browser process.
+        if (processType.Length == 0) AppendSwitch(commandLine, "disable-field-trial-config");
         if (processType.Length == 0 && s_current is { } app)
         {
             // After Oriel's own switches, so the app can remove them as an Electron app can Electron's.
