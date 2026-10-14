@@ -12,7 +12,10 @@ General items: [todo.md](todo.md). Windows work runs on the Windows laptop.
       (Chromium's default); `--no-sandbox` turns it all off. WindowTest 400/401 (always-on-top flake), SessionTest
       141/143 (spellcheck flake, getAppMetrics CPU: no Windows children, A18), IpcTest 11/11, ProtocolTest 37/37.
   - [ ] Per-window `sandbox: false`: no CEF hook maps a renderer launch to its browser (DRIFT W13)
-  - [ ] Signing: tested unsigned only; exe and DLL must share a certificate (DRIFT P13). Test a mismatch and a real signature
+  - [x] Signing (DRIFT P13), tested with a self-signed certificate trusted per user: exe + `<Exe>.dll` +
+        `chrome_elf.dll` signed with one certificate runs sandboxed (IpcTest 0 failures); unsigned `chrome_elf.dll`, any
+        one signed alone, the DLL under another certificate, or an untrusted root is refused with only a stderr FATAL
+        and exit 0x80000003. A friendlier error would need a patched bootstrap or a pre-flight check in the layout script
   - [ ] Packaging (M4): build `Oriel.Host.Native` per RID into the runtime package; re-check `bootstrap.exe`'s
         resources and hash on every CEF bump
     - [x] Opt-in publish target (`-p:OrielWindowsLayout=true`, `eng/windows-layout.targets`) that builds the host and
@@ -51,9 +54,10 @@ General items: [todo.md](todo.md). Windows work runs on the Windows laptop.
       Windows-specific rules (z-order merge of this process's windows, `EnumDisplayDevices`, GDI thumbnails, `WM_GETICON`)
       beyond those, and SessionTest's two `chromeMediaSourceId` checks fail on main (empty `displaySurface`, fixed on
       `win-fixes`); DXGI and WGC capture are DRIFT DC3
-- [ ] `app` audit (branch `app-audit`): port `showEmojiPanel` (Win+. through `SendInput`, DRIFT A25) and the
-      singleton's WM_COPYDATA client for `requestSingleInstanceLock` data (A29); run SessionTest `AppAuditChecks`, the
-      about panel's message box and `runningUnderARM64Translation` (`IsWow64Process2`)
+- [ ] `app` audit (branch `app-audit`): `showEmojiPanel` (Win+. through `SendInput`) and the singleton's
+      WM_COPYDATA client for `requestSingleInstanceLock` data are ported (SessionTest's second-launch check passes;
+      the emoji picker is unverified, DRIFT A25); still to run: the about panel's message box and
+      `runningUnderARM64Translation` (`IsWow64Process2`)
   - [x] SessionTest `AppAuditChecks`: all 24 pass on Windows (2026-10-13, d07986c, Wojtek)
   - [ ] The about panel's message box: no check shows it (the unit test covers only its text)
   - [ ] `runningUnderARM64Translation`: no check; needs an arm64 device (x64 answers false either way)

@@ -2,6 +2,15 @@
 
 General items: [todo.md](todo.md).
 
+- [x] **safeStorage against a real Secret Service**, and Chromium's deadlock guard on both paths (was DRIFT D4):
+      `docker build -t oriel-linux-dev-keyring -f eng/docker/linux-dev-keyring.Dockerfile eng/docker` (on top of
+      `oriel-linux-dev`), then run SafeStorageTest with `-e ORIEL_SECRET_SERVICE=gnome-keyring -e ORIEL_SS_EXPECT=gnome_libsecret`
+      (add `-e ORIEL_SS_ASYNC_FIRST=1` for the asynchronous provider creating the item), or
+      `-e ORIEL_SECRET_SERVICE=silent -e ORIEL_SS_EXPECT=gnome_libsecret -e ORIEL_SS_SILENT=1` (a fake service that answers
+      only `ReadAlias`: both paths fall back after the 25 s D-Bus timeout). Unset, the default run is unchanged; keep it on
+      `oriel-linux-dev`, where no keyring can be D-Bus-activated (an activatable but locked gnome-keyring waits for an unlock
+      prompt nobody answers, as Chromium's would)
+
 - [ ] **libyuv SIGILL on SME-without-SVE arm64** (Linux VMs on Apple M4+): the renderer crashes on the first
       software-converted video frame.
   - [x] Workaround: `Oriel.Subprocess.Native` overrides `getauxval` and clears HWCAP2 SME when SVE is absent

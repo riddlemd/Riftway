@@ -5,7 +5,8 @@ using Oriel;
 // End-to-end safeStorage check on Linux: runs Electron's API against the real store selection, libsecret and CEF's
 // app lifecycle. ORIEL_SS_EXPECT names the store the environment should select ("basic_text" by default,
 // "gnome_libsecret" with a running Secret Service). ORIEL_SS_OUT, if set, receives the v11 ciphertexts in hex so the
-// harness can decrypt them independently; ORIEL_SS_ASYNC_FIRST=1 starts with the asynchronous API. The exit code is the number of failures.
+// harness can decrypt them independently; ORIEL_SS_ASYNC_FIRST=1 starts with the asynchronous API; ORIEL_SS_SILENT=1 means the
+// Secret Service's default collection never answers (eng/docker/with-secret-service.sh silent). The exit code is the number of failures.
 [assembly: SupportedOSPlatform("linux")]
 
 if (!OperatingSystem.IsLinux())
@@ -15,6 +16,21 @@ if (!OperatingSystem.IsLinux())
 }
 
 var expected = Environment.GetEnvironmentVariable("ORIEL_SS_EXPECT") ?? "basic_text";
+var silent = Environment.GetEnvironmentVariable("ORIEL_SS_SILENT") == "1";
+// Chromium's D-Bus default timeout, 25 s, plus room for the libsecret calls the guard skips.
+var guardLimit = TimeSpan.FromSeconds(40);
+var callLog = Environment.GetEnvironmentVariable("ORIEL_SS_CALL_LOG");
+// The fake service's calls since the last look; the guard asks only ReadAlias and the Label.
+var seenCalls = 0;
+string[] NewCalls()
+{
+    var all = callLog is null || !File.Exists(callLog) ? [] : File.ReadAllLines(callLog);
+    var fresh = all[seenCalls..];
+    seenCalls = all.Length;
+    return fresh;
+}
+bool OnlyGuardCalls(string[] calls) =>
+    calls.Length > 0 && calls.All(c => c is "org.freedesktop.Secret.Service.ReadAlias" or "org.freedesktop.DBus.Properties.Get");
 var outFile = Environment.GetEnvironmentVariable("ORIEL_SS_OUT");
 const string Text = "Oriel ✓ safeStorage";
 const string NotReady = "safeStorage cannot be used before app is ready";
@@ -71,14 +87,24 @@ app.Ready += async (_, _) =>
         Check("selected backend", backend == expected, backend);
         var lines = new List<string>();
         // ORIEL_SS_ASYNC_FIRST: the asynchronous provider meets an empty keyring and creates the item itself.
-        if (Environment.GetEnvironmentVariable("ORIEL_SS_ASYNC_FIRST") == "1")
+        if (Environment.GetEnvironmentVariable("ORIEL_SS_ASYNC_FIRST") == "1" && !silent)
         {
             var first = await SafeStorage.EncryptStringAsync(Text);
             Check("async first: v11", first.AsSpan().StartsWith("v11"u8));
             lines.Add("async-first " + Convert.ToHexString(first));
         }
 
-        if (expected == "basic_text")
+        if (silent)
+        {
+            // Chromium's CanUseLibsecret: a default collection that does not answer means no libsecret, so no key.
+            var clock = System.Diagnostics.Stopwatch.StartNew();
+            var available = SafeStorage.IsEncryptionAvailable();
+            Check("silent keyring: the synchronous API is unavailable, within the D-Bus timeout", !available && clock.Elapsed < guardLimit, $"{available} after {clock.Elapsed.TotalSeconds:F1} s");
+            Check("silent keyring: encryptString refuses", Throws(() => SafeStorage.EncryptString("x")) == EncryptError + " Encryption is not available.");
+            var syncCalls = NewCalls();
+            Check("silent keyring: the synchronous guard stops before libsecret asks the service anything", OnlyGuardCalls(syncCalls), string.Join(",", syncCalls));
+        }
+        else if (expected == "basic_text")
         {
             Check("basic_text: unavailable without plain text", !SafeStorage.IsEncryptionAvailable());
             Check("basic_text: encryptString refuses", Throws(() => SafeStorage.EncryptString("x")) == EncryptError + " Encryption is not available.");
@@ -98,16 +124,30 @@ app.Ready += async (_, _) =>
             lines.Add("sync " + Convert.ToHexString(encrypted));
         }
 
-        Check("decrypt: unversioned", Throws(() => SafeStorage.DecryptString("abc"u8.ToArray())) == DecryptError + " Ciphertext does not appear to be encrypted.");
-        var tampered = v10Text.ToArray();
-        tampered[^1] ^= 1;
-        Check("decrypt: tampered", Throws(() => SafeStorage.DecryptString(tampered)) == DecryptError);
-        Check("decrypt: empty", SafeStorage.DecryptString([]) == "");
+        if (silent)
+            Check("silent keyring: decryptString refuses", Throws(() => SafeStorage.DecryptString(v10Text)) == DecryptError + " Decryption is not available.");
+        else
+        {
+            Check("decrypt: unversioned", Throws(() => SafeStorage.DecryptString("abc"u8.ToArray())) == DecryptError + " Ciphertext does not appear to be encrypted.");
+            var tampered = v10Text.ToArray();
+            tampered[^1] ^= 1;
+            Check("decrypt: tampered", Throws(() => SafeStorage.DecryptString(tampered)) == DecryptError);
+            Check("decrypt: empty", SafeStorage.DecryptString([]) == "");
+        }
 
+        // The first asynchronous call loads the key, the guard included.
+        var asyncClock = System.Diagnostics.Stopwatch.StartNew();
         Check("async: available", await SafeStorage.IsAsyncEncryptionAvailableAsync());
         var asyncEncrypted = await SafeStorage.EncryptStringAsync(Text);
-        var asyncTag = expected == "basic_text" ? "v10" : "v11";
+        // FreedesktopSecretKeyProvider's kGnomeKeyringDeadlock leaves only the "v10" key.
+        var asyncTag = expected == "basic_text" || silent ? "v10" : "v11";
         Check("async: tag", Encoding.ASCII.GetString(asyncEncrypted, 0, 3) == asyncTag, Encoding.ASCII.GetString(asyncEncrypted, 0, 3));
+        if (silent)
+        {
+            Check("silent keyring: the asynchronous API falls back within the D-Bus timeout", asyncClock.Elapsed < guardLimit, $"{asyncClock.Elapsed.TotalSeconds:F1} s");
+            var asyncCalls = NewCalls();
+            Check("silent keyring: the asynchronous guard stops before libsecret asks the service anything", OnlyGuardCalls(asyncCalls), string.Join(",", asyncCalls));
+        }
         Check("async: round trip", await SafeStorage.DecryptStringAsync(asyncEncrypted) == new SafeStorageDecryptResult(false, Text));
         Check("async: v10 re-encrypt flag", await SafeStorage.DecryptStringAsync(v10Text) == new SafeStorageDecryptResult(asyncTag != "v10", Text));
         Check("async: garbage", await Rejects(() => SafeStorage.DecryptStringAsync([1, 2, 3])) == "Error while decrypting the ciphertext provided to safeStorage.decryptStringAsync.");

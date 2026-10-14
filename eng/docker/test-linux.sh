@@ -55,7 +55,8 @@ if [ "$sandbox" = 1 ]; then
   chmod -R a+rX /work/out
   runuser -u oriel -- env DISPLAY=:99 ORIEL_XVFB=1 ORIEL_TRACE_DEVTOOLS="${ORIEL_TRACE_DEVTOOLS:-}" $limit dbus-run-session -- eng/docker/with-system-bus.sh "/work/out/app/$exe" --enable-sandbox ${ORIEL_EXTRA_ARGS:-} 2> /work/app.err || status=$?
 else
-  $limit dbus-run-session -- eng/docker/with-system-bus.sh "/work/out/app/$exe" ${ORIEL_EXTRA_ARGS:-} 2> /work/app.err || status=$?
+  # ORIEL_SECRET_SERVICE (gnome-keyring or silent) puts a Secret Service on the run's session bus; unset, nothing changes.
+  $limit dbus-run-session -- eng/docker/with-system-bus.sh eng/docker/with-secret-service.sh "/work/out/app/$exe" ${ORIEL_EXTRA_ARGS:-} 2> /work/app.err || status=$?
 fi
 
 if [ "$status" = 124 ] || [ "$status" = 137 ]; then echo "FAIL  the app exits by itself within ${ORIEL_RUN_LIMIT:-1800} s  [killed]"; fi

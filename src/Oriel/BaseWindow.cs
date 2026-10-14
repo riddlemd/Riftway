@@ -708,11 +708,28 @@ public unsafe partial class BaseWindow
     public void SetFullScreen(bool flag)
     {
         if (UsesSimpleFullScreen) SetSimpleFullScreen(flag);
-        else Command(w =>
+        else Command(w => SetFullScreenOn(w, flag));
+    }
+
+    // Set during a Windows SetFullScreen whose event has already gone out; the transition's end then raises none.
+    private bool _fullScreenAnnounced;
+
+    private void SetFullScreenOn(cef_window_t* w, bool flag)
+    {
+        _sizeState?.SetFullScreen(flag);
+        var announced = false;
+        if (OperatingSystem.IsWindows())
         {
-            _sizeState?.SetFullScreen(flag);
-            w->set_fullscreen(w, flag ? 1 : 0);
-        });
+            // Electron's NativeWindowViews::SetFullScreen notifies first, before the resize, and on every call.
+            announced = (w->is_fullscreen(w) != 0) != flag;
+            (flag ? EnteredFullScreen : LeftFullScreen)?.Invoke(this, EventArgs.Empty);
+            if (_window is null) return;
+        }
+        // Off macOS the transition ends inside set_fullscreen, so the flag covers exactly this call, even one a handler
+        // made above, and cannot outlive a call that changed nothing.
+        _fullScreenAnnounced = announced;
+        w->set_fullscreen(w, flag ? 1 : 0);
+        _fullScreenAnnounced = false;
     }
 
     /// <summary>Whether the window is in native full screen; false in simple full screen, as Electron (which reads the
@@ -731,11 +748,7 @@ public unsafe partial class BaseWindow
     {
         if (!OperatingSystem.IsMacOS())
         {
-            Command(w =>
-            {
-                _sizeState?.SetFullScreen(flag);
-                w->set_fullscreen(w, flag ? 1 : 0);
-            });
+            Command(w => SetFullScreenOn(w, flag));
             return;
         }
 
@@ -1539,7 +1552,8 @@ public unsafe partial class BaseWindow
         // Electron's SetFullScreen: corners that round square up in full screen, framed windows included.
         if (OperatingSystem.IsWindows() && _roundedCorners && WindowsWindow.IsWindows11) WindowsWindow.SetRoundedCorners(Hwnd(_window), !fullscreen);
         _titleBarOverlay?.SetVisible(!fullscreen);
-        (fullscreen ? EnteredFullScreen : LeftFullScreen)?.Invoke(this, EventArgs.Empty);
+        if (_fullScreenAnnounced) _fullScreenAnnounced = false;
+        else (fullscreen ? EnteredFullScreen : LeftFullScreen)?.Invoke(this, EventArgs.Empty);
     }
 
     private void OnWindowDestroyed(cef_window_t* window)

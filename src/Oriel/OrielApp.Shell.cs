@@ -148,11 +148,12 @@ public sealed partial class OrielApp
     /// <c>app.isEmojiPanelSupported()</c>.</summary>
     public bool IsEmojiPanelSupported() => OperatingSystem.IsMacOS() || OperatingSystem.IsWindowsVersionAtLeast(10, 0, 17134);
 
-    /// <summary>Shows the OS's emoji picker (macOS: the character palette). Electron's <c>app.showEmojiPanel()</c>;
-    /// Windows is not wired up yet (drift A25).</summary>
+    /// <summary>Shows the OS's emoji picker (macOS: the character palette; Windows: Win+., as Electron sends it).
+    /// Electron's <c>app.showEmojiPanel()</c>.</summary>
     public void ShowEmojiPanel()
     {
         if (OperatingSystem.IsMacOS()) OnMacMain(MacApp.ShowCharacterPalette);
+        else if (IsEmojiPanelSupported()) WindowsEmojiPanel.Show();
     }
 
     /// <summary>Sets what <see cref="ShowAboutPanel"/> shows, replacing earlier options. Electron's
