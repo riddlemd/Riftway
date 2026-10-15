@@ -25,7 +25,7 @@ eng/layout-linux.sh /work/out/app /work/out/subprocess/Oriel.Subprocess "$cef_pl
 
 Xvfb :99 -screen 0 1600x1000x24 > /dev/null 2>&1 &
 export DISPLAY=:99
-# Chromium's X11 desktop capturer dies (SIGILL) on this Xvfb; tests skip real screen capture under it.
+# Chromium's X11 desktop capturer dies (SIGILL) on this Xvfb on arm64; tests skip real screen capture there.
 export ORIEL_XVFB=1
 sleep 1
 # Maximize, minimize and full screen are window-manager operations. The other window managers

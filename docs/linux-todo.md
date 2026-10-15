@@ -22,7 +22,10 @@ General items: [todo.md](todo.md).
       the bug: `cpu_id.cc` enables SME without SVE on purpose. No libyuv fix found; recheck when CEF moves past 154
   - [x] `Oriel.Subprocess.Native` builds and links on linux-x64 (clang 18, GNU ld; `--export-dynamic-symbol` is accepted).
         The override is `__aarch64__`-only, so x64 exports no `getauxval` by design.
-- [ ] **CrashReporter** (branch `crash-reporter-mac-linux`; macOS passes): run CrashTest
+- [x] **CrashReporter** (branch `crash-reporter-mac-linux`; macOS passes): run CrashTest. linux-x64 passes, 48 checks
+      (2026-10-14, 63ac6f1, real x64 Docker on Windows, stock CEF): the handler is `Oriel.Subprocess --type=crashpad-handler`
+      with the app's database, `platform=linux`, renderer reports carry `globalExtra`, and the browser crash (exit 133)
+      reaches Crashpad and uploads. linux-arm64 not rerun
       `docker run --rm -v "$PWD":/src -v "$HOME/.cache/oriel/cef":/cef-cache --shm-size=1g oriel-linux-dev /src/eng/docker/test-linux.sh samples/Oriel.CrashTest Oriel.CrashTest`.
       Expect the handler to be `Oriel.Subprocess --type=crashpad-handler --database=~/.config/<name>/Crashpad`, `platform=linux`,
       the renderer keys set from `OnWebKitInitialized` after the zygote fork (CR11), and the browser crash reaching Crashpad's
@@ -46,10 +49,15 @@ General items: [todo.md](todo.md).
 - [ ] Linux sandbox on Ubuntu 24.04+: AppArmor profile, or documented `--no-sandbox` (M4)
 - [ ] Wayland: CEF Views on Wayland is still being fixed upstream; Oriel targets X11/XWayland for now
 - [ ] Clipboard: the Wayland data device with Wayland, and the XDG portal file targets (DRIFT K1)
-- [ ] linux-x64: only linux-arm64 is tested end to end (Docker on Apple Silicon). On linux-x64 (amd64 image under QEMU)
+- [x] linux-x64: only linux-arm64 is tested end to end (Docker on Apple Silicon). On linux-x64 (amd64 image under QEMU)
       `Oriel.Subprocess.Native` links and `dotnet test tests/Oriel.Tests` passes (1302 passed, 3 skipped).
-  - [ ] Run `eng/docker/test-linux.sh` on real x64 hardware: under QEMU `dotnet publish` segfaults (needs
-        `DOTNET_EnableWriteXorExecute=0`) and Chromium's GPU process then dies with SIGTRAP, even with `--disable-gpu`
+  - [x] Run `eng/docker/test-linux.sh` on real x64 hardware: under QEMU `dotnet publish` segfaults (needs
+        `DOTNET_EnableWriteXorExecute=0`) and Chromium's GPU process then dies with SIGTRAP, even with `--disable-gpu`.
+        On real x64 (2026-10-14, 63ac6f1, Docker on Windows, stock CEF) publish needs no W^X switch and the GPU process
+        (llvmpipe) lives: unit 3897 passed, 59 skipped; SessionTest, IpcTest, ProtocolTest, ShellTest, SafeStorageTest
+        (default, gnome-keyring and silent) and CrashTest pass; WindowTest fails only the three Linux dialog checks
+        (folder dialog, OpenDirectory, a download's save dialog), as on every Linux x64 run
+  - [ ] Find why those three dialog checks fail on linux-x64 only (they pass on linux-arm64 Docker, the same image)
   - `eng/docker/*.sh` pick the CEF platform and RID from `uname -m`
 - [x] Modal windows (`Modal = true`) block the parent under any window manager, as Electron: an input-only X11 cover
       plus dropped keys (branch `linux-modal`); the same route serves `SetEnabled`/`IsEnabled` and message boxes (MB4).
@@ -60,8 +68,9 @@ General items: [todo.md](todo.md).
     - [x] CEF patch [eng/cef](../eng/cef/README.md) 0002 (`CefWindow::SetEventListeningEnabled`, Electron's
           `DisableEventListening`) and `LinuxCefPatches.SetWindowInputEnabled`; written, not built or run
     - [x] Called first in `ApplyLinuxEnabled`; the X11 input cover and dropped keys stay the stock fallback
-    - [ ] Run WindowTest's `LinuxPatchedInputAsync` on the patched libcef (crossing events, clicks, wheel, keys),
-          and the modal and `SetEnabled` checks on both libcefs
+    - [x] Run WindowTest's `LinuxPatchedInputAsync` on the patched libcef (crossing events, clicks, wheel, keys),
+          and the modal and `SetEnabled` checks on both libcefs: all pass on linux-x64 (2026-10-14, 63ac6f1, patches
+          0001-0009)
   - [ ] Check an input method (ibus) composing into a disabled window's focused field
 - [x] Window-manager behaviour beyond openbox: WindowTest passes under Mutter 46 (`--x11`), KWin 5.27 (`kwin_x11`) and
       Xfwm4 4.18 as under openbox, including maximize, minimize, full screen, always on top, focus and workspaces.
@@ -80,16 +89,19 @@ General items: [todo.md](todo.md).
   - [x] WindowTest's `LinuxNotificationTest` (fake `org.freedesktop.Notifications`,
         `samples/Shared/FakeNotificationServer.cs`) passes in Docker: Notify's arguments and hints, `show` inside
         `Show()`, the default action as `click`, no `action` or `reply`, `NotificationClosed` as `close`,
-        `CloseNotification` from `Close()`, a refused Notify as `failed`, `IsSupported`
+        `CloseNotification` from `Close()`, a refused Notify as `failed`, `IsSupported`. All 14 pass on linux-arm64
+        and linux-x64 (2026-10-14, 63ac6f1)
   - [ ] Check against real servers: GNOME Shell, Plasma, dunst/mako (the default action, `image-data`, `append`)
   - [ ] The click's activation token on the patched libcef (DRIFT Q10), with the tray's
 - [ ] `desktopCapturer` on X11 (branch `desktop-capturer`): Oriel's own enumeration and capture (XQueryTree, `WM_STATE`,
       `WM_NAME`, XRandR monitors, XComposite + `XGetImage`), separate from Chromium's capturer below. WindowTest's
       `DesktopCapturerChecks` pass under Xvfb; run them on a real X server; the EDID-based `display_id` needs a real monitor (Xvfb
-      has no EDID, so it falls back to the output's place). SessionTest's `chromeMediaSourceId` check is skipped under
-      ORIEL_XVFB with the other capture checks
+      has no EDID, so it falls back to the output's place). SessionTest's `chromeMediaSourceId` checks are skipped under
+      the arm64 Xvfb with the other capture checks (they pass under the x64 Xvfb)
   - [ ] Wayland: the xdg-desktop-portal ScreenCast picker (DRIFT DC2)
-- [ ] Screen capture: Chromium's X11 desktop capturer dies with SIGILL under the Docker Xvfb (arm64) when getDisplayMedia starts; SessionTest skips the capture checks there (ORIEL_XVFB). Verify on a real X server; if it crashes there too, find the CHECK with CEF's symbols
+- [ ] Screen capture: Chromium's X11 desktop capturer dies with SIGILL under the Docker Xvfb (arm64) when getDisplayMedia starts; SessionTest skips the capture checks there (ORIEL_XVFB on arm64). Verify on a real X server; if it crashes there too, find the CHECK with CEF's symbols.
+      Under the x64 Docker Xvfb all of them pass (2026-10-14, 63ac6f1): getDisplayMedia video and loopback audio, and
+      `chromeMediaSourceId` screen and window sources
 - [x] `Shell` (branch `linux-shell`): Electron's `platform_util_linux.cc`, checked by `samples/Oriel.ShellTest` against fake
       `xdg-open`/`xdg-email`/`gio` scripts, a fake portal `OpenDirectory` and a fake `FileManager1`, and the X bell
   - [x] A real `gio trash` landing in `~/.local/share/Trash`: the image has `libglib2.0-bin` (rebuild `oriel-linux-dev`)
