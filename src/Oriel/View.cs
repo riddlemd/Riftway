@@ -104,11 +104,13 @@ public unsafe class View
 
     /// <summary>Adds <paramref name="view"/> above the others, or at <paramref name="index"/> (past the end means the end,
     /// as Electron); a view already here moves, and a view in another parent leaves it. Electron's <c>view.addChildView()</c>.</summary>
-    /// <exception cref="InvalidOperationException"><paramref name="view"/> is this view or contains it.</exception>
+    /// <exception cref="InvalidOperationException"><paramref name="view"/> is this view or contains it, or a
+    /// <see cref="WebContentsView"/> whose page was closed before it ever started.</exception>
     /// <exception cref="ArgumentOutOfRangeException"><paramref name="index"/> is negative.</exception>
     public void AddChildView(View view, int? index = null)
     {
         ArgumentNullException.ThrowIfNull(view);
+        if (CefThread.InvokeOnUi(() => view.IsDestroyedChild)) throw new InvalidOperationException("Can't add a destroyed child view to a parent view");
         for (var ancestor = this; ancestor is not null; ancestor = ancestor.Parent)
             if (ancestor == view) throw new InvalidOperationException("A view cannot be added to itself or to a view inside it.");
         CefThread.InvokeOnUi(() =>
@@ -181,6 +183,9 @@ public unsafe class View
 
     /// <summary>UI thread: <see cref="SetBackgroundColor"/> was called with <paramref name="argb"/>.</summary>
     private protected virtual void OnBackgroundColorSet(uint argb) { }
+
+    // UI thread: Electron refuses to add a view that is no longer usable.
+    private protected virtual bool IsDestroyedChild => false;
 
     /// <summary>UI thread: the page below the children, if any.</summary>
     private protected cef_view_t* Page => _page;

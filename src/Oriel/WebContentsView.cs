@@ -149,6 +149,7 @@ public sealed unsafe class WebContentsView : View
         var context = session.IsDefault ? null : session.AddRefNative();
         SetPage((cef_view_t*)CefNative.cef_browser_view_create(client.Native, &url, &settings, null, context, viewDelegate.Native));
         s_unstarted.Add(this);
+        WebContents.CloseWithoutBrowser = CloseUnstarted;
         CefString.Clear(&url);
         BrowserWindow.ClearWebPreferenceStrings(&settings);
     }
@@ -215,6 +216,21 @@ public sealed unsafe class WebContentsView : View
         // CEF then calls do_close, which tears the view down.
         WebContents.Close();
     }
+
+    // UI thread: WebContents.Close on a page that never started. Only outside a window: once in one, CEF is already
+    // creating its browser, which close_browser then reaches.
+    private void CloseUnstarted()
+    {
+        if (Parent is not null || !s_unstarted.Remove(this)) return;
+        NativeObject.Release(TakePage());
+        _closedUnstarted = true;
+        WebContents.OnClosedWithoutBrowser();
+    }
+
+    // Electron's view stops being usable once its page is destroyed; a closed page that never started stays closed.
+    private bool _closedUnstarted;
+
+    private protected override bool IsDestroyedChild => _closedUnstarted;
 
     // UI thread. The page asked to close. The browser and its view hold each other, and CEF deletes a view only
     // with the window it is in, so the page goes into a hidden window that closes at once; this view stays, empty.

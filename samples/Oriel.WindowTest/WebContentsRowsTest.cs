@@ -19,6 +19,38 @@ static class WebContentsRowsTest
         await ImageAnimationAsync(check);
         await CaretBrowsingAsync(check);
         await SharedWorkersAsync(check, debugPort);
+        await CloseUnstartedAsync(check, step);
+    }
+
+    // Electron's webContents.close() on a view never added to a window: 'destroyed' once on a later task, isDestroyed,
+    // and the view can no longer be added ("Can't add a destroyed child view to a parent view").
+    static async Task CloseUnstartedAsync(CheckFn check, TimeSpan step)
+    {
+        var view = new WebContentsView();
+        var page = view.WebContents;
+        var destroyed = 0;
+        page.Destroyed += (_, _) => Interlocked.Increment(ref destroyed);
+        page.Close();
+        var deadline = DateTime.UtcNow + step;
+        while (!page.IsDestroyed() && DateTime.UtcNow < deadline) await Task.Delay(50);
+        await Task.Delay(500);
+        check("WebContents.Close on a view's page that never started destroys it: Destroyed once, IsDestroyed",
+            page.IsDestroyed() && Volatile.Read(ref destroyed) == 1, $"destroyed={destroyed} isDestroyed={page.IsDestroyed()}");
+        page.Close();
+        await Task.Delay(500);
+        check("closing it again raises nothing more", Volatile.Read(ref destroyed) == 1, destroyed);
+
+        var host = new BaseWindow(new BaseWindowOptions { Show = false });
+        var tabs = OrielApp.Current.GetAppMetrics().Count(m => m.Type == "Tab");
+        string? refused = null;
+        try { host.ContentView.AddChildView(view); }
+        catch (InvalidOperationException e) { refused = e.Message; }
+        await Task.Delay(1500);
+        var tabsAfter = OrielApp.Current.GetAppMetrics().Count(m => m.Type == "Tab");
+        check("adding that view to a window throws Electron's error, and no page starts",
+            refused == "Can't add a destroyed child view to a parent view" && host.ContentView.Children.Count == 0 && page.GetProcessId() < 0 && tabsAfter == tabs,
+            $"{refused} children={host.ContentView.Children.Count} pid={page.GetProcessId()} tabs={tabs}->{tabsAfter}");
+        host.Destroy();
     }
 
     // The ids Chromium's own DevTools HTTP endpoint lists, by URL.
