@@ -15,6 +15,7 @@ const string MediaChild = "--oriel-media-child";
 var mediaChild = args.Contains(MediaChild);
 var clientCertificates = !mediaChild && OperatingSystem.IsLinux() && File.Exists("/usr/bin/certutil") && File.Exists("/usr/bin/pk12util") ? InstallClientCertificates() : false;
 var app = OrielApp.Create("Oriel.SessionTest");
+if (args.Contains("--enable-sandbox")) app.EnableSandbox();
 if (mediaChild)
 {
     // Its own data directory: Chromium's process singleton would hand this run to the main one.
@@ -1756,6 +1757,8 @@ async Task RunAsync()
         && secondMetrics.All(m => m.Type != "Tab" || m.Cpu.PercentCPUUsage <= 120.0 / Environment.ProcessorCount),
         string.Join(" ", secondMetrics.Select(m => $"{m.Pid}:{m.Type}:{m.Cpu.PercentCPUUsage:F1}")));
     busyWin.Destroy();
+    // After the metrics checks above: they read the first GetAppMetrics call, and these windows start renderers.
+    await SandboxSessionChecks();
 
     // Proxy: requests go to a local listener posing as the proxy.
     var proxied = Session.FromPartition("proxied");
@@ -3062,6 +3065,71 @@ async Task SessionAuditChecks()
 }
 
 // app members added by the docs/parity/app.md audit; written for a macOS, Windows and Linux run.
+// Electron's webPreferences.sandbox: false, which Oriel decides per session (drift W13, patch 0010).
+async Task SandboxSessionChecks()
+{
+    var mismatch = await Throws(() => { Session.FromPartition("", new SessionOptions { Sandbox = false }); return Task.CompletedTask; });
+    Check("an unsandboxed default session is refused", mismatch is ArgumentException, mismatch?.Message);
+    if (app.IsSandboxed && !Oriel.Cef.CefRuntime.IsPatched)
+    {
+        var stock = await Throws(() => { Session.FromPartition("unsandboxed-stock", new SessionOptions { Sandbox = false }); return Task.CompletedTask; });
+        Check("stock CEF: a sandboxed app refuses an unsandboxed session", stock is PlatformNotSupportedException, stock?.Message);
+        return;
+    }
+
+    var open = Session.FromPartition("unsandboxed", new SessionOptions { Sandbox = false });
+    var shut = Session.FromPartition("sandboxed-split");
+    var other = await Throws(() => { Session.FromPartition("unsandboxed", new SessionOptions { Sandbox = true }); return Task.CompletedTask; });
+    Check("asking an existing session for another Sandbox throws, and no options take it as it is",
+        other is InvalidOperationException && Session.FromPartition("unsandboxed") == open && !open.Sandbox && shut.Sandbox, other?.Message);
+    var onShut = await Throws(() => { new BrowserWindow(new BrowserWindowOptions { Show = false, WebPreferences = new WebPreferences { Session = shut, Sandbox = false } }).Destroy(); return Task.CompletedTask; });
+    var onOpen = await Throws(() => { new BrowserWindow(new BrowserWindowOptions { Show = false, WebPreferences = new WebPreferences { Partition = "unsandboxed", Sandbox = true } }).Destroy(); return Task.CompletedTask; });
+    Check("a window's Sandbox that contradicts its session throws", onShut is ArgumentException && onOpen is ArgumentException, $"{onShut?.Message} | {onOpen?.Message}");
+    if (!app.IsSandboxed)
+    {
+        Console.WriteLine("SKIP  per-session sandbox split: the app's children are not sandboxed, so every renderer already runs without it");
+        return;
+    }
+
+    var page = Path.Combine(Path.GetTempPath(), "oriel-sandbox-split.html");
+    File.WriteAllText(page, "<!doctype html><p>split</p>");
+    var disk = Session.FromPartition("persist:unsandboxed-disk", new SessionOptions { Sandbox = false });
+    // Interleaved, so a spare renderer warmed for one session is offered to the other's next window.
+    var windows = new List<(string Name, bool Open, BrowserWindow Window)>();
+    foreach (var (name, session, isOpen) in new[] { ("A1", open, true), ("B1", shut, false), ("A2", open, true), ("B2", shut, false), ("C1", disk, true) })
+    {
+        var window = new BrowserWindow(new BrowserWindowOptions { Show = false, WebPreferences = new WebPreferences { Session = session, Sandbox = isOpen ? false : null } });
+        await window.WebContents.LoadFile(page);
+        windows.Add((name, isOpen, window));
+    }
+    var pids = windows.Select(w => (w.Name, w.Open, Pid: w.Window.WebContents.GetOSProcessId())).ToList();
+    var openPids = pids.Where(p => p.Open).Select(p => p.Pid).ToHashSet();
+    Check("the sessions' renderers are separate processes, the same site in both",
+        pids.All(p => p.Pid > 0) && pids.Where(p => !p.Open).All(p => !openPids.Contains(p.Pid)), string.Join(",", pids.Select(p => $"{p.Name}:{p.Pid}")));
+#pragma warning disable CA1416
+    if (OperatingSystem.IsWindows())
+    {
+        var metrics = app.GetAppMetrics();
+        var seen = pids.Select(p => (p.Name, p.Open, p.Pid, Token: TokenProbe.IntegrityName(p.Pid), Metric: metrics.FirstOrDefault(m => m.Pid == p.Pid))).ToList();
+        var detail = string.Join(",", seen.Select(s => $"{s.Name}:{s.Pid}:{s.Token}/{s.Metric?.IntegrityLevel}/{s.Metric?.Sandboxed}"));
+        Check("patched (0010): at once, the unsandboxed sessions' renderers run at medium integrity and the sandboxed one's at untrusted, as getAppMetrics says",
+            seen.All(s => s.Metric is { Type: "Tab" } m && m.IntegrityLevel == s.Token
+                && (s.Open ? s.Token == "medium" && m.Sandboxed == false : s.Token == "untrusted" && m.Sandboxed == true)), detail);
+    }
+#pragma warning restore CA1416
+    if (OperatingSystem.IsLinux())
+    {
+        // A sandboxed renderer runs under seccomp-bpf (mode 2); an unsandboxed one has none.
+        string Seccomp(int pid) => File.ReadLines($"/proc/{pid}/status").FirstOrDefault(l => l.StartsWith("Seccomp:", StringComparison.Ordinal))?.Split('\t')[^1] ?? "?";
+        string Args(int pid) => File.ReadAllText($"/proc/{pid}/cmdline").Replace('\0', ' ');
+        var seen = pids.Select(p => (p.Name, p.Open, p.Pid, Seccomp: Seccomp(p.Pid), NoSandbox: Args(p.Pid).Contains("--no-sandbox"))).ToList();
+        Check("patched (0010): at once, the unsandboxed sessions' renderers run without seccomp and with --no-sandbox, the sandboxed one's under seccomp",
+            seen.All(s => s.Open ? s.Seccomp == "0" && s.NoSandbox : s.Seccomp == "2" && !s.NoSandbox),
+            string.Join(",", seen.Select(s => $"{s.Name}:{s.Pid}:seccomp={s.Seccomp}/no-sandbox={s.NoSandbox}")));
+    }
+    foreach (var (_, _, window) in windows) window.Destroy();
+}
+
 async Task AppAuditChecks()
 {
     Check("WillFinishLaunching (Windows, Linux) comes before Ready, and WhenReady after the Ready handlers",

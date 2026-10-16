@@ -45,6 +45,9 @@ public unsafe delegate void CommandLineCallback(string processType, cef_command_
 /// <summary>A child process's command line before it launches.</summary>
 public unsafe delegate void ChildCommandLineCallback(cef_command_line_t* commandLine);
 
+/// <summary>A renderer's command line before it launches, with a request context of the profile it will serve.</summary>
+public unsafe delegate void RenderCommandLineCallback(cef_command_line_t* commandLine, cef_request_context_t* context);
+
 /// <summary>Registers preferences of <paramref name="type"/>: the app-wide <c>Local State</c> (global) or a profile's.</summary>
 public unsafe delegate void RegisterPreferencesCallback(cef_preferences_type_t type, cef_preference_registrar_t* registrar);
 
@@ -154,6 +157,7 @@ public sealed unsafe class BrowserProcessHandler
             var next = NativeObject.Create<cef_browser_process_handler_next_t>(this);
             next->on_child_process_gone = &OnChildProcessGone;
             next->on_accessibility_mode_changed = &OnAccessibilityModeChanged;
+            next->on_before_render_process_launch = &OnBeforeRenderProcessLaunch;
             Native = &next->@base;
         }
         else Native = NativeObject.Create<cef_browser_process_handler_t>(this);
@@ -183,6 +187,20 @@ public sealed unsafe class BrowserProcessHandler
 
     /// <summary>Chromium added flags to the process's accessibility mode by itself; the new mode (patch 0009; UI thread).</summary>
     public Action<int>? AccessibilityModeChanged { get; init; }
+
+    /// <summary>A renderer is about to launch for the profile of the request context (patch 0010; UI thread, after
+    /// <see cref="BeforeChildProcessLaunch"/>).</summary>
+    public RenderCommandLineCallback? BeforeRenderProcessLaunch { get; init; }
+
+    [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])]
+    private static void OnBeforeRenderProcessLaunch(cef_browser_process_handler_t* self, cef_command_line_t* commandLine,
+        cef_request_context_t* context)
+    {
+        var owner = NativeObject.Owner<BrowserProcessHandler>(self);
+        if (owner.BeforeRenderProcessLaunch is { } callback) Guard.Run(() => callback(commandLine, context));
+        NativeObject.Release(commandLine);
+        NativeObject.Release(context);
+    }
 
     [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])]
     private static void OnChildProcessGone(cef_browser_process_handler_t* self, cef_string_utf16_t* type, cef_termination_status_t status,

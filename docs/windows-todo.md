@@ -11,7 +11,12 @@ General items: [todo.md](todo.md). Windows work runs on the Windows laptop.
       (2026-10-05): renderers Untrusted/Lockdown, GPU Low/Limited, storage Untrusted, network service unsandboxed
       (Chromium's default); `--no-sandbox` turns it all off. WindowTest 400/401 (always-on-top flake), SessionTest
       141/143 (spellcheck flake, getAppMetrics CPU: no Windows children, A18), IpcTest 11/11, ProtocolTest 37/37.
-  - [ ] Per-window `sandbox: false`: no CEF hook maps a renderer launch to its browser (DRIFT W13)
+  - [x] `sandbox: false`, per session rather than per window (DRIFT W13): CEF patch 0010 names a renderer launch's
+        profile, and `SessionOptions.Sandbox = false` gives that session's renderers `--no-sandbox`. SessionTest
+        `patched (0010)` (2026-10-14, bootstrap layout, CEF a03e714 + 0001-0011): two windows each on an in-memory
+        unsandboxed and a sandboxed session plus one on a persistent unsandboxed one, interleaved, the same site in
+        all: the unsandboxed sessions' renderers at medium integrity (`Sandboxed` false), the sandboxed one's
+        untrusted, at once. Stock CEF refuses such a session in a sandboxed app.
   - [x] Signing (DRIFT P13), tested with a self-signed certificate trusted per user: exe + `<Exe>.dll` +
         `chrome_elf.dll` signed with one certificate runs sandboxed (IpcTest 0 failures); unsigned `chrome_elf.dll`, any
         one signed alone, the DLL under another certificate, or an untrusted root is refused with only a stderr FATAL

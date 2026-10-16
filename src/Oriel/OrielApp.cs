@@ -188,7 +188,7 @@ public sealed unsafe partial class OrielApp
 
     /// <summary>Turns on Chromium's sandbox for every child process, renderers included. Electron's <c>app.enableSandbox()</c>.</summary>
     /// <remarks>Call before <see cref="Run"/>. In the Windows bootstrap layout (eng/layout-windows.ps1) every child is
-    /// already sandboxed, as no window can opt out (drift W13). Elsewhere on Windows and on macOS <see cref="Run"/>
+    /// already sandboxed; only a session can opt out (<see cref="SessionOptions.Sandbox"/>, drift W13). Elsewhere on Windows and on macOS <see cref="Run"/>
     /// throws: only the bootstrap exe holds Chromium's sandbox broker, and the macOS helper lacks the sandbox library.</remarks>
     /// <exception cref="InvalidOperationException">The application is already running.</exception>
     public void EnableSandbox()
@@ -246,6 +246,7 @@ public sealed unsafe partial class OrielApp
                     if (schemeSwitch is not null) AppendSwitch(commandLine, SchemeSwitch.Name, schemeSwitch);
                     CrashReporterNative.OnChildProcessLaunch(commandLine);
                 },
+                BeforeRenderProcessLaunch = Session.OnBeforeRenderProcessLaunch,
             },
             OnBeforeCommandLineProcessing,
             schemes);

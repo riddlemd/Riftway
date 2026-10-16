@@ -18,10 +18,13 @@ Base: CEF `a03e714` (branch 8037, CEF 154, Chromium 154.0.8037.94), the version 
 | [`cef/0007-browser-process-handler-child-process-gone.patch`](patches/cef/0007-browser-process-handler-child-process-gone.patch) | `chromium/src/cef` | Adds `CefBrowserProcessHandler::OnChildProcessGone(type, status, exit_code, service_name, name, system_error_code)`. A `content::BrowserChildProcessObserver` that `CefContext` owns from context initialisation to shutdown reports `BrowserChildProcessCrashed`, `Killed` and `LaunchFailed` as Electron's `App::EmitChildProcessGone`: `GetProcessTypeNameInEnglish`, the status (as `CefBrowserContentsDelegate` maps it), the exit code, `metrics_name`, `name`, and on Windows a failed launch's `last_error`. | A31 |
 | [`cef/0008-request-context-resolve-proxy.patch`](patches/cef/0008-request-context-resolve-proxy.patch) | `chromium/src/cef` | Adds `CefRequestContext::ResolveProxy` and the static `ResolveSystemProxy` (`cef_request_context_resolve_system_proxy`), with the client callback `CefResolveProxyCallback`, as Electron's `ResolveProxyHelper`: `NetworkContext::LookUpProxyForURL` on the profile's or the system network context, answered with `net::ProxyInfo::ToPacString`. Setting proxies needs no patch (the `proxy` preference). | A35, E8 |
 | [`cef/0009-process-accessibility-mode.patch`](patches/cef/0009-process-accessibility-mode.patch) | `chromium/src/cef` | Adds the static `CefBrowserHost::GetProcessAccessibilityMode` and `SetProcessAccessibilityMode` (`ui::AXMode` flags) and `CefBrowserProcessHandler::OnAccessibilityModeChanged`: the getter reads `BrowserAccessibilityState::GetAccessibilityMode`, the setter keeps one `ScopedAccessibilityMode` for the process (Electron's `scoped_accessibility_mode_`), and a `ui::AXModeObserver` reports the flags Chromium adds by itself, not the setter's. `BUILD.gn` gains `//ui/accessibility:ax_base` and `//ui/accessibility/platform`. | A28 |
+| [`cef/0010-browser-process-handler-before-render-process-launch.patch`](patches/cef/0010-browser-process-handler-before-render-process-launch.patch) | `chromium/src/cef` | Adds `CefBrowserProcessHandler::OnBeforeRenderProcessLaunch(command_line, request_context)`, called from `ChromeContentBrowserClientCef::AppendExtraCommandLineSwitches` after `OnBeforeChildProcessLaunch`, for renderers only, with an existing request context (`CefBrowserContext::GetAnyRequestContext`, preferring one without a handler) of the profile `RenderProcessHost::FromID(child_process_id)` serves: a client with one context per profile gets its own back. Chromium never shares a renderer between profiles, so a switch added there holds through every process reuse. | W13 (per session) |
+| [`chromium/0011-renderer-no-zygote-per-process.patch`](patches/chromium/0011-renderer-no-zygote-per-process.patch) | `chromium/src` | On Linux, `RenderProcessHostImpl::Init` gives `RendererSandboxedProcessLauncherDelegate` `use_zygote = false` when the renderer's own command line has `--no-zygote`, and `GetZygote` then returns null, so the renderer is launched directly instead of forked from the sandboxed generic zygote: Electron's `support_mixed_sandbox_with_zygote.patch`. Without it, 0010's `--no-sandbox` on Linux changes nothing. Off `USE_ZYGOTE` builds it compiles to nothing. | W13 (Linux) |
 
 CEF patches apply first, then Chromium patches (`patches/chromium/`, in `chromium/src`), each set in name order; the
 numbers are shared, so their order is the order they were written in. Later patches change the context of earlier ones
-in the same file (0008 follows 0006 in `request_context_impl.cc`, 0009 follows 0007 in `context.cc`), so
+in the same file (0008 follows 0006 in `request_context_impl.cc`, 0009 follows 0007 in `context.cc`, and 0010 follows 0007 and 0009
+in `cef_browser_process_handler.h`), so
 `apply-patches.sh` works out each patch's state on a copy of the files they touch: it takes the applied ones out newest
 first, then puts them back in order.
 
@@ -71,8 +74,9 @@ configured the next version (`CEF_API_IS_ADDED(CEF_NEXT)`), because an older cli
   `cef_request_context_t` it hands out are `cef_download_item_next_t` (0005's five getters appended) and
   `cef_request_context_next_t` (0006's `start_net_log`, `stop_net_log`, `is_net_logging`), and the client's
   `cef_net_log_callback_t` is hand-written too; `CefPatchedApi.ReadDownloadExtras` returns null and the net log calls
-  return false (releasing the callback) without the patches. 0007 and 0009 append `on_child_process_gone` and
-  `on_accessibility_mode_changed` to the client's `cef_browser_process_handler_t`, so `BrowserProcessHandler` allocates
+  return false (releasing the callback) without the patches. 0007, 0009 and 0010 append `on_child_process_gone`,
+  `on_accessibility_mode_changed` and `on_before_render_process_launch` to the client's
+  `cef_browser_process_handler_t`, so `BrowserProcessHandler` allocates
   `cef_browser_process_handler_next_t` when patched; 0008 appends `resolve_proxy` to `cef_request_context_next_t` and
   adds the client's `cef_resolve_proxy_callback_t`; the exports `cef_request_context_resolve_system_proxy` (0008) and
   `cef_browser_host_get_process_accessibility_mode` / `_set_` (0009) are called only when patched;
@@ -150,8 +154,10 @@ GTK theme change (0003) and `LinuxActivationTokenAsync` (0004, the next window's
 `patched (0005)` download checks (gesture, initiator, `will-download` frame, ETag and Last-Modified) and `NetLogChecks`
 (0006), and its `patched (0007)` (`chrome://gpucrash` raises `ChildProcessGone` for the GPU process), `patched (0008)`
 (`ResolveProxyAsync` for fixed servers, a PAC script and `DIRECT`, and `app.SetProxyAsync` / `app.ResolveProxyAsync`
-on the system context) and `patched (0009)` (the accessibility features read back) checks; with stock CEF SessionTest
-checks the blanks and the `PlatformNotSupportedException` instead. None has run yet.
+on the system context), `patched (0009)` (the accessibility features read back) and `patched (0010)` (with the app
+sandboxed, an unsandboxed session's renderers at medium integrity on Windows, or without seccomp on Linux, while a
+sandboxed session's run at untrusted or under seccomp) checks; with stock CEF SessionTest checks the blanks and the
+`PlatformNotSupportedException` instead. On Linux the 0010 split needs `--enable-sandbox`.
 
 ### Wiring
 
@@ -175,6 +181,10 @@ checks the blanks and the `PlatformNotSupportedException` instead. None has run 
 - `OrielApp`'s accessibility members use 0009's process-wide mode when patched (`AccessibilityModes` maps Electron's
   feature names); with stock CEF they keep the per-page `set_accessibility_state` path, and
   `SetAccessibilitySupportFeatures` throws `PlatformNotSupportedException`.
+- `Session.OnBeforeRenderProcessLaunch` answers 0010's callback: a renderer whose profile an unsandboxed session
+  (`SessionOptions.Sandbox = false`) shares, by `is_sharing_with`, gets `--no-sandbox`, and on Linux `--no-zygote`, as
+  Electron's `AppendExtraCommandLineSwitches`. With stock CEF, creating such a session in a sandboxed app throws
+  `PlatformNotSupportedException` rather than unsandboxing every renderer.
 - `Tray.Linux.cs` `HandleItemCall` passes `ProvideXdgActivationToken`'s token to `LinuxCefPatches.ProvideActivationToken`
   (on the UI thread) and replies as before.
 
