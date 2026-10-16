@@ -16,7 +16,7 @@ The 67 rows include `BrowserView` (deprecated, never implemented; counted as not
 
 | Checklist | Applicable items | Done | Partial | Missing | % done | % done + partial/2 |
 |---|---|---|---|---|---|---|
-| [BrowserWindow](parity/browser-window.md) (with `BaseWindow`) | 295 | 170 | 55 | 70 | 57.6% | 66.9% |
+| [BrowserWindow](parity/browser-window.md) (with `BaseWindow`) | 295 | 170 | 56 | 69 | 57.6% | 67.1% |
 | [webContents](parity/web-contents.md) (with `navigationHistory`, `WebFrameMain`) | 230 | 111 | 70 | 49 | 48.3% | 63.5% |
 | [DownloadItem](parity/download-item.md) (with the session's download API) | 31 | 20 | 10 | 1 | 64.5% | 80.6% |
 | [app](parity/app.md) (with `app.dock` as one item) | 114 | 67 | 30 | 17 | 58.8% | 71.9% |

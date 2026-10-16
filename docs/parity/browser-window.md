@@ -18,12 +18,12 @@ Counted from the Checklist at the end: `BaseWindow` and `BrowserWindow` are one 
 | Area | Items | Done | Partial | Missing | n/a | % done | % done + partial/2 |
 |---|---|---|---|---|---|---|---|
 | BaseWindow + BrowserWindow options | 54 | 32 | 12 | 10 | 0 | 59.3% | 70.4% |
-| webPreferences | 46 | 12 | 4 | 23 | 7 | 30.8% | 35.9% |
+| webPreferences | 46 | 12 | 5 | 22 | 7 | 30.8% | 37.2% |
 | Instance methods | 143 | 89 | 25 | 23 | 6 | 65.0% | 74.1% |
 | Instance properties | 24 | 13 | 4 | 7 | 0 | 54.2% | 62.5% |
 | Events | 35 | 18 | 10 | 7 | 0 | 51.4% | 65.7% |
 | Static methods | 7 | 6 | 0 | 0 | 1 | 100.0% | 100.0% |
-| **Total** | 309 | 170 | 55 | 70 | 14 | 57.6% | 66.9% |
+| **Total** | 309 | 170 | 56 | 69 | 14 | 57.6% | 67.1% |
 
 ## Done since the audit
 
@@ -266,7 +266,7 @@ Parameters in brackets are optional in Electron. `webContents` members are in [w
 | `nodeIntegrationInWorker` | — | n/a | Node.js |
 | `nodeIntegrationInSubFrames` | — | n/a | Node.js |
 | `preload` | `Preload` | done |  |
-| `sandbox` | — | missing | Process-wide in CEF (W13). |
+| `sandbox` | `Sandbox` | partial | Per session, not per window: `false` needs a session made with `SessionOptions.Sandbox = false` (patch 0010), and a value contradicting the session throws (W13). |
 | `session` | `Session` | done | Overrides `Partition`; popups cannot take another session (E7). |
 | `partition` | `Partition` | done | `persist:` dirs live in the data directory (E1). |
 | `zoomFactor` | `ZoomFactor` | partial | Re-applies to an origin whose zoom was reset to 0 (W15). |

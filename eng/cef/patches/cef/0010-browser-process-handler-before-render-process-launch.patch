@@ -1,0 +1,97 @@
+Oriel CEF patch 0010: CefBrowserProcessHandler::OnBeforeRenderProcessLaunch.
+
+Called before a render process launches, after OnBeforeChildProcessLaunch,
+with the command line and an existing request context of the browser context
+the process will serve (RenderProcessHost::FromID(child_process_id)->
+GetBrowserContext(), then CefBrowserContext::GetAnyRequestContext, which prefers
+one without a handler). A client that made one context for the browser context
+gets that one back. CefRequestContext::IsSharingWith cannot tell two
+initialized contexts of one in-memory browser context apart (Initialize clears
+config_.other and there is no cache path), so the context passed is an
+existing one rather than a new one. Chromium never shares a render process between browser contexts
+(RenderProcessHostImpl::IsSuitableHost, the spare renderer's
+kMismatchedBrowserContext), so a switch added here reaches only that context's
+renderers through every process-reuse path: Oriel adds --no-sandbox for a
+Session created with Sandbox = false, Electron's sandbox: false per Session
+rather than per window. API at CEF_NEXT (999998): API version 15400 and its
+hash are unchanged.
+
+Resolves: Oriel docs/DRIFT.md W13 (per Session).
+Base: CEF a03e714 (branch 8037, CEF 154) with 0001-0009. Applies in chromium/src/cef.
+diff --git a/include/cef_browser_process_handler.h b/include/cef_browser_process_handler.h
+index e975ce0..03aa79c 100644
+--- a/include/cef_browser_process_handler.h
++++ b/include/cef_browser_process_handler.h
+@@ -42,6 +42,7 @@
+ #include "include/cef_client.h"
+ #include "include/cef_command_line.h"
+ #include "include/cef_preference.h"
++#include "include/cef_request_context.h"
+ #include "include/cef_request_context_handler.h"
+ #include "include/cef_values.h"
+ 
+@@ -194,6 +195,22 @@ class CefBrowserProcessHandler : public virtual CefBaseRefCounted {
+   ///
+   /*--cef(added=next)--*/
+   virtual void OnAccessibilityModeChanged(int mode) {}
++
++  ///
++  /// Called on the browser process UI thread before a render process is
++  /// launched, after OnBeforeChildProcessLaunch, with an existing request
++  /// context of the browser context the process will serve, preferring one
++  /// without a handler; a client with one context per browser context gets
++  /// that one (CefRequestContext::IsSame). Chromium never shares a
++  /// render process between browser contexts, so switches added to
++  /// |command_line| here reach only that context's renderers (such as
++  /// --no-sandbox for one context). Do not keep a reference to |command_line|
++  /// outside of this method.
++  ///
++  /*--cef(added=next)--*/
++  virtual void OnBeforeRenderProcessLaunch(
++      CefRefPtr<CefCommandLine> command_line,
++      CefRefPtr<CefRequestContext> request_context) {}
+ #endif
+ };
+ 
+diff --git a/libcef/browser/chrome/chrome_content_browser_client_cef.cc b/libcef/browser/chrome/chrome_content_browser_client_cef.cc
+index 3febdad..9813497 100644
+--- a/libcef/browser/chrome/chrome_content_browser_client_cef.cc
++++ b/libcef/browser/chrome/chrome_content_browser_client_cef.cc
+@@ -24,7 +24,9 @@
+ #include "cef/libcef/browser/net_service/resource_request_handler_wrapper.h"
+ #include "cef/libcef/browser/prefs/browser_prefs.h"
+ #include "cef/libcef/browser/prefs/renderer_prefs.h"
++#include "cef/libcef/browser/request_context_impl.h"
+ #include "cef/libcef/browser/x509_certificate_impl.h"
++#include "cef/libcef/common/api_version_util.h"
+ #include "cef/libcef/common/app_manager.h"
+ #include "cef/libcef/common/cef_switches.h"
+ #include "cef/libcef/common/command_line_impl.h"
+@@ -280,6 +282,27 @@ void ChromeContentBrowserClientCef::AppendExtraCommandLineSwitches(
+       CefRefPtr<CefCommandLineImpl> commandLinePtr(
+           new CefCommandLineImpl(command_line, false, false));
+       handler->OnBeforeChildProcessLaunch(commandLinePtr.get());
++
++      // A client built against an older API version has no
++      // OnBeforeRenderProcessLaunch. The host is registered before Init builds
++      // the command line, and it never changes browser context.
++      if (process_type == switches::kRendererProcess &&
++          CEF_API_IS_ADDED(CEF_NEXT)) {
++        auto* host = content::RenderProcessHost::FromID(child_process_id);
++        auto* browser_context =
++            host ? CefBrowserContext::FromBrowserContext(
++                       host->GetBrowserContext())
++                 : nullptr;
++        CefRefPtr<CefRequestContextImpl> request_context;
++        if (browser_context) {
++          request_context =
++              browser_context->GetAnyRequestContext(/*prefer_no_handler=*/true);
++        }
++        if (request_context) {
++          handler->OnBeforeRenderProcessLaunch(commandLinePtr.get(),
++                                               request_context.get());
++        }
++      }
+       std::ignore = commandLinePtr->Detach(nullptr);
+     }
+   }

@@ -12,9 +12,9 @@ public static unsafe class CefPatchedApi
     /// <summary>CEF's <c>CEF_API_VERSION_NEXT</c>.</summary>
     public const int Version = 999998;
 
-    public const string HashWindows = "a4f9ca4f07caca418ea9d2126d4cbbf408706fc9";
-    public const string HashMac = "a34eda7bf9c9d55f0a1b61c2da1267459e4da1d6";
-    public const string HashLinux = "41328e768ef24db112c839e118ea0783d3d8543a";
+    public const string HashWindows = "1dde57dfdeea68efb8e2013b71f2c0e8e4780797";
+    public const string HashMac = "890ab6cbbbaa27e572dc2a86e5ca4646f067d373";
+    public const string HashLinux = "d02eaedc5a4549055218b8461d795f826ecfc81a";
 
     /// <summary>What a libcef's hash for the next version says about it.</summary>
     internal enum Kind
@@ -283,6 +283,9 @@ public unsafe struct cef_browser_process_handler_next_t
 
     /// <summary>Patch 0009: the process's new accessibility mode after Chromium added flags by itself.</summary>
     public delegate* unmanaged[Cdecl]<cef_browser_process_handler_t*, int, void> on_accessibility_mode_changed;
+
+    /// <summary>Patch 0010: a renderer's command line, and a request context of the profile it will serve.</summary>
+    public delegate* unmanaged[Cdecl]<cef_browser_process_handler_t*, cef_command_line_t*, cef_request_context_t*, void> on_before_render_process_launch;
 }
 
 /// <summary><c>cef_net_log_callback_t</c> (patch 0006), implemented by the client.</summary>

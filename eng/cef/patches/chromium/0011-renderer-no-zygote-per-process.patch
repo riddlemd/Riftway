@@ -1,0 +1,73 @@
+Oriel Chromium patch 0011: a renderer launched with --no-zygote skips the zygote.
+
+On Linux every renderer is forked from the generic zygote, which has the
+sandbox engaged, whatever the renderer's own command line says
+(RendererSandboxedProcessLauncherDelegate::GetZygote). So a renderer that
+CEF patch 0010's OnBeforeRenderProcessLaunch gives --no-sandbox for an
+unsandboxed session would still run sandboxed. RenderProcessHostImpl::Init
+now tells the delegate to skip the zygote when the renderer's command line has
+--no-zygote, and the renderer is launched directly, as Electron's
+support_mixed_sandbox_with_zygote.patch does. Renderers without the switch
+are untouched. Does nothing off USE_ZYGOTE builds. No CEF API change.
+
+Resolves: Oriel docs/DRIFT.md W13 on Linux (with 0010).
+Base: Chromium 154.0.8037.94 with CEF a03e714's patches. Applies in chromium/src.
+diff --git a/content/browser/renderer_host/render_process_host_impl.cc b/content/browser/renderer_host/render_process_host_impl.cc
+index 0d96ded..48963a7 100644
+--- a/content/browser/renderer_host/render_process_host_impl.cc
++++ b/content/browser/renderer_host/render_process_host_impl.cc
+@@ -2097,6 +2097,12 @@ bool RenderProcessHostImpl::Init() {
+     std::unique_ptr<SandboxedProcessLauncherDelegate> sandbox_delegate =
+         std::make_unique<RendererSandboxedProcessLauncherDelegateWin>(
+             *cmd_line, IsPdf(), IsJitDisabled());
++#elif BUILDFLAG(USE_ZYGOTE)
++    // The zygote sandboxes what it forks, so a renderer the embedder launches
++    // unsandboxed (--no-sandbox --no-zygote on its own command line) skips it.
++    std::unique_ptr<SandboxedProcessLauncherDelegate> sandbox_delegate =
++        std::make_unique<RendererSandboxedProcessLauncherDelegate>(
++            /*use_zygote=*/!cmd_line->HasSwitch(switches::kNoZygote));
+ #else
+     std::unique_ptr<SandboxedProcessLauncherDelegate> sandbox_delegate =
+         std::make_unique<RendererSandboxedProcessLauncherDelegate>();
+diff --git a/content/browser/renderer_host/renderer_sandboxed_process_launcher_delegate.cc b/content/browser/renderer_host/renderer_sandboxed_process_launcher_delegate.cc
+index e5e9bb9..ae1ca8e 100644
+--- a/content/browser/renderer_host/renderer_sandboxed_process_launcher_delegate.cc
++++ b/content/browser/renderer_host/renderer_sandboxed_process_launcher_delegate.cc
+@@ -35,6 +35,9 @@ namespace content {
+ 
+ #if BUILDFLAG(USE_ZYGOTE)
+ ZygoteCommunication* RendererSandboxedProcessLauncherDelegate::GetZygote() {
++  if (!use_zygote_) {
++    return nullptr;
++  }
+   const base::CommandLine& browser_command_line =
+       *base::CommandLine::ForCurrentProcess();
+   base::CommandLine::StringType renderer_prefix =
+diff --git a/content/browser/renderer_host/renderer_sandboxed_process_launcher_delegate.h b/content/browser/renderer_host/renderer_sandboxed_process_launcher_delegate.h
+index e058db4..f70d526 100644
+--- a/content/browser/renderer_host/renderer_sandboxed_process_launcher_delegate.h
++++ b/content/browser/renderer_host/renderer_sandboxed_process_launcher_delegate.h
+@@ -18,6 +18,11 @@ class CONTENT_EXPORT RendererSandboxedProcessLauncherDelegate
+  public:
+   RendererSandboxedProcessLauncherDelegate() = default;
+ 
++#if BUILDFLAG(USE_ZYGOTE)
++  explicit RendererSandboxedProcessLauncherDelegate(bool use_zygote)
++      : use_zygote_(use_zygote) {}
++#endif  // BUILDFLAG(USE_ZYGOTE)
++
+   ~RendererSandboxedProcessLauncherDelegate() override = default;
+ 
+ #if BUILDFLAG(USE_ZYGOTE)
+@@ -30,6 +35,11 @@ class CONTENT_EXPORT RendererSandboxedProcessLauncherDelegate
+ 
+   // sandbox::policy::SandboxDelegate:
+   sandbox::mojom::Sandbox GetSandboxType() override;
++
++#if BUILDFLAG(USE_ZYGOTE)
++ private:
++  const bool use_zygote_ = true;
++#endif  // BUILDFLAG(USE_ZYGOTE)
+ };
+ 
+ #if BUILDFLAG(IS_WIN)

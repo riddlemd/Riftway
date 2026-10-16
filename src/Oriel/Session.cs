@@ -68,40 +68,65 @@ public sealed unsafe partial class Session
     /// under the app's data directory; any other name lives in memory until the app quits. The empty string is
     /// <see cref="DefaultSession"/>. The same name always returns the same session. Electron's <c>session.fromPartition()</c>.</summary>
     /// <exception cref="InvalidOperationException">The app is not ready.</exception>
-    public static Session FromPartition(string partition)
+    public static Session FromPartition(string partition) => FromPartition(partition, null);
+
+    /// <summary><see cref="FromPartition(string)"/>, creating the session with <paramref name="options"/>. Electron's
+    /// <c>session.fromPartition(partition, options)</c>, with Oriel's options.</summary>
+    /// <exception cref="ArgumentException">An unsandboxed default session: it is sandboxed as the app.</exception>
+    /// <exception cref="InvalidOperationException">The app is not ready, or the session exists with other options.</exception>
+    /// <exception cref="PlatformNotSupportedException">An unsandboxed session the loaded CEF cannot give.</exception>
+    public static Session FromPartition(string partition, SessionOptions? options)
     {
         ArgumentNullException.ThrowIfNull(partition);
-        if (partition.Length == 0) return DefaultSession;
+        if (partition.Length == 0) return DefaultFor(options);
         RequireReady();
         Session session;
         lock (s_gate)
         {
-            if (s_byPartition.TryGetValue(partition, out var existing)) return existing;
+            if (s_byPartition.TryGetValue(partition, out var existing)) return Matching(existing, options);
             session = partition.StartsWith(PersistPrefix, StringComparison.Ordinal)
-                ? FromPathLocked(Path.Combine(OrielApp.DataDirectory!, PartitionDirectory(partition[PersistPrefix.Length..])))
-                : Create(null);
+                ? FromPathLocked(Path.Combine(OrielApp.DataDirectory!, PartitionDirectory(partition[PersistPrefix.Length..])), options)
+                : Create(null, options);
             s_byPartition[partition] = session;
         }
         return Announce(session);
     }
+
+    private static Session DefaultFor(SessionOptions? options)
+    {
+        if (options is { Sandbox: false })
+            throw new ArgumentException("The default session is sandboxed as the app; use a partition for an unsandboxed session.", nameof(options));
+        return DefaultSession;
+    }
+
+    private static Session Matching(Session existing, SessionOptions? options)
+        => OptionsMismatch(existing.Sandbox, options) is { } error ? throw new InvalidOperationException(error) : existing;
 
     /// <summary>The session stored at <paramref name="path"/>. Electron's <c>session.fromPath()</c>.</summary>
     /// <remarks>Unlike Electron, the path must be a directory directly inside the app's data directory: Chrome-style CEF
     /// creates profiles nowhere else.</remarks>
     /// <exception cref="ArgumentException">The path is not absolute, or not directly inside the app's data directory.</exception>
     /// <exception cref="InvalidOperationException">The app is not ready.</exception>
-    public static Session FromPath(string path)
+    public static Session FromPath(string path) => FromPath(path, null);
+
+    /// <summary><see cref="FromPath(string)"/>, creating the session with <paramref name="options"/>. Electron's
+    /// <c>session.fromPath(path, options)</c>, with Oriel's options.</summary>
+    /// <exception cref="ArgumentException">The path is not absolute, or not directly inside the app's data directory; or an
+    /// unsandboxed default session.</exception>
+    /// <exception cref="InvalidOperationException">The app is not ready, or the session exists with other options.</exception>
+    /// <exception cref="PlatformNotSupportedException">An unsandboxed session the loaded CEF cannot give.</exception>
+    public static Session FromPath(string path, SessionOptions? options)
     {
         ArgumentNullException.ThrowIfNull(path);
         if (!Path.IsPathFullyQualified(path)) throw new ArgumentException("The path must be absolute.", nameof(path));
         RequireReady();
         var full = Path.TrimEndingDirectorySeparator(Path.GetFullPath(path));
         var root = Path.TrimEndingDirectorySeparator(Path.GetFullPath(OrielApp.DataDirectory!));
-        if (string.Equals(full, root, PathComparison)) return DefaultSession;
+        if (string.Equals(full, root, PathComparison)) return DefaultFor(options);
         if (!string.Equals(Path.GetDirectoryName(full), root, PathComparison))
             throw new ArgumentException($"CEF only creates sessions directly inside the app's data directory ({root}).", nameof(path));
         Session session;
-        lock (s_gate) session = FromPathLocked(full);
+        lock (s_gate) session = FromPathLocked(full, options);
         return Announce(session);
     }
 
@@ -265,17 +290,19 @@ public sealed unsafe partial class Session
             throw new InvalidOperationException("Use sessions after OrielApp.Ready.");
     }
 
-    private static Session FromPathLocked(string path)
+    private static Session FromPathLocked(string path, SessionOptions? options)
     {
-        if (s_byPath.TryGetValue(path, out var existing)) return existing;
-        var session = Create(path);
+        if (s_byPath.TryGetValue(path, out var existing)) return Matching(existing, options);
+        var session = Create(path, options);
         s_byPath[path] = session;
         return session;
     }
 
     // An empty cache path gives an in-memory profile; a path inside the root cache path gives a profile on disk.
-    private static Session Create(string? path)
+    private static Session Create(string? path, SessionOptions? options)
     {
+        var sandbox = options?.Sandbox ?? true;
+        CheckSandboxOption(sandbox, CefRuntime.IsPatched, OrielApp.Current.IsSandboxed);
         var initialized = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         Session? session = null;
         var handler = WebRequest.PagelessHandler(() => session?.WebRequest, context =>
@@ -293,7 +320,9 @@ public sealed unsafe partial class Session
             return (nint)created;
         });
         if (context == 0) throw new InvalidOperationException($"CEF could not create a session{(path is null ? "" : $" at {path}")}.");
-        return session = new Session((cef_request_context_t*)context, path, handler) { _initialized = initialized.Task };
+        // Before any page of the session can start a renderer.
+        if (!sandbox) AddUnsandboxed((cef_request_context_t*)context);
+        return session = new Session((cef_request_context_t*)context, path, handler) { _initialized = initialized.Task, Sandbox = sandbox };
     }
 
     // The global context can have no handler, but CEF hands a profile's worker requests to the handler of any context

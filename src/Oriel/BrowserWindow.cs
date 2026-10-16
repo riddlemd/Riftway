@@ -74,7 +74,7 @@ public sealed record WebPreferences
     /// Electron's <c>session</c>.</summary>
     public Session? Session { get; init; }
 
-    /// <summary>The page's session by name, as <see cref="Oriel.Session.FromPartition"/>: <c>persist:</c><i>name</i>
+    /// <summary>The page's session by name, as <see cref="Oriel.Session.FromPartition(string)"/>: <c>persist:</c><i>name</i>
     /// is kept on disk, any other name in memory. Null or empty uses <see cref="Oriel.Session.DefaultSession"/>.
     /// Electron's <c>partition</c>.</summary>
     public string? Partition { get; init; }
@@ -86,6 +86,11 @@ public sealed record WebPreferences
     /// <c>&lt;webview&gt;</c>'s).</summary>
     public bool Transparent { get; init; }
 
+    /// <summary>Whether the page's renderer runs in Chromium's sandbox; null follows the session. Electron's
+    /// <c>sandbox</c>, which Oriel decides per session (<see cref="SessionOptions.Sandbox"/>, drift W13): a value that
+    /// contradicts the page's session throws.</summary>
+    public bool? Sandbox { get; init; }
+
     internal void Validate(string paramName)
     {
         // Chrome-style browsers take these from the profile's preferences, over the browser settings.
@@ -94,7 +99,11 @@ public sealed record WebPreferences
         if (ZoomFactor <= 0) throw new ArgumentOutOfRangeException(paramName, "ZoomFactor must be greater than 0.");
     }
 
-    internal Session ResolveSession() => Session ?? Oriel.Session.FromPartition(Partition ?? "");
+    internal Session ResolveSession()
+    {
+        var session = Session ?? Oriel.Session.FromPartition(Partition ?? "");
+        return Oriel.Session.SandboxMismatch(Sandbox, session.Sandbox) is { } error ? throw new ArgumentException(error, "options") : session;
+    }
 }
 
 /// <summary>Fonts for CSS's generic font families; null keeps Chromium's choice. Electron's <c>defaultFontFamily</c>.</summary>
