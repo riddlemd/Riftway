@@ -155,9 +155,11 @@ GTK theme change (0003) and `LinuxActivationTokenAsync` (0004, the next window's
 (0006), and its `patched (0007)` (`chrome://gpucrash` raises `ChildProcessGone` for the GPU process), `patched (0008)`
 (`ResolveProxyAsync` for fixed servers, a PAC script and `DIRECT`, and `app.SetProxyAsync` / `app.ResolveProxyAsync`
 on the system context), `patched (0009)` (the accessibility features read back) and `patched (0010)` (with the app
-sandboxed, an unsandboxed session's renderers at medium integrity on Windows, or without seccomp on Linux, while a
-sandboxed session's run at untrusted or under seccomp) checks; with stock CEF SessionTest checks the blanks and the
-`PlatformNotSupportedException` instead. On Linux the 0010 split needs `--enable-sandbox`.
+sandboxed, an unsandboxed session's renderers at medium integrity on Windows, or on Linux launched by the browser
+(0011) under no seccomp filter beyond the browser's own, while a sandboxed session's run at untrusted or come from the
+zygote under one more filter) checks; with stock CEF SessionTest checks the blanks and the
+`PlatformNotSupportedException` instead. On Linux the 0010 split needs `--enable-sandbox`; Docker's default seccomp
+profile puts every process in the container under a filter, so the check counts filters rather than reading the mode.
 
 ### Wiring
 

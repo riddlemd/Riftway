@@ -11,6 +11,12 @@ General items: [todo.md](todo.md).
       `oriel-linux-dev`, where no keyring can be D-Bus-activated (an activatable but locked gnome-keyring waits for an unlock
       prompt nobody answers, as Chromium's would)
 
+- [x] **`sandbox: false` per session** (DRIFT W13, CEF patches 0010 and 0011): SessionTest `patched (0010, 0011)` with
+      `test-linux.sh --sandbox` (2026-10-16, branch `sessiontest-fd-floor` on 455d58e, linux-x64 Docker on Windows, CEF
+      a03e714 + 0001-0011 with `disable_fieldtrial_testing_config=true`): 361 passed, 0 failed. The unsandboxed sessions'
+      renderers are the browser's children with `--no-sandbox` and only Docker's seccomp filter; the sandboxed one's are
+      the zygote's under Chromium's filter too. Stock CEF sandboxed: 346 passed, and the unsandboxed session is refused
+
 - [ ] **libyuv SIGILL on SME-without-SVE arm64** (Linux VMs on Apple M4+): the renderer crashes on the first
       software-converted video frame.
   - [x] Workaround: `Oriel.Subprocess.Native` overrides `getauxval` and clears HWCAP2 SME when SVE is absent
