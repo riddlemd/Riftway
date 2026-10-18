@@ -1615,8 +1615,11 @@ async Task RunAsync()
         Check("GetSystemVersion is the kernel release, as uname -r", OrielProcess.GetSystemVersion() == Output("/bin/uname", "-r"), OrielProcess.GetSystemVersion());
         string SoftFiles() => File.ReadAllLines("/proc/self/limits").First(l => l.StartsWith("Max open files", StringComparison.Ordinal)).Split(' ', StringSplitOptions.RemoveEmptyEntries)[3];
         string HardFiles() => File.ReadAllLines("/proc/self/limits").First(l => l.StartsWith("Max open files", StringComparison.Ordinal)).Split(' ', StringSplitOptions.RemoveEmptyEntries)[4];
-        // .NET raises the soft limit to the hard one at start-up, so lower it first.
-        var lowered = FdLimit.LowerSoft(1024);
+        // .NET raises the soft limit to the hard one at start-up, so lower it first. A sandboxed patched run already holds
+        // about 1024 descriptors here, and a limit at or under that fails every later open with EMFILE.
+        var openFds = Directory.GetFileSystemEntries("/proc/self/fd").Length;
+        var floor = Math.Max(1024, (openFds + 256 + 1023) / 1024 * 1024);
+        var lowered = FdLimit.LowerSoft((ulong)floor);
         var soft = long.Parse(SoftFiles(), CultureInfo.InvariantCulture);
         var hard = HardFiles() == "unlimited" ? long.MaxValue : long.Parse(HardFiles(), CultureInfo.InvariantCulture);
         OrielProcess.SetFdLimit((int)Math.Max(1, soft / 2));
@@ -1625,8 +1628,8 @@ async Task RunAsync()
         OrielProcess.SetFdLimit(target);
         var raised = SoftFiles();
         if (hard < int.MaxValue / 2) OrielProcess.SetFdLimit((int)hard * 2);
-        Check("SetFdLimit raises the soft open-files limit up to the hard limit, never lowers it", lowered && soft == 1024 && soft < hard && notLowered == soft.ToString(CultureInfo.InvariantCulture)
-            && raised == target.ToString(CultureInfo.InvariantCulture) && SoftFiles() == hard.ToString(CultureInfo.InvariantCulture), $"soft {soft} hard {hard}: {notLowered}, {raised}, then {SoftFiles()}");
+        Check("SetFdLimit raises the soft open-files limit up to the hard limit, never lowers it", lowered && soft == floor && soft < hard && notLowered == soft.ToString(CultureInfo.InvariantCulture)
+            && raised == target.ToString(CultureInfo.InvariantCulture) && SoftFiles() == hard.ToString(CultureInfo.InvariantCulture), $"open {openFds}, soft {soft} hard {hard}: {notLowered}, {raised}, then {SoftFiles()}");
     }
     if (OperatingSystem.IsMacOS())
     {
@@ -3150,13 +3153,18 @@ async Task SandboxSessionChecks()
 #pragma warning restore CA1416
     if (OperatingSystem.IsLinux())
     {
-        // A sandboxed renderer runs under seccomp-bpf (mode 2); an unsandboxed one has none.
-        string Seccomp(int pid) => File.ReadLines($"/proc/{pid}/status").FirstOrDefault(l => l.StartsWith("Seccomp:", StringComparison.Ordinal))?.Split('\t')[^1] ?? "?";
+        // A sandboxed renderer adds Chromium's seccomp-bpf filter to whatever the browser runs under; a container's
+        // runtime puts every process under a filter of its own, so mode 2 alone proves nothing.
+        string Status(int pid, string key) => File.ReadLines($"/proc/{pid}/status").FirstOrDefault(l => l.StartsWith(key + ":", StringComparison.Ordinal))?.Split('\t')[^1] ?? "?";
         string Args(int pid) => File.ReadAllText($"/proc/{pid}/cmdline").Replace('\0', ' ');
-        var seen = pids.Select(p => (p.Name, p.Open, p.Pid, Seccomp: Seccomp(p.Pid), NoSandbox: Args(p.Pid).Contains("--no-sandbox"))).ToList();
-        Check("patched (0010): at once, the unsandboxed sessions' renderers run without seccomp and with --no-sandbox, the sandboxed one's under seccomp",
-            seen.All(s => s.Open ? s.Seccomp == "0" && s.NoSandbox : s.Seccomp == "2" && !s.NoSandbox),
-            string.Join(",", seen.Select(s => $"{s.Name}:{s.Pid}:seccomp={s.Seccomp}/no-sandbox={s.NoSandbox}")));
+        var browserFilters = int.Parse(Status(Environment.ProcessId, "Seccomp_filters"), CultureInfo.InvariantCulture);
+        var browserPid = Environment.ProcessId.ToString(CultureInfo.InvariantCulture);
+        var seen = pids.Select(p => (p.Name, p.Open, p.Pid, Filters: int.Parse(Status(p.Pid, "Seccomp_filters"), CultureInfo.InvariantCulture),
+            NoSandbox: Args(p.Pid).Contains("--no-sandbox"), Parent: Status(p.Pid, "PPid"))).ToList();
+        // Patch 0011: only a renderer launched outside the zygote, by the browser itself, escapes the zygote's sandbox.
+        Check("patched (0010, 0011): at once, the unsandboxed sessions' renderers are the browser's children with --no-sandbox and no seccomp filter beyond the browser's, the sandboxed one's are the zygote's under one more",
+            seen.All(s => s.Open ? s.Filters == browserFilters && s.NoSandbox && s.Parent == browserPid : s.Filters > browserFilters && !s.NoSandbox && s.Parent != browserPid),
+            $"browser {browserPid} filters={browserFilters}: " + string.Join(",", seen.Select(s => $"{s.Name}:{s.Pid}:filters={s.Filters}/no-sandbox={s.NoSandbox}/parent={s.Parent}")));
     }
     foreach (var (_, _, window) in windows) window.Destroy();
 }
