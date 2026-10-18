@@ -272,6 +272,9 @@ public static class CrashReporter
         lock (s_lock)
         {
             if (!s_started) return null;
+            // macOS and Linux start the GPU and utility processes inside cef_initialize, before OnCrashpadStarted; the cfg
+            // on disk is already the one they read.
+            if (!s_crashpadStarted && s_configPath is not null) s_liveSlots = ReadSlots(s_configPath);
             var pairs = new List<KeyValuePair<string, string>>
             {
                 new("process_type", processType),

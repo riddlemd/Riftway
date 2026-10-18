@@ -12,9 +12,9 @@ public static unsafe class CefPatchedApi
     /// <summary>CEF's <c>CEF_API_VERSION_NEXT</c>.</summary>
     public const int Version = 999998;
 
-    public const string HashWindows = "1dde57dfdeea68efb8e2013b71f2c0e8e4780797";
-    public const string HashMac = "890ab6cbbbaa27e572dc2a86e5ca4646f067d373";
-    public const string HashLinux = "d02eaedc5a4549055218b8461d795f826ecfc81a";
+    public const string HashWindows = "07759c46f3a10b0ea35632f3e8f22fd0ff34e9a0";
+    public const string HashMac = "093fe3b5b3dc6142ff44cbcf207fc03e71f693d7";
+    public const string HashLinux = "f8b68bfc322cd32ba9cc1bb25ef05b941b9db3c7";
 
     /// <summary>What a libcef's hash for the next version says about it.</summary>
     internal enum Kind
@@ -230,6 +230,58 @@ public static unsafe class CefPatchedApi
 
     [DllImport("libcef", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
     private static extern void cef_browser_host_set_process_accessibility_mode(int mode);
+
+    /// <summary><c>CefBrowserHost::GetGpuInfo</c> (patch 0013): Electron's <c>app.getGPUInfo()</c> as a dictionary, basic
+    /// or (Windows, macOS) complete. Browser UI thread. Takes the callback's reference.</summary>
+    /// <returns>False, without a call, when the loaded libcef lacks the patches; the callback is then released.</returns>
+    public static bool GetGpuInfo(bool complete, cef_gpu_info_callback_t* callback)
+        => GetGpuInfo(complete, callback, CefRuntime.IsPatched, &cef_browser_host_get_gpu_info);
+
+    internal static bool GetGpuInfo(bool complete, cef_gpu_info_callback_t* callback, bool patched,
+        delegate*<int, cef_gpu_info_callback_t*, void> get)
+    {
+        // A stock libcef has no such export.
+        if (!patched)
+        {
+            NativeObject.Release(callback);
+            return false;
+        }
+        get(complete ? 1 : 0, callback);
+        return true;
+    }
+
+    /// <summary><c>CefBrowserHost::GetGpuFeatureStatus</c> (patch 0013): each feature's status, as JSON. Browser UI
+    /// thread.</summary>
+    /// <returns>Null, without a call, when the loaded libcef lacks the patches.</returns>
+    public static string? GetGpuFeatureStatusJson()
+        => CefRuntime.IsPatched ? DictionaryJson(cef_browser_host_get_gpu_feature_status()) : null;
+
+    /// <summary><c>CefBrowserHost::IsHardwareAccelerationEnabled</c> (patch 0013): Chromium's own answer, which counts its
+    /// fallback to software after GPU crashes.</summary>
+    /// <returns>Null, without a call, when the loaded libcef lacks the patches.</returns>
+    public static bool? IsHardwareAccelerationEnabled()
+        => IsHardwareAccelerationEnabled(CefRuntime.IsPatched, &cef_browser_host_is_hardware_acceleration_enabled);
+
+    internal static bool? IsHardwareAccelerationEnabled(bool patched, delegate*<int> get) => patched ? get() != 0 : null;
+
+    /// <summary>A dictionary as JSON, binary values left out; "{}" for null. Takes the dictionary's reference.</summary>
+    public static string DictionaryJson(cef_dictionary_value_t* dictionary)
+    {
+        if (dictionary == null) return "{}";
+        var value = CefNative.cef_value_create();
+        // set_dictionary and cef_write_json each take the reference they are given.
+        value->set_dictionary(value, dictionary);
+        return CefString.ReadUserFree(CefNative.cef_write_json(value, cef_json_writer_options_t.JSON_WRITER_OMIT_BINARY_VALUES));
+    }
+
+    [DllImport("libcef", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
+    private static extern void cef_browser_host_get_gpu_info(int complete, cef_gpu_info_callback_t* callback);
+
+    [DllImport("libcef", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
+    private static extern cef_dictionary_value_t* cef_browser_host_get_gpu_feature_status();
+
+    [DllImport("libcef", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
+    private static extern int cef_browser_host_is_hardware_acceleration_enabled();
 }
 
 /// <summary>A download's fields from patch 0005: Electron's <c>hasUserGesture</c>, <c>getLastModifiedTime</c>,
@@ -286,6 +338,18 @@ public unsafe struct cef_browser_process_handler_next_t
 
     /// <summary>Patch 0010: a renderer's command line, and a request context of the profile it will serve.</summary>
     public delegate* unmanaged[Cdecl]<cef_browser_process_handler_t*, cef_command_line_t*, cef_request_context_t*, void> on_before_render_process_launch;
+
+    /// <summary>Patch 0013: Chromium's GPU information changed.</summary>
+    public delegate* unmanaged[Cdecl]<cef_browser_process_handler_t*, void> on_gpu_info_update;
+}
+
+/// <summary><c>cef_gpu_info_callback_t</c> (patch 0013), implemented by the client.</summary>
+public unsafe struct cef_gpu_info_callback_t
+{
+    public cef_base_ref_counted_t @base;
+
+    /// <summary>UI thread: the GPU information (the callee's reference), or null and the error.</summary>
+    public delegate* unmanaged[Cdecl]<cef_gpu_info_callback_t*, cef_dictionary_value_t*, cef_string_utf16_t*, void> on_gpu_info;
 }
 
 /// <summary><c>cef_net_log_callback_t</c> (patch 0006), implemented by the client.</summary>

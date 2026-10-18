@@ -240,6 +240,7 @@ public sealed unsafe partial class OrielApp
                 RegisterPreferences = WindowStateStore.Register,
                 ChildProcessGone = OnChildProcessGone,
                 AccessibilityModeChanged = OnAccessibilityModeChanged,
+                GpuInfoUpdate = OnGpuInfoUpdate,
                 // Every child (the Linux zygote included) must register the same schemes as this process.
                 BeforeChildProcessLaunch = commandLine =>
                 {

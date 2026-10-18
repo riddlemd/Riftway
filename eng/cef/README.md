@@ -20,11 +20,14 @@ Base: CEF `a03e714` (branch 8037, CEF 154, Chromium 154.0.8037.94), the version 
 | [`cef/0009-process-accessibility-mode.patch`](patches/cef/0009-process-accessibility-mode.patch) | `chromium/src/cef` | Adds the static `CefBrowserHost::GetProcessAccessibilityMode` and `SetProcessAccessibilityMode` (`ui::AXMode` flags) and `CefBrowserProcessHandler::OnAccessibilityModeChanged`: the getter reads `BrowserAccessibilityState::GetAccessibilityMode`, the setter keeps one `ScopedAccessibilityMode` for the process (Electron's `scoped_accessibility_mode_`), and a `ui::AXModeObserver` reports the flags Chromium adds by itself, not the setter's. `BUILD.gn` gains `//ui/accessibility:ax_base` and `//ui/accessibility/platform`. | A28 |
 | [`cef/0010-browser-process-handler-before-render-process-launch.patch`](patches/cef/0010-browser-process-handler-before-render-process-launch.patch) | `chromium/src/cef` | Adds `CefBrowserProcessHandler::OnBeforeRenderProcessLaunch(command_line, request_context)`, called from `ChromeContentBrowserClientCef::AppendExtraCommandLineSwitches` after `OnBeforeChildProcessLaunch`, for renderers only, with an existing request context (`CefBrowserContext::GetAnyRequestContext`, preferring one without a handler) of the profile `RenderProcessHost::FromID(child_process_id)` serves: a client with one context per profile gets its own back. Chromium never shares a renderer between profiles, so a switch added there holds through every process reuse. | W13 (per session) |
 | [`chromium/0011-renderer-no-zygote-per-process.patch`](patches/chromium/0011-renderer-no-zygote-per-process.patch) | `chromium/src` | On Linux, `RenderProcessHostImpl::Init` gives `RendererSandboxedProcessLauncherDelegate` `use_zygote = false` when the renderer's own command line has `--no-zygote`, and `GetZygote` then returns null, so the renderer is launched directly instead of forked from the sandboxed generic zygote: Electron's `support_mixed_sandbox_with_zygote.patch`. Without it, 0010's `--no-sandbox` on Linux changes nothing. Off `USE_ZYGOTE` builds it compiles to nothing. | W13 (Linux) |
+| [`cef/0012-child-crash-keys-from-command-line.patch`](patches/cef/0012-child-crash-keys-from-command-line.patch) | `chromium/src/cef` | On macOS and Linux a child cannot set crash keys itself (libcef drops the call before `cef_execute_process`, and only renderers get a callback once crash reporting starts), so libcef sets the keys of the `--oriel-crash-keys` switch Oriel's browser gives every child (hex of UTF-8 `key\0value\0...`) right after crash reporting starts in GPU, utility and zygote-forked children, and leaves the switch out of the `switch-N` keys. On Windows chrome_elf has set them already. No API change. | CR11 |
+| [`cef/0013-gpu-info-and-hardware-acceleration.patch`](patches/cef/0013-gpu-info-and-hardware-acceleration.patch) | `chromium/src/cef` | Adds the static `CefBrowserHost::GetGpuInfo` (with the client callback `CefGpuInfoCallback`), `GetGpuFeatureStatus` and `IsHardwareAccelerationEnabled` (`cef_browser_host_get_gpu_info`, `_get_gpu_feature_status`, `_is_hardware_acceleration_enabled`) and `CefBrowserProcessHandler::OnGpuInfoUpdate`, as Electron's `getGPUInfo`, `getGPUFeatureStatus`, `isHardwareAccelerationEnabled` and `gpu-info-update`: `gpu::GPUInfo` enumerated as Electron's `GPUInfoEnumerator`, basic info from `gpu::CollectBasicGraphicsInfo` off the UI thread, complete info (Windows, macOS) from `GpuDataManagerImpl::RequestGpuInfoIfNeeded` (DirectX and video), answered on the next update, at once when that info is already in, or after 10 s; `content::GetFeatureStatus`; `GpuDataManager::HardwareAccelerationEnabled`. A `content::GpuDataManagerObserver` that `CefContext` owns from context initialisation to shutdown reports the updates. `BUILD.gn` gains `//gpu/config`. | A24, A27 |
 
 CEF patches apply first, then Chromium patches (`patches/chromium/`, in `chromium/src`), each set in name order; the
 numbers are shared, so their order is the order they were written in. Later patches change the context of earlier ones
-in the same file (0008 follows 0006 in `request_context_impl.cc`, 0009 follows 0007 in `context.cc`, and 0010 follows 0007 and 0009
-in `cef_browser_process_handler.h`), so
+in the same file (0008 follows 0006 in `request_context_impl.cc`, 0009 follows 0007 in `context.cc`, 0010 follows 0007 and 0009
+in `cef_browser_process_handler.h`, and 0013 follows 0009 in `cef_browser.h` and `context.cc` and 0010 in
+`cef_browser_process_handler.h`), so
 `apply-patches.sh` works out each patch's state on a copy of the files they touch: it takes the applied ones out newest
 first, then puts them back in order.
 
@@ -74,12 +77,14 @@ configured the next version (`CEF_API_IS_ADDED(CEF_NEXT)`), because an older cli
   `cef_request_context_t` it hands out are `cef_download_item_next_t` (0005's five getters appended) and
   `cef_request_context_next_t` (0006's `start_net_log`, `stop_net_log`, `is_net_logging`), and the client's
   `cef_net_log_callback_t` is hand-written too; `CefPatchedApi.ReadDownloadExtras` returns null and the net log calls
-  return false (releasing the callback) without the patches. 0007, 0009 and 0010 append `on_child_process_gone`,
-  `on_accessibility_mode_changed` and `on_before_render_process_launch` to the client's
+  return false (releasing the callback) without the patches. 0007, 0009, 0010 and 0013 append `on_child_process_gone`,
+  `on_accessibility_mode_changed`, `on_before_render_process_launch` and `on_gpu_info_update` to the client's
   `cef_browser_process_handler_t`, so `BrowserProcessHandler` allocates
   `cef_browser_process_handler_next_t` when patched; 0008 appends `resolve_proxy` to `cef_request_context_next_t` and
-  adds the client's `cef_resolve_proxy_callback_t`; the exports `cef_request_context_resolve_system_proxy` (0008) and
-  `cef_browser_host_get_process_accessibility_mode` / `_set_` (0009) are called only when patched;
+  adds the client's `cef_resolve_proxy_callback_t`, and 0013 adds the client's `cef_gpu_info_callback_t`; the exports
+  `cef_request_context_resolve_system_proxy` (0008), `cef_browser_host_get_process_accessibility_mode` / `_set_`
+  (0009) and `cef_browser_host_get_gpu_info`, `_get_gpu_feature_status` and `_is_hardware_acceleration_enabled` (0013)
+  are called only when patched;
 - any other hash: Oriel refuses to start, as for any API mismatch.
 
 The generated bindings (`tools/cef-interop/generate.sh`) stay at 15400 and need no regenerating: the new member is
@@ -185,6 +190,14 @@ sandboxed session's run at untrusted or under seccomp) checks; with stock CEF Se
   (`SessionOptions.Sandbox = false`) shares, by `is_sharing_with`, gets `--no-sandbox`, and on Linux `--no-zygote`, as
   Electron's `AppendExtraCommandLineSwitches`. With stock CEF, creating such a session in a sandboxed app throws
   `PlatformNotSupportedException` rather than unsandboxing every renderer.
+- 0012 changes no Oriel code: `CrashReporterNative.OnChildProcessLaunch` already gives every child
+  `--oriel-crash-keys`, and a patched libcef sets those keys in GPU, utility and zygote children itself.
+- `OrielApp.GetGpuInfoAsync` calls 0013's `GetGpuInfo` and turns the dictionary into JSON (`cef_write_json` without
+  binary values); `GetGpuFeatureStatus` (synchronous) and `GetGpuFeatureStatusAsync` read `GetGpuFeatureStatus`;
+  `IsHardwareAccelerationEnabled` asks Chromium once ready; `GpuInfoUpdate` is raised from `on_gpu_info_update`. With
+  stock CEF the hidden `chrome://gpu` page answers the first two, `GetGpuFeatureStatus` throws
+  `PlatformNotSupportedException`, hardware acceleration follows `--disable-gpu`, and `GpuInfoUpdate` never comes.
+  `DisableDomainBlockingFor3DAPIs` needs no patch.
 - `Tray.Linux.cs` `HandleItemCall` passes `ProvideXdgActivationToken`'s token to `LinuxCefPatches.ProvideActivationToken`
   (on the UI thread) and replies as before.
 

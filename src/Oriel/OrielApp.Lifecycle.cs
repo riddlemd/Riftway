@@ -1,5 +1,6 @@
 using System.Diagnostics;
 using System.Runtime.InteropServices;
+using Oriel.Cef;
 using Oriel.Cef.Platform;
 
 namespace Oriel;
@@ -108,10 +109,14 @@ public sealed partial class OrielApp
     }
 
     /// <summary>Whether hardware acceleration is on: before <see cref="Ready"/>, unless
-    /// <see cref="DisableHardwareAcceleration"/> was called; after, unless Chromium was started with
-    /// <c>--disable-gpu</c>. Electron's <c>app.isHardwareAccelerationEnabled()</c>; Chromium's own fallback to software
-    /// after GPU crashes is not seen (drift A24).</summary>
-    public bool IsHardwareAccelerationEnabled() => IsReady ? !CommandLine.HasSwitch("disable-gpu") : !_hardwareAccelerationDisabled;
+    /// <see cref="DisableHardwareAcceleration"/> was called; after, Chromium's answer with Oriel's CEF patch 0013, which
+    /// counts its fallback to software after GPU crashes, and with stock CEF unless Chromium was started with
+    /// <c>--disable-gpu</c> (drift A24). Electron's <c>app.isHardwareAccelerationEnabled()</c>.</summary>
+    public bool IsHardwareAccelerationEnabled()
+    {
+        if (!IsReady) return !_hardwareAccelerationDisabled;
+        return CefPatchedApi.IsHardwareAccelerationEnabled() ?? !CommandLine.HasSwitch("disable-gpu");
+    }
 
     /// <summary>The menu bar of every window (Windows, Linux) or the app (macOS). Electron's <c>app.applicationMenu</c>.</summary>
     public Menu? ApplicationMenu
