@@ -43,7 +43,10 @@ General items: [todo.md](todo.md). Windows work runs on the Windows laptop.
       one 1x bitmap from the thumbnail cache" and the six `.ico` checks (LoadImage's conversion, pixel for pixel) pass
       (2026-10-13, d07986c, Wojtek). The per-step rejection checks are macOS-only; Windows has none
 - [ ] windows-arm64: the unsandboxed layout builds, publishes and lays out from x64 with every native binary ARM64
-      (2026-10-10); the sandboxed layout's host DLL is not yet built for arm64; nothing has run on Arm hardware
+      (2026-10-10); so does the sandboxed one: `Oriel.Host.Native/build.ps1 ... windowsarm64`, Oriel.Sample published
+      `-r win-arm64` and laid out with `-Platform windowsarm64`, and dumpbin reads ARM64 on all 24 native PEs (the exe,
+      host DLL, libcef, CoreCLR) and the 91 ReadyToRun assemblies (2026-10-17, 455d58e, from x64 on Wojtek). Nothing has
+      run on Arm hardware
 - [x] Run the Alt-key menu checks on Windows (Alt toggles an auto-hidden bar, Alt+F opens File): all 7 pass in a
       default WindowTest run (2026-10-10, 01e9524: WindowTest 235/235, ProtocolTest 34/34, IpcTest 11/11,
       SessionTest 42/42, unit 381 + 3 macOS skips; at 100% scaling over RDP)
