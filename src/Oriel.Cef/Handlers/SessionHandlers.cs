@@ -241,6 +241,44 @@ public sealed unsafe class ResolveProxyCallback : IReleaseObserver
         => NativeObject.Owner<ResolveProxyCallback>(self)._done.TrySetResult((error, CefString.Read(proxy)));
 }
 
+/// <summary><c>cef_gpu_info_callback_t</c> (patch 0013): completes with the GPU information as JSON, or fails with
+/// CEF's error.</summary>
+public sealed unsafe class GpuInfoCallback : IReleaseObserver
+{
+    private readonly TaskCompletionSource<string> _done = new(TaskCreationOptions.RunContinuationsAsynchronously);
+    private readonly delegate*<cef_dictionary_value_t*, string> _toJson;
+
+    public GpuInfoCallback() : this(&CefPatchedApi.DictionaryJson)
+    {
+    }
+
+    internal GpuInfoCallback(delegate*<cef_dictionary_value_t*, string> toJson)
+    {
+        _toJson = toJson;
+        Native = NativeObject.Create<cef_gpu_info_callback_t>(this);
+        Native->on_gpu_info = &OnGpuInfo;
+    }
+
+    public cef_gpu_info_callback_t* Native { get; }
+
+    public Task<string> Task => _done.Task;
+
+    void IReleaseObserver.Released() => _done.TrySetException(new InvalidOperationException("CEF dropped the operation."));
+
+    [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])]
+    private static void OnGpuInfo(cef_gpu_info_callback_t* self, cef_dictionary_value_t* info, cef_string_utf16_t* error)
+    {
+        var owner = NativeObject.Owner<GpuInfoCallback>(self);
+        if (info == null)
+        {
+            owner._done.TrySetException(new InvalidOperationException(CefString.Read(error)));
+            return;
+        }
+        try { owner._done.TrySetResult(owner._toJson(info)); }
+        catch (Exception e) { owner._done.TrySetException(e); }
+    }
+}
+
 /// <summary><c>cef_end_tracing_callback_t</c>: completes with the trace file's path.</summary>
 public sealed unsafe class EndTracingCallback : IReleaseObserver
 {

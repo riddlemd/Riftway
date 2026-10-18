@@ -1,0 +1,441 @@
+Oriel CEF patch 0013: GPU information, feature status and hardware acceleration.
+
+Adds the static CefBrowserHost::GetGpuInfo, GetGpuFeatureStatus and
+IsHardwareAccelerationEnabled (cef_browser_host_get_gpu_info,
+cef_browser_host_get_gpu_feature_status,
+cef_browser_host_is_hardware_acceleration_enabled), the client callback
+CefGpuInfoCallback and CefBrowserProcessHandler::OnGpuInfoUpdate, as
+Electron's app.getGPUInfo, getGPUFeatureStatus, isHardwareAccelerationEnabled
+and gpu-info-update. GetGpuInfo enumerates gpu::GPUInfo key for key as
+Electron's GPUInfoEnumerator (empty strings dropped, time deltas in
+milliseconds, devices in "gpuDevice"). Basic information is collected with
+gpu::CollectBasicGraphicsInfo off the UI thread; complete information, on
+Windows and macOS, asks GpuDataManagerImpl for the DirectX and video
+information and answers on the next GPU info update. Chromium collects the
+DirectX information once and sends no update when asked again, so a request
+is answered at once when that information is already in, and otherwise after
+10 seconds at the latest. Without GPU access the callback gets Electron's
+"GPU access not allowed. Reason: <reason>". The feature status is
+content::GetFeatureStatus, as chrome://gpu shows it. A
+content::GpuDataManagerObserver that CefContext owns from context
+initialisation to shutdown reports the updates. BUILD.gn gains //gpu/config.
+API at CEF_NEXT (999998): API version 15400 and its hash are unchanged.
+
+Resolves: Oriel docs/DRIFT.md A24, A27.
+Base: CEF a03e714 (branch 8037, CEF 154) with 0001-0012. Applies in chromium/src/cef.
+
+diff --git a/BUILD.gn b/BUILD.gn
+index 11273ce..7a7c7af 100644
+--- a/BUILD.gn
++++ b/BUILD.gn
+@@ -1001,6 +1001,7 @@ source_set("libcef_static") {
+     "//extensions/common/api",
+     "//extensions/common:core_api_provider",
+     "//extensions/renderer",
++    "//gpu/config",
+     "//ipc",
+     "//media",
+     "//net",
+diff --git a/include/cef_browser.h b/include/cef_browser.h
+index fc667e6..c791215 100644
+--- a/include/cef_browser.h
++++ b/include/cef_browser.h
+@@ -272,6 +272,25 @@ class CefDownloadImageCallback : public virtual CefBaseRefCounted {
+                                        CefRefPtr<CefImage> image) = 0;
+ };
+ 
++#if CEF_API_ADDED(CEF_NEXT)
++///
++/// Callback interface for CefBrowserHost::GetGpuInfo. The methods of this class
++/// will be called on the browser process UI thread.
++///
++/*--cef(source=client,added=next)--*/
++class CefGpuInfoCallback : public virtual CefBaseRefCounted {
++ public:
++  ///
++  /// Method that will be executed when the GPU information has been collected.
++  /// |info| holds the fields of Chromium's gpu::GPUInfo by their enumerated
++  /// names, or is empty on failure, when |error| describes it.
++  ///
++  /*--cef(optional_param=info,optional_param=error)--*/
++  virtual void OnGpuInfo(CefRefPtr<CefDictionaryValue> info,
++                         const CefString& error) = 0;
++};
++#endif
++
+ ///
+ /// Class used to represent the browser process aspects of a browser. The
+ /// methods of this class can only be called in the browser process. They may be
+@@ -351,6 +370,35 @@ class CefBrowserHost : public virtual CefBaseRefCounted {
+   ///
+   /*--cef(added=next)--*/
+   static void SetProcessAccessibilityMode(int mode);
++
++  ///
++  /// Collect the browser process's GPU information and pass it to |callback|.
++  /// With |complete| false only the basic information is collected, off the UI
++  /// thread. With |complete| true, on Windows and macOS the GPU process is
++  /// also asked for its DirectX and video information, and |callback| runs
++  /// once Chromium reports an update or after 10 seconds, with what it has
++  /// then; elsewhere |complete| is ignored. Fails if GPU access is not
++  /// allowed. Must be called on the browser process UI thread.
++  ///
++  /*--cef(added=next)--*/
++  static void GetGpuInfo(bool complete,
++                         CefRefPtr<CefGpuInfoCallback> callback);
++
++  ///
++  /// Returns the status of each GPU feature, as chrome://gpu lists them:
++  /// feature name to a status such as "enabled", "disabled_software" or
++  /// "unavailable_off". Must be called on the browser process UI thread.
++  ///
++  /*--cef(added=next)--*/
++  static CefRefPtr<CefDictionaryValue> GetGpuFeatureStatus();
++
++  ///
++  /// Returns true if hardware acceleration is enabled for the browser process
++  /// (content::GpuDataManager::HardwareAccelerationEnabled). Returns false
++  /// before the GPU data manager is initialized.
++  ///
++  /*--cef(added=next)--*/
++  static bool IsHardwareAccelerationEnabled();
+ #endif
+ 
+   ///
+diff --git a/include/cef_browser_process_handler.h b/include/cef_browser_process_handler.h
+index 03aa79c..35b665d 100644
+--- a/include/cef_browser_process_handler.h
++++ b/include/cef_browser_process_handler.h
+@@ -211,6 +211,15 @@ class CefBrowserProcessHandler : public virtual CefBaseRefCounted {
+   virtual void OnBeforeRenderProcessLaunch(
+       CefRefPtr<CefCommandLine> command_line,
+       CefRefPtr<CefRequestContext> request_context) {}
++
++  ///
++  /// Called on the browser process UI thread when Chromium's GPU information
++  /// changes (content::GpuDataManagerObserver::OnGpuInfoUpdate), as when the
++  /// GPU process starts or reports more complete information. Read the new
++  /// information with CefBrowserHost::GetGpuInfo.
++  ///
++  /*--cef(added=next)--*/
++  virtual void OnGpuInfoUpdate() {}
+ #endif
+ };
+ 
+diff --git a/libcef/browser/context.cc b/libcef/browser/context.cc
+index b56a688..38452c0 100644
+--- a/libcef/browser/context.cc
++++ b/libcef/browser/context.cc
+@@ -5,6 +5,7 @@
+ #include "cef/libcef/browser/context.h"
+ 
+ #include <memory>
++#include <vector>
+ 
+ #include "base/auto_reset.h"
+ #include "base/files/file_util.h"
+@@ -12,7 +13,9 @@
+ #include "base/notimplemented.h"
+ #include "base/run_loop.h"
+ #include "base/task/current_thread.h"
++#include "base/task/thread_pool.h"
+ #include "base/threading/thread_restrictions.h"
++#include "base/timer/timer.h"
+ #include "cef/libcef/browser/browser_info_manager.h"
+ #include "cef/libcef/browser/prefs/pref_helper.h"
+ #include "cef/libcef/browser/request_context_impl.h"
+@@ -20,15 +23,22 @@
+ #include "cef/libcef/browser/trace_subscriber.h"
+ #include "cef/libcef/common/api_version_util.h"
+ #include "cef/libcef/common/cef_switches.h"
++#include "cef/libcef/common/values_impl.h"
+ #include "chrome/browser/browser_process_impl.h"
+ #include "components/network_session_configurator/common/network_switches.h"
+ #include "cef/include/cef_browser.h"
++#include "content/browser/gpu/compositor_util.h"
++#include "content/browser/gpu/gpu_data_manager_impl.h"
+ #include "content/public/browser/browser_accessibility_state.h"
+ #include "content/public/browser/browser_child_process_observer.h"
+ #include "content/public/browser/child_process_data.h"
+ #include "content/public/browser/child_process_termination_info.h"
++#include "content/public/browser/gpu_data_manager.h"
++#include "content/public/browser/gpu_data_manager_observer.h"
+ #include "content/public/browser/scoped_accessibility_mode.h"
+ #include "content/public/common/process_type.h"
++#include "gpu/config/gpu_info.h"
++#include "gpu/config/gpu_info_collector.h"
+ #include "ui/accessibility/ax_mode.h"
+ #include "ui/accessibility/platform/ax_mode_observer.h"
+ #include "ui/accessibility/platform/ax_platform.h"
+@@ -499,6 +509,221 @@ void CefBrowserHost::SetProcessAccessibilityMode(int mode) {
+       static_cast<uint32_t>(mode) & known & ~ui::AXMode::kFromPlatform));
+ }
+ 
++namespace {
++
++// Reads gpu::GPUInfo with the keys and nesting of Electron's
++// GPUInfoEnumerator, which app.getGPUInfo returns.
++class CefGpuInfoEnumerator final : public gpu::GPUInfo::Enumerator {
++ public:
++  static base::DictValue Enumerate(const gpu::GPUInfo& gpu_info) {
++    CefGpuInfoEnumerator enumerator;
++    gpu_info.EnumerateFields(&enumerator);
++    return std::move(enumerator.current_);
++  }
++
++  void AddInt64(const char* name, int64_t value) override {
++    // base::Value has no 64-bit integer; Electron narrows the same way.
++    current_.Set(name, static_cast<int>(value));
++  }
++  void AddInt(const char* name, int value) override {
++    current_.Set(name, value);
++  }
++  void AddString(const char* name, const std::string& value) override {
++    if (!value.empty()) {
++      current_.Set(name, value);
++    }
++  }
++  void AddBool(const char* name, bool value) override {
++    current_.Set(name, value);
++  }
++  void AddTimeDeltaInSecondsF(const char* name,
++                              const base::TimeDelta& value) override {
++    current_.Set(name, value.InMillisecondsF());
++  }
++  void AddBinary(const char* name,
++                 const base::span<const uint8_t>& value) override {
++    current_.Set(name, base::Value(value));
++  }
++
++  void BeginGPUDevice() override { Begin(); }
++  void EndGPUDevice() override {
++    // Every device goes in one list, the active one first.
++    base::DictValue device = End();
++    current_.EnsureList("gpuDevice")->Append(std::move(device));
++  }
++  void BeginVideoDecodeAcceleratorSupportedProfile() override { Begin(); }
++  void EndVideoDecodeAcceleratorSupportedProfile() override {
++    End("videoDecodeAcceleratorSupportedProfile");
++  }
++  void BeginVideoEncodeAcceleratorSupportedProfile() override { Begin(); }
++  void EndVideoEncodeAcceleratorSupportedProfile() override {
++    End("videoEncodeAcceleratorSupportedProfile");
++  }
++  void BeginAuxAttributes() override { Begin(); }
++  void EndAuxAttributes() override { End("auxAttributes"); }
++  void BeginOverlayInfo() override { Begin(); }
++  void EndOverlayInfo() override { End("overlayInfo"); }
++
++ private:
++  void Begin() {
++    parents_.push_back(std::move(current_));
++    current_ = base::DictValue();
++  }
++  base::DictValue End() {
++    base::DictValue child = std::move(current_);
++    current_ = std::move(parents_.back());
++    parents_.pop_back();
++    return child;
++  }
++  void End(const char* key) {
++    base::DictValue child = End();
++    current_.Set(key, std::move(child));
++  }
++
++  std::vector<base::DictValue> parents_;
++  base::DictValue current_;
++};
++
++CefRefPtr<CefDictionaryValue> CreateGpuInfoValue(
++    const gpu::GPUInfo& gpu_info) {
++  return new CefDictionaryValueImpl(CefGpuInfoEnumerator::Enumerate(gpu_info),
++                                    /*read_only=*/false);
++}
++
++}  // namespace
++
++// Reports Chromium's GPU info updates to the client and answers
++// CefBrowserHost::GetGpuInfo's complete requests from them, as Electron's
++// GPUInfoManager.
++class CefGpuInfoObserver : public content::GpuDataManagerObserver {
++ public:
++  explicit CefGpuInfoObserver(CefRefPtr<CefApp> application)
++      : application_(application) {
++    content::GpuDataManager::GetInstance()->AddObserver(this);
++  }
++
++  CefGpuInfoObserver(const CefGpuInfoObserver&) = delete;
++  CefGpuInfoObserver& operator=(const CefGpuInfoObserver&) = delete;
++
++  ~CefGpuInfoObserver() override {
++    content::GpuDataManager::GetInstance()->RemoveObserver(this);
++  }
++
++  void RequestCompleteInfo(CefRefPtr<CefGpuInfoCallback> callback) {
++    auto* manager = content::GpuDataManagerImpl::GetInstance();
++    // Chromium collects DirectX info once and sends no update when asked
++    // again, so a request after it is in would otherwise wait forever.
++    if (HasCompleteInfo()) {
++      callback->OnGpuInfo(CreateGpuInfoValue(manager->GetGPUInfo()),
++                          CefString());
++      return;
++    }
++    pending_.push_back(callback);
++    if (!timeout_.IsRunning()) {
++      timeout_.Start(FROM_HERE, base::Seconds(10),
++                     base::BindOnce(&CefGpuInfoObserver::AnswerPending,
++                                    base::Unretained(this)));
++    }
++    // Dawn info is not part of gpu::GPUInfo, and collecting it can stall the
++    // GPU main thread for seconds.
++    manager->RequestGpuInfoIfNeeded(
++        static_cast<content::GpuDataManagerImpl::GpuInfoRequest>(
++            content::GpuDataManagerImpl::kGpuInfoRequestDirectX |
++            content::GpuDataManagerImpl::kGpuInfoRequestVideo),
++        /*delayed=*/false);
++  }
++
++  void OnGpuInfoUpdate() override {
++    // The video and DirectX reports come separately; answer once both are in.
++    if (HasCompleteInfo()) {
++      AnswerPending();
++    }
++    // A client built against an older API version has no callback for it.
++    if (application_ && CEF_API_IS_ADDED(CEF_NEXT)) {
++      if (auto handler = application_->GetBrowserProcessHandler()) {
++        handler->OnGpuInfoUpdate();
++      }
++    }
++  }
++
++ private:
++  static bool HasCompleteInfo() {
++    auto* manager = content::GpuDataManagerImpl::GetInstance();
++#if BUILDFLAG(IS_WIN)
++    if (!manager->DirectXRequested() ||
++        !manager->IsDx12VulkanVersionAvailable()) {
++      return false;
++    }
++#endif
++    return !manager->GetGPUInfo()
++                .video_decode_accelerator_supported_profiles.empty();
++  }
++
++  void AnswerPending() {
++    timeout_.Stop();
++    if (pending_.empty()) {
++      return;
++    }
++    auto callbacks = std::move(pending_);
++    pending_.clear();
++    const gpu::GPUInfo gpu_info =
++        content::GpuDataManagerImpl::GetInstance()->GetGPUInfo();
++    for (auto& callback : callbacks) {
++      callback->OnGpuInfo(CreateGpuInfoValue(gpu_info), CefString());
++    }
++  }
++
++  CefRefPtr<CefApp> application_;
++  std::vector<CefRefPtr<CefGpuInfoCallback>> pending_;
++  base::OneShotTimer timeout_;
++};
++
++// static
++void CefBrowserHost::GetGpuInfo(bool complete,
++                                CefRefPtr<CefGpuInfoCallback> callback) {
++  CEF_REQUIRE_UIT_RETURN_VOID();
++  std::string reason;
++  if (!content::GpuDataManagerImpl::GetInstance()->GpuAccessAllowed(&reason)) {
++    callback->OnGpuInfo(nullptr, "GPU access not allowed. Reason: " + reason);
++    return;
++  }
++
++#if BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC)
++  if (complete && CONTEXT_STATE_VALID() && g_context->gpu_info_observer()) {
++    g_context->gpu_info_observer()->RequestCompleteInfo(callback);
++    return;
++  }
++#endif
++
++  // Collection blocks: on Windows it loads system libraries.
++  base::ThreadPool::PostTaskAndReplyWithResult(
++      FROM_HERE, {base::MayBlock(), base::TaskPriority::USER_VISIBLE},
++      base::BindOnce([]() {
++        gpu::GPUInfo gpu_info;
++        gpu::CollectBasicGraphicsInfo(&gpu_info);
++        return gpu_info;
++      }),
++      base::BindOnce(
++          [](CefRefPtr<CefGpuInfoCallback> callback,
++             const gpu::GPUInfo& gpu_info) {
++            callback->OnGpuInfo(CreateGpuInfoValue(gpu_info), CefString());
++          },
++          callback));
++}
++
++// static
++CefRefPtr<CefDictionaryValue> CefBrowserHost::GetGpuFeatureStatus() {
++  CEF_REQUIRE_UIT_RETURN(nullptr);
++  return new CefDictionaryValueImpl(content::GetFeatureStatus(),
++                                    /*read_only=*/false);
++}
++
++// static
++bool CefBrowserHost::IsHardwareAccelerationEnabled() {
++  return content::GpuDataManager::Initialized() &&
++         content::GpuDataManager::GetInstance()->HardwareAccelerationEnabled();
++}
++
+ // CefContext
+ 
+ CefContext::CefContext() = default;
+@@ -693,6 +915,9 @@ bool CefContext::HasObserver(Observer* observer) const {
+ void CefContext::OnContextInitialized() {
+   CEF_REQUIRE_UIT();
+ 
++  // GetGpuInfo needs it without a CefApp too.
++  gpu_info_observer_ = std::make_unique<CefGpuInfoObserver>(application_);
++
+   if (application_) {
+     child_process_observer_ =
+         std::make_unique<CefChildProcessObserver>(application_);
+@@ -731,6 +956,7 @@ void CefContext::ShutdownOnUIThread() {
+ 
+   child_process_observer_.reset();
+   accessibility_state_.reset();
++  gpu_info_observer_.reset();
+ 
+   if (trace_subscriber_) {
+     trace_subscriber_.reset();
+diff --git a/libcef/browser/context.h b/libcef/browser/context.h
+index a18fd65..030c51f 100644
+--- a/libcef/browser/context.h
++++ b/libcef/browser/context.h
+@@ -25,6 +25,7 @@ class Registrar;
+ class CefAccessibilityState;
+ class CefBrowserInfoManager;
+ class CefChildProcessObserver;
++class CefGpuInfoObserver;
+ class CefTraceSubscriber;
+ 
+ class CefContext {
+@@ -88,6 +89,11 @@ class CefContext {
+     return accessibility_state_.get();
+   }
+ 
++  // Valid on the UI thread from context initialization until shutdown.
++  CefGpuInfoObserver* gpu_info_observer() const {
++    return gpu_info_observer_.get();
++  }
++
+   // Populate request context settings for the global system context based on
+   // CefSettings and command-line flags.
+   void PopulateGlobalRequestContextSettings(
+@@ -133,6 +139,7 @@ class CefContext {
+   std::unique_ptr<CefBrowserInfoManager> browser_info_manager_;
+   std::unique_ptr<CefChildProcessObserver> child_process_observer_;
+   std::unique_ptr<CefAccessibilityState> accessibility_state_;
++  std::unique_ptr<CefGpuInfoObserver> gpu_info_observer_;
+ 
+   std::optional<
+       base::CurrentThread::ScopedAllowApplicationTasksInNativeNestedLoop>

@@ -13,7 +13,7 @@ public sealed unsafe class CefPatches0007To0009Tests
     [Fact]
     public void NextBrowserProcessHandler_AppendsPatches0007And0009AfterTheStockStruct()
     {
-        Assert.Equal(sizeof(cef_browser_process_handler_t) + 3 * sizeof(nint), sizeof(cef_browser_process_handler_next_t));
+        Assert.Equal(sizeof(cef_browser_process_handler_t) + 4 * sizeof(nint), sizeof(cef_browser_process_handler_next_t));
         cef_browser_process_handler_next_t value = default;
         Assert.Equal(sizeof(cef_browser_process_handler_t), (int)((byte*)&value.on_child_process_gone - (byte*)&value));
         Assert.Equal(sizeof(cef_browser_process_handler_t) + sizeof(nint), (int)((byte*)&value.on_accessibility_mode_changed - (byte*)&value));

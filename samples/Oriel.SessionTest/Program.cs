@@ -3434,6 +3434,10 @@ async Task AppAuditChecks()
         app.IsHardwareAccelerationEnabled() == !app.CommandLine.HasSwitch("disable-gpu")
         && (await Throws(() => { app.DisableHardwareAcceleration(); return Task.CompletedTask; }))?.Message == "app.disableHardwareAcceleration() can only be called before app is ready");
 
+    // Before the first Complete request, whose DirectX and video reports are what raise GpuInfoUpdate.
+    var gpuUpdates = 0;
+    EventHandler onGpuUpdate = (_, _) => Interlocked.Increment(ref gpuUpdates);
+    app.GpuInfoUpdate += onGpuUpdate;
     // First: once one chrome://gpu has asked for Windows' DirectX rows, later pages report them at once.
     var completeGpuInfo = await app.GetGpuInfoAsync(GpuInfoType.Complete);
     var dx12 = completeGpuInfo["auxAttributes"]?["dx12FeatureLevel"] is System.Text.Json.Nodes.JsonValue dx12Value && dx12Value.TryGetValue<string>(out var level) ? level : null;
@@ -3442,11 +3446,43 @@ async Task AppAuditChecks()
     var gpuStatus = await app.GetGpuFeatureStatusAsync();
     Check("GetGpuFeatureStatusAsync lists chrome://gpu's features", gpuStatus.ContainsKey("webgl") && gpuStatus.ContainsKey("gpu_compositing"), string.Join(",", gpuStatus.Select(p => $"{p.Key}={p.Value}")));
     var gpuInfo = await app.GetGpuInfoAsync(GpuInfoType.Basic);
-    Check("GetGpuInfoAsync answers auxAttributes and gpuDevice, the active device first", gpuInfo["auxAttributes"] is System.Text.Json.Nodes.JsonObject
-        && gpuInfo["gpuDevice"] is System.Text.Json.Nodes.JsonArray { Count: > 0 } devices && devices[0]!["active"]!.GetValue<bool>(), gpuInfo.ToJsonString());
-    Check("GetGpuInfoAsync(Basic) carries the GPU process's initialization time",
-        gpuInfo["auxAttributes"]?["initializationTime"] is System.Text.Json.Nodes.JsonValue initTime && initTime.TryGetValue<double>(out var initMs) && initMs > 0,
-        gpuInfo["auxAttributes"]?["initializationTime"]?.ToJsonString());
+    // Patched Basic is collected afresh in the browser process, as Electron's, which knows no active device; the
+    // GPU process marks it, so Complete has it either way.
+    Check("GetGpuInfoAsync answers auxAttributes and gpuDevice, the active device first (Complete; Basic too on stock CEF)",
+        gpuInfo["auxAttributes"] is System.Text.Json.Nodes.JsonObject && completeGpuInfo["gpuDevice"] is System.Text.Json.Nodes.JsonArray { Count: > 0 } completeDevices
+        && completeDevices[0]!["active"]!.GetValue<bool>()
+        && (Oriel.Cef.CefRuntime.IsPatched || gpuInfo["gpuDevice"] is System.Text.Json.Nodes.JsonArray { Count: > 0 } devices && devices[0]!["active"]!.GetValue<bool>()),
+        gpuInfo.ToJsonString());
+    if (!Oriel.Cef.CefRuntime.IsPatched)
+    {
+        Check("stock CEF: GetGpuInfoAsync(Basic) carries the GPU process's initialization time",
+            gpuInfo["auxAttributes"]?["initializationTime"] is System.Text.Json.Nodes.JsonValue initTime && initTime.TryGetValue<double>(out var initMs) && initMs > 0,
+            gpuInfo["auxAttributes"]?["initializationTime"]?.ToJsonString());
+        Check("stock CEF: GetGpuFeatureStatus (synchronous) needs patch 0013", (await Throws(() => Task.FromResult(app.GetGpuFeatureStatus()))) is PlatformNotSupportedException);
+        Check("stock CEF: GpuInfoUpdate is never raised", gpuUpdates == 0, gpuUpdates);
+    }
+    else
+    {
+        // Patch 0013: Chromium's GpuDataManager itself, as Electron reads it.
+        var aux = completeGpuInfo["auxAttributes"] as System.Text.Json.Nodes.JsonObject;
+        Check("patched (0013): GetGpuInfoAsync(Complete) enumerates GPUInfo's fields the chrome://gpu page lacks",
+            aux is not null && new[] { "targetCpuBits", "isAsan", "canSupportThreadedTextureMailbox" }.All(aux.ContainsKey)
+            && (!OperatingSystem.IsWindows() || aux.ContainsKey("supportsDx12")), aux is null ? "none" : string.Join(",", aux.Select(p => p.Key)));
+        var again = System.Diagnostics.Stopwatch.StartNew();
+        var second = await app.GetGpuInfoAsync(GpuInfoType.Complete).WaitAsync(TimeSpan.FromSeconds(15));
+        Check("patched (0013): a second Complete request answers too, without waiting out the timeout", second["gpuDevice"] is System.Text.Json.Nodes.JsonArray { Count: > 0 }
+            && again.Elapsed < TimeSpan.FromSeconds(9), again.Elapsed);
+        Check("patched (0013): Basic is collected afresh with every device's vendor and device ids",
+            gpuInfo["gpuDevice"] is System.Text.Json.Nodes.JsonArray { Count: > 0 } basicDevices && basicDevices.All(d => d?["vendorId"] is not null && d["deviceId"] is not null), gpuInfo.ToJsonString());
+        var syncStatus = app.GetGpuFeatureStatus();
+        Check("patched (0013): GetGpuFeatureStatus answers synchronously, the same as chrome://gpu's",
+            syncStatus.ContainsKey("webgl") && syncStatus.OrderBy(p => p.Key).SequenceEqual(gpuStatus.OrderBy(p => p.Key)), string.Join(",", syncStatus.Select(p => $"{p.Key}={p.Value}")));
+        Check("patched (0013): IsHardwareAccelerationEnabled is GpuDataManager's, on for a hardware GPU", app.IsHardwareAccelerationEnabled() == !app.CommandLine.HasSwitch("disable-gpu"));
+        Check("patched (0013): GpuInfoUpdate is raised when the GPU info changes", gpuUpdates > 0, gpuUpdates);
+    }
+    app.GpuInfoUpdate -= onGpuUpdate;
+    Check("DisableDomainBlockingFor3DAPIs throws Electron's error once ready",
+        (await Throws(() => { app.DisableDomainBlockingFor3DAPIs(); return Task.CompletedTask; }))?.Message == "app.disableDomainBlockingFor3DAPIs() can only be called before app is ready");
 
     var a11yEvents = new List<bool>();
     app.AccessibilitySupportChanged += (_, on) => a11yEvents.Add(on);

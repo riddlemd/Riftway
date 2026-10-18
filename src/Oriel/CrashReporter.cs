@@ -61,6 +61,7 @@ public static class CrashReporter
     private static bool s_started;
     private static bool s_uploadToServer;
     private static bool s_crashpadStarted;
+    private static bool s_liveSlotsRead;
     private static FileSystemWatcher? s_settingsWatcher;
 
     /// <summary>Whether <see cref="Start"/> has been called in this process.</summary>
@@ -242,6 +243,7 @@ public static class CrashReporter
         {
             s_configPath ??= CrashReporterConfig.PathFor(AppContext.BaseDirectory);
             s_liveSlots = ReadSlots(s_configPath);
+            s_liveSlotsRead = true;
         }
     }
 
@@ -272,6 +274,9 @@ public static class CrashReporter
         lock (s_lock)
         {
             if (!s_started) return null;
+            // macOS and Linux start the GPU and utility processes inside cef_initialize, before OnCrashpadStarted records
+            // the launch's cfg; until then the cfg on disk is the one they read. Once recorded, a later Start's cfg is not.
+            if (!s_liveSlotsRead && s_configPath is not null) s_liveSlots = ReadSlots(s_configPath);
             var pairs = new List<KeyValuePair<string, string>>
             {
                 new("process_type", processType),
@@ -309,6 +314,7 @@ public static class CrashReporter
             s_global = new(StringComparer.Ordinal);
             s_liveSlots = new(StringComparer.Ordinal);
             s_crashpadStarted = false;
+            s_liveSlotsRead = false;
             s_configPath = configPath;
             s_databasePath = null;
         }
