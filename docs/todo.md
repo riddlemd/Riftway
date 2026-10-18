@@ -62,9 +62,11 @@ Cross-platform work. Platform-specific items: [linux-todo.md](linux-todo.md), [w
 - [ ] `app` ([parity/app.md](parity/app.md)): CEF patches for A23 (context initialised after AppKit's launch; what
       it needs is in eng/cef/README.md), A24, A27 (GPU info observer); choose the app locale as Electron does and pass it
       as `CefSettings.locale` (A30); a relauncher mode (A21)
-- [ ] CEF patches 0007-0009 (A31 `child-process-gone`, A35 `resolveProxy`, A28 accessibility mode): build a patched
-      libcef and run SessionTest's `patched (0007)`, `(0008)` and `(0009)` checks on each OS; the stock proxy checks
-      (bypass list, fixed servers without rules, `app.SetProxyAsync`) pass on Linux, not yet run on macOS and Windows
+- [ ] CEF patches 0007-0009 (A31 `child-process-gone`, A35 `resolveProxy`, A28 accessibility mode): SessionTest's
+      `patched (0007)`, `(0008)` and `(0009)` checks pass on linux-x64 (2026-10-13, f01f7e8 + the field-trial switch;
+      again 2026-10-16 on 455d58e with 0001-0011) and windows-x64 (2026-10-13, f01f7e8 + the switch, bootstrap layout).
+      macOS: not built. The stock proxy checks (bypass list, fixed servers without rules, `app.SetProxyAsync`) pass on
+      Linux and Windows (2026-10-13, stock control, 0 failures), not yet run on macOS
 
 ## Tests
 
@@ -111,8 +113,9 @@ Cross-platform work. Platform-specific items: [linux-todo.md](linux-todo.md), [w
       `CefWindow::SetXdgActivationToken` (linux-tray's T5), 0005 `CefDownloadItem` gesture, validators, initiator
       and frame (E13, E40), 0006 `CefRequestContext::StartNetLog`/`StopNetLog`/`IsNetLogging` for `netLog` (E42).
       Oriel detects a patched libcef by its next-version API hash (`CefRuntime.IsPatched`) and runs unchanged on stock
-      CEF. None is built yet: build, check the hashes, run WindowTest on Linux ([linux-todo.md](linux-todo.md)) and
-      SessionTest's `patched (0005)` and `patched (0006)` checks
+      CEF. Built for linux-x64 and windows-x64 (CEF a03e714, 2026-10-13; the next-version hashes match
+      `CefPatchedApi`): WindowTest's 0001-0004 checks pass on linux-x64 (2026-10-14, 63ac6f1) and SessionTest's
+      `patched (0005)` and `(0006)` on linux-x64 and windows-x64 (2026-10-13, f01f7e8). macOS: not built
 - [ ] `session` audit (branch `session-audit`, [parity/session.md](parity/session.md)): SessionTest
       `SessionAuditChecks` pass on Linux; run them on macOS and Windows: `StoragePath`, `SpellCheckerEnabled`,
       `EnableNetworkEmulation` offline and latency on open and later pages, another session untouched (DRIFT E43),

@@ -30,12 +30,13 @@ General items: [todo.md](todo.md).
       Expect the handler to be `Oriel.Subprocess --type=crashpad-handler --database=~/.config/<name>/Crashpad`, `platform=linux`,
       the renderer keys set from `OnWebKitInitialized` after the zygote fork (CR11), and the browser crash reaching Crashpad's
       signal handler ahead of .NET's
-- [ ] **Transparent windows** (DRIFT W24): CEF patch [eng/cef](../eng/cef/README.md) 0001 and Oriel's side are written,
-      not yet built or run.
-  - [ ] Build the patched libcef (`eng/cef/apply-patches.sh`, then `cef-build-linux/build.sh --no-update --force-build`);
+- [ ] **Transparent windows** (DRIFT W24): CEF patch [eng/cef](../eng/cef/README.md) 0001 and Oriel's side pass on
+      linux-x64 (2026-10-14, 63ac6f1, patches 0001-0009); the Electron comparisons below are open.
+  - [x] Build the patched libcef (`eng/cef/apply-patches.sh`, then `cef-build-linux/build.sh --no-update --force-build`);
         check its next-version hashes against `CefPatchedApi.cs`
-  - [ ] Rebuild `oriel-linux-dev` (adds xcompmgr, x11-utils) and run WindowTest with `ORIEL_CEF_DIR`; the
-        `LinuxTransparencyAsync` checks read the X visual and the screen over a red backdrop
+  - [x] Rebuild `oriel-linux-dev` (adds xcompmgr, x11-utils) and run WindowTest with `ORIEL_CEF_DIR`; the
+        `LinuxTransparencyAsync` checks read the X visual and the screen over a red backdrop: all 12 pass, with the
+        translucent `SetBackgroundColor` one (linux-x64, 2026-10-14, 63ac6f1; stock CEF skips the block)
   - [ ] Compare with Electron what shows where the page is clear without a compositing manager: Electron also clears
         the compositor colour, which CEF cannot
   - [ ] Electron gives every frameless window on Linux a translucent widget, for its own client-side frame
@@ -66,7 +67,7 @@ General items: [todo.md](todo.md).
   - [x] Re-run the input-blocking checks under Mutter, KWin and Xfwm4 (`ORIEL_WM`): all pass, view pages included
   - [ ] Crossing events still reach a disabled window's page with stock CEF (DRIFT W5)
     - [x] CEF patch [eng/cef](../eng/cef/README.md) 0002 (`CefWindow::SetEventListeningEnabled`, Electron's
-          `DisableEventListening`) and `LinuxCefPatches.SetWindowInputEnabled`; written, not built or run
+          `DisableEventListening`) and `LinuxCefPatches.SetWindowInputEnabled`
     - [x] Called first in `ApplyLinuxEnabled`; the X11 input cover and dropped keys stay the stock fallback
     - [x] Run WindowTest's `LinuxPatchedInputAsync` on the patched libcef (crossing events, clicks, wheel, keys),
           and the modal and `SetEnabled` checks on both libcefs: all pass on linux-x64 (2026-10-14, 63ac6f1, patches
@@ -92,7 +93,8 @@ General items: [todo.md](todo.md).
         `CloseNotification` from `Close()`, a refused Notify as `failed`, `IsSupported`. All 14 pass on linux-arm64
         and linux-x64 (2026-10-14, 63ac6f1)
   - [ ] Check against real servers: GNOME Shell, Plasma, dunst/mako (the default action, `image-data`, `append`)
-  - [ ] The click's activation token on the patched libcef (DRIFT Q10), with the tray's
+  - [ ] The click's activation token on the patched libcef (DRIFT Q10), with the tray's. No check drives it: the fake
+        server can emit `ActivationToken` but no notification check sends it
 - [ ] `desktopCapturer` on X11 (branch `desktop-capturer`): Oriel's own enumeration and capture (XQueryTree, `WM_STATE`,
       `WM_NAME`, XRandR monitors, XComposite + `XGetImage`), separate from Chromium's capturer below. WindowTest's
       `DesktopCapturerChecks` pass under Xvfb; run them on a real X server; the EDID-based `display_id` needs a real monitor (Xvfb
@@ -113,13 +115,14 @@ General items: [todo.md](todo.md).
         and a real screen locker's `ActiveChanged`
 - [ ] nativeTheme against a real `xdg-desktop-portal` (GNOME, KDE): Docker has none, so the checks use a fake portal
       (`samples/Shared/FakePortal.cs`) that WindowTest starts before CEF
-- [ ] nativeTheme: with no portal preference, pages keep GTK's colours from startup with stock CEF (DRIFT Y2). Chromium
-      patch [eng/cef](../eng/cef/README.md) 0003 clears the GTK style colour cache on the settings notifications;
-      written, not built. Run `ThemeAsync`'s patched page checks on it
-- [ ] Tray activation token (linux-tray's T5): CEF patch [eng/cef](../eng/cef/README.md) 0004
-      (`CefWindow::SetXdgActivationToken`) and `LinuxCefPatches.ProvideActivationToken`; written, not built; called
-      from `Tray.Linux.cs` `HandleItemCall` for `ProvideXdgActivationToken`. Run
-      WindowTest's `LinuxActivationTokenAsync`. T6 (Chromium's `dbus::Bus`) is not patched: see the eng/cef README
+- [x] nativeTheme: with no portal preference, pages keep GTK's colours from startup with stock CEF (DRIFT Y2). Chromium
+      patch [eng/cef](../eng/cef/README.md) 0003 clears the GTK style colour cache on the settings notifications.
+      WindowTest's three `NativeTheme, CEF patch 0003` page checks pass on linux-x64 (2026-10-14, 63ac6f1)
+- [x] Tray activation token (linux-tray's T5): CEF patch [eng/cef](../eng/cef/README.md) 0004
+      (`CefWindow::SetXdgActivationToken`) and `LinuxCefPatches.ProvideActivationToken`, called from `Tray.Linux.cs`
+      `HandleItemCall` for `ProvideXdgActivationToken`. WindowTest's `LinuxActivationTokenAsync` (3 checks: taken,
+      `_NET_STARTUP_ID` on the next window, used once) passes on linux-x64 (2026-10-14, 63ac6f1). T6 (Chromium's
+      `dbus::Bus`) is not patched: see the eng/cef README
 - [ ] `app` audit (branch `app-audit`): build and run SessionTest `AppAuditChecks`, and check by hand the GIO
       protocol client (`SetAsDefaultProtocolClient` with an installed desktop file, `GetApplicationInfoForProtocol`'s GTK 3
       icon) and `ShowAboutPanel`'s GtkAboutDialog (DRIFT A12); A14's `assets` check
