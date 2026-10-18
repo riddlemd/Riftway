@@ -1414,6 +1414,7 @@ async Task RunAsync()
     app.SetPath("logs", originalLogs);
     await Section("AppAuditChecks", AppAuditChecks);
     await Section("SessionAuditChecks", SessionAuditChecks);
+    await Section("GpuHardwareChecks", GpuHardwareChecks);
     var movedTo = Directory.CreateTempSubdirectory("oriel-userdata-").FullName;
     var originalUserData = app.GetPath("userData");
     app.SetPath("userData", movedTo);
@@ -2404,7 +2405,7 @@ static async Task ServeHeaderDownloads(TcpListener listener, int port, System.Co
 // Serves "tls ok" over TLS with the given certificate, to every connection; with requireClient, says which client
 // certificate came.
 static async Task ServeTls(TcpListener listener, System.Security.Cryptography.X509Certificates.X509Certificate2 certificate, bool requireClient = false,
-    Action<string>? receivedThumbprint = null)
+    Action<string>? receivedThumbprint = null, System.Security.Authentication.SslProtocols protocols = System.Security.Authentication.SslProtocols.None)
 {
     while (true)
     {
@@ -2420,7 +2421,7 @@ static async Task ServeTls(TcpListener listener, System.Security.Cryptography.X5
                     using var tls = new System.Net.Security.SslStream(client.GetStream(), false,
                         // Self-signed client certificates, or none, are what the test sends.
                         (_, _, _, errors) => (errors & ~(System.Net.Security.SslPolicyErrors.RemoteCertificateChainErrors | System.Net.Security.SslPolicyErrors.RemoteCertificateNotAvailable)) == 0);
-                    await tls.AuthenticateAsServerAsync(certificate, requireClient, false);
+                    await tls.AuthenticateAsServerAsync(certificate, requireClient, protocols, false);
                     var who = tls.RemoteCertificate is { } remote ? new System.Security.Cryptography.X509Certificates.X509Certificate2(remote).GetNameInfo(System.Security.Cryptography.X509Certificates.X509NameType.SimpleName, false) : "none";
                     receivedThumbprint?.Invoke(tls.RemoteCertificate is { } sent ? new System.Security.Cryptography.X509Certificates.X509Certificate2(sent).Thumbprint : "none");
                     await Respond(tls, 200, "OK", "", requireClient ? $"tls ok client={who}" : "tls ok");
@@ -2454,6 +2455,55 @@ static async Task ServeBasicAuth(TcpListener listener)
                         if (line.Equals("Authorization: " + expected, StringComparison.OrdinalIgnoreCase)) authorized = true;
                     if (authorized) await Respond(stream, 200, "OK", "", "logged in");
                     else await Respond(stream, 401, "Unauthorized", "WWW-Authenticate: Basic realm=\"oriel\"\r\n", "denied");
+                }
+                catch (Exception) { }
+            }
+        });
+    }
+}
+
+// Answers "ntlm <user>" once a client completes NTLM on its connection, else a 401 offering NTLM. NTLM authenticates
+// the connection, not the request, so the connection stays open through the handshake.
+static async Task ServeNtlm(TcpListener listener)
+{
+    while (true)
+    {
+        TcpClient client;
+        try { client = await listener.AcceptTcpClientAsync(); }
+        catch (Exception) { return; }
+        _ = Task.Run(async () =>
+        {
+            using (client)
+            using (var ntlm = new System.Net.Security.NegotiateAuthentication(new System.Net.Security.NegotiateAuthenticationServerOptions { Package = "NTLM" }))
+            {
+                try
+                {
+                    var stream = client.GetStream();
+                    var reader = new StreamReader(stream, Encoding.ASCII);
+                    while (await reader.ReadLineAsync() is { Length: > 0 })
+                    {
+                        string? token = null;
+                        for (var line = await reader.ReadLineAsync(); !string.IsNullOrEmpty(line); line = await reader.ReadLineAsync())
+                            if (line.StartsWith("Authorization: NTLM ", StringComparison.OrdinalIgnoreCase)) token = line["Authorization: NTLM ".Length..];
+                        async Task Send(int status, string headers, string body)
+                        {
+                            var bytes = Encoding.ASCII.GetBytes($"<!doctype html><body>{body}</body>");
+                            await stream.WriteAsync(Encoding.ASCII.GetBytes($"HTTP/1.1 {status} X\r\nContent-Type: text/html\r\nContent-Length: {bytes.Length}\r\n{headers}\r\n"));
+                            await stream.WriteAsync(bytes);
+                        }
+                        if (token is null)
+                        {
+                            await Send(401, "WWW-Authenticate: NTLM\r\n", "denied");
+                            continue;
+                        }
+                        var reply = ntlm.GetOutgoingBlob(token, out var status);
+                        if (status == System.Net.Security.NegotiateAuthenticationStatusCode.ContinueNeeded)
+                            await Send(401, $"WWW-Authenticate: NTLM {reply}\r\n", "challenge");
+                        else if (status == System.Net.Security.NegotiateAuthenticationStatusCode.Completed)
+                            await Send(200, "", $"ntlm {ntlm.RemoteIdentity.Name}");
+                        else
+                            await Send(401, "WWW-Authenticate: NTLM\r\n", $"failed {status}");
+                    }
                 }
                 catch (Exception) { }
             }
@@ -2792,8 +2842,12 @@ async Task PermissionChecks(bool mediaOnly = false)
 
         // A desktopCapturer id as chromeMediaSourceId: CEF parses it as a DesktopMediaID and captures that source. Its device
         // carries no DisplayMediaInformation, so the track has no displaySurface (drift E30).
+        // The window source is one of the run's own: the first listed window can be any app's, cloaked or uncapturable.
+        const string CaptureTitle = "Oriel capture target";
+        var target = new BrowserWindow(new BrowserWindowOptions { Title = CaptureTitle, Width = 320, Height = 240, BackgroundColor = "#20C040" });
+        await target.WebContents.LoadUrl("data:text/html,<title>" + Uri.EscapeDataString(CaptureTitle) + "</title><body style='background:%2320C040'>");
         var sources = await DesktopCapturer.GetSourcesAsync(new SourcesOptions { Types = ["screen", "window"], ThumbnailSize = new System.Drawing.Size(0, 0) });
-        foreach (var source in new[] { sources.FirstOrDefault(s => s.Id.StartsWith("screen:", StringComparison.Ordinal)), sources.FirstOrDefault(s => s.Id.StartsWith("window:", StringComparison.Ordinal)) })
+        foreach (var source in new[] { sources.FirstOrDefault(s => s.Id.StartsWith("screen:", StringComparison.Ordinal)), sources.FirstOrDefault(s => s.Name == CaptureTitle) })
         {
             if (source is null) continue;
             streams = new() { Video = source };
@@ -2807,6 +2861,8 @@ async Task PermissionChecks(bool mediaOnly = false)
             Check($"getUserMedia with a desktopCapturer {kind} id as chromeMediaSourceId captures that source, with no displaySurface (drift E30)",
                 parts is [var deviceId, "none", var size] && deviceId == source.Id && size != "0x0", $"{source.Id}: {legacy}");
         }
+        Check("desktopCapturer lists the run's own capture target window", sources.Any(s => s.Name == CaptureTitle), string.Join(" | ", sources.Select(s => s.Name)));
+        target.Destroy();
     }
     streams = null;
     var refusedScreen = await Run(mediaWin, Screen, gesture: true);
@@ -3030,6 +3086,65 @@ static async Task<string> AnswerRequest(TcpClient connection)
     return first;
 }
 
+// WebGL2, WebGPU and video decode on a real GPU; skipped where Chromium renders in software (llvmpipe, SwiftShader,
+// Microsoft's Basic Render Driver).
+async Task GpuHardwareChecks()
+{
+    var info = await app.GetGpuInfoAsync(GpuInfoType.Basic);
+    var devices = (info["gpuDevice"] as System.Text.Json.Nodes.JsonArray ?? []).OfType<System.Text.Json.Nodes.JsonObject>().ToList();
+    static int VendorOf(System.Text.Json.Nodes.JsonObject d) => d["vendorId"] is System.Text.Json.Nodes.JsonValue v && v.TryGetValue<int>(out var id) ? id : 0;
+    static string VendorName(int id) => id switch { 0x10DE => "nvidia", 0x8086 => "intel", 0x1002 => "amd", 0x13B5 => "arm", 0x5143 => "qualcomm", 0x106B => "apple", _ => "" };
+    var active = devices.FirstOrDefault(d => d["active"]?.GetValue<bool>() == true);
+    var activeString = active?["deviceString"]?.ToString() ?? "";
+    if (OperatingSystem.IsWindows())
+    {
+        // Windows names each display adapter's PCI vendor, so the GPU rows can be checked against the machine itself.
+        var pci = WindowsDisplayAdapters.PciVendorIds();
+        var listed = devices.Select(VendorOf).ToHashSet();
+        Check("Windows: GetGpuInfoAsync lists every PCI display adapter by vendor id, and one of them is active",
+            pci.Count > 0 && pci.All(listed.Contains) && active is not null && pci.Contains(VendorOf(active)),
+            $"pci {string.Join(",", pci.Select(v => $"0x{v:X4}"))} vs listed {string.Join(",", listed.Select(v => $"0x{v:X4}"))}, active {activeString}");
+    }
+    if (active is null || VendorName(VendorOf(active)) == "" || activeString.Contains("llvmpipe", StringComparison.OrdinalIgnoreCase) || activeString.Contains("SwiftShader", StringComparison.OrdinalIgnoreCase))
+    {
+        Console.WriteLine($"SKIP  GPU hardware checks: Chromium's active GPU is software or unknown [{activeString}]");
+        return;
+    }
+    var activeVendor = VendorName(VendorOf(active));
+    var page = Path.Combine(Path.GetTempPath(), $"oriel-gpu-{Environment.ProcessId}.html");
+    File.WriteAllText(page, "<!doctype html><title>gpu</title>");
+    var w = new BrowserWindow(new BrowserWindowOptions { Show = false });
+    try
+    {
+        // file: is a secure context, which navigator.gpu needs.
+        await w.WebContents.LoadFile(page);
+        var renderer = (await w.WebContents.ExecuteJavaScriptAsync(
+            "(() => { const gl = document.createElement('canvas').getContext('webgl2'); if (!gl) return 'none';" +
+            " const ext = gl.getExtension('WEBGL_debug_renderer_info'); return ext ? gl.getParameter(ext.UNMASKED_RENDERER_WEBGL) : 'no debug info'; })()"))?.ToString() ?? "";
+        Check("a WebGL2 context renders on Chromium's active GPU, not in software", renderer.Contains(activeVendor, StringComparison.OrdinalIgnoreCase)
+            && !renderer.Contains("SwiftShader", StringComparison.OrdinalIgnoreCase), $"{renderer} vs active {activeVendor} {activeString}");
+        async Task<string> Adapter(string power) => (await w.WebContents.ExecuteJavaScriptAsync(
+            $"(async () => {{ if (!navigator.gpu) return 'no navigator.gpu'; const a = await navigator.gpu.requestAdapter({{ powerPreference: '{power}' }});" +
+            " if (!a) return 'no adapter'; const i = a.info || await a.requestAdapterInfo(); return `${i.vendor}|${i.architecture}|${i.description}|fallback=${!!(i.isFallbackAdapter ?? a.isFallbackAdapter)}`; })()"))?.ToString() ?? "";
+        var lowPower = await Adapter("low-power");
+        Check("WebGPU gives a hardware adapter from one of the machine's GPUs", !lowPower.Contains("fallback=true", StringComparison.Ordinal)
+            && devices.Select(d => VendorName(VendorOf(d))).Where(v => v.Length > 0).Any(v => lowPower.StartsWith(v + "|", StringComparison.OrdinalIgnoreCase)), lowPower);
+        Console.WriteLine($"INFO  WebGPU high-performance adapter: {await Adapter("high-performance")}");
+        foreach (var (codec, type) in new[] { ("VP9", "video/webm; codecs=\"vp09.00.40.08\""), ("AV1", "video/webm; codecs=\"av01.0.08M.08\""), ("H.264", "video/mp4; codecs=\"avc1.640028\"") })
+        {
+            var decode = (await w.WebContents.ExecuteJavaScriptAsync(
+                $"navigator.mediaCapabilities.decodingInfo({{ type: 'media-source', video: {{ contentType: '{type.Replace("\"", "\\\"")}', width: 3840, height: 2160, bitrate: 20000000, framerate: 30 }} }})" +
+                ".then(r => `supported=${r.supported} smooth=${r.smooth} powerEfficient=${r.powerEfficient}`)"))?.ToString();
+            Console.WriteLine($"INFO  decodingInfo {codec} 2160p30: {decode}");
+        }
+    }
+    finally
+    {
+        w.Destroy();
+        File.Delete(page);
+    }
+}
+
 // Session members added by the docs/parity/session.md audit; written for a macOS, Windows and Linux run.
 async Task SessionAuditChecks()
 {
@@ -3086,6 +3201,38 @@ async Task SessionAuditChecks()
     });
     Check("SetSslConfig refuses tls1.1 and Chromium takes the TLS version and cipher suite preferences", badVersion is ArgumentException && setSsl is null,
         $"{badVersion?.Message} | {setSsl?.Message}");
+
+    // A server that speaks only TLS 1.2 shows the minimum taking effect in the handshake, not just in the preference.
+    using var tls12Key = System.Security.Cryptography.RSA.Create(2048);
+    using var tls12SelfSigned = new System.Security.Cryptography.X509Certificates.CertificateRequest("CN=oriel-tls12.test", tls12Key,
+        System.Security.Cryptography.HashAlgorithmName.SHA256, System.Security.Cryptography.RSASignaturePadding.Pkcs1).CreateSelfSigned(DateTimeOffset.UtcNow.AddDays(-1), DateTimeOffset.UtcNow.AddDays(30));
+    using var tls12Cert = System.Security.Cryptography.X509Certificates.X509CertificateLoader.LoadPkcs12(
+        tls12SelfSigned.Export(System.Security.Cryptography.X509Certificates.X509ContentType.Pkcs12), null);
+    using var tls12Listener = new TcpListener(IPAddress.Loopback, 0);
+    tls12Listener.Start();
+    var tls12Url = $"https://127.0.0.1:{((IPEndPoint)tls12Listener.LocalEndpoint).Port}/";
+    _ = ServeTls(tls12Listener, tls12Cert, protocols: System.Security.Authentication.SslProtocols.Tls12);
+    var tlsSession = Session.FromPartition("audit-tls12");
+    async Task<Exception?> VisitTls12()
+    {
+        var w = new BrowserWindow(new BrowserWindowOptions { Show = false, WebPreferences = new WebPreferences { Session = tlsSession } });
+        w.WebContents.CertificateError += (_, e) => { e.Cancel = true; e.Callback(e.Url.StartsWith(tls12Url, StringComparison.Ordinal)); };
+        var failed = await Throws(() => w.LoadUrl(tls12Url + Guid.NewGuid().ToString("N")).WaitAsync(TimeSpan.FromSeconds(15)));
+        w.Destroy();
+        return failed;
+    }
+    var tls12Default = await VisitTls12();
+    tlsSession.SetSslConfig(new SslConfig { MinVersion = "tls1.3" });
+    // The network service hears the change after a hop.
+    await Task.Delay(500);
+    var tls12Refused = await VisitTls12();
+    tlsSession.SetSslConfig(new SslConfig());
+    await Task.Delay(500);
+    var tls12Again = await VisitTls12();
+    tls12Listener.Stop();
+    Check("SetSslConfig(MinVersion tls1.3) refuses a TLS 1.2-only server that loads by default, and resetting it loads again",
+        tls12Default is null && tls12Refused is LoadFailedException { ErrorCode: -113 or -107 } && tls12Again is null,
+        $"{tls12Default?.Message ?? "loaded"} | {tls12Refused?.Message ?? "loaded"} | {tls12Again?.Message ?? "loaded"}");
     var ntlm = await Throws(() =>
     {
         persistent.AllowNtlmCredentialsForDomains("*.oriel.test,intranet");
@@ -3093,6 +3240,39 @@ async Task SessionAuditChecks()
         return Task.CompletedTask;
     });
     Check("AllowNtlmCredentialsForDomains: Chromium takes the auth.server_allowlist preference", ntlm is null, ntlm?.Message);
+
+    // SSPI answers NTLM with the signed-in user's own credentials, so the allow list decides who gets them unasked.
+    if (OperatingSystem.IsWindows())
+    {
+        using var ntlmListener = new TcpListener(IPAddress.Loopback, 0);
+        ntlmListener.Start();
+        var ntlmUrl = $"http://127.0.0.1:{((IPEndPoint)ntlmListener.LocalEndpoint).Port}/";
+        _ = ServeNtlm(ntlmListener);
+        var ntlmSession = Session.FromPartition("audit-ntlm");
+        async Task<(string? Body, int Logins)> VisitNtlm()
+        {
+            var logins = 0;
+            var w = new BrowserWindow(new BrowserWindowOptions { Show = false, WebPreferences = new WebPreferences { Session = ntlmSession } });
+            w.WebContents.Login += (_, _) => Interlocked.Increment(ref logins);
+            var failed = await Throws(() => w.LoadUrl(ntlmUrl + Guid.NewGuid().ToString("N")).WaitAsync(TimeSpan.FromSeconds(15)));
+            var body = failed is null ? (await w.WebContents.ExecuteJavaScriptAsync("document.body.innerText"))?.ToString() : failed.Message;
+            w.Destroy();
+            return (body, logins);
+        }
+        var me = System.Security.Principal.WindowsIdentity.GetCurrent().Name;
+        ntlmSession.AllowNtlmCredentialsForDomains("*.oriel.test");
+        await Task.Delay(500);
+        var unlisted = await VisitNtlm();
+        ntlmSession.AllowNtlmCredentialsForDomains("127.0.0.1");
+        await Task.Delay(500);
+        var listed = await VisitNtlm();
+        ntlmSession.AllowNtlmCredentialsForDomains("");
+        ntlmListener.Stop();
+        Check("Windows: AllowNtlmCredentialsForDomains sends a listed server the user's NTLM credentials, with no login event",
+            listed.Body == $"ntlm {me}" && listed.Logins == 0, $"{listed.Body} logins={listed.Logins} vs {me}");
+        Check("Windows: a server off the list gets no NTLM credentials unasked: login is raised instead",
+            unlisted.Body != $"ntlm {me}" && unlisted.Logins > 0, $"{unlisted.Body} logins={unlisted.Logins}");
+    }
 }
 
 // app members added by the docs/parity/app.md audit; written for a macOS, Windows and Linux run.
@@ -3350,7 +3530,67 @@ async Task AppAuditChecks()
     {
         Check("IsDefaultProtocolClient is false for a scheme no desktop file handles on Linux", !app.IsDefaultProtocolClient("oriel-none-" + Environment.ProcessId));
         Check("IsEmojiPanelSupported is false on Linux, and login items read as off", !app.IsEmojiPanelSupported() && !app.GetLoginItemSettings().OpenAtLogin);
+        await LinuxDesktopIntegrationChecks();
     }
+}
+
+// The GIO protocol client against a desktop file installed for the run, and the GtkAboutDialog read back from GTK.
+async Task LinuxDesktopIntegrationChecks()
+{
+    var applications = Path.Combine(Environment.GetEnvironmentVariable("XDG_DATA_HOME") is { Length: > 0 } dataHome ? dataHome
+        : Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".local", "share"), "applications");
+    Directory.CreateDirectory(applications);
+    var desktopName = $"oriel-sessiontest-{Environment.ProcessId}.desktop";
+    var desktopFile = Path.Combine(applications, desktopName);
+    var iconFile = Path.Combine(Path.GetTempPath(), $"oriel-protocol-icon-{Environment.ProcessId}.png");
+    var green = new byte[48 * 48 * 4];
+    for (var i = 0; i < green.Length; i += 4) (green[i], green[i + 1], green[i + 2], green[i + 3]) = (0, 200, 0, 255);
+    File.WriteAllBytes(iconFile, NativeImage.CreateFromBitmap(green, new NativeImageBitmapOptions { Width = 48, Height = 48 }).ToPng());
+    var scheme = $"oriel-proto-{Environment.ProcessId}";
+    File.WriteAllText(desktopFile, $"[Desktop Entry]\nType=Application\nName=Oriel Protocol Probe\nExec={Environment.ProcessPath} %u\nIcon={iconFile}\nMimeType=x-scheme-handler/{scheme};\n");
+    var previousDesktop = OperatingSystem.IsLinux() ? Oriel.Cef.Platform.LinuxLauncherEntry.DesktopName() : null;
+    try
+    {
+        app.SetDesktopName(desktopName);
+        // GIO hears of a new desktop file through a file monitor on the UI thread's main loop.
+        var set = false;
+        for (var waited = 0; waited < 50 && !(set = app.SetAsDefaultProtocolClient(scheme)); waited++) await Task.Delay(100);
+        var url = scheme + "://open";
+        var info = await Throws(() => app.GetApplicationInfoForProtocol(url));
+        var got = set ? await app.GetApplicationInfoForProtocol(url).ContinueWith(t => t.IsCompletedSuccessfully ? t.Result : null) : null;
+        Check("Linux: SetAsDefaultProtocolClient makes the installed desktop file (SetDesktopName) the scheme's GIO default, and IsDefaultProtocolClient says so",
+            set && app.IsDefaultProtocolClient(scheme), $"set={set} default={app.IsDefaultProtocolClient(scheme)}");
+        Check("Linux: GetApplicationNameForProtocol and GetApplicationInfoForProtocol read the desktop file's Name and Exec",
+            app.GetApplicationNameForProtocol(url) == "Oriel Protocol Probe" && got is { Name: "Oriel Protocol Probe" } && got.Path == Environment.ProcessPath,
+            $"{app.GetApplicationNameForProtocol(url)} | {got?.Name} {got?.Path} | {info?.Message}");
+        var (iw, ih) = got?.Icon.GetSize() ?? (0, 0);
+        var pixels = got?.Icon.ToBitmap() ?? [];
+        var mid = ((ih / 2) * iw + iw / 2) * 4;
+        Check("Linux: its icon is the desktop file's, through GTK's icon theme at 32 pixels",
+            (iw, ih) == (32, 32) && pixels.Length > mid + 3 && pixels[mid + 1] > 150 && pixels[mid] < 60 && pixels[mid + 2] < 60,
+            pixels.Length > mid + 3 ? $"{iw}x{ih} {pixels[mid]},{pixels[mid + 1]},{pixels[mid + 2]}" : $"{iw}x{ih}");
+    }
+    finally
+    {
+        if (previousDesktop is not null) app.SetDesktopName(previousDesktop);
+        File.Delete(desktopFile);
+        File.Delete(iconFile);
+    }
+
+    var logo = Path.Combine(Path.GetTempPath(), $"oriel-about-logo-{Environment.ProcessId}.png");
+    File.WriteAllBytes(logo, NativeImage.CreateFromBitmap(green, new NativeImageBitmapOptions { Width = 48, Height = 48 }).ToPng());
+    app.SetAboutPanelOptions(new AboutPanelOptions { ApplicationName = "Oriel About", ApplicationVersion = "9.9", Copyright = "(c) Oriel", Website = "https://oriel.test/", IconPath = logo, Authors = ["Ada", "Grace"], Credits = "unused on Linux" });
+    app.ShowAboutPanel();
+    LinuxGtkAbout.Fields? about = null;
+    for (var waited = 0; waited < 50 && (about = Oriel.Cef.CefThread.InvokeOnUi(LinuxGtkAbout.Read)) is null; waited++) await Task.Delay(100);
+    Check("Linux: ShowAboutPanel shows a GtkAboutDialog of the options: name, version, copyright, website, authors, and the icon as a 64-pixel logo",
+        about is { Name: "Oriel About", Version: "9.9", Copyright: "(c) Oriel", Website: "https://oriel.test/", Authors: "Ada,Grace", LogoSize: 64 }, about);
+    Oriel.Cef.CefThread.InvokeOnUi(() => { LinuxGtkAbout.Respond(); return true; });
+    var gone = false;
+    for (var waited = 0; waited < 50 && !(gone = Oriel.Cef.CefThread.InvokeOnUi(LinuxGtkAbout.Read) is null); waited++) await Task.Delay(100);
+    Check("Linux: any response destroys the about dialog", gone);
+    app.SetAboutPanelOptions(new AboutPanelOptions());
+    File.Delete(logo);
 }
 
 // Fresh, so the run shows CEF creating the persistent partition's directory.

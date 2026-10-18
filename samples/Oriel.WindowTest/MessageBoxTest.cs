@@ -29,6 +29,7 @@ static class MessageBoxTest
             ("ShowMessageBoxSync", () => SyncAsync(win, check, step)),
             ("ShowErrorBox", () => ErrorBoxAsync(win, check, step)),
             ("untitled box and icon", () => UntitledAsync(check, step)),
+            ("about panel", () => AboutPanelAsync(check, step)),
         };
         foreach (var (name, run) in scenarios)
         {
@@ -237,6 +238,39 @@ static class MessageBoxTest
         WinTaskDialog.Escape(h);
         check("the icon box closes", await Within(iconBox, step) is { Response: 0 });
     }
+
+    private static Task AboutPanelAsync(CheckFn check, TimeSpan step)
+    {
+        var app = OrielApp.CurrentOrNull!;
+        var exe = System.Diagnostics.FileVersionInfo.GetVersionInfo(Environment.ProcessPath!);
+        app.SetAboutPanelOptions(new AboutPanelOptions());
+        app.ShowAboutPanel();
+        var h = WaitFor(app.Name, step);
+        var els = WinTaskDialog.Elements(h);
+        check("ShowAboutPanel: an unowned information box titled by the app's name, with a lone OK, as Electron's",
+            h != 0 && WinTaskDialog.Owner(h) == 0 && els.Any(e => e.AutomationId == "MainIcon") && WinTaskDialog.Buttons(h).Count == 1 && Has(els, "CommandButton_1", "OK"),
+            Describe(els));
+        check("ShowAboutPanel without options shows the exe's FileDescription and ProductVersion",
+            Content(els) == $"{exe.FileDescription}\n{exe.ProductVersion}", $"{Content(els)} vs {exe.FileDescription}/{exe.ProductVersion}");
+        Click(h, "OK");
+        check("the about box closes on OK", Eventually(() => !WinTaskDialog.Exists(h), step));
+
+        app.SetAboutPanelOptions(new AboutPanelOptions { ApplicationName = "Oriel About", ApplicationVersion = "9.9", Copyright = "(c) Oriel", Credits = "credits", Website = "https://oriel.test" });
+        app.ShowAboutPanel();
+        h = WaitFor(app.Name, step);
+        els = WinTaskDialog.Elements(h);
+        // Electron's Windows panel reads only these four of the string options; the website is dropped.
+        check("ShowAboutPanel shows the name, version, copyright and credits set, one per line",
+            Content(els) == "Oriel About\n9.9\n(c) Oriel\ncredits", Content(els));
+        Click(h, "OK");
+        check("the second about box closes on OK", Eventually(() => !WinTaskDialog.Exists(h), step));
+        app.SetAboutPanelOptions(new AboutPanelOptions());
+        return Task.CompletedTask;
+    }
+
+    // The box's content text, line breaks normalised and the trailing one dropped.
+    private static string Content(List<WinTaskDialog.Element> elements)
+        => (elements.Where(e => e.AutomationId == "ContentText").Select(e => e.Name).FirstOrDefault() ?? "").ReplaceLineEndings("\n").TrimEnd('\n');
 
     private static nint WaitFor(string title, TimeSpan step)
     {

@@ -20,7 +20,11 @@ General items: [todo.md](todo.md). Windows work runs on the Windows laptop.
   - [x] Signing (DRIFT P13), tested with a self-signed certificate trusted per user: exe + `<Exe>.dll` +
         `chrome_elf.dll` signed with one certificate runs sandboxed (IpcTest 0 failures); unsigned `chrome_elf.dll`, any
         one signed alone, the DLL under another certificate, or an untrusted root is refused with only a stderr FATAL
-        and exit 0x80000003. A friendlier error would need a patched bootstrap or a pre-flight check in the layout script
+        and exit 0x80000003. A friendlier error would need a patched bootstrap
+    - [ ] Pre-flight: `eng/verify-windows-signing.ps1 <Exe>.exe`, run after signing, names each file and its problem
+          (unsigned among signed, a signature `WinVerifyTrust` does not accept, two certificates). Each refused case
+          fails it and an unsigned layout passes (2026-10-17, self-signed certificates, removed after); the trusted,
+          correctly signed case is not yet run: trusting a root per user needs the user to accept Windows' prompt
   - [ ] Packaging (M4): build `Oriel.Host.Native` per RID into the runtime package; re-check `bootstrap.exe`'s
         resources and hash on every CEF bump
     - [x] Opt-in publish target (`-p:OrielWindowsLayout=true`, `eng/windows-layout.targets`) that builds the host and
