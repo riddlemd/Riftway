@@ -1280,7 +1280,11 @@ async Task DialogsAsync(BrowserWindow win)
                 return p.ExitCode == 0 ? output.Trim() : "";
             }
             // Mutter's frames are windows of mutter-x11-frames carrying the client's title; only ours have our pid.
-            var id = X($"search --sync --all --pid {Environment.ProcessId} --name \"{title}\"").Split('\n')[0];
+            // A search walks every window and quits on one that goes away meanwhile, as the dialog answered just before
+            // does on x64, so it is retried rather than waited on with --sync.
+            var id = "";
+            for (var deadline = DateTime.UtcNow.AddSeconds(10); id.Length == 0 && DateTime.UtcNow < deadline; Thread.Sleep(100))
+                id = X($"search --all --pid {Environment.ProcessId} --name \"{title}\"").Split('\n')[0];
             if (id.Length == 0) return false;
             if (!accept)
             {

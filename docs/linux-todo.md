@@ -58,7 +58,12 @@ General items: [todo.md](todo.md).
         (llvmpipe) lives: unit 3897 passed, 59 skipped; SessionTest, IpcTest, ProtocolTest, ShellTest, SafeStorageTest
         (default, gnome-keyring and silent) and CrashTest pass; WindowTest fails only the three Linux dialog checks
         (folder dialog, OpenDirectory, a download's save dialog), as on every Linux x64 run
-  - [ ] Find why those three dialog checks fail on linux-x64 only (they pass on linux-arm64 Docker, the same image)
+  - [x] Find why those three dialog checks fail on linux-x64 only (they pass on linux-arm64 Docker, the same image):
+        a test bug. The folder dialog's `xdotool search --sync` ran while the open dialog answered just before was being
+        destroyed; xdotool quits on a window that goes away mid-walk, so the search came back empty in 32 ms, the folder
+        dialog stayed unanswered, and CEF then refused the download's dialog ("Multiple simultaneous dialogs"). arm64
+        is slow enough that the old dialog is gone first. `Answer` now retries the search for 10 s: WindowTest 0
+        failures on linux-x64 (2026-10-17, 455d58e, stock CEF); without it the trio failed 9 of 9 soak rounds
   - `eng/docker/*.sh` pick the CEF platform and RID from `uname -m`
 - [x] Modal windows (`Modal = true`) block the parent under any window manager, as Electron: an input-only X11 cover
       plus dropped keys (branch `linux-modal`); the same route serves `SetEnabled`/`IsEnabled` and message boxes (MB4).
