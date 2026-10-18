@@ -74,6 +74,11 @@ Cross-platform work. Platform-specific items: [linux-todo.md](linux-todo.md), [w
 - [ ] Flaky WindowTest checks: macOS native full screen, minimize and modal focus fail on some runs while the
       Mac is in use (also on unchanged `main`); Linux "simple full screen restores the bounds" was off by a few pixels
       once under openbox. Make them robust (wait for the transition, retry activation) or mark them as environment-bound.
+  - Linux x64 soak (2026-10-17, 455d58e, stock CEF, Docker on Wojtek, 10 rounds): SessionTest failed once in 10 ("app
+    RenderProcessGone comes before the page's"); WindowTest, besides the dialog trio (now fixed), failed one-offs:
+    the "after the modal closes" input set and the real-click checks together in one round (the host was busy then),
+    thumbnail green, always on top cleared after level normal, SetAlwaysOnTop normal, reload after a crash,
+    ForcefullyCrashRenderer, and once openbox did not start. Windows soak not run yet (needs the unlocked console)
 
 ## Runtime and codecs
 
