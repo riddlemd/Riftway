@@ -72,9 +72,94 @@ static class DesktopCapturerChecks
             var bare = await DesktopCapturer.GetSourcesAsync(new SourcesOptions { Types = ["window"], ThumbnailSize = new(0, 0) });
             check("a 0 thumbnail size gives empty thumbnails and, without fetchWindowIcons, null appIcons",
                 bare.Count > 0 && bare.All(s => s.Thumbnail.IsEmpty() && s.AppIcon is null), bare.Count);
+
+            if (OperatingSystem.IsWindows()) await WindowsRulesAsync(probe, check);
         }
         finally { probe.Destroy(); }
     }
+
+    // The Windows-only rules: Chromium's merge of this process's windows into webrtc's list by EnumWindows z-order,
+    // webrtc's screen ids as EnumDisplayDevices indices, PrintWindow thumbnails and WM_GETICON icons.
+    [System.Runtime.Versioning.SupportedOSPlatform("windows")]
+    private static async Task WindowsRulesAsync(BrowserWindow probe, Action<string, bool, object?> check)
+    {
+        var cover = new BrowserWindow(new BrowserWindowOptions { Width = 400, Height = 300, Title = Title + " cover", BackgroundColor = "#2040C0", Show = true });
+        try
+        {
+            await cover.LoadUrl("data:text/html,<body style='margin:0;background:%232040C0'></body>");
+            cover.SetBounds(probe.GetBounds());
+            var red = new byte[32 * 32 * 4];
+            for (var i = 0; i < red.Length; i += 4) (red[i], red[i + 1], red[i + 2], red[i + 3]) = (0, 0, 255, 255);
+            probe.SetIcon(NativeImage.CreateFromBitmap(red, new NativeImageBitmapOptions { Width = 32, Height = 32 }));
+            cover.MoveTop();
+            await Task.Delay(500);
+
+            var options = new SourcesOptions { Types = ["window", "screen"], ThumbnailSize = s_box, FetchWindowIcons = true };
+            var sources = await DesktopCapturer.GetSourcesAsync(options);
+            var zOrder = WindowsZOrder();
+            var listed = sources.Select(s => DesktopMedia.TryParseId(s.Id, out var id) && !id.IsScreen ? id.Id : -1).Where(h => h != -1).ToList();
+            var positions = listed.Select(h => zOrder.IndexOf(h)).ToList();
+            var probeHwnd = (long)probe.GetNativeWindowHandle();
+            var coverHwnd = (long)cover.GetNativeWindowHandle();
+            var others = listed.Count(h => WindowsShell.ProcessOf((nint)h) != Environment.ProcessId);
+            check("Windows: window sources come front to back in EnumWindows order, this process's merged among the others'",
+                positions.All(p => p >= 0) && positions.Zip(positions.Skip(1)).All(p => p.First < p.Second) && listed.IndexOf(coverHwnd) is >= 0 and var c && c < listed.IndexOf(probeHwnd),
+                $"{others} other-process windows; order {string.Join(",", positions)}; cover at {listed.IndexOf(coverHwnd)}, probe at {listed.IndexOf(probeHwnd)}");
+
+            var probeSource = sources.FirstOrDefault(s => s.Name == Title);
+            var thumb = probeSource?.Thumbnail.ToBitmap() ?? [];
+            var (tw, th) = probeSource?.Thumbnail.GetSize() ?? (0, 0);
+            var mid = ((th / 2) * tw + tw / 2) * 4;
+            check("Windows: a covered window's thumbnail is its own pixels (PrintWindow), not what covers it",
+                thumb.Length >= mid + 4 && thumb[mid + 1] > 150 && thumb[mid] < 80, thumb.Length >= mid + 4 ? $"{thumb[mid]},{thumb[mid + 1]},{thumb[mid + 2]}" : "none");
+            var icon = probeSource?.AppIcon?.ToBitmap() ?? [];
+            var (iw, ih) = probeSource?.AppIcon?.GetSize() ?? (0, 0);
+            var iconMid = ((ih / 2) * iw + iw / 2) * 4;
+            check("Windows: appIcon is the icon the window answers WM_GETICON with (SetIcon's red)",
+                icon.Length >= iconMid + 4 && icon[iconMid + 2] > 200 && icon[iconMid + 1] < 60 && icon[iconMid] < 60, icon.Length >= iconMid + 4 ? $"{iw}x{ih} {icon[iconMid]},{icon[iconMid + 1]},{icon[iconMid + 2]}" : "none");
+
+            var devices = ActiveDisplayDevices();
+            var screenIds = sources.Where(s => s.Id.StartsWith("screen:", StringComparison.Ordinal)).Select(s => s.Id).ToList();
+            check("Windows: screen ids are the active EnumDisplayDevices indices, in that order",
+                screenIds.SequenceEqual(devices.Select(i => $"screen:{i}:0")), $"{string.Join(",", screenIds)} vs devices {string.Join(",", devices)}");
+        }
+        finally { cover.Destroy(); }
+    }
+
+    private static List<long> WindowsZOrder()
+    {
+        var order = new List<long>();
+        EnumWindows((hwnd, _) => { order.Add(hwnd); return true; }, 0);
+        return order;
+    }
+
+    private static List<int> ActiveDisplayDevices()
+    {
+        var active = new List<int>();
+        for (var i = 0; ; i++)
+        {
+            var device = new DisplayDevice { Size = System.Runtime.InteropServices.Marshal.SizeOf<DisplayDevice>() };
+            if (!EnumDisplayDevicesW(null, i, ref device, 0)) break;
+            if ((device.StateFlags & 0x1 /* DISPLAY_DEVICE_ACTIVE */) != 0) active.Add(i);
+        }
+        return active;
+    }
+
+    private delegate bool EnumWindowsProc(nint hwnd, nint param);
+
+    [System.Runtime.InteropServices.StructLayout(System.Runtime.InteropServices.LayoutKind.Sequential, CharSet = System.Runtime.InteropServices.CharSet.Unicode)]
+    private struct DisplayDevice
+    {
+        public int Size;
+        [System.Runtime.InteropServices.MarshalAs(System.Runtime.InteropServices.UnmanagedType.ByValTStr, SizeConst = 32)] public string DeviceName;
+        [System.Runtime.InteropServices.MarshalAs(System.Runtime.InteropServices.UnmanagedType.ByValTStr, SizeConst = 128)] public string DeviceString;
+        public int StateFlags;
+        [System.Runtime.InteropServices.MarshalAs(System.Runtime.InteropServices.UnmanagedType.ByValTStr, SizeConst = 128)] public string DeviceId;
+        [System.Runtime.InteropServices.MarshalAs(System.Runtime.InteropServices.UnmanagedType.ByValTStr, SizeConst = 128)] public string DeviceKey;
+    }
+
+    [System.Runtime.InteropServices.DllImport("user32.dll")] private static extern bool EnumWindows(EnumWindowsProc callback, nint param);
+    [System.Runtime.InteropServices.DllImport("user32.dll", CharSet = System.Runtime.InteropServices.CharSet.Unicode)] private static extern bool EnumDisplayDevicesW(string? device, int index, ref DisplayDevice info, int flags);
 
     private static async Task<Exception?> Catch(Func<Task> run)
     {

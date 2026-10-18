@@ -2785,6 +2785,27 @@ async Task WindowsDialogsAsync(BrowserWindow win, string dir)
     Check("a '*' filter lists every file", Listed(any, "a.txt") && Listed(any, "b.dat"));
     Check("an extension filter lists only its files", Listed(textOnly, "a.txt") && !Listed(textOnly, "b.dat"));
 
+    // A download whose item sets no dialog options: Electron titles the box with the URL and puts the file's registry
+    // type first among the filters (FormatFilterForExtensions).
+    // .png: Windows describes it ("PNG Image"), where .txt often has no description and falls back as an unknown type would.
+    File.WriteAllBytes(Path.Combine(dir, "pic.png"), [0x89, 0x50, 0x4E, 0x47]);
+    var downloadUrl = new Uri(Path.Combine(dir, "pic.png")).AbsoluteUri;
+    var downloadDone = new TaskCompletionSource<DownloadState>(TaskCreationOptions.RunContinuationsAsynchronously);
+    void OnDownload(object? _, WillDownloadEventArgs e) => e.Item.Done += (_, args) => downloadDone.TrySetResult(args.State);
+    win.WebContents.Session.WillDownload += OnDownload;
+    win.WebContents.DownloadUrl(downloadUrl);
+    d = Find(downloadUrl);
+    var downloadType = d == 0 ? null : WindowsShell.FileType(d);
+    Press(d, accept: false);
+    var downloadState = await Task.WhenAny(downloadDone.Task, Task.Delay(step)) == downloadDone.Task ? downloadDone.Task.Result : (DownloadState?)null;
+    win.WebContents.Session.WillDownload -= OnDownload;
+    var pngProgId = OperatingSystem.IsWindows() ? Microsoft.Win32.Registry.GetValue(@"HKEY_CLASSES_ROOT\.png", "", null) as string : null;
+    var pngDescription = OperatingSystem.IsWindows() && pngProgId is { Length: > 0 }
+        && Microsoft.Win32.Registry.GetValue($@"HKEY_CLASSES_ROOT\{pngProgId}", "", null) is string { Length: > 0 } described ? described : "PNG File";
+    Check("a download's save dialog is titled by its URL when the item sets no title", d != 0, downloadUrl);
+    Check("a download's save dialog offers the file's registry type first", downloadType == $"{pngDescription} (*.png)", $"{downloadType} vs {pngDescription}");
+    Check("cancelling that dialog cancels the download", downloadState == DownloadState.Cancelled, downloadState);
+
     // Save: a typed name gets the first filter's extension (SetDefaultExtension).
     var save = Dialog.ShowSaveDialogAsync(win, new SaveDialogOptions { Title = "Oriel save", DefaultPath = dir, Filters = [new("Text", "txt")] });
     d = Find("Oriel save");

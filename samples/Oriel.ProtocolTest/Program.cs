@@ -46,6 +46,8 @@ Protocol.Handle("app", request =>
         "/range.bin" => ProtocolResponse.Bytes(rangeBody),
         "/big" => ProtocolResponse.Bytes(bigBody),
         "/throws" => throw new InvalidOperationException("handler failure"),
+        // Which answer the H.264 checks expect: only a libcef built with proprietary_codecs plays it.
+        "/codecs-expected" => ProtocolResponse.Text(Environment.GetEnvironmentVariable("ORIEL_PROPRIETARY_CODECS") == "1" ? "1" : "0", "text/plain"),
         _ => ProtocolResponse.File(Path.Combine(web, path.TrimStart('/'))),
     };
 });

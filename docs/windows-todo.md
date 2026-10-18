@@ -20,14 +20,22 @@ General items: [todo.md](todo.md). Windows work runs on the Windows laptop.
   - [x] Signing (DRIFT P13), tested with a self-signed certificate trusted per user: exe + `<Exe>.dll` +
         `chrome_elf.dll` signed with one certificate runs sandboxed (IpcTest 0 failures); unsigned `chrome_elf.dll`, any
         one signed alone, the DLL under another certificate, or an untrusted root is refused with only a stderr FATAL
-        and exit 0x80000003. A friendlier error would need a patched bootstrap or a pre-flight check in the layout script
+        and exit 0x80000003. A friendlier error would need a patched bootstrap
+    - [ ] Pre-flight: `eng/verify-windows-signing.ps1 <Exe>.exe`, run after signing, names each file and its problem
+          (unsigned among signed, a signature `WinVerifyTrust` does not accept, two certificates). Each refused case
+          fails it and an unsigned layout passes (2026-10-17, self-signed certificates, removed after); the trusted,
+          correctly signed case is not yet run: trusting a root per user needs the user to accept Windows' prompt
   - [ ] Packaging (M4): build `Oriel.Host.Native` per RID into the runtime package; re-check `bootstrap.exe`'s
         resources and hash on every CEF bump
     - [x] Opt-in publish target (`-p:OrielWindowsLayout=true`, `eng/windows-layout.targets`) that builds the host and
           runs `layout-windows.ps1`: IpcTest and Sample lay out file for file as the script does and run sandboxed
           (2026-10-14, d07986c, Wojtek). Still a prototype: it needs `pwsh` and a C++ toolchain on the publishing machine
-  - [ ] The shell caches an exe path's FileDescription (MuiCache) on first launch: installers must lay out before
-        any run, or the taskbar keeps "CEF Bootstrap Application"
+  - [x] The shell caches an exe path's FileDescription (MuiCache) on first launch: installers must lay out before
+        any run, or the taskbar keeps "CEF Bootstrap Application". Reproduced with Oriel.Sample (2026-10-18, 1f300fe,
+        Wojtek): one launch of the unstamped bootstrap.exe at a new path, then the stamped exe there, replaced and
+        touched, still shows "CEF Bootstrap Application" on the taskbar; removing that path's `.FriendlyAppName`
+        value fixes the next launch without restarting Explorer. Rule in the README Windows section; the layout
+        writes no registry value
   - [x] getAppMetrics `sandboxed`/`integrityLevel` per child (A18): SessionTest "each process's integrityLevel is its
         token's, and sandboxed means below medium" passes; browser and network service medium, GPU and one utility
         low, renderers untrusted (2026-10-13, d07986c, Wojtek, default layout)
@@ -50,9 +58,13 @@ General items: [todo.md](todo.md). Windows work runs on the Windows laptop.
 - [x] Run the Alt-key menu checks on Windows (Alt toggles an auto-hidden bar, Alt+F opens File): all 7 pass in a
       default WindowTest run (2026-10-10, 01e9524: WindowTest 235/235, ProtocolTest 34/34, IpcTest 11/11,
       SessionTest 42/42, unit 381 + 3 macOS skips; at 100% scaling over RDP)
-- [ ] Screen checks at 125% scaling: not yet run on Windows. At 150% (primary display, 2026-10-13) the DIP and pixel
-      conversions pass (DipToScreenPoint/Rect, ScreenToDipPoint/Rect, GetCursorScreenPoint); 150% converts exactly, so
-      the flooring a fractional 125% needs is still untested
+- [x] Screen checks at 125% scaling: all pass on the primary display at 125% (2026-10-18, 1f300fe, Wojtek console,
+      3 monitors): DipToScreenPoint/Rect (100,50 -> 125,62), ScreenToDipPoint/Rect back within a pixel (100,49),
+      GetCursorScreenPoint, each display's centre and floored NativeOrigin. At 150% (2026-10-13) they pass too
+- [ ] Three other WindowTest checks fail at 125% only (0 failures at 100%, 2026-10-18): PreferredSizeChanged after an
+      animation ends at 300x332, not 333; CapturePage with a rect has red in its last device pixel (50x38 for a 40x30
+      DIP rect); TitleBarStyle.Hidden's content bounds are 1 DIP taller than the window's (251 vs 250). Each is a
+      fractional-pixel rounding: decide per check whether Oriel or the check rounds differently from Electron
 - [x] Run the menu-event checks on Windows: WindowTest `MenuEventsAsync`'s popup and menu-bar checks (6) and the tray's
       Views menu ("the tray menu raises MenuWillShow and MenuWillClose each time it opens and closes") pass
       (2026-10-13, d07986c, Wojtek). The submenu, Escape and nested-menu checks drive xdotool and run on Linux only

@@ -25,7 +25,11 @@ General items: [todo.md](todo.md).
     - Likely tracked as issuetracker.google.com/issues/558654023 (M5 Pro under OrbStack; sign-in only, read from a search
       summary, fix status unknown). Cause, per pingdotgg/t3code#11731: SME code built for `-march=armv9-a+i8mm+sme`
       (libyuv BUILD.gn) runs a non-streaming SVE `cntd` before `smstart`, which M4+ lacks. Chromium 154 detection is not
-      the bug: `cpu_id.cc` enables SME without SVE on purpose. No libyuv fix found; recheck when CEF moves past 154
+      the bug: `cpu_id.cc` enables SME without SVE on purpose. Fixed upstream in libyuv fab11704 (2026-09-09, Bug
+      558654023): `:libyuv_sme` builds for `armv8.5-a+i8mm+sme`, so clang reads the vector length through
+      `__arm_get_current_vg` instead of the prologue `cntd` it emits for unwind info under `armv9-a`. Chromium 154 pins
+      libyuv 2fed9193 (2026-08-28), before it; Chromium main pins 1e2e3a35, which has it. Drop the override once
+      CEF's Chromium pins a libyuv with fab11704 (likely M156; check with `git merge-base --is-ancestor`)
   - [x] `Oriel.Subprocess.Native` builds and links on linux-x64 (clang 18, GNU ld; `--export-dynamic-symbol` is accepted).
         The override is `__aarch64__`-only, so x64 exports no `getauxval` by design.
 - [x] **CrashReporter** (branch `crash-reporter-mac-linux`; macOS passes): run CrashTest. linux-x64 passes, 48 checks
