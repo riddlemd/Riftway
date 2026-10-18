@@ -62,6 +62,7 @@ Renderers run in Chromium's sandbox, as in Electron. Only CEF's `bootstrap.exe` 
 - the exe name must differ from the app's assembly name, whose `.dll` stays beside it;
 - publish self-contained (no framework-dependent or single-file publish);
 - sign the exe, `<Exe>.dll` and `chrome_elf.dll` with the same trusted certificate, or none of them (a certificate Windows does not trust stops the launch, docs/DRIFT.md P13); `eng/verify-windows-signing.ps1 <Exe>.exe`, run after signing, names any file that would stop it;
+- lay out before the exe ever runs at its final path: on first launch the shell caches the exe's FileDescription per path (MuiCache), and later launches of the stamped exe keep "CEF Bootstrap Application" on the taskbar. Installers copy the laid-out folder, never a half-done one. The stale name goes only if that path's `<path>.FriendlyAppName` value is removed from `HKCU\Software\Classes\Local Settings\Software\Microsoft\Windows\Shell\MuiCache`; replacing or touching the exe doesn't clear it;
 - a crash on start writes its reason to stderr, or shows it in a message box when there is none;
 - `--no-sandbox` turns the sandbox off; `sandbox: false` is per session, not per window (`SessionOptions.Sandbox`, with Oriel's CEF patch 0010; docs/DRIFT.md W13).
 
