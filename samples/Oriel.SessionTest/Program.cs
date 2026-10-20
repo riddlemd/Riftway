@@ -3099,7 +3099,8 @@ static async Task<string> AnswerRequest(TcpClient connection)
 async Task GpuHardwareChecks()
 {
     System.Text.Json.Nodes.JsonObject info;
-    try { info = await app.GetGpuInfoAsync(GpuInfoType.Basic); }
+    // Patched Basic is collected in the browser process, which marks no device active; only Complete knows it.
+    try { info = await app.GetGpuInfoAsync(Oriel.Cef.CefRuntime.IsPatched ? GpuInfoType.Complete : GpuInfoType.Basic); }
     catch (InvalidOperationException e) when (Oriel.Cef.CefRuntime.IsPatched)
     {
         Console.WriteLine($"SKIP  GPU hardware checks: Chromium refused GPU access [{e.Message}]");
