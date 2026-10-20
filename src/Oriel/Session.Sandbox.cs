@@ -16,7 +16,7 @@ public sealed record SessionOptions
 
     /// <summary>Whether the session's pages rubber-band when scrolled past their ends (macOS). Electron's
     /// <c>webPreferences.scrollBounce</c>, off by default, which Oriel decides per session (drift W55).</summary>
-    /// <remarks>Needs Oriel's CEF patches 0010 and 0012: with stock CEF every page rubber-bands, whatever this says.</remarks>
+    /// <remarks>Needs Oriel's CEF patches 0010 and 0014: with stock CEF every page rubber-bands, whatever this says.</remarks>
     public bool ScrollBounce { get; init; }
 }
 
@@ -26,7 +26,7 @@ public sealed unsafe partial class Session
     /// with <see cref="SessionOptions.Sandbox"/> false.</summary>
     public bool Sandbox { get; private init; } = true;
 
-    /// <summary>Whether the session's pages rubber-band (macOS, with patches 0010 and 0012); true for a session created
+    /// <summary>Whether the session's pages rubber-band (macOS, with patches 0010 and 0014); true for a session created
     /// with <see cref="SessionOptions.ScrollBounce"/>.</summary>
     public bool ScrollBounce { get; private init; }
 
@@ -95,7 +95,7 @@ public sealed unsafe partial class Session
             AppendSwitch(commandLine, "no-sandbox");
             if (linux) AppendSwitch(commandLine, "no-zygote");
         }
-        // Patch 0012 reads it in the renderer; Electron adds it on macOS only.
+        // Patch 0014 reads it in the renderer; Electron adds it on macOS only.
         if (mac && IsUnsandboxed(context, scrollBounce)) AppendSwitch(commandLine, "scroll-bounce");
     }
 

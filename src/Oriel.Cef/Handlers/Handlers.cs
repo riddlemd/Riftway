@@ -158,6 +158,7 @@ public sealed unsafe class BrowserProcessHandler
             next->on_child_process_gone = &OnChildProcessGone;
             next->on_accessibility_mode_changed = &OnAccessibilityModeChanged;
             next->on_before_render_process_launch = &OnBeforeRenderProcessLaunch;
+            next->on_gpu_info_update = &OnGpuInfoUpdate;
             Native = &next->@base;
         }
         else Native = NativeObject.Create<cef_browser_process_handler_t>(this);
@@ -191,6 +192,16 @@ public sealed unsafe class BrowserProcessHandler
     /// <summary>A renderer is about to launch for the profile of the request context (patch 0010; UI thread, after
     /// <see cref="BeforeChildProcessLaunch"/>).</summary>
     public RenderCommandLineCallback? BeforeRenderProcessLaunch { get; init; }
+
+    /// <summary>Chromium's GPU information changed (patch 0013; UI thread).</summary>
+    public Action? GpuInfoUpdate { get; init; }
+
+    [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])]
+    private static void OnGpuInfoUpdate(cef_browser_process_handler_t* self)
+    {
+        var owner = NativeObject.Owner<BrowserProcessHandler>(self);
+        if (owner.GpuInfoUpdate is { } callback) Guard.Run(callback);
+    }
 
     [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])]
     private static void OnBeforeRenderProcessLaunch(cef_browser_process_handler_t* self, cef_command_line_t* commandLine,

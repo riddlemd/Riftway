@@ -61,13 +61,50 @@ Renderers run in Chromium's sandbox, as in Electron. Only CEF's `bootstrap.exe` 
 
 - the exe name must differ from the app's assembly name, whose `.dll` stays beside it;
 - publish self-contained (no framework-dependent or single-file publish);
-- sign the exe, `<Exe>.dll` and `chrome_elf.dll` with the same trusted certificate, or none of them (a certificate Windows does not trust stops the launch, docs/DRIFT.md P13);
+- sign the exe, `<Exe>.dll` and `chrome_elf.dll` with the same trusted certificate, or none of them (a certificate Windows does not trust stops the launch, docs/DRIFT.md P13); `eng/verify-windows-signing.ps1 <Exe>.exe`, run after signing, names any file that would stop it;
+- lay out before the exe ever runs at its final path: on first launch the shell caches the exe's FileDescription per path (MuiCache), and later launches of the stamped exe keep "CEF Bootstrap Application" on the taskbar. Installers copy the laid-out folder, never a half-done one. The stale name goes only if that path's `<path>.FriendlyAppName` value is removed from `HKCU\Software\Classes\Local Settings\Software\Microsoft\Windows\Shell\MuiCache`; replacing or touching the exe doesn't clear it;
 - a crash on start writes its reason to stderr, or shows it in a message box when there is none;
 - `--no-sandbox` turns the sandbox off; `sandbox: false` is per session, not per window (`SessionOptions.Sandbox`, with Oriel's CEF patch 0010; docs/DRIFT.md W13).
 
 `dotnet run`, and `eng/layout-windows.ps1 <publish-dir> -Subprocess <Oriel.Subprocess.exe>` (built by `src/Oriel.Subprocess.Native/build.ps1`), keep the unsandboxed apphost layout: the app's own `.exe`, with `Oriel.Subprocess.exe` for the children.
 
 For Windows on Arm, pass `windowsarm64` to the build and layout scripts and publish with `-r win-arm64`; it cross-builds from x64 too, with the "MSVC ARM64 build tools" component installed. Not yet run on Arm hardware.
+
+## Build an app from packages (Windows, Linux)
+
+Outside this repo an app references `Oriel` and one `Oriel.Runtime.<rid>` per RID it ships. The runtime package carries CEF and Oriel's native host, and `Oriel`'s build targets lay out the publish folder, with no Git Bash, MSVC or scripts:
+
+```xml
+<PackageReference Include="Oriel" Version="1.0.0" />
+<PackageReference Include="Oriel.Runtime.win-x64" Version="1.0.0" />
+```
+
+```powershell
+dotnet publish -c Release -r win-x64 --self-contained   # bin/Release/net10.0/win-x64/publish/<App>Run.exe
+```
+
+On Windows the result is the sandboxed layout above (`OrielExeName` names the exe; the same rules apply). On Linux the native executables get their exec bits when publishing on Linux; `chrome-sandbox` still needs `chown root:root` and `chmod 4755` from the installer before `EnableSandbox()`. `-p:OrielLayout=false` leaves the publish untouched.
+
+The packages are not published to a feed yet. Build them into a local folder feed (`artifacts/pkg`):
+
+```powershell
+eng/pack.ps1                                            # Oriel, Oriel.Cef
+eng/runtime/stage-windows.ps1 artifacts/runtime/win-x64 # needs MSVC, as above
+dotnet pack eng/runtime/Oriel.Runtime.csproj -c Release -p:OrielRuntimeRid=win-x64 -p:OrielRuntimeStage=artifacts/runtime/win-x64 -o artifacts/pkg
+```
+
+For linux-x64, stage with `eng/runtime/stage-linux.sh artifacts/runtime/linux-x64` in the `oriel-linux-dev` image (it strips libcef.so, over 1 GB with symbols) and pack the same way; the package is 154 MB, win-x64's 184 MB.
+
+### Installers and updates
+
+[Velopack](https://velopack.io)'s `vpk` (a dotnet tool, the same version as the `Velopack` package `Oriel.AutoUpdater` uses) packs the published folder:
+
+```powershell
+vpk pack --packId MyApp --packVersion 1.0.0 --packDir <publish-dir> --mainExe MyAppRun.exe --skipVeloAppCheck   # Windows: Setup.exe
+vpk pack --packId MyApp --packVersion 1.0.0 --packDir <publish-dir> --mainExe MyApp                              # Linux: an AppImage (needs mksquashfs)
+```
+
+`--skipVeloAppCheck`: on Windows the main exe is CEF's native bootstrap, which vpk cannot inspect for a `VelopackApp` call. The installer runs that exe with hook arguments (`--veloapp-install` and others), which reach `Main` like any others; call `AutoUpdater.HandleInstallerHooks()` first in `Main`, before `OrielApp.Create()`, so those runs exit before a window opens. `AutoUpdater.Default` then checks a feed and installs an update, as Electron's `autoUpdater`. An AppImage mounts `nosuid`, so `chrome-sandbox` cannot be setuid in one: leave the sandbox off (Oriel's Linux default) or rely on unprivileged user namespaces.
 
 ## Known issues
 
@@ -87,7 +124,7 @@ The workaround goes once Chromium fixes libyuv upstream: it should require SVE f
 - `src/Oriel.Subprocess.Native` - the exe Chromium runs for its zygote/renderer/GPU/utility processes on Linux, and on Windows in the unsandboxed apphost layout (a small C program: the zygote must be single-threaded, which no .NET process is)
 - `src/Oriel.Subprocess` - the same exe for macOS, in NativeAOT C# (until the macOS sandbox moves it to the native one)
 - `tools/cef-interop` - regenerates `Oriel.Cef/Interop` from the pinned CEF headers (ClangSharp)
-- `eng/` - `cef.json` pins the CEF release; `fetch-cef.sh` downloads it; `bundle-macos.sh` assembles a .app; `layout-windows.ps1` lays out a Windows app
+- `eng/` - `cef.json` pins the CEF release; `fetch-cef.sh` downloads it; `bundle-macos.sh` assembles a .app; `layout-windows.ps1` lays out a Windows app; `pack.ps1` and `runtime/` build the NuGet packages
 - `samples/` - sample apps
 - `tests/` - unit tests
 

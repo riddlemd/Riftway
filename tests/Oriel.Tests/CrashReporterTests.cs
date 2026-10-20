@@ -494,6 +494,16 @@ public sealed class CrashReporterTests : IDisposable
     }
 
     [Fact]
+    public void ChildSwitchValue_BeforeTheLaunchRecordsItsCfg_TakesTheCfgOnDisk()
+    {
+        CrashReporter.Start(Options());
+
+        var pairs = CrashReporterConfig.DecodePairs(CrashReporter.ChildSwitchValue("gpu-process")!);
+
+        Assert.Equal(["process_type", "platform", "_productName", "_version", "_companyName", "global_key"], pairs.Select(p => p.Key));
+    }
+
+    [Fact]
     public void ChildSwitchValue_SkipsGlobalKeysTheLaunchDidNotDeclare()
     {
         File.WriteAllText(Cfg, "[CrashKeys]\nglobal_key=small\n");

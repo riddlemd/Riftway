@@ -189,7 +189,7 @@ async Task RunAsync(BrowserWindow win, BrowserWindow simple)
     var normalOnTop = !OperatingSystem.IsMacOS();
     win.SetAlwaysOnTop(true, "normal");
     Check("SetAlwaysOnTop(true, \"normal\") is on top except on macOS, as Electron",
-        win.IsAlwaysOnTop == normalOnTop && (normalOnTop ? onTopEventsAre(true, false, true) : onTopEventsAre(true, false)),
+        Eventually(() => win.IsAlwaysOnTop == normalOnTop, step) && (normalOnTop ? onTopEventsAre(true, false, true) : onTopEventsAre(true, false)),
         $"{seenOnTop()} isAlwaysOnTop={win.IsAlwaysOnTop}");
     win.SetAlwaysOnTop(false);
     Check("always on top cleared after level normal", Eventually(() => !win.IsAlwaysOnTop && !topmost(), step), $"{win.IsAlwaysOnTop} topmost={topmost()}");
@@ -1280,7 +1280,11 @@ async Task DialogsAsync(BrowserWindow win)
                 return p.ExitCode == 0 ? output.Trim() : "";
             }
             // Mutter's frames are windows of mutter-x11-frames carrying the client's title; only ours have our pid.
-            var id = X($"search --sync --all --pid {Environment.ProcessId} --name \"{title}\"").Split('\n')[0];
+            // A search walks every window and quits on one that goes away meanwhile, as the dialog answered just before
+            // does on x64, so it is retried rather than waited on with --sync.
+            var id = "";
+            for (var deadline = DateTime.UtcNow.AddSeconds(10); id.Length == 0 && DateTime.UtcNow < deadline; Thread.Sleep(100))
+                id = X($"search --all --pid {Environment.ProcessId} --name \"{title}\"").Split('\n')[0];
             if (id.Length == 0) return false;
             if (!accept)
             {
@@ -2812,7 +2816,7 @@ async Task InputEventAsync()
 async Task PreferredSizeAsync()
 {
     var page = Path.Combine(Path.GetTempPath(), "oriel-preferred-size.html");
-    File.WriteAllText(page, "<!doctype html><style>@keyframes grow { to { height: 333px } }</style><body style='margin:0'><div id=d style='width:300px;height:150px'></div>");
+    File.WriteAllText(page, "<!doctype html><style>@keyframes grow { to { height: 320px } }</style><body style='margin:0'><div id=d style='width:300px;height:150px'></div>");
     async Task Run(BrowserWindow w, string code) => await w.WebContents.ExecuteJavaScriptAsync(code + "; 1");
 
     var off = new BrowserWindow(new BrowserWindowOptions { Width = 500, Height = 400 });
@@ -2844,7 +2848,7 @@ async Task PreferredSizeAsync()
         await stream.WriteAsync(png);
     });
     var slowPage = Path.Combine(Path.GetTempPath(), "oriel-preferred-size-slow.html");
-    File.WriteAllText(slowPage, $"<!doctype html><style>@keyframes grow {{ to {{ height: 333px }} }}</style><body style='margin:0'><div id=d style='width:300px;height:150px'></div><img src='http://127.0.0.1:{port}/slow.png' style='position:absolute;left:0;top:0;width:1px;height:1px'>");
+    File.WriteAllText(slowPage, $"<!doctype html><style>@keyframes grow {{ to {{ height: 320px }} }}</style><body style='margin:0'><div id=d style='width:300px;height:150px'></div><img src='http://127.0.0.1:{port}/slow.png' style='position:absolute;left:0;top:0;width:1px;height:1px'>");
     await w.WebContents.LoadFile(slowPage);
     slow.Stop();
     File.Delete(slowPage);
@@ -2866,9 +2870,10 @@ async Task PreferredSizeAsync()
     await Run(w, "s.style.width = '260px'");
     Check("PreferredSizeChanged follows a change to the narrowest width alone", Eventually(() => sizes.LastOrDefault() == new System.Drawing.Size(260, 250), step), string.Join(" ", sizes));
 
-    // An animation changes the size with no DOM change after it starts.
+    // An animation changes the size with no DOM change after it starts. 320 is whole pixels at 125-200%: Chromium
+    // floors the pixel size back to DIPs, so 333 at 125% reads 332.
     await Run(w, "d.innerHTML = ''; d.style.width = '300px'; d.style.animation = 'grow 0.3s forwards'");
-    Check("PreferredSizeChanged follows a size change no DOM change makes", Eventually(() => sizes.LastOrDefault() == new System.Drawing.Size(300, 333), step), string.Join(" ", sizes));
+    Check("PreferredSizeChanged follows a size change no DOM change makes", Eventually(() => sizes.LastOrDefault() == new System.Drawing.Size(300, 320), step), string.Join(" ", sizes));
     await Run(w, "d.style.animation = ''");
 
     // Chromium's width is the minimum: content that wraps is measured at its narrowest.
@@ -3012,6 +3017,27 @@ async Task WindowsDialogsAsync(BrowserWindow win, string dir)
     Check("a '*' filter is offered as *.*", anyType == "Everything (*.*)", anyType);
     Check("a '*' filter lists every file", Listed(any, "a.txt") && Listed(any, "b.dat"));
     Check("an extension filter lists only its files", Listed(textOnly, "a.txt") && !Listed(textOnly, "b.dat"));
+
+    // A download whose item sets no dialog options: Electron titles the box with the URL and puts the file's registry
+    // type first among the filters (FormatFilterForExtensions).
+    // .png: Windows describes it ("PNG Image"), where .txt often has no description and falls back as an unknown type would.
+    File.WriteAllBytes(Path.Combine(dir, "pic.png"), [0x89, 0x50, 0x4E, 0x47]);
+    var downloadUrl = new Uri(Path.Combine(dir, "pic.png")).AbsoluteUri;
+    var downloadDone = new TaskCompletionSource<DownloadState>(TaskCreationOptions.RunContinuationsAsynchronously);
+    void OnDownload(object? _, WillDownloadEventArgs e) => e.Item.Done += (_, args) => downloadDone.TrySetResult(args.State);
+    win.WebContents.Session.WillDownload += OnDownload;
+    win.WebContents.DownloadUrl(downloadUrl);
+    d = Find(downloadUrl);
+    var downloadType = d == 0 ? null : WindowsShell.FileType(d);
+    Press(d, accept: false);
+    var downloadState = await Task.WhenAny(downloadDone.Task, Task.Delay(step)) == downloadDone.Task ? downloadDone.Task.Result : (DownloadState?)null;
+    win.WebContents.Session.WillDownload -= OnDownload;
+    var pngProgId = OperatingSystem.IsWindows() ? Microsoft.Win32.Registry.GetValue(@"HKEY_CLASSES_ROOT\.png", "", null) as string : null;
+    var pngDescription = OperatingSystem.IsWindows() && pngProgId is { Length: > 0 }
+        && Microsoft.Win32.Registry.GetValue($@"HKEY_CLASSES_ROOT\{pngProgId}", "", null) is string { Length: > 0 } described ? described : "PNG File";
+    Check("a download's save dialog is titled by its URL when the item sets no title", d != 0, downloadUrl);
+    Check("a download's save dialog offers the file's registry type first", downloadType == $"{pngDescription} (*.png)", $"{downloadType} vs {pngDescription}");
+    Check("cancelling that dialog cancels the download", downloadState == DownloadState.Cancelled, downloadState);
 
     // Save: a typed name gets the first filter's extension (SetDefaultExtension).
     var save = Dialog.ShowSaveDialogAsync(win, new SaveDialogOptions { Title = "Oriel save", DefaultPath = dir, Filters = [new("Text", "txt")] });
@@ -5179,7 +5205,14 @@ async Task TitleBarAsync(BrowserWindow win)
     // TitleBarStyle.Hidden without an overlay: no title bar, the page fills the window.
     var hidden = new BrowserWindow(new BrowserWindowOptions { Title = "Oriel window test: hidden title bar", X = 220, Y = 220, Width = 400, Height = 250, TitleBarStyle = TitleBarStyle.Hidden });
     await Task.Delay(1200);
-    Check("TitleBarStyle.Hidden fills the window with the page", hidden.GetContentBounds() == hidden.GetBounds() && hidden.GetTitleBarOverlayBounds() == default, $"{hidden.GetContentBounds()} vs {hidden.GetBounds()}");
+    // Chromium rounds the window's DIP edges but encloses the root view's size, so at a fractional scale the content
+    // can be a DIP larger (250 DIP at 125% is 313 px: 250 for the window, 251 for the content).
+    var (hiddenContent, hiddenWindow) = (hidden.GetContentBounds(), hidden.GetBounds());
+    var hiddenSlack = Screen.GetDisplayMatching(hiddenWindow).ScaleFactor % 1 == 0 ? 0 : 1;
+    Check("TitleBarStyle.Hidden fills the window with the page (a DIP of slack at a fractional scale)",
+        hiddenContent.X == hiddenWindow.X && hiddenContent.Y == hiddenWindow.Y && Math.Abs(hiddenContent.Width - hiddenWindow.Width) <= hiddenSlack
+        && Math.Abs(hiddenContent.Height - hiddenWindow.Height) <= hiddenSlack && hidden.GetTitleBarOverlayBounds() == default,
+        $"{hiddenContent} vs {hiddenWindow}, slack {hiddenSlack}");
     Check("SetTitleBarOverlay without an overlay throws", Throws<InvalidOperationException>(() => hidden.SetTitleBarOverlay(new TitleBarOverlayOptions { Color = "#000000" })));
     hidden.Destroy();
 

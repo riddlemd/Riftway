@@ -87,6 +87,17 @@ internal static class Child
         }
 
         var window = new BrowserWindow(new BrowserWindowOptions { Show = false });
+        if (mode == "gpu")
+        {
+            Report("patched", Oriel.Cef.CefRuntime.IsPatched);
+            // The GPU process restarts after the crash, so the window and the app live on.
+            _ = window.WebContents.LoadUrl("chrome://gpucrash");
+            var gpuDeadline = DateTime.UtcNow.AddSeconds(40);
+            while (DateTime.UtcNow < gpuDeadline && !Settled(mode, 1)) await Task.Delay(1000);
+            Report("settled1", Settled(mode, 1));
+            ReportList();
+            return window;
+        }
         if (mode == "browser")
         {
             await Task.Delay(500);
@@ -194,6 +205,7 @@ internal static class Driver
             Scenario("disable", () => Disable(server));
             Scenario("ratelimit", () => RateLimit(server));
             Scenario("browser", () => Browser(server));
+            Scenario("gpu", () => Gpu(server));
         }
         finally
         {
@@ -310,6 +322,31 @@ internal static class Driver
         Check("list: child exited cleanly", listExit == 0, listExit);
         var reports = Reports(list);
         Check("a later launch lists the browser crash", upload is not null && reports.Any(r => r.Id == upload.ResponseId), Fact(list, "reports"));
+    }
+
+    // Electron's crashReporter gives every process's report globalExtra and process_type. Off Windows a GPU process
+    // gets them only from CEF patch 0012 (CR11), so stock CEF there documents the gap instead.
+    private static void Gpu(UploadServer server)
+    {
+        var before = server.Count;
+        var (exit, facts) = RunChild("gpu", server.Port, out _);
+        Check("gpu: child exited cleanly after the GPU process crashed", exit == 0, exit);
+        var upload = server.WaitForNew(before, 1, TimeSpan.FromSeconds(30)).FirstOrDefault();
+        Check("gpu: the GPU crash was uploaded", upload is not null, Fact(facts, "settled1"));
+        if (upload is not null) Console.WriteLine("      fields: " + string.Join(", ", upload.Fields.Select(f => $"{f.Key}={Shorten(f.Value)}")));
+        if (OperatingSystem.IsWindows() || Fact(facts, "patched") == "true")
+        {
+            Check("GPU report: process_type is gpu-process", Field(upload, "process_type") == "gpu-process", Field(upload, "process_type"));
+            Check("GPU report carries globalExtra", Field(upload, "global_key") == "global-value" && Field(upload, "scenario") == "gpu", Field(upload, "global_key"));
+            Check($"GPU report: platform is {Platform}", Field(upload, "platform") == Platform, Field(upload, "platform"));
+            Check("GPU report carries _productName", Field(upload, "_productName") == "OrielCrashTest", Field(upload, "_productName"));
+            Check("GPU report does not inherit extra", upload is not null && Field(upload, "extra_key") is null, Field(upload, "extra_key"));
+            Check("the crash-keys switch is not recorded as a switch-N key",
+                upload is not null && !upload.Fields.Any(f => f.Key.StartsWith("switch-", StringComparison.Ordinal) && f.Value.Contains("oriel-crash-keys", StringComparison.Ordinal)));
+        }
+        else
+            Check("stock CEF (CR11): the GPU report lacks globalExtra and Oriel's process_type", upload is not null && Field(upload, "global_key") is null,
+                Field(upload, "global_key"));
     }
 
     // Electron's platform crash key (shell/common/crash_keys.cc SetPlatformCrashKey).
@@ -461,6 +498,18 @@ internal sealed class UploadServer : IDisposable
         while ((matching = _uploads.Where(u => u.Fields.GetValueOrDefault("scenario") == scenario).ToList()).Count < count
                && DateTime.UtcNow < deadline) Thread.Sleep(250);
         return matching;
+    }
+
+    /// <summary>How many uploads have arrived.</summary>
+    public int Count => _uploads.Count;
+
+    /// <summary>The uploads after the first <paramref name="skip"/>, once <paramref name="count"/> have arrived or the wait ends.</summary>
+    public List<Upload> WaitForNew(int skip, int count, TimeSpan wait)
+    {
+        var deadline = DateTime.UtcNow + wait;
+        List<Upload> fresh;
+        while ((fresh = _uploads.Skip(skip).ToList()).Count < count && DateTime.UtcNow < deadline) Thread.Sleep(250);
+        return fresh;
     }
 
     public void Dispose() => _listener.Stop();

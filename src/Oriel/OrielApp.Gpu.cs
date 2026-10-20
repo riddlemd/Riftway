@@ -1,6 +1,8 @@
 using System.Globalization;
 using System.Text.Json;
 using System.Text.Json.Nodes;
+using Oriel.Cef;
+using Oriel.Cef.Handlers;
 
 namespace Oriel;
 
@@ -16,31 +18,89 @@ public enum GpuInfoType
 
 public sealed partial class OrielApp
 {
+    private const string DisableDomainBlockingFor3DAPIsSwitch = "disable-domain-blocking-for-3d-apis";
+
+    /// <summary>Chromium's GPU information changed, as when the GPU process starts or reports more. Electron's
+    /// <c>gpu-info-update</c>.</summary>
+    /// <remarks>Raised only with Oriel's CEF patch 0013; stock CEF has no such notification (drift A27).</remarks>
+    public event EventHandler? GpuInfoUpdate;
+
     /// <summary>The status of each graphics feature, as <c>chrome://gpu</c> lists it (for example <c>webgl</c>:
-    /// <c>enabled</c>). Electron's <c>app.getGPUFeatureStatus()</c>, asynchronous here: it is read from a hidden
-    /// <c>chrome://gpu</c> page, which first waits for the GPU process's report (drift A27).</summary>
+    /// <c>enabled</c>). Electron's <c>app.getGPUFeatureStatus()</c>. With Oriel's CEF patch 0013 this is
+    /// <see cref="GetGpuFeatureStatus"/>; with stock CEF it is read from a hidden <c>chrome://gpu</c> page, which first
+    /// waits for the GPU process's report (drift A27).</summary>
     /// <exception cref="InvalidOperationException">The app is not ready, or <c>chrome://gpu</c> did not report.</exception>
     public async Task<IReadOnlyDictionary<string, string>> GetGpuFeatureStatusAsync()
     {
         if (!IsReady) throw new InvalidOperationException("The app is not ready.");
+        if (CefRuntime.IsPatched) return GetGpuFeatureStatus();
         var info = await ChromeGpuAsync().ConfigureAwait(false);
+        return FeatureStatusFrom(info.GetProperty("featureStatus").GetProperty("featureStatus"));
+    }
+
+    /// <summary>The status of each graphics feature, as <see cref="GetGpuFeatureStatusAsync"/>, read from Chromium
+    /// directly. Electron's synchronous <c>app.getGPUFeatureStatus()</c>.</summary>
+    /// <exception cref="InvalidOperationException">The app is not ready.</exception>
+    /// <exception cref="PlatformNotSupportedException">Stock CEF: use <see cref="GetGpuFeatureStatusAsync"/>; needs
+    /// Oriel's CEF patch 0013.</exception>
+    public IReadOnlyDictionary<string, string> GetGpuFeatureStatus()
+    {
+        if (!IsReady) throw new InvalidOperationException("The app is not ready.");
+        if (!CefRuntime.IsPatched) throw new PlatformNotSupportedException("A synchronous GPU feature status needs Oriel's CEF patch 0013.");
+        var json = CefThread.InvokeOnUi(() => CefPatchedApi.GetGpuFeatureStatusJson() ?? "{}");
+        using var document = JsonDocument.Parse(json);
+        return FeatureStatusFrom(document.RootElement);
+    }
+
+    private static Dictionary<string, string> FeatureStatusFrom(JsonElement features)
+    {
         var status = new Dictionary<string, string>(StringComparer.Ordinal);
-        foreach (var feature in info.GetProperty("featureStatus").GetProperty("featureStatus").EnumerateObject())
+        foreach (var feature in features.EnumerateObject())
             status[feature.Name] = feature.Value.GetString() ?? "";
         return status;
     }
 
     /// <summary>The GPU's details in Electron's shape: <c>auxAttributes</c>, <c>gpuDevice</c> (the primary GPU first),
-    /// <c>machineModelName</c> and <c>machineModelVersion</c>. Electron's <c>app.getGPUInfo()</c>, from the rows
+    /// <c>machineModelName</c> and <c>machineModelVersion</c>. Electron's <c>app.getGPUInfo()</c>. With Oriel's CEF
+    /// patch 0013 Chromium's <c>GPUInfo</c> is enumerated as Electron does, and <c>complete</c> asks the GPU process for
+    /// its DirectX and video details on Windows and macOS. With stock CEF the result comes from the rows
     /// <c>chrome://gpu</c> shows, which leave out some fields: <c>basic</c> answers once the GPU process has reported,
     /// <c>complete</c> once the rows have also stopped changing for a second (drift A27).</summary>
-    /// <exception cref="InvalidOperationException">The app is not ready, or <c>chrome://gpu</c> did not report.</exception>
+    /// <exception cref="InvalidOperationException">The app is not ready, GPU access is not allowed, or
+    /// <c>chrome://gpu</c> did not report.</exception>
     public async Task<JsonObject> GetGpuInfoAsync(GpuInfoType infoType)
     {
         if (!IsReady) throw new InvalidOperationException("The app is not ready.");
         if (!Enum.IsDefined(infoType)) throw new ArgumentException("Invalid info type. Use 'basic' or 'complete'", nameof(infoType));
+        if (CefRuntime.IsPatched)
+        {
+            var json = await StartGpuInfo(infoType == GpuInfoType.Complete).ConfigureAwait(false);
+            return JsonNode.Parse(json) as JsonObject ?? [];
+        }
         var info = await ChromeGpuAsync(infoType == GpuInfoType.Complete).ConfigureAwait(false);
         return GpuInfoFromChromeGpu(info.GetProperty("basicInfo"));
+    }
+
+    /// <summary>Stops Chromium from blocking WebGL and other 3D APIs for a site it blames for a GPU crash, by starting
+    /// Chromium with <c>--disable-domain-blocking-for-3d-apis</c>. Electron's
+    /// <c>app.disableDomainBlockingFor3DAPIs()</c>.</summary>
+    /// <exception cref="InvalidOperationException">The app is ready.</exception>
+    public void DisableDomainBlockingFor3DAPIs() => DisableDomainBlockingFor3DAPIs(IsReady, CommandLine);
+
+    internal static void DisableDomainBlockingFor3DAPIs(bool ready, CommandLine commandLine)
+    {
+        if (ready) throw new InvalidOperationException("app.disableDomainBlockingFor3DAPIs() can only be called before app is ready");
+        if (!commandLine.HasSwitch(DisableDomainBlockingFor3DAPIsSwitch)) commandLine.AppendSwitch(DisableDomainBlockingFor3DAPIsSwitch);
+    }
+
+    private void OnGpuInfoUpdate() => GpuInfoUpdate?.Invoke(this, EventArgs.Empty);
+
+    private static unsafe Task<string> StartGpuInfo(bool complete)
+    {
+        var callback = new GpuInfoCallback();
+        var native = (IntPtr)callback.Native;
+        CefThread.RunOnUi(() => CefPatchedApi.GetGpuInfo(complete, (cef_gpu_info_callback_t*)native));
+        return callback.Task;
     }
 
     // The page's first report predates the GPU process's (initialization time 0), and Windows' DirectX and Vulkan rows

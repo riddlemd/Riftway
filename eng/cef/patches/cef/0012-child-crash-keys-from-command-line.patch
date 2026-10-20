@@ -1,0 +1,96 @@
+Oriel CEF patch 0012: crash keys for GPU, utility and zygote children from the command line.
+
+On macOS and Linux a child process cannot set crash keys: before
+cef_execute_process libcef has not read crash_reporter.cfg and drops the call,
+and once crash reporting starts (PreSandboxStartup, and ZygoteForked for
+children the Linux zygote forks) only renderers get a client callback
+(OnWebKitInitialized). So GPU and utility crash reports lacked the app's
+globalExtra and process_type, which Electron's carry. Oriel's browser already
+gives every child --oriel-crash-keys (hex of UTF-8 "key\0value\0..."); libcef
+now sets those keys itself right after crash reporting starts in the child, and
+leaves the switch out of the switch-N keys. On Windows chrome_elf has set them
+before main, so setting them again changes nothing. No CEF API change: the
+API hashes, CEF_NEXT's included, are unchanged.
+
+Resolves: Oriel docs/DRIFT.md CR11.
+Base: CEF a03e714 (branch 8037, CEF 154). No other patch touches this file.
+Applies in chromium/src/cef.
+
+diff --git a/libcef/common/crash_reporting.cc b/libcef/common/crash_reporting.cc
+index 04c129cf..eea16405 100644
+--- a/libcef/common/crash_reporting.cc
++++ b/libcef/common/crash_reporting.cc
+@@ -11,6 +11,8 @@
+ #include "base/debug/crash_logging.h"
+ #include "base/logging.h"
+ #include "base/stl_util.h"
++#include "base/strings/string_number_conversions.h"
++#include "base/strings/string_split.h"
+ #include "base/strings/string_util.h"
+ #include "cef/include/cef_crash_util.h"
+ #include "cef/libcef/common/cef_switches.h"
+@@ -35,6 +37,9 @@ namespace crash_reporting {
+ 
+ namespace {
+ 
++// The browser passes each child its crash keys as the hex of UTF-8 "key\0value\0...".
++constexpr char kChildCrashKeysSwitch[] = "oriel-crash-keys";
++
+ #if BUILDFLAG(IS_WIN)
+ 
+ const base::FilePath::CharType kChromeElfDllName[] =
+@@ -146,6 +151,7 @@ bool IsBoringCEFSwitch(const std::string& flag) {
+   static const char* const kIgnoreSwitches[] = {
+       // CEF internals.
+       switches::kLogFile,
++      kChildCrashKeysSwitch,
+ 
+       // Chromium internals.
+       "content-image-texture-target",
+@@ -188,6 +194,30 @@ bool SetCrashKeyValue(const std::string_view& key,
+ #endif
+ }
+ 
++namespace {
++
++// GPU, utility and zygote children get no client callback once crash reporting
++// starts, so libcef sets the keys the browser handed them.
++void SetCrashKeysFromSwitch(const base::CommandLine& command_line) {
++  if (!g_crash_reporting_enabled ||
++      !command_line.HasSwitch(kChildCrashKeysSwitch)) {
++    return;
++  }
++  std::string bytes;
++  if (!base::HexStringToString(
++          command_line.GetSwitchValueASCII(kChildCrashKeysSwitch), &bytes)) {
++    return;
++  }
++  const auto parts =
++      base::SplitStringPiece(bytes, std::string_view("\0", 1),
++                             base::KEEP_WHITESPACE, base::SPLIT_WANT_ALL);
++  for (size_t i = 0; i + 1 < parts.size(); i += 2) {
++    crash_reporting::SetCrashKeyValue(parts[i], parts[i + 1]);
++  }
++}
++
++}  // namespace
++
+ #if BUILDFLAG(IS_POSIX)
+ // Be aware that logging is not initialized at the time this method is called.
+ void BasicStartupComplete(base::CommandLine* command_line) {
+@@ -215,6 +245,7 @@ void PreSandboxStartup(const base::CommandLine& command_line,
+   // After platform crash reporting have been initialized, store the command
+   // line for crash reporting.
+   crash_keys::SetSwitchesFromCommandLine(command_line, &IsBoringCEFSwitch);
++  SetCrashKeysFromSwitch(command_line);
+ }
+ 
+ #if BUILDFLAG(IS_POSIX) && !BUILDFLAG(IS_ANDROID) && !BUILDFLAG(IS_MAC)
+@@ -228,6 +259,7 @@ void ZygoteForked(base::CommandLine* command_line,
+ 
+   // Reset the command line for the newly spawned process.
+   crash_keys::SetSwitchesFromCommandLine(*command_line, &IsBoringCEFSwitch);
++  SetCrashKeysFromSwitch(*command_line);
+ }
+ #endif
+ 

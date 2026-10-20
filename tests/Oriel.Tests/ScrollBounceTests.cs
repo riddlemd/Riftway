@@ -1,6 +1,6 @@
 namespace Oriel.Tests;
 
-// webPreferences.scrollBounce, decided per session (drift W55), with Oriel's patches 0010 and 0012.
+// webPreferences.scrollBounce, decided per session (drift W55), with Oriel's patches 0010 and 0014.
 public sealed class ScrollBounceTests
 {
     [Theory]

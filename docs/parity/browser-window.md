@@ -279,7 +279,7 @@ Parameters in brackets are optional in Electron. `webContents` members are in [w
 | `webgl` | `WebGL` | done |  |
 | `plugins` | — | missing |  |
 | `experimentalFeatures` | — | missing | Process-wide in CEF (W13). |
-| `scrollBounce` | `ScrollBounce` | partial | Per session (`SessionOptions.ScrollBounce`), with Oriel's patches 0010 and 0012, Electron's `scroll_bounce_flag.patch`; with stock CEF every page rubber-bands (W55). |
+| `scrollBounce` | `ScrollBounce` | partial | Per session (`SessionOptions.ScrollBounce`), with Oriel's patches 0010 and 0014, Electron's `scroll_bounce_flag.patch`; with stock CEF every page rubber-bands (W55). |
 | `enableBlinkFeatures` | — | missing | Process-wide in CEF (W13). |
 | `disableBlinkFeatures` | — | missing | Process-wide in CEF (W13). |
 | `defaultFontFamily` | `DefaultFontFamily` | partial | All families but `math`, which throws (W11). |

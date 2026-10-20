@@ -11,6 +11,12 @@ General items: [todo.md](todo.md).
       `oriel-linux-dev`, where no keyring can be D-Bus-activated (an activatable but locked gnome-keyring waits for an unlock
       prompt nobody answers, as Chromium's would)
 
+- [x] **`sandbox: false` per session** (DRIFT W13, CEF patches 0010 and 0011): SessionTest `patched (0010, 0011)` with
+      `test-linux.sh --sandbox` (2026-10-16, branch `sessiontest-fd-floor` on 455d58e, linux-x64 Docker on Windows, CEF
+      a03e714 + 0001-0011 with `disable_fieldtrial_testing_config=true`): 361 passed, 0 failed. The unsandboxed sessions'
+      renderers are the browser's children with `--no-sandbox` and only Docker's seccomp filter; the sandboxed one's are
+      the zygote's under Chromium's filter too. Stock CEF sandboxed: 346 passed, and the unsandboxed session is refused
+
 - [ ] **libyuv SIGILL on SME-without-SVE arm64** (Linux VMs on Apple M4+): the renderer crashes on the first
       software-converted video frame.
   - [x] Workaround: `Oriel.Subprocess.Native` overrides `getauxval` and clears HWCAP2 SME when SVE is absent
@@ -19,7 +25,11 @@ General items: [todo.md](todo.md).
     - Likely tracked as issuetracker.google.com/issues/558654023 (M5 Pro under OrbStack; sign-in only, read from a search
       summary, fix status unknown). Cause, per pingdotgg/t3code#11731: SME code built for `-march=armv9-a+i8mm+sme`
       (libyuv BUILD.gn) runs a non-streaming SVE `cntd` before `smstart`, which M4+ lacks. Chromium 154 detection is not
-      the bug: `cpu_id.cc` enables SME without SVE on purpose. No libyuv fix found; recheck when CEF moves past 154
+      the bug: `cpu_id.cc` enables SME without SVE on purpose. Fixed upstream in libyuv fab11704 (2026-09-09, Bug
+      558654023): `:libyuv_sme` builds for `armv8.5-a+i8mm+sme`, so clang reads the vector length through
+      `__arm_get_current_vg` instead of the prologue `cntd` it emits for unwind info under `armv9-a`. Chromium 154 pins
+      libyuv 2fed9193 (2026-08-28), before it; Chromium main pins 1e2e3a35, which has it. Drop the override once
+      CEF's Chromium pins a libyuv with fab11704 (likely M156; check with `git merge-base --is-ancestor`)
   - [x] `Oriel.Subprocess.Native` builds and links on linux-x64 (clang 18, GNU ld; `--export-dynamic-symbol` is accepted).
         The override is `__aarch64__`-only, so x64 exports no `getauxval` by design.
 - [x] **CrashReporter** (branch `crash-reporter-mac-linux`; macOS passes): run CrashTest. linux-x64 passes, 48 checks
@@ -30,12 +40,13 @@ General items: [todo.md](todo.md).
       Expect the handler to be `Oriel.Subprocess --type=crashpad-handler --database=~/.config/<name>/Crashpad`, `platform=linux`,
       the renderer keys set from `OnWebKitInitialized` after the zygote fork (CR11), and the browser crash reaching Crashpad's
       signal handler ahead of .NET's
-- [ ] **Transparent windows** (DRIFT W24): CEF patch [eng/cef](../eng/cef/README.md) 0001 and Oriel's side are written,
-      not yet built or run.
-  - [ ] Build the patched libcef (`eng/cef/apply-patches.sh`, then `cef-build-linux/build.sh --no-update --force-build`);
+- [ ] **Transparent windows** (DRIFT W24): CEF patch [eng/cef](../eng/cef/README.md) 0001 and Oriel's side pass on
+      linux-x64 (2026-10-14, 63ac6f1, patches 0001-0009); the Electron comparisons below are open.
+  - [x] Build the patched libcef (`eng/cef/apply-patches.sh`, then `cef-build-linux/build.sh --no-update --force-build`);
         check its next-version hashes against `CefPatchedApi.cs`
-  - [ ] Rebuild `oriel-linux-dev` (adds xcompmgr, x11-utils) and run WindowTest with `ORIEL_CEF_DIR`; the
-        `LinuxTransparencyAsync` checks read the X visual and the screen over a red backdrop
+  - [x] Rebuild `oriel-linux-dev` (adds xcompmgr, x11-utils) and run WindowTest with `ORIEL_CEF_DIR`; the
+        `LinuxTransparencyAsync` checks read the X visual and the screen over a red backdrop: all 12 pass, with the
+        translucent `SetBackgroundColor` one (linux-x64, 2026-10-14, 63ac6f1; stock CEF skips the block)
   - [ ] Compare with Electron what shows where the page is clear without a compositing manager: Electron also clears
         the compositor colour, which CEF cannot
   - [ ] Electron gives every frameless window on Linux a translucent widget, for its own client-side frame
@@ -57,7 +68,12 @@ General items: [todo.md](todo.md).
         (llvmpipe) lives: unit 3897 passed, 59 skipped; SessionTest, IpcTest, ProtocolTest, ShellTest, SafeStorageTest
         (default, gnome-keyring and silent) and CrashTest pass; WindowTest fails only the three Linux dialog checks
         (folder dialog, OpenDirectory, a download's save dialog), as on every Linux x64 run
-  - [ ] Find why those three dialog checks fail on linux-x64 only (they pass on linux-arm64 Docker, the same image)
+  - [x] Find why those three dialog checks fail on linux-x64 only (they pass on linux-arm64 Docker, the same image):
+        a test bug. The folder dialog's `xdotool search --sync` ran while the open dialog answered just before was being
+        destroyed; xdotool quits on a window that goes away mid-walk, so the search came back empty in 32 ms, the folder
+        dialog stayed unanswered, and CEF then refused the download's dialog ("Multiple simultaneous dialogs"). arm64
+        is slow enough that the old dialog is gone first. `Answer` now retries the search for 10 s: WindowTest 0
+        failures on linux-x64 (2026-10-17, 455d58e, stock CEF); without it the trio failed 9 of 9 soak rounds
   - `eng/docker/*.sh` pick the CEF platform and RID from `uname -m`
 - [x] Modal windows (`Modal = true`) block the parent under any window manager, as Electron: an input-only X11 cover
       plus dropped keys (branch `linux-modal`); the same route serves `SetEnabled`/`IsEnabled` and message boxes (MB4).
@@ -66,7 +82,7 @@ General items: [todo.md](todo.md).
   - [x] Re-run the input-blocking checks under Mutter, KWin and Xfwm4 (`ORIEL_WM`): all pass, view pages included
   - [ ] Crossing events still reach a disabled window's page with stock CEF (DRIFT W5)
     - [x] CEF patch [eng/cef](../eng/cef/README.md) 0002 (`CefWindow::SetEventListeningEnabled`, Electron's
-          `DisableEventListening`) and `LinuxCefPatches.SetWindowInputEnabled`; written, not built or run
+          `DisableEventListening`) and `LinuxCefPatches.SetWindowInputEnabled`
     - [x] Called first in `ApplyLinuxEnabled`; the X11 input cover and dropped keys stay the stock fallback
     - [x] Run WindowTest's `LinuxPatchedInputAsync` on the patched libcef (crossing events, clicks, wheel, keys),
           and the modal and `SetEnabled` checks on both libcefs: all pass on linux-x64 (2026-10-14, 63ac6f1, patches
@@ -92,7 +108,8 @@ General items: [todo.md](todo.md).
         `CloseNotification` from `Close()`, a refused Notify as `failed`, `IsSupported`. All 14 pass on linux-arm64
         and linux-x64 (2026-10-14, 63ac6f1)
   - [ ] Check against real servers: GNOME Shell, Plasma, dunst/mako (the default action, `image-data`, `append`)
-  - [ ] The click's activation token on the patched libcef (DRIFT Q10), with the tray's
+  - [ ] The click's activation token on the patched libcef (DRIFT Q10), with the tray's. No check drives it: the fake
+        server can emit `ActivationToken` but no notification check sends it
 - [ ] `desktopCapturer` on X11 (branch `desktop-capturer`): Oriel's own enumeration and capture (XQueryTree, `WM_STATE`,
       `WM_NAME`, XRandR monitors, XComposite + `XGetImage`), separate from Chromium's capturer below. WindowTest's
       `DesktopCapturerChecks` pass under Xvfb; run them on a real X server; the EDID-based `display_id` needs a real monitor (Xvfb
@@ -113,13 +130,15 @@ General items: [todo.md](todo.md).
         and a real screen locker's `ActiveChanged`
 - [ ] nativeTheme against a real `xdg-desktop-portal` (GNOME, KDE): Docker has none, so the checks use a fake portal
       (`samples/Shared/FakePortal.cs`) that WindowTest starts before CEF
-- [ ] nativeTheme: with no portal preference, pages keep GTK's colours from startup with stock CEF (DRIFT Y2). Chromium
-      patch [eng/cef](../eng/cef/README.md) 0003 clears the GTK style colour cache on the settings notifications;
-      written, not built. Run `ThemeAsync`'s patched page checks on it
-- [ ] Tray activation token (linux-tray's T5): CEF patch [eng/cef](../eng/cef/README.md) 0004
-      (`CefWindow::SetXdgActivationToken`) and `LinuxCefPatches.ProvideActivationToken`; written, not built; called
-      from `Tray.Linux.cs` `HandleItemCall` for `ProvideXdgActivationToken`. Run
-      WindowTest's `LinuxActivationTokenAsync`. T6 (Chromium's `dbus::Bus`) is not patched: see the eng/cef README
-- [ ] `app` audit (branch `app-audit`): build and run SessionTest `AppAuditChecks`, and check by hand the GIO
-      protocol client (`SetAsDefaultProtocolClient` with an installed desktop file, `GetApplicationInfoForProtocol`'s GTK 3
-      icon) and `ShowAboutPanel`'s GtkAboutDialog (DRIFT A12); A14's `assets` check
+- [x] nativeTheme: with no portal preference, pages keep GTK's colours from startup with stock CEF (DRIFT Y2). Chromium
+      patch [eng/cef](../eng/cef/README.md) 0003 clears the GTK style colour cache on the settings notifications.
+      WindowTest's three `NativeTheme, CEF patch 0003` page checks pass on linux-x64 (2026-10-14, 63ac6f1)
+- [x] Tray activation token (linux-tray's T5): CEF patch [eng/cef](../eng/cef/README.md) 0004
+      (`CefWindow::SetXdgActivationToken`) and `LinuxCefPatches.ProvideActivationToken`, called from `Tray.Linux.cs`
+      `HandleItemCall` for `ProvideXdgActivationToken`. WindowTest's `LinuxActivationTokenAsync` (3 checks: taken,
+      `_NET_STARTUP_ID` on the next window, used once) passes on linux-x64 (2026-10-14, 63ac6f1). T6 (Chromium's
+      `dbus::Bus`) is not patched: see the eng/cef README
+- [x] `app` audit (branch `app-audit`): SessionTest `AppAuditChecks` pass in Docker, with the GIO protocol client
+      (`SetAsDefaultProtocolClient` with an installed desktop file, `GetApplicationInfoForProtocol`'s GTK 3 icon),
+      `ShowAboutPanel`'s GtkAboutDialog (DRIFT A12) and A14's `assets` check (2026-10-20, 82655fa, linux-x64 stock CEF,
+      `test-linux.sh --sandbox`, 0 failures)
