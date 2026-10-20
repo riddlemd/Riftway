@@ -138,6 +138,7 @@ General items: [todo.md](todo.md).
       `HandleItemCall` for `ProvideXdgActivationToken`. WindowTest's `LinuxActivationTokenAsync` (3 checks: taken,
       `_NET_STARTUP_ID` on the next window, used once) passes on linux-x64 (2026-10-14, 63ac6f1). T6 (Chromium's
       `dbus::Bus`) is not patched: see the eng/cef README
-- [ ] `app` audit (branch `app-audit`): build and run SessionTest `AppAuditChecks`, and check by hand the GIO
-      protocol client (`SetAsDefaultProtocolClient` with an installed desktop file, `GetApplicationInfoForProtocol`'s GTK 3
-      icon) and `ShowAboutPanel`'s GtkAboutDialog (DRIFT A12); A14's `assets` check
+- [x] `app` audit (branch `app-audit`): SessionTest `AppAuditChecks` pass in Docker, with the GIO protocol client
+      (`SetAsDefaultProtocolClient` with an installed desktop file, `GetApplicationInfoForProtocol`'s GTK 3 icon),
+      `ShowAboutPanel`'s GtkAboutDialog (DRIFT A12) and A14's `assets` check (2026-10-20, 82655fa, linux-x64 stock CEF,
+      `test-linux.sh --sandbox`, 0 failures)

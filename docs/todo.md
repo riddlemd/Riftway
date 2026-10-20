@@ -97,14 +97,16 @@ Cross-platform work. Platform-specific items: [linux-todo.md](linux-todo.md), [w
 - [x] `GlobalShortcut`, `PowerMonitor`, `PowerSaveBlocker` on Windows (branch `power-shortcuts`) and Linux (branch `linux-power-shortcuts`); `PowerMonitor` and `PowerSaveBlocker` on macOS (branch `mac-power-tray`); macOS `GlobalShortcut` (branch `mac-shell-shortcut`, WindowTest checks pass: DRIFT J1)
 - [x] `Tray` on Windows (branch `tray`), Linux (branch `linux-tray`) and macOS (branch `mac-power-tray`)
 - [x] `systemPreferences` on macOS and Linux (branch `system-preferences`; was DRIFT SP1): unit and host-side macOS tests
-      pass; the macOS GUI and Linux WindowTest checks are written, not run ([mac-todo.md](mac-todo.md), [linux-todo.md](linux-todo.md))
+      pass; the Linux WindowTest checks pass (2026-10-20, 82655fa, linux-x64 stock CEF); the macOS GUI checks are written,
+      not run ([mac-todo.md](mac-todo.md))
 - [ ] `DownloadItem` parity (branch `download-item`, [parity/download-item.md](parity/download-item.md)): Chromium's resume
       rules, the save dialog's URL title and Windows filters, `savePath`, `hasUserGesture`/`getETag`/`getLastModifiedTime`
       (DRIFT E13), pause/cancel before CEF hands a control. Unit tests pass; the SessionTest `HTTP:` download checks
       (local server: redirect, Content-Disposition, ETag, pause/resume, reset and Range resume, 403) pass on Linux; run them on macOS.
       CEF patch 0005 (in [eng/cef](../eng/cef/README.md)) covers E13 and E40; E14-E16, E39 and E41 still need patches
-- [ ] `Notification`: Windows (branch `notify-storage`) and Linux (branch `linux-notification`, WindowTest checks written,
-      not run: [linux-todo.md](linux-todo.md)); macOS not started (DRIFT Q3)
+- [ ] `Notification`: Windows (branch `notify-storage`) and Linux (branch `linux-notification`; WindowTest's
+      `LinuxNotificationTest` passes, 2026-10-20, 82655fa, linux-x64 stock CEF; real servers open in
+      [linux-todo.md](linux-todo.md)); macOS not started (DRIFT Q3)
 - [ ] `session.serviceWorkers` / `ServiceWorkerMain` (branch `service-workers`): done over DevTools (DRIFT SW1-SW8); SessionTest's
       `ServiceWorkerChecks` pass on Linux, not yet run on macOS and Windows; `send`, `ipc` and `ipcMainServiceWorker` wait on the
       service worker patch described after DRIFT SW8

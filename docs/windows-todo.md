@@ -62,9 +62,12 @@ General items: [todo.md](todo.md). Windows work runs on the Windows laptop.
       3 monitors): DipToScreenPoint/Rect (100,50 -> 125,62), ScreenToDipPoint/Rect back within a pixel (100,49),
       GetCursorScreenPoint, each display's centre and floored NativeOrigin. At 150% (2026-10-13) they pass too
 - [ ] Three other WindowTest checks fail at 125% only (0 failures at 100%, 2026-10-18): PreferredSizeChanged after an
-      animation ends at 300x332, not 333; CapturePage with a rect has red in its last device pixel (50x38 for a 40x30
-      DIP rect); TitleBarStyle.Hidden's content bounds are 1 DIP taller than the window's (251 vs 250). Each is a
-      fractional-pixel rounding: decide per check whether Oriel or the check rounds differently from Electron
+      animation ends at 300x332, not 333; CapturePage with a rect has red in its first device pixel (Pixel() reads
+      BGR; 50x38 for a 40x30 DIP rect); TitleBarStyle.Hidden's content bounds are 1 DIP taller than the window's (251
+      vs 250). Fixed on branch `batch2`, to verify at 125%: PreferredSize is Blink's own floor (the check now animates to
+      320, whole pixels at 125-200%); CapturePage now rounds each edge as Electron's `ScaleToRoundedRect` and scales the
+      area to the ceiled size; the hidden title bar's 1 DIP is Chromium's (rounded window edges, enclosed root view
+      size), so the check allows it at a fractional scale
 - [x] Run the menu-event checks on Windows: WindowTest `MenuEventsAsync`'s popup and menu-bar checks (6) and the tray's
       Views menu ("the tray menu raises MenuWillShow and MenuWillClose each time it opens and closes") pass
       (2026-10-13, d07986c, Wojtek). The submenu, Escape and nested-menu checks drive xdotool and run on Linux only
@@ -76,8 +79,10 @@ General items: [todo.md](todo.md). Windows work runs on the Windows laptop.
       `win-fixes`); DXGI and WGC capture are DRIFT DC3
 - [ ] `app` audit (branch `app-audit`): `showEmojiPanel` (Win+. through `SendInput`) and the singleton's
       WM_COPYDATA client for `requestSingleInstanceLock` data are ported (SessionTest's second-launch check passes;
-      the emoji picker is unverified, DRIFT A25); still to run: the about panel's message box and
-      `runningUnderARM64Translation` (`IsWow64Process2`)
+      the emoji picker is unverified, DRIFT A25); still to run: `runningUnderARM64Translation` (`IsWow64Process2`)
   - [x] SessionTest `AppAuditChecks`: all 24 pass on Windows (2026-10-13, d07986c, Wojtek)
-  - [ ] The about panel's message box: no check shows it (the unit test covers only its text)
+  - [x] The about panel's message box: WindowTest `MessageBoxTest`'s three `ShowAboutPanel` checks (an unowned
+        information box titled by the app's name with a lone OK; the exe's FileDescription and ProductVersion without
+        options; the options one per line) pass, read through UI Automation, and each of three mutations turns its own
+        check red (2026-10-18, backlog-win, merged in d3f5dd4; Wojtek console, stock CEF, sandboxed layout)
   - [ ] `runningUnderARM64Translation`: no check; needs an arm64 device (x64 answers false either way)
