@@ -74,6 +74,17 @@ public static unsafe partial class X11Window
         return sent;
     }
 
+    /// <summary>Asks the window manager to keep the window above others (<c>_NET_WM_STATE_ABOVE</c>), or to stop. A
+    /// repeated request changes nothing. False without an X display.</summary>
+    public static bool SetAbove(nint window, bool above)
+    {
+        var display = Display();
+        if (display == 0 || window == 0) return false;
+        Send(display, window, Atom(display, "_NET_WM_STATE"u8), above ? NetWmStateAdd : NetWmStateRemove, Atom(display, "_NET_WM_STATE_ABOVE"u8), 0, 1);
+        _ = XFlush(display);
+        return true;
+    }
+
     /// <summary>Asks GTK window managers for the dark or light theme variant of the window's frame
     /// (<c>_GTK_THEME_VARIANT</c>, a UTF8_STRING), as Electron's darkTheme does. False without an X display.</summary>
     public static bool SetGtkThemeVariant(nint window, bool dark)

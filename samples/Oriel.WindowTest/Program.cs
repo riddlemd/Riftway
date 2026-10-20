@@ -189,7 +189,7 @@ async Task RunAsync(BrowserWindow win, BrowserWindow simple)
     var normalOnTop = !OperatingSystem.IsMacOS();
     win.SetAlwaysOnTop(true, "normal");
     Check("SetAlwaysOnTop(true, \"normal\") is on top except on macOS, as Electron",
-        win.IsAlwaysOnTop == normalOnTop && (normalOnTop ? onTopEventsAre(true, false, true) : onTopEventsAre(true, false)),
+        Eventually(() => win.IsAlwaysOnTop == normalOnTop, step) && (normalOnTop ? onTopEventsAre(true, false, true) : onTopEventsAre(true, false)),
         $"{seenOnTop()} isAlwaysOnTop={win.IsAlwaysOnTop}");
     win.SetAlwaysOnTop(false);
     Check("always on top cleared after level normal", Eventually(() => !win.IsAlwaysOnTop && !topmost(), step), $"{win.IsAlwaysOnTop} topmost={topmost()}");
@@ -2584,7 +2584,7 @@ async Task InputEventAsync()
 async Task PreferredSizeAsync()
 {
     var page = Path.Combine(Path.GetTempPath(), "oriel-preferred-size.html");
-    File.WriteAllText(page, "<!doctype html><style>@keyframes grow { to { height: 333px } }</style><body style='margin:0'><div id=d style='width:300px;height:150px'></div>");
+    File.WriteAllText(page, "<!doctype html><style>@keyframes grow { to { height: 320px } }</style><body style='margin:0'><div id=d style='width:300px;height:150px'></div>");
     async Task Run(BrowserWindow w, string code) => await w.WebContents.ExecuteJavaScriptAsync(code + "; 1");
 
     var off = new BrowserWindow(new BrowserWindowOptions { Width = 500, Height = 400 });
@@ -2616,7 +2616,7 @@ async Task PreferredSizeAsync()
         await stream.WriteAsync(png);
     });
     var slowPage = Path.Combine(Path.GetTempPath(), "oriel-preferred-size-slow.html");
-    File.WriteAllText(slowPage, $"<!doctype html><style>@keyframes grow {{ to {{ height: 333px }} }}</style><body style='margin:0'><div id=d style='width:300px;height:150px'></div><img src='http://127.0.0.1:{port}/slow.png' style='position:absolute;left:0;top:0;width:1px;height:1px'>");
+    File.WriteAllText(slowPage, $"<!doctype html><style>@keyframes grow {{ to {{ height: 320px }} }}</style><body style='margin:0'><div id=d style='width:300px;height:150px'></div><img src='http://127.0.0.1:{port}/slow.png' style='position:absolute;left:0;top:0;width:1px;height:1px'>");
     await w.WebContents.LoadFile(slowPage);
     slow.Stop();
     File.Delete(slowPage);
@@ -2638,9 +2638,10 @@ async Task PreferredSizeAsync()
     await Run(w, "s.style.width = '260px'");
     Check("PreferredSizeChanged follows a change to the narrowest width alone", Eventually(() => sizes.LastOrDefault() == new System.Drawing.Size(260, 250), step), string.Join(" ", sizes));
 
-    // An animation changes the size with no DOM change after it starts.
+    // An animation changes the size with no DOM change after it starts. 320 is whole pixels at 125-200%: Chromium
+    // floors the pixel size back to DIPs, so 333 at 125% reads 332.
     await Run(w, "d.innerHTML = ''; d.style.width = '300px'; d.style.animation = 'grow 0.3s forwards'");
-    Check("PreferredSizeChanged follows a size change no DOM change makes", Eventually(() => sizes.LastOrDefault() == new System.Drawing.Size(300, 333), step), string.Join(" ", sizes));
+    Check("PreferredSizeChanged follows a size change no DOM change makes", Eventually(() => sizes.LastOrDefault() == new System.Drawing.Size(300, 320), step), string.Join(" ", sizes));
     await Run(w, "d.style.animation = ''");
 
     // Chromium's width is the minimum: content that wraps is measured at its narrowest.
@@ -4972,7 +4973,14 @@ async Task TitleBarAsync(BrowserWindow win)
     // TitleBarStyle.Hidden without an overlay: no title bar, the page fills the window.
     var hidden = new BrowserWindow(new BrowserWindowOptions { Title = "Oriel window test: hidden title bar", X = 220, Y = 220, Width = 400, Height = 250, TitleBarStyle = TitleBarStyle.Hidden });
     await Task.Delay(1200);
-    Check("TitleBarStyle.Hidden fills the window with the page", hidden.GetContentBounds() == hidden.GetBounds() && hidden.GetTitleBarOverlayBounds() == default, $"{hidden.GetContentBounds()} vs {hidden.GetBounds()}");
+    // Chromium rounds the window's DIP edges but encloses the root view's size, so at a fractional scale the content
+    // can be a DIP larger (250 DIP at 125% is 313 px: 250 for the window, 251 for the content).
+    var (hiddenContent, hiddenWindow) = (hidden.GetContentBounds(), hidden.GetBounds());
+    var hiddenSlack = Screen.GetDisplayMatching(hiddenWindow).ScaleFactor % 1 == 0 ? 0 : 1;
+    Check("TitleBarStyle.Hidden fills the window with the page (a DIP of slack at a fractional scale)",
+        hiddenContent.X == hiddenWindow.X && hiddenContent.Y == hiddenWindow.Y && Math.Abs(hiddenContent.Width - hiddenWindow.Width) <= hiddenSlack
+        && Math.Abs(hiddenContent.Height - hiddenWindow.Height) <= hiddenSlack && hidden.GetTitleBarOverlayBounds() == default,
+        $"{hiddenContent} vs {hiddenWindow}, slack {hiddenSlack}");
     Check("SetTitleBarOverlay without an overlay throws", Throws<InvalidOperationException>(() => hidden.SetTitleBarOverlay(new TitleBarOverlayOptions { Color = "#000000" })));
     hidden.Destroy();
 

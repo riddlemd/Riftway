@@ -63,9 +63,27 @@ public sealed class WebContentsMethodsTests
     public void CapturePixels_NoRect_IsTheWholeImage() => Assert.Null(WebContents.CapturePixels(null, 2, 100, 100));
 
     [Fact]
-    public void CapturePixels_ScalesOutwardAndClipsToTheImage()
+    public void CapturePixels_RoundsEachEdgeHalfAwayFromZeroAndClipsToTheImage()
     {
-        Assert.Equal(new Rectangle(16, 16, 17, 17), WebContents.CapturePixels(new Rectangle(11, 11, 11, 11), 1.5, 100, 100));
+        // 16.5 -> 17 and 33 -> 33: a floored origin would take the half pixel outside the rect.
+        Assert.Equal(new Rectangle(17, 17, 16, 16), WebContents.CapturePixels(new Rectangle(11, 11, 11, 11), 1.5, 100, 100));
+        // The WindowTest's rect at 125%: (12.5, 12.5)-(62.5, 50) rounds to (13, 13)-(63, 50).
+        Assert.Equal(new Rectangle(13, 13, 50, 37), WebContents.CapturePixels(new Rectangle(10, 10, 40, 30), 1.25, 100, 100));
         Assert.Equal(new Rectangle(80, 0, 20, 10), WebContents.CapturePixels(new Rectangle(40, -5, 20, 10), 2, 100, 100));
+        Assert.Equal(new Rectangle(90, 95, 10, 5), WebContents.CapturePixels(new Rectangle(90, 95, 20, 10), 1, 100, 100));
     }
+
+    [Theory]
+    [InlineData(10, 10, 40, 30, true)]
+    [InlineData(-1, 10, 40, 30, false)]
+    [InlineData(10, -1, 40, 30, false)]
+    [InlineData(70, 10, 10, 30, true)]
+    [InlineData(70, 10, 11, 30, false)]
+    [InlineData(10, 50, 40, 31, false)]
+    public void CaptureInside_IsWhetherTheRoundedAreaFitsTheImage(int x, int y, int width, int height, bool inside)
+        => Assert.Equal(inside, WebContents.CaptureInside(new Rectangle(x, y, width, height), 1.25, 100, 100));
+
+    [Fact]
+    public void CaptureSize_IsTheRectsSizeScaledAndCeiled()
+        => Assert.Equal((50, 38), WebContents.CaptureSize(new Rectangle(10, 10, 40, 30), 1.25));
 }
