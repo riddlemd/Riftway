@@ -194,8 +194,12 @@ public unsafe partial class BaseWindow
         if (WindowStateRules.Flag(entry, "kiosk"))
         {
             _awaitingRestoreTransition = true;
-            _kiosk = true;
-            EnterFullScreenOn(w);
+            if (OperatingSystem.IsMacOS()) SetMacKiosk(w, true);
+            else
+            {
+                _kiosk = true;
+                EnterFullScreenOn(w);
+            }
         }
         else if (WindowStateRules.Flag(entry, "fullscreen"))
         {
@@ -213,7 +217,8 @@ public unsafe partial class BaseWindow
     private void EnterFullScreenOn(cef_window_t* w)
     {
         if (UsesSimpleFullScreen && OperatingSystem.IsMacOS()) MacWindow.SetSimpleFullScreen((nint)w->get_window_handle(w), true);
-        else
+        // Electron restores it through SetFullScreen, which refuses a window that is not fullscreenable.
+        else if (FullScreenableOn(w))
         {
             _sizeState?.SetFullScreen(true);
             w->set_fullscreen(w, 1);

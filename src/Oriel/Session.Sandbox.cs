@@ -13,6 +13,11 @@ public sealed record SessionOptions
     /// <remarks>False needs Oriel's CEF patch 0010 while the app is sandboxed: stock CEF sandboxes every renderer or
     /// none.</remarks>
     public bool Sandbox { get; init; } = true;
+
+    /// <summary>Whether the session's pages rubber-band when scrolled past their ends (macOS). Electron's
+    /// <c>webPreferences.scrollBounce</c>, off by default, which Oriel decides per session (drift W55).</summary>
+    /// <remarks>Needs Oriel's CEF patches 0010 and 0012: with stock CEF every page rubber-bands, whatever this says.</remarks>
+    public bool ScrollBounce { get; init; }
 }
 
 public sealed unsafe partial class Session
@@ -21,6 +26,16 @@ public sealed unsafe partial class Session
     /// with <see cref="SessionOptions.Sandbox"/> false.</summary>
     public bool Sandbox { get; private init; } = true;
 
+    /// <summary>Whether the session's pages rubber-band (macOS, with patches 0010 and 0012); true for a session created
+    /// with <see cref="SessionOptions.ScrollBounce"/>.</summary>
+    public bool ScrollBounce { get; private init; }
+
+    private static nint[] s_scrollBounce = [];
+
+    private static void AddScrollBounce(cef_request_context_t* context)
+    {
+        lock (s_unsandboxedGate) Volatile.Write(ref s_scrollBounce, [.. s_scrollBounce, (nint)context]);
+    }
     // Read by the renderer launch callback on the UI thread, which must not wait for s_gate: Create holds s_gate while
     // it waits for the UI thread.
     private static nint[] s_unsandboxed = [];
@@ -50,22 +65,38 @@ public sealed unsafe partial class Session
     };
 
     /// <summary>The error for asking an existing session for other options; null when they agree.</summary>
-    internal static string? OptionsMismatch(bool existingSandbox, SessionOptions? options)
-        => options is not null && options.Sandbox != existingSandbox
-            ? $"The session already exists with SessionOptions.Sandbox = {(existingSandbox ? "true" : "false")}."
+    internal static string? OptionsMismatch(bool existingSandbox, SessionOptions? options, bool existingScrollBounce = false)
+        => options is null ? null
+            : options.Sandbox != existingSandbox ? $"The session already exists with SessionOptions.Sandbox = {(existingSandbox ? "true" : "false")}."
+            : options.ScrollBounce != existingScrollBounce ? $"The session already exists with SessionOptions.ScrollBounce = {(existingScrollBounce ? "true" : "false")}."
+            : null;
+
+    /// <summary>The error for a window whose <see cref="WebPreferences.ScrollBounce"/> contradicts its session's; null when
+    /// they agree or the window asks nothing.</summary>
+    internal static string? ScrollBounceMismatch(bool? requested, bool sessionScrollBounce)
+        => requested is { } wanted && wanted != sessionScrollBounce
+            ? $"webPreferences.scrollBounce {(wanted ? "true" : "false")} needs a session created with SessionOptions.ScrollBounce = {(wanted ? "true" : "false")}: Oriel decides it per session (drift W55)."
             : null;
 
     /// <summary>Patch 0010, UI thread: a renderer of an unsandboxed session's profile launches without Chromium's sandbox.
     /// On Linux it also skips the zygote, which sandboxes what it forks, as Electron does.</summary>
     internal static void OnBeforeRenderProcessLaunch(cef_command_line_t* commandLine, cef_request_context_t* context)
-        => OnBeforeRenderProcessLaunch(commandLine, context, Volatile.Read(ref s_unsandboxed), OperatingSystem.IsLinux());
+        => OnBeforeRenderProcessLaunch(commandLine, context, Volatile.Read(ref s_unsandboxed), Volatile.Read(ref s_scrollBounce),
+            OperatingSystem.IsLinux(), OperatingSystem.IsMacOS());
 
     internal static void OnBeforeRenderProcessLaunch(cef_command_line_t* commandLine, cef_request_context_t* context, nint[] unsandboxed,
-        bool linux)
+        bool linux) => OnBeforeRenderProcessLaunch(commandLine, context, unsandboxed, [], linux, mac: false);
+
+    internal static void OnBeforeRenderProcessLaunch(cef_command_line_t* commandLine, cef_request_context_t* context, nint[] unsandboxed,
+        nint[] scrollBounce, bool linux, bool mac)
     {
-        if (!IsUnsandboxed(context, unsandboxed)) return;
-        AppendSwitch(commandLine, "no-sandbox");
-        if (linux) AppendSwitch(commandLine, "no-zygote");
+        if (IsUnsandboxed(context, unsandboxed))
+        {
+            AppendSwitch(commandLine, "no-sandbox");
+            if (linux) AppendSwitch(commandLine, "no-zygote");
+        }
+        // Patch 0012 reads it in the renderer; Electron adds it on macOS only.
+        if (mac && IsUnsandboxed(context, scrollBounce)) AppendSwitch(commandLine, "scroll-bounce");
     }
 
     // A session made from a partition or path is its profile's only CEF context, so 0010 hands back that same object;

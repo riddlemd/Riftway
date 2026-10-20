@@ -47,6 +47,37 @@ public sealed class MacMenuRefreshTests
     }
 
     [Fact]
+    public void State_CarriesTheIcon_TheSublabelWithoutMnemonics_AndTheToolTip()
+    {
+        var icon = NativeImage.CreateFromBitmap([1, 2, 3, 255], new NativeImageBitmapOptions { Width = 1, Height = 1 });
+        var state = MacMenuItemState.Of(new MenuItem { Label = "Open", Icon = icon, Sublabel = "&Recent && new", ToolTip = "Opens a file" })!.Value;
+        Assert.Same(icon, state.Icon);
+        Assert.Equal(("Recent & new", "Opens a file"), (state.Subtitle, state.ToolTip));
+    }
+
+    [Fact]
+    public void State_HasNoIconForAnEmptyImage_AndEmptyTextsByDefault()
+    {
+        var state = MacMenuItemState.Of(new MenuItem { Label = "Open", Icon = NativeImage.CreateEmpty() })!.Value;
+        Assert.Null(state.Icon);
+        Assert.Equal(("", ""), (state.Subtitle, state.ToolTip));
+    }
+
+    [Fact]
+    public void ChangingTheIconSublabelOrToolTipTellsTheMenus()
+    {
+        var menu = new Menu();
+        var item = new MenuItem { Label = "Open" };
+        menu.Append(item);
+        var changes = 0;
+        menu.Changed += () => changes++;
+        item.Sublabel = "x";
+        item.ToolTip = "y";
+        item.Icon = NativeImage.CreateEmpty();
+        Assert.Equal(3, changes);
+    }
+
+    [Fact]
     public void State_CarriesTheRoleSelector_AndTheRoleLabel()
     {
         var state = MacMenuItemState.Of(new MenuItem { Role = MenuItemRole.Copy });

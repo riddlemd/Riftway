@@ -32,7 +32,7 @@ public unsafe partial class BaseWindow
 
     /// <summary>Shows progress on the taskbar button, from 0 to 1; below 0 removes it and above 1 shows it as
     /// indeterminate. Electron's <c>win.setProgressBar()</c>.</summary>
-    /// <remarks>macOS: on the Dock icon, which all windows share; error and paused show as the plain bar.
+    /// <remarks>macOS: on the Dock icon, which all windows share, drawn as Electron's blue bar whatever the mode.
     /// Linux: a Unity launcher entry signal for the whole app, as Electron's: the raw value, shown only inside (0, 1),
     /// whatever the mode; only some desktops show it.</remarks>
     public void SetProgressBar(double progress, ProgressBarOptions? options = null)
@@ -42,9 +42,11 @@ public unsafe partial class BaseWindow
         {
             if (OperatingSystem.IsWindows() && !WindowsTaskbar.SetProgress(Hwnd(w), state, percent))
                 Console.Error.WriteLine("[Oriel] The taskbar did not take the progress bar.");
-            // One Dock tile for the whole application; error and paused show as the plain bar.
             if (OperatingSystem.IsMacOS())
-                MacDock.SetProgress(state == TaskbarProgressState.None ? null : percent / 100.0, state == TaskbarProgressState.Indeterminate);
+            {
+                var (hidden, indeterminate, value) = ProgressBar.MacDock(progress);
+                MacDock.SetProgress(hidden, indeterminate, value);
+            }
             if (OperatingSystem.IsLinux()) _ = LinuxLauncherEntry.SetProgress(progress);
         });
     }

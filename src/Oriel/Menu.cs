@@ -20,6 +20,68 @@ public enum MenuItemType
     /// <summary>One of a group: radio items with no separator between them form a group, and clicking one unchecks
     /// the others. The group is fixed when the item is inserted. Electron's <c>radio</c>.</summary>
     Radio,
+
+    /// <summary>A section title (macOS 14 and later); a normal item elsewhere and on older macOS. Electron's <c>header</c>.</summary>
+    Header,
+
+    /// <summary>Opens <see cref="MenuItem.Submenu"/> laid out as a palette (macOS 14 and later); a submenu elsewhere and on
+    /// older macOS. Electron's <c>palette</c>.</summary>
+    Palette,
+}
+
+/// <summary>What a <see cref="MenuItemBadge"/> counts. Electron's badge <c>type</c>.</summary>
+public enum MenuItemBadgeType
+{
+    /// <summary>Free text in <see cref="MenuItemBadge.Content"/>. Electron's <c>none</c>, the default.</summary>
+    None,
+
+    /// <summary>A count of alerts. Electron's <c>alerts</c>.</summary>
+    Alerts,
+
+    /// <summary>A count of updates. Electron's <c>updates</c>.</summary>
+    Updates,
+
+    /// <summary>A count of new items. Electron's <c>new-items</c>.</summary>
+    NewItems,
+}
+
+/// <summary>A badge at a menu item's trailing edge (macOS 14 and later). Electron's <c>MenuItemBadge</c>.</summary>
+public sealed record MenuItemBadge
+{
+    /// <summary>What the badge shows. Electron's <c>type</c>.</summary>
+    public MenuItemBadgeType Type { get; init; }
+
+    /// <summary>The count, for every type but <see cref="MenuItemBadgeType.None"/>. Electron's <c>count</c>.</summary>
+    public int? Count { get; init; }
+
+    /// <summary>The text, for <see cref="MenuItemBadgeType.None"/> only. Electron's <c>content</c>.</summary>
+    public string? Content { get; init; }
+
+    /// <summary>Electron's <c>validateBadge</c>, with its messages.</summary>
+    /// <exception cref="ArgumentException">A field the type does not take, or a count that is not a non-negative integer.</exception>
+    internal MenuItemBadge Validated()
+    {
+        if (Type == MenuItemBadgeType.None)
+        {
+            if (Content is null) throw new ArgumentException("badge.content must be a string when badge.type is 'none'");
+            if (Count is not null) throw new ArgumentException("badge.count cannot be used when badge.type is 'none'");
+        }
+        else
+        {
+            if (Count is not >= 0) throw new ArgumentException($"badge.count must be a non-negative integer when badge.type is '{Name}'");
+            if (Content is not null) throw new ArgumentException("badge.content can only be used when badge.type is 'none'");
+        }
+        return this;
+    }
+
+    /// <summary>Electron's name of the type.</summary>
+    internal string Name => Type switch
+    {
+        MenuItemBadgeType.Alerts => "alerts",
+        MenuItemBadgeType.Updates => "updates",
+        MenuItemBadgeType.NewItems => "new-items",
+        _ => "none",
+    };
 }
 
 /// <summary>A predefined behaviour for a <see cref="MenuItem"/>, with its own label and accelerator unless
@@ -170,6 +232,14 @@ public enum MenuItemRole
 
     /// <summary>macOS: empties the recent documents list. Electron's <c>clearRecentDocuments</c>.</summary>
     ClearRecentDocuments,
+
+    /// <summary>macOS: a submenu of the sharing services for <see cref="MenuItem.SharingItem"/>; empty elsewhere.
+    /// Electron's <c>shareMenu</c>.</summary>
+    ShareMenu,
+
+    /// <summary>macOS: its submenu becomes AppKit's Open Recent menu, which lists the recent documents above the
+    /// submenu's own items (such as <see cref="ClearRecentDocuments"/>). Electron's <c>recentDocuments</c>.</summary>
+    RecentDocuments,
 }
 
 /// <summary>An entry in a <see cref="Menu"/>; Electron's <c>MenuItem</c>.</summary>
@@ -185,6 +255,10 @@ public sealed class MenuItem
     private bool _visible = true;
     private bool _checked;
     private Menu? _submenu;
+    private NativeImage? _icon;
+    private string? _sublabel;
+    private string? _toolTip;
+    private MenuItemBadge? _badge;
     private MenuItemType? _type;
 
     /// <summary>Creates an item; set its properties with an object initializer.</summary>
@@ -213,7 +287,7 @@ public sealed class MenuItem
     /// <see cref="MenuItemType.Normal"/>. Electron's <c>type</c>.</summary>
     public MenuItemType Type
     {
-        get => _type ?? (Submenu is not null ? MenuItemType.Submenu : MenuItemType.Normal);
+        get => _type ?? (Submenu is not null ? MenuItemType.Submenu : MenuRoles.HasOwnCheck(Role) ? MenuItemType.Checkbox : MenuItemType.Normal);
         init => _type = value;
     }
 
@@ -226,6 +300,37 @@ public sealed class MenuItem
     {
         get => _label ?? MenuRoles.Label(Role) ?? string.Empty;
         set => Set(ref _label, value);
+    }
+
+    /// <summary>An image beside the label (macOS menus; Windows and Linux not yet, drift M3); load a file with
+    /// <see cref="NativeImage.CreateFromPath(string)"/>. Electron's <c>icon</c>.</summary>
+    public NativeImage? Icon
+    {
+        get => _icon;
+        set => Set(ref _icon, value);
+    }
+
+    /// <summary>A second line under the label (macOS 14.4 and later; elsewhere not yet, drift M3). Electron's <c>sublabel</c>.</summary>
+    public string? Sublabel
+    {
+        get => _sublabel;
+        set => Set(ref _sublabel, value);
+    }
+
+    /// <summary>A badge at the item's trailing edge (macOS 14 and later); setting it updates an item already in a menu.
+    /// Electron's <c>badge</c>.</summary>
+    /// <exception cref="ArgumentException">On macOS, a badge Electron's <c>validateBadge</c> refuses.</exception>
+    public MenuItemBadge? Badge
+    {
+        get => _badge;
+        set => Set(ref _badge, OperatingSystem.IsMacOS() ? value?.Validated() : value);
+    }
+
+    /// <summary>The text shown when the pointer rests on the item (macOS). Electron's <c>toolTip</c>.</summary>
+    public string? ToolTip
+    {
+        get => _toolTip;
+        set => Set(ref _toolTip, value);
     }
 
     /// <summary>The keyboard shortcut, e.g. <c>CmdOrCtrl+Shift+S</c>; defaults to the role's. Electron's <c>accelerator</c>.</summary>
@@ -275,6 +380,14 @@ public sealed class MenuItem
         init => _submenu = value is null ? null : Adopt(value);
     }
 
+    /// <summary>What a <see cref="MenuItemRole.ShareMenu"/> item shares. Electron's <c>sharingItem</c>.</summary>
+    /// <exception cref="ArgumentException">A file path is empty or a URL is not valid.</exception>
+    public SharingItem? SharingItem
+    {
+        get;
+        init => field = value?.Validated();
+    }
+
     /// <summary>Runs when the item is chosen, with the focused window (or null) and the keys held; not for role items,
     /// whose role runs instead. Electron's <c>click(menuItem, browserWindow, event)</c>.</summary>
     public Action<MenuItem, BrowserWindow?, KeyboardEvent>? Click { get; set; }
@@ -297,7 +410,7 @@ public sealed class MenuItem
     /// the role or <see cref="Click"/>.</summary>
     internal void Activate(BaseWindow? focusedWindow, KeyboardEvent? keys = null)
     {
-        if (!Enabled) return;
+        if (!CommandEnabled) return;
         Run(focusedWindow, keys);
     }
 
@@ -305,11 +418,34 @@ public sealed class MenuItem
     /// item is enabled: what a DBusMenu <c>Event</c> runs.</summary>
     internal void Run(BaseWindow? focusedWindow, KeyboardEvent? keys = null)
     {
-        if (Type == MenuItemType.Checkbox) Checked = !Checked;
+        if (Type == MenuItemType.Checkbox && !MenuRoles.HasOwnCheck(Role)) Checked = !Checked;
         else if (Type == MenuItemType.Radio && Parent is { } parent) parent.CheckRadio(this);
         // Click names only a BrowserWindow (DRIFT V15); a role acts on any window.
         if (!MenuRoles.Execute(Role, focusedWindow)) Click?.Invoke(this, focusedWindow as BrowserWindow, keys ?? new KeyboardEvent());
     }
+
+    /// <summary>Electron's <c>getCheckStatus</c>: <see cref="Checked"/>, or for <see cref="MenuItemRole.ToggleSpellChecker"/>
+    /// whether the focused page's session (else the default session) checks spelling. What menus show.</summary>
+    internal bool CheckStatus => MenuRoles.HasOwnCheck(Role) ? SpellCheckerEnabled() : Checked;
+
+    /// <summary>Electron's <c>_isCommandIdEnabled</c>: with a focused window, <see cref="MenuItemRole.Minimize"/>,
+    /// <see cref="MenuItemRole.ToggleFullScreen"/> and <see cref="MenuItemRole.Close"/> follow what the window allows;
+    /// otherwise <see cref="Enabled"/>. What menus show and what an activation checks.</summary>
+    internal bool CommandEnabled => FocusedWindowAbilities() is { } window
+        ? Role switch
+        {
+            MenuItemRole.Minimize => window.Minimizable,
+            MenuItemRole.ToggleFullScreen => window.FullScreenable,
+            MenuItemRole.Close => window.Closable,
+            _ => Enabled,
+        }
+        : Enabled;
+
+    internal static Func<(bool Minimizable, bool FullScreenable, bool Closable)?> FocusedWindowAbilities { get; set; }
+        = () => BaseWindow.GetFocusedWindow() is { } w ? (w.IsMinimizable, w.IsFullScreenable, w.IsClosable) : null;
+
+    internal static Func<bool> SpellCheckerEnabled { get; set; }
+        = () => (WebContents.GetFocusedWebContents()?.Session ?? Session.DefaultSession).IsSpellCheckerEnabled();
 
     /// <summary>Chooses the item from its accelerator: the accelerator's modifiers were held. UI thread.</summary>
     internal void ActivateByAccelerator(BaseWindow? focusedWindow)

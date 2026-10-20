@@ -63,9 +63,8 @@ internal static class TitleBar
     /// <summary>The overlay height where the OS gives none: Views' caption button layout height in DIPs (Linux).</summary>
     internal const int FallbackHeight = 32;
 
-    /// <summary>Electron's rule: no frame, or a hidden title bar on Windows and Linux (macOS keeps its frame and moves the
-    /// traffic lights instead).</summary>
-    internal static bool IsFrameless(bool frame, TitleBarStyle style, bool isMacOS) => !frame || (style != TitleBarStyle.Default && !isMacOS);
+    /// <summary>Electron's <c>has_frame</c>: no frame, or any hidden title bar style.</summary>
+    internal static bool IsFrameless(bool frame, TitleBarStyle style) => !frame || style != TitleBarStyle.Default;
 
     /// <summary>The overlay needs a hidden title bar and options; macOS draws its own buttons.</summary>
     internal static bool HasOverlay(TitleBarStyle style, TitleBarOverlayOptions? overlay, bool isMacOS)

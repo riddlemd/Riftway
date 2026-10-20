@@ -18,8 +18,10 @@ public partial record BaseWindowOptions
     /// Electron's <c>movable</c>.</summary>
     public bool Movable { get; init; } = true;
 
-    /// <summary>The window's type. On Windows only <c>toolbar</c> means anything: a tool window
-    /// (<c>WS_EX_TOOLWINDOW</c>), which has no taskbar button. Ignored elsewhere for now. Electron's <c>type</c>.</summary>
+    /// <summary>The window's type. Windows: <c>toolbar</c>, a tool window (<c>WS_EX_TOOLWINDOW</c>) with no taskbar button.
+    /// macOS: <c>desktop</c> (below the desktop icons, never focused, on every Space), <c>panel</c> (floating; not an
+    /// <c>NSPanel</c>, unlike Electron's) and the deprecated <c>textured</c>. Ignored on Linux for now. Electron's
+    /// <c>type</c>.</summary>
     public string? Type { get; init; }
 }
 
@@ -84,13 +86,15 @@ public unsafe partial class BaseWindow
     /// <summary>Lets the window be focused, or stops. On Windows this sets <c>WS_EX_NOACTIVATE</c>, removes or restores
     /// the taskbar button (<see cref="SetSkipTaskbar"/>), and unfocuses the window when turned off. Electron's
     /// <c>win.setFocusable()</c>.</summary>
-    /// <remarks>Stored only on macOS and Linux for now.</remarks>
+    /// <remarks>macOS: Electron's <c>disableKeyOrMainWindow</c>, on Oriel's window subclass, which cannot take focus away from a focused window,
+    /// as in Electron. Stored only on Linux for now.</remarks>
     public void SetFocusable(bool focusable)
     {
         Command(w =>
         {
             _focusable = focusable;
             if (OperatingSystem.IsWindows()) WindowsWindowOps.SetNoActivate(Hwnd(w), !focusable);
+            else if (OperatingSystem.IsMacOS()) MacWindow.SetFocusable((nint)w->get_window_handle(w), focusable);
         });
         if (!OperatingSystem.IsWindows()) return;
         SetSkipTaskbar(!focusable);
@@ -99,43 +103,47 @@ public unsafe partial class BaseWindow
 
     /// <summary>Whether the window can be focused; on Windows also false while it has <c>WS_EX_NOACTIVATE</c>.
     /// Electron's <c>win.isFocusable()</c> and <c>win.focusable</c>.</summary>
-    public bool IsFocusable => Query(w => (_focusable ?? _options.Focusable)
-        && !(OperatingSystem.IsWindows() && WindowsWindowOps.IsNoActivate(Hwnd(w))), false);
+    public bool IsFocusable => Query(w => OperatingSystem.IsMacOS() ? MacWindow.IsFocusable((nint)w->get_window_handle(w))
+        : (_focusable ?? _options.Focusable) && !(OperatingSystem.IsWindows() && WindowsWindowOps.IsNoActivate(Hwnd(w))), false);
 
-    /// <summary>Lets the user move the window, or stops (Windows). Electron's <c>win.setMovable()</c>.</summary>
-    public void SetMovable(bool movable) => Command(_ => _windowsHooks.Movable = movable);
+    /// <summary>Lets the user move the window, or stops (Windows, macOS). Electron's <c>win.setMovable()</c>.</summary>
+    public void SetMovable(bool movable) => Command(w =>
+    {
+        _windowsHooks.Movable = movable;
+        if (OperatingSystem.IsMacOS()) MacWindow.SetMovable((nint)w->get_window_handle(w), movable);
+    });
 
-    /// <summary>Whether the user can move the window; always true off Windows, as Electron on Linux.
-    /// Electron's <c>win.isMovable()</c> and <c>win.movable</c>.</summary>
-    public bool IsMovable => !OperatingSystem.IsWindows() || Query(_ => _windowsHooks.Movable, false);
+    /// <summary>Whether the user can move the window; on macOS the window's <c>isMovable</c>; always true on Linux, as
+    /// Electron there. Electron's <c>win.isMovable()</c> and <c>win.movable</c>.</summary>
+    public bool IsMovable => OperatingSystem.IsMacOS() ? Query(w => MacWindow.IsMovable((nint)w->get_window_handle(w)), true)
+        : !OperatingSystem.IsWindows() || Query(_ => _windowsHooks.Movable, false);
 
-    /// <summary>Raises the window to the top of the z-order without focusing it. Windows only for now.
-    /// Electron's <c>win.moveTop()</c>.</summary>
+    /// <summary>Raises the window to the top of the z-order without focusing it: Windows and macOS. Electron's
+    /// <c>win.moveTop()</c>.</summary>
     public void MoveTop() => Command(w =>
     {
         if (OperatingSystem.IsWindows()) WindowsWindowOps.MoveTop(Hwnd(w));
+        else if (OperatingSystem.IsMacOS()) MacWindow.MoveTop((nint)w->get_window_handle(w));
     });
 
     /// <summary>Puts the window just above the window <paramref name="mediaSourceId"/> names
-    /// (<c>window:</c><i>id</i><c>:</c><i>id</i>, as <see cref="GetMediaSourceId"/> returns). Windows only for now.
+    /// (<c>window:</c><i>id</i><c>:</c><i>id</i>, as <see cref="GetMediaSourceId"/> returns): Windows and macOS.
     /// Electron's <c>win.moveAbove()</c>.</summary>
     /// <exception cref="ArgumentException">The id names no window: Electron's <c>Invalid media source id</c>.</exception>
     public void MoveAbove(string mediaSourceId)
     {
         ArgumentNullException.ThrowIfNull(mediaSourceId);
         var other = MediaSourceId.ParseWindow(mediaSourceId);
-        var moved = other is { } id && Query(w => !OperatingSystem.IsWindows() || WindowsWindowOps.MoveAbove(Hwnd(w), (nint)id), true);
+        var moved = other is { } id && Query(w => OperatingSystem.IsWindows() ? WindowsWindowOps.MoveAbove(Hwnd(w), (nint)id)
+            // A CGWindowID is 32 bits; Electron narrows the parsed id the same way.
+            : !OperatingSystem.IsMacOS() || MacWindow.MoveAbove((nint)w->get_window_handle(w), unchecked((uint)id)), true);
         if (!moved) throw new ArgumentException("Invalid media source id", nameof(mediaSourceId));
     }
 
-    /// <summary>The window's id for screen capture and <see cref="MoveAbove"/>: <c>window:</c><i>HWND or X11 window</i><c>:0</c>.
-    /// Electron's <c>win.getMediaSourceId()</c>.</summary>
-    /// <exception cref="PlatformNotSupportedException">On macOS, for now.</exception>
+    /// <summary>The window's id for screen capture and <see cref="MoveAbove"/>: <c>window:</c><i>HWND, X11 window or macOS
+    /// window number</i><c>:0</c>. Electron's <c>win.getMediaSourceId()</c>.</summary>
     public string GetMediaSourceId()
-    {
-        if (OperatingSystem.IsMacOS()) throw new PlatformNotSupportedException("GetMediaSourceId is not implemented on macOS yet.");
-        return MediaSourceId.ForWindow(GetNativeWindowHandle());
-    }
+        => MediaSourceId.ForWindow(OperatingSystem.IsMacOS() ? (nint)Query(w => MacWindow.WindowNumber((nint)w->get_window_handle(w)), 0L) : GetNativeWindowHandle());
 
     /// <summary>Whether Windows is in tablet mode for this window (touch interaction mode); false elsewhere, as in
     /// Electron. Electron's <c>win.isTabletMode()</c>.</summary>
@@ -164,7 +172,13 @@ public unsafe partial class BaseWindow
     /// <paramref name="extraSize"/> is ignored (macOS uses it).</remarks>
     public void SetAspectRatio(double aspectRatio, (int Width, int Height)? extraSize = null) => Command(w =>
     {
-        _ = extraSize;
+        if (OperatingSystem.IsMacOS())
+        {
+            _macAspectRatio = aspectRatio;
+            _macAspectExtra = extraSize ?? (0, 0);
+            MacWindow.SetAppKitAspectRatio((nint)w->get_window_handle(w), aspectRatio, !IsFrameless);
+            return;
+        }
         if (!OperatingSystem.IsWindows()) return;
         if (aspectRatio <= 0)
         {

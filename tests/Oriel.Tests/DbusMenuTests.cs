@@ -51,6 +51,15 @@ public sealed class DbusMenuTests
     }
 
     [Fact]
+    public void APaletteIsASubmenu_AndAHeaderANormalItem_OffMac()
+    {
+        var menu = NewMenu();
+        menu.SetModel([new MenuItem { Label = "Title", Type = MenuItemType.Header }, new MenuItem { Label = "Swatches", Type = MenuItemType.Palette, Submenu = [new MenuItem { Label = "Red" }] }], false);
+        var reply = menu.Handle(DbusMenu.Interface, "GetLayout", [0, -1, new List<object?>()]);
+        Assert.Equal("0{children-display=submenu}[1{label=Title}[],3{children-display=submenu,label=Swatches}[2{label=Red}[]]]", Layout(reply!.Value.Values[1]));
+    }
+
+    [Fact]
     public void GetLayout_DepthAndFilter_AndFailures()
     {
         var menu = NewMenu();

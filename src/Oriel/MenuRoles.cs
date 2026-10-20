@@ -50,6 +50,8 @@ internal static class MenuRoles
         MenuItemRole.ToggleSmartDashes => "Smart Dashes",
         MenuItemRole.ToggleTextReplacement => "Text Replacement",
         MenuItemRole.ClearRecentDocuments => "Clear Menu",
+        MenuItemRole.ShareMenu => "Share",
+        MenuItemRole.RecentDocuments => "Open Recent",
         _ => null,
     };
 
@@ -76,6 +78,10 @@ internal static class MenuRoles
         MenuItemRole.HideOthers => "Command+Alt+H",
         _ => null,
     };
+
+    /// <summary>Electron's <c>shouldOverrideCheckStatus</c>: a role whose check is its own state, which makes it a
+    /// checkbox that a click does not flip.</summary>
+    internal static bool HasOwnCheck(MenuItemRole role) => role == MenuItemRole.ToggleSpellChecker;
 
     /// <summary>A new copy of the role's submenu; null for roles without one.</summary>
     internal static Menu? Submenu(MenuItemRole role) => role switch
@@ -125,7 +131,7 @@ internal static class MenuRoles
         MenuItemRole.WindowMenu or MenuItemRole.Window => Mac
             ? [Item(MenuItemRole.Minimize), Item(MenuItemRole.Zoom), Separator(), Item(MenuItemRole.Front)]
             : [Item(MenuItemRole.Minimize), Item(MenuItemRole.Zoom), Item(MenuItemRole.Close)],
-        MenuItemRole.Services or MenuItemRole.Help => [],
+        MenuItemRole.Services or MenuItemRole.Help or MenuItemRole.ShareMenu => [],
         _ => null,
     };
 

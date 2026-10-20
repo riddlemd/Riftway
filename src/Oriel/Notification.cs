@@ -59,7 +59,8 @@ public enum NotificationCloseReason
 /// <see cref="OrielApp.AppUserModelId"/>. As in Electron, the first notification (or <see cref="IsSupported"/>) of an
 /// unpackaged app writes a Start-menu shortcut named after the executable's product name and registers the toast
 /// activator CLSID under HKCU, so that Windows shows the app's toasts and delivers their buttons. Linux sends it to
-/// <c>org.freedesktop.Notifications</c> on the session bus as libnotify does, waiting for the server's answer.
+/// <c>org.freedesktop.Notifications</c> on the session bus as libnotify does, waiting for the server's answer. macOS adds it
+/// to <c>UNUserNotificationCenter</c>, which needs the app to run from a bundle with a <c>CFBundleIdentifier</c>.
 /// Use it on the UI thread; its events arrive there.</summary>
 /// <remarks>A shown notification stays alive until it is clicked, closed or fails, even with no reference to it.</remarks>
 public sealed class Notification
@@ -78,12 +79,16 @@ public sealed class Notification
     private Sink? _sink;
     private int _showAttempt;
     private bool _dismissed;
+    // is_restored_: read back from Notification Center by GetHistoryAsync.
+    private readonly bool _restored;
 
     internal static INotificationBackend Backend { get; set; } = OperatingSystem.IsWindows()
         ? new ToastNotificationBackend()
         : OperatingSystem.IsLinux()
             ? new LinuxNotificationBackend()
-            : new UnsupportedNotificationBackend();
+            : OperatingSystem.IsMacOS()
+                ? new MacNotificationBackend()
+                : new UnsupportedNotificationBackend();
 
     internal static Func<bool> IsAppReady { get; set; } = () => OrielApp.CurrentOrNull is { IsReady: true };
 
@@ -94,6 +99,17 @@ public sealed class Notification
     {
         if (!IsAppReady()) throw new InvalidOperationException("Cannot create Notification before app is ready");
         if (OrielApp.CurrentOrNull is not null) Backend.Prepare();
+    }
+
+    // Electron's Notification(const NotificationInfo&): no ready check, since only a presenter can have delivered it.
+    private Notification(DeliveredNotification info)
+    {
+        _id = info.Id;
+        _groupId = info.GroupId;
+        Title = info.Title;
+        Subtitle = info.Subtitle;
+        Body = info.Body;
+        _restored = true;
     }
 
     /// <summary>The notification's identifier: the toast's <c>Tag</c> on Windows. A random lowercase UUID when not set or
@@ -166,7 +182,7 @@ public sealed class Notification
 
     /// <summary>The notification was shown; Electron's <c>show</c>. On Windows raised on the UI thread after
     /// <see cref="Show"/> returns, as Electron posts it, and not if <see cref="Close"/> came first; on Linux raised inside
-    /// <see cref="Show"/>, as Electron's synchronous libnotify call does.</summary>
+    /// <see cref="Show"/>, as Electron's synchronous libnotify call does; on macOS once Notification Center has it.</summary>
     public event EventHandler? Shown;
 
     /// <summary>The user clicked the notification's body; Electron's <c>click</c>. On Linux, the server's "default"
@@ -180,7 +196,8 @@ public sealed class Notification
     public event EventHandler<string>? Reply;
 
     /// <summary>The notification was dismissed by the user, timed out, or was hidden by the system; Electron's
-    /// <c>close</c>. <see cref="Close"/> does not raise it, as on Electron for Windows and Linux. On Linux the
+    /// <c>close</c>. <see cref="Close"/> does not raise it, as on Electron for Windows and Linux; on macOS it does, with
+    /// <see cref="NotificationCloseReason.ApplicationHidden"/>, as Electron's <c>Dismiss</c> does. On Linux the
     /// notification ends with it, as Electron destroys it.</summary>
     public event EventHandler<NotificationCloseReason>? Closed;
 
@@ -212,6 +229,57 @@ public sealed class Notification
         if (pending is not null) callback(pending);
     }
 
+    /// <summary>macOS: the app's notifications still in Notification Center, as notifications whose
+    /// <see cref="Click"/>, <see cref="Action"/>, <see cref="Reply"/> and <see cref="Closed"/> work and whose
+    /// <see cref="Show"/> does nothing; empty elsewhere. Electron's <c>Notification.getHistory()</c>.</summary>
+    public static Task<IReadOnlyList<Notification>> GetHistoryAsync()
+    {
+        var done = new TaskCompletionSource<IReadOnlyList<Notification>>(TaskCreationOptions.RunContinuationsAsynchronously);
+        Backend.GetDelivered(list => done.SetResult([.. list.Select(Restore)]));
+        return done.Task;
+    }
+
+    private static Notification Restore(DeliveredNotification info)
+    {
+        var n = new Notification(info);
+        var sink = new Sink(n);
+        if (Backend.Restore(n, sink) is { } handle)
+        {
+            n._handle = handle;
+            n._sink = sink;
+            s_live.Add(n);
+        }
+        return n;
+    }
+
+    /// <summary>macOS: removes the app's notifications with this identifier from Notification Center; does nothing
+    /// elsewhere. Electron's <c>Notification.remove()</c>.</summary>
+    public static void Remove(string id)
+    {
+        ArgumentNullException.ThrowIfNull(id);
+        Backend.RemoveDelivered([id]);
+    }
+
+    /// <summary>macOS: removes the app's notifications with these identifiers from Notification Center. Electron's
+    /// <c>Notification.remove()</c> with an array.</summary>
+    public static void Remove(IEnumerable<string> ids)
+    {
+        ArgumentNullException.ThrowIfNull(ids);
+        Backend.RemoveDelivered([.. ids]);
+    }
+
+    /// <summary>macOS: removes all of the app's notifications from Notification Center. Electron's
+    /// <c>Notification.removeAll()</c>.</summary>
+    public static void RemoveAll() => Backend.RemoveAllDelivered();
+
+    /// <summary>macOS: removes the app's notifications whose <see cref="GroupId"/> is <paramref name="groupId"/> from
+    /// Notification Center. Electron's <c>Notification.removeGroup()</c>.</summary>
+    public static void RemoveGroup(string groupId)
+    {
+        ArgumentNullException.ThrowIfNull(groupId);
+        Backend.RemoveDeliveredGroup(groupId);
+    }
+
     internal static void ResetActivationHandler()
     {
         lock (s_activationLock)
@@ -224,8 +292,10 @@ public sealed class Notification
     /// <summary>Shows the notification, closing it first if it is already shown. Raises <see cref="Failed"/> rather than
     /// throwing when the OS refuses.</summary>
     /// <exception cref="InvalidOperationException">On Windows, <see cref="GroupTitle"/> is set without <see cref="GroupId"/>.</exception>
+    /// <remarks>Does nothing for a notification from <see cref="GetHistoryAsync"/>, as Electron.</remarks>
     public void Show()
     {
+        if (_restored) return;
         if (OperatingSystem.IsWindows() && GroupTitle.Length > 0 && GroupId.Length == 0)
             throw new InvalidOperationException("Notification groupTitle requires groupId to be set");
         Close();
@@ -253,6 +323,7 @@ public sealed class Notification
         }
         _dismissed = false;
         s_live.Add(this);
+        if (Backend.ReportsShown) return;
         if (!Backend.PostsShowEvents)
         {
             Shown?.Invoke(this, EventArgs.Empty);
@@ -471,6 +542,22 @@ public sealed class Notification
         {
             if (Current) owner.OnFailed(error);
         }
+        public void Shown()
+        {
+            if (Current) owner.Shown?.Invoke(owner, EventArgs.Empty);
+        }
+        public void Clicked()
+        {
+            if (Current) owner.OnClicked();
+        }
+        public void ActionInvoked(int actionIndex)
+        {
+            if (Current) owner.Action?.Invoke(owner, new NotificationActionEventArgs(actionIndex, -1));
+        }
+        public void Replied(string reply)
+        {
+            if (Current) owner.Reply?.Invoke(owner, reply);
+        }
     }
 }
 
@@ -480,6 +567,18 @@ internal interface INotificationSink
     void Activated(string arguments, IReadOnlyList<KeyValuePair<string, string>> userInputs);
     void Dismissed(NotificationCloseReason reason);
     void Failed(string error);
+
+    /// <summary>The OS confirmed it is showing (macOS).</summary>
+    void Shown();
+
+    /// <summary>The body was clicked (macOS); the notification ends.</summary>
+    void Clicked();
+
+    /// <summary>An action button was used (macOS).</summary>
+    void ActionInvoked(int actionIndex);
+
+    /// <summary>A reply was sent (macOS).</summary>
+    void Replied(string reply);
 }
 
 /// <summary>A toast as <see cref="Notification.Toast"/> builds it.</summary>
@@ -497,6 +596,10 @@ internal interface INotificationBackend
     /// <summary>Whether a dismissed notification stays until <see cref="Notification.Close"/> (Windows' Action Center)
     /// rather than ending with its <c>close</c> event (Linux).</summary>
     bool KeepsDismissed { get; }
+
+    /// <summary>Whether <c>show</c> and <c>failed</c> come later through the sink once the OS answers (macOS) rather than
+    /// from <see cref="Notification.Show"/>.</summary>
+    bool ReportsShown => false;
 
     /// <summary>Readies the service once per process: Electron's notification presenter creation.</summary>
     void Prepare();
@@ -516,7 +619,23 @@ internal interface INotificationBackend
 
     /// <summary>Lets go of a handle; the sink hears nothing more.</summary>
     void Release(object handle);
+
+    /// <summary>The notifications in Notification Center, passed to <paramref name="done"/> on the UI thread; none
+    /// outside macOS, as Electron's base presenter.</summary>
+    void GetDelivered(Action<IReadOnlyList<DeliveredNotification>> done) => done([]);
+
+    /// <summary>A handle for a notification already delivered, or null where there are none.</summary>
+    object? Restore(Notification notification, INotificationSink sink) => null;
+
+    void RemoveDelivered(IReadOnlyList<string> identifiers) { }
+
+    void RemoveAllDelivered() { }
+
+    void RemoveDeliveredGroup(string groupId) { }
 }
+
+/// <summary>A delivered notification: Electron's <c>NotificationInfo</c>.</summary>
+internal sealed record DeliveredNotification(string Id, string Title, string Subtitle, string Body, string GroupId);
 
 /// <summary>WinRT toast backend.</summary>
 [SupportedOSPlatform("windows")]

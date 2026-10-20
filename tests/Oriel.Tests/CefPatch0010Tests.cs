@@ -141,6 +141,33 @@ public sealed unsafe class CefPatch0010Tests
             NativeMemory.Free(line);
         }
     }
+
+    [Theory]
+    [InlineData(true, true, true, false, "scroll-bounce")]
+    [InlineData(true, true, false, false, "")]
+    [InlineData(true, false, true, false, "")]
+    [InlineData(false, true, true, false, "")]
+    [InlineData(true, true, true, true, "no-sandbox,scroll-bounce")]
+    public void OnBeforeRenderProcessLaunch_AddsScrollBounceForASessionThatAsks_OnMacOnly(bool sharing, bool listed, bool mac, bool unsandboxed, string expected)
+    {
+        Reset();
+        var session = FakeContext();
+        var launched = FakeContext();
+        var line = FakeCommandLine();
+        if (sharing) s_sharing.Add(((nint)session, (nint)launched));
+        try
+        {
+            Session.OnBeforeRenderProcessLaunch(line, launched, unsandboxed ? [(nint)session] : [], listed ? [(nint)session] : [], linux: false, mac);
+
+            Assert.Equal(expected, string.Join(",", s_switches));
+        }
+        finally
+        {
+            NativeMemory.Free(session);
+            NativeMemory.Free(launched);
+            NativeMemory.Free(line);
+        }
+    }
 }
 
 public sealed class SessionSandboxTests

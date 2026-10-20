@@ -232,6 +232,20 @@ public sealed unsafe partial class WebContents
         if (OperatingSystem.IsMacOS()) RunEditingScript(EditingScripts.CenterSelection);
     }
 
+    /// <summary>Shows the system's Look Up panel for the selected word (macOS); does nothing elsewhere, as Electron's.
+    /// Electron's <c>webContents.showDefinitionForSelection()</c>.</summary>
+    public void ShowDefinitionForSelection()
+    {
+        if (!OperatingSystem.IsMacOS()) return;
+        CefThread.RunOnUi(() =>
+        {
+            if (_browser is null || !OperatingSystem.IsMacOS()) return;
+            var host = _browser->get_host(_browser);
+            try { Oriel.Cef.Platform.MacLookUp.ShowDefinitionForSelection((nint)host->get_window_handle(host)); }
+            finally { NativeObject.Release(host); }
+        });
+    }
+
     /// <summary>Moves the ends of the focused frame's selection by characters. Electron's
     /// <c>webContents.adjustSelection()</c>; done by script, and <c>end</c> is honoured (drift C20, C21).</summary>
     public void AdjustSelection(AdjustSelectionOptions options)

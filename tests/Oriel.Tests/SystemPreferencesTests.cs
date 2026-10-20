@@ -165,3 +165,21 @@ public sealed class SystemPreferencesTests
         Assert.True(SystemPreferences.ForcedReducedMotion(["app", "--force-prefers-no-reduced-motion", "--force-prefers-reduced-motion"], windows: false));
     }
 }
+
+// Electron reads these switches from base::CommandLine, which app.commandLine changes.
+public sealed class SystemPreferencesSwitchTests
+{
+    [Fact]
+    public void AnAppendedSwitchIsSeen_AndARemovedOneIsNot()
+    {
+        var line = new CommandLine(["--force-prefers-no-reduced-motion", "--other=1"]);
+        Assert.False(SystemPreferences.ForcedReducedMotion(line.SwitchArguments(), windows: false));
+        line.AppendSwitch("force-prefers-reduced-motion");
+        Assert.True(SystemPreferences.ForcedReducedMotion(line.SwitchArguments(), windows: false));
+        line.RemoveSwitch("force-prefers-reduced-motion");
+        line.RemoveSwitch("force-prefers-no-reduced-motion");
+        Assert.Null(SystemPreferences.ForcedReducedMotion(line.SwitchArguments(), windows: false));
+        line.AppendSwitch("use-fake-device-for-media-stream");
+        Assert.True(SystemPreferences.HasSwitch(line.SwitchArguments(), "use-fake-device-for-media-stream", windows: false));
+    }
+}

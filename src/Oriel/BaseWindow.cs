@@ -61,6 +61,10 @@ public partial record BaseWindowOptions
     /// <summary>Whether the window can be maximized.</summary>
     public bool Maximizable { get; init; } = true;
 
+    /// <summary>Whether the window can enter full screen; on macOS also what the green button does. Electron's
+    /// <c>fullscreenable</c>.</summary>
+    public bool FullScreenable { get; init; } = true;
+
     /// <summary>Whether the user can close the window; code can still call <see cref="BaseWindow.Close"/>.
     /// Not implemented on Linux in Electron; honoured everywhere here.</summary>
     public bool Closable { get; init; } = true;
@@ -109,9 +113,46 @@ public partial record BaseWindowOptions
     /// <summary>Opens the window in kiosk mode: full screen. Electron's <c>kiosk</c>.</summary>
     public bool Kiosk { get; init; }
 
-    /// <summary>How the title bar looks; anything but <see cref="Oriel.TitleBarStyle.Default"/> hides it on Windows and
-    /// Linux. Electron's <c>titleBarStyle</c>.</summary>
+    /// <summary>How the title bar looks; anything but <see cref="Oriel.TitleBarStyle.Default"/> hides it, and on macOS keeps
+    /// the traffic lights over the page. Electron's <c>titleBarStyle</c>.</summary>
     public TitleBarStyle TitleBarStyle { get; init; }
+
+    /// <summary>A vibrant material behind the page (macOS): <c>titlebar</c>, <c>selection</c>, <c>menu</c>, <c>popover</c>,
+    /// <c>sidebar</c>, <c>header</c>, <c>sheet</c>, <c>window</c>, <c>hud</c>, <c>fullscreen-ui</c>, <c>tooltip</c>,
+    /// <c>content</c>, <c>under-window</c> or <c>under-page</c>. Any value makes the window translucent and, without
+    /// <see cref="BackgroundColor"/>, the page transparent, as Electron. Electron's <c>vibrancy</c>.</summary>
+    public string? Vibrancy { get; init; }
+
+    /// <summary>Whether the vibrant material follows the window's active state (macOS). Electron's <c>visualEffectState</c>.</summary>
+    public VisualEffectState VisualEffectState { get; init; }
+
+    /// <summary>The zoom button widens the window to the page's preferred width (with
+    /// <see cref="WebPreferences.EnablePreferredSizeMode"/>; else it keeps its width) and takes the screen's height, instead
+    /// of filling the screen; Shift-click still fills it (macOS). Electron's <c>zoomToPageWidth</c>.</summary>
+    public bool ZoomToPageWidth { get; init; }
+
+    /// <summary>Electron's <c>disableAutoHideCursor</c> (macOS). Electron v44 stores it on its window, but neither Electron
+    /// nor Chromium reads it, so typing in the page still hides the cursor; Oriel accepts it to the same effect.</summary>
+    public bool DisableAutoHideCursor { get; init; }
+
+    /// <summary>Lets the window grow past its screen (macOS); a framed window still stays where it can be moved. Electron's
+    /// <c>enableLargerThanScreen</c>.</summary>
+    public bool EnableLargerThanScreen { get; init; }
+
+    /// <summary>Groups the window into native tabs with the other windows of the same identifier (macOS); without one, or
+    /// for a transparent or frameless window, the window never tabs. Electron's <c>tabbingIdentifier</c>.</summary>
+    public string? TabbingIdentifier { get; init; }
+
+    /// <summary>The title screen readers announce in place of the window's title. Electron's <c>accessibleTitle</c>.</summary>
+    public string AccessibleTitle { get; init; } = "";
+
+    /// <summary>A click on the window while it is inactive also reaches the page, besides activating it (macOS). Electron's
+    /// <c>acceptFirstMouse</c>.</summary>
+    public bool AcceptFirstMouse { get; init; }
+
+    /// <summary>Where the traffic lights sit in a hidden title bar, from the window's top left (top right, right to left);
+    /// null for the style's own place. macOS only. Electron's <c>trafficLightPosition</c>.</summary>
+    public Point? TrafficLightPosition { get; init; }
 
     /// <summary>With a hidden title bar, draws the window's minimize, maximize and close buttons over the page's top right.
     /// Windows only for now. Electron's <c>titleBarOverlay</c>.</summary>
@@ -130,7 +171,7 @@ public partial record BaseWindowOptions
     public bool ThickFrame { get; init; } = true;
 
     /// <summary>Whether a frameless window has rounded corners: Windows 11 only, through DWM, and only with
-    /// <see cref="ThickFrame"/>. Not yet applied on macOS and Linux. Electron's <c>roundedCorners</c>.</summary>
+    /// <see cref="ThickFrame"/>. On macOS a frameless window without them is borderless, titled again in full screen, as Electron; not yet on Linux. Electron's <c>roundedCorners</c>.</summary>
     public bool RoundedCorners { get; init; } = true;
 
     /// <summary>The window's border (and, when framed, caption) colour on Windows 11; null follows the system
@@ -202,6 +243,7 @@ public unsafe partial class BaseWindow
     private bool _hasShadow;
     // macOS: Electron's is_kiosk_; elsewhere kiosk is full screen itself.
     private bool _kiosk;
+    private MacKiosk? _macKiosk;
     // Electron's layered_: once given an opacity, the window stays layered when click-through ends.
     private bool _layered;
     private Rectangle _normalBounds;
@@ -233,14 +275,28 @@ public unsafe partial class BaseWindow
 
     // macOS keeps resizing and maximizing for a transparent window, as Electron's NativeWindowMac does.
     private readonly bool _macTransparent;
+    // NativeWindow::IsTranslucent: transparent, or vibrant.
+    private readonly bool _macTranslucent;
 
     // Linux: transparent only with a patched libcef, which can create the X window with an ARGB visual (DRIFT W24).
     private readonly bool _linuxTransparent;
     private bool _resizable;
+    // Windows and Linux: NativeWindowViews' fullscreenable_. macOS keeps it in the collection behaviour.
+    private bool _fullScreenable = true;
     // A transparent window's bounds before Maximize filled the work area.
     private Rectangle? _restoreBounds;
     // macOS: the NSWindow whose full-screen toggle routes to simple full screen, or 0.
     private nint _routedNSWindow;
+    private nint _occlusionNSWindow;
+    private nint _touchBarNSWindow;
+    private nint _eventsNSWindow;
+    private nint _resizeDelegate;
+    // NativeWindow's aspect_ratio_ and aspect_ratio_extraSize_, and the delegate's resizingHorizontally_ (macOS).
+    private double _macAspectRatio;
+    private (int Width, int Height) _macAspectExtra;
+    private bool? _resizingHorizontally;
+    // ElectronNSWindowDelegate's level_: the level a minimize set aside.
+    private long _levelBeforeMiniaturize;
     // Whether the window takes input (every OS), and Linux's X11 cover that blocks it while it does not; UI thread only.
     private readonly WindowEnabledState _enabled = new();
     private nint _inputCover;
@@ -299,9 +355,10 @@ public unsafe partial class BaseWindow
         _accent = WindowsFrame.FromOption(_options.AccentColor);
         _transparent = _options.Transparent && OperatingSystem.IsWindows();
         _macTransparent = _options.Transparent && OperatingSystem.IsMacOS();
+        _macTranslucent = OperatingSystem.IsMacOS() && MacVibrancy.IsTranslucent(_options.Transparent, _options.Vibrancy);
         _linuxTransparent = _options.Transparent && OperatingSystem.IsLinux() && CefRuntime.IsPatched;
         _resizable = _options.Resizable;
-        _backgroundColor = WindowTransparency.InitialBackgroundColor(_options.BackgroundColor, _transparent || _macTransparent || _linuxTransparent,
+        _backgroundColor = WindowTransparency.InitialBackgroundColor(_options.BackgroundColor, _transparent || _macTranslucent || _linuxTransparent,
             OperatingSystem.IsWindows() ? _options.BackgroundMaterial : null);
         _contentsView = new View();
         ContentView = new View { FillsParent = true };
@@ -333,6 +390,7 @@ public unsafe partial class BaseWindow
             Maximizable = _options.Maximizable && !_transparent,
             ThemeChanged = () => Command(ApplyBackgroundColor),
             Frameless = IsFrameless,
+            AcceptFirstMouse = _options.AcceptFirstMouse,
             Translucent = WindowTransparency.TranslucentWidget(_options.Transparent, CefRuntime.IsPatched, OperatingSystem.IsWindows()),
             MinimumSize = new cef_size_t { width = _options.MinWidth, height = _options.MinHeight },
             MaximumSize = new cef_size_t { width = _options.MaxWidth, height = _options.MaxHeight },
@@ -465,8 +523,8 @@ public unsafe partial class BaseWindow
     public bool IsModal => _options.Modal;
 
     /// <summary>Lets the window take mouse, keyboard and touch input, or stops it; it stays disabled while a modal
-    /// child is shown. Windows: <c>EnableWindow</c>. Linux: an X11 cover over the window, and its keys dropped. Stored
-    /// only on macOS for now. Electron's <c>win.setEnabled()</c>.</summary>
+    /// child is shown. Windows: <c>EnableWindow</c>. Linux: an X11 cover over the window, and its keys dropped. macOS: a
+    /// half-transparent sheet over the window, as Electron. Electron's <c>win.setEnabled()</c>.</summary>
     /// <remarks>The window manager can still activate a disabled window, as in Electron. On Linux the pointer crossing
     /// into or out of a disabled window still reaches its page (drift W5).</remarks>
     public void SetEnabled(bool enable) => CefThread.RunOnUi(() => SetEnabledOnUi(enable));
@@ -482,13 +540,19 @@ public unsafe partial class BaseWindow
             ApplyWindowsEnabled(_window);
             return;
         }
+        if (OperatingSystem.IsMacOS())
+        {
+            if (_window is not null) MacWindow.SetEnabledBySheet((nint)_window->get_window_handle(_window), enable);
+            return;
+        }
         if (_enabled.SetEnabled(enable)) ApplyLinuxEnabled();
     }
 
     /// <summary>Whether the window takes input: false after <see cref="SetEnabled"/>(false) or while a modal child is
-    /// shown. Windows: <c>IsWindowEnabled</c>. Always true on macOS for now. Electron's <c>win.isEnabled()</c>.</summary>
-    public bool IsEnabled => OperatingSystem.IsWindows()
-        ? IsWindowsEnabled
+    /// shown. Windows: <c>IsWindowEnabled</c>. macOS: no sheet attached, a modal child's included. Electron's
+    /// <c>win.isEnabled()</c>.</summary>
+    public bool IsEnabled => OperatingSystem.IsWindows() ? IsWindowsEnabled
+        : OperatingSystem.IsMacOS() ? Query(w => !OperatingSystem.IsMacOS() || !MacWindow.HasAttachedSheet((nint)w->get_window_handle(w)), true)
         : !OperatingSystem.IsLinux() || CefThread.InvokeOnUi(() => _enabled.Enabled);
 
     // Linux only: Chromium disables a modal's parent itself on Windows, which ApplyWindowsEnabled reads back.
@@ -536,10 +600,12 @@ public unsafe partial class BaseWindow
     /// <summary>The window lost focus. Electron's <c>blur</c>.</summary>
     public event EventHandler? Blurred;
 
-    /// <summary>The window became visible. Electron's <c>show</c>.</summary>
+    /// <summary>The window became visible. Electron's <c>show</c>. On macOS raised when the window's occlusion state turns
+    /// visible: after <see cref="Show"/>, but also when it is uncovered, restored or its Space is shown.</summary>
     public event EventHandler? Shown;
 
-    /// <summary>The window was hidden. Electron's <c>hide</c>.</summary>
+    /// <summary>The window was hidden. Electron's <c>hide</c>. On macOS raised when the window's occlusion state turns
+    /// hidden: after <see cref="Hide"/>, but also when it is fully covered, minimized or its Space is left.</summary>
     public event EventHandler? Hidden;
 
     /// <summary>The window moved. Electron's <c>move</c>.</summary>
@@ -593,7 +659,8 @@ public unsafe partial class BaseWindow
         _macLink?.Show();
         ShowThroughCef(w, activate: _focusable ?? _options.Focusable);
         ApplySkipTaskbar(w);
-        if (!wasVisible) Shown?.Invoke(this, EventArgs.Empty);
+        // macOS raises it from the occlusion change instead, as Electron's NativeWindowMac.
+        if (!wasVisible && !OperatingSystem.IsMacOS()) Shown?.Invoke(this, EventArgs.Empty);
     });
 
     /// <summary>Hides the window. Electron's <c>win.hide()</c>.</summary>
@@ -605,7 +672,7 @@ public unsafe partial class BaseWindow
         if (_options.Modal) _options.Parent?.ChangeChildModals(increment: false);
         _macLink?.Hide();
         w->hide(w);
-        if (wasVisible) Hidden?.Invoke(this, EventArgs.Empty);
+        if (wasVisible && !OperatingSystem.IsMacOS()) Hidden?.Invoke(this, EventArgs.Empty);
     });
 
     /// <summary>Whether the window is shown. Electron's <c>win.isVisible()</c>.</summary>
@@ -700,6 +767,10 @@ public unsafe partial class BaseWindow
     /// <summary>Whether the window is minimized. Electron's <c>win.isMinimized()</c>.</summary>
     public bool IsMinimized => Query(w => w->is_minimized(w) != 0, false);
 
+    /// <summary>Neither minimised, maximised nor full screen (simple full screen included on macOS). Electron's
+    /// <c>win.isNormal()</c>.</summary>
+    public bool IsNormal() => WindowStateRules.IsNormal(IsMinimized, IsMaximized, IsFullScreen, IsSimpleFullScreen);
+
     /// <summary>Enters or leaves full screen. Electron's <c>win.setFullScreen()</c>.</summary>
     /// <remarks>On macOS this is native full screen unless <see cref="BaseWindowOptions.SimpleFullScreen"/>
     /// is set: native moves the window to its own Space and the other displays go black. For a window on
@@ -716,6 +787,7 @@ public unsafe partial class BaseWindow
 
     private void SetFullScreenOn(cef_window_t* w, bool flag)
     {
+        if (!FullScreenableOn(w)) return;
         _sizeState?.SetFullScreen(flag);
         var announced = false;
         if (OperatingSystem.IsWindows())
@@ -754,11 +826,16 @@ public unsafe partial class BaseWindow
 
         Command(w =>
         {
-            if (!OperatingSystem.IsMacOS()) return;
-            var wasSimple = IsMacSimpleFullScreen(w);
-            MacWindow.SetSimpleFullScreen((nint)w->get_window_handle(w), flag);
-            if (wasSimple != flag) (flag ? EnteredFullScreen : LeftFullScreen)?.Invoke(this, EventArgs.Empty);
+            if (OperatingSystem.IsMacOS()) SetMacSimpleFullScreenOn(w, flag);
         });
+    }
+
+    [System.Runtime.Versioning.SupportedOSPlatform("macos")]
+    private void SetMacSimpleFullScreenOn(cef_window_t* w, bool flag)
+    {
+        var wasSimple = IsMacSimpleFullScreen(w);
+        MacWindow.SetSimpleFullScreen((nint)w->get_window_handle(w), flag);
+        if (wasSimple != flag) (flag ? EnteredFullScreen : LeftFullScreen)?.Invoke(this, EventArgs.Empty);
     }
 
     /// <summary>Whether the window is in simple full screen. Electron's <c>win.isSimpleFullScreen()</c>.</summary>
@@ -792,7 +869,8 @@ public unsafe partial class BaseWindow
             var wasOnTop = w->is_always_on_top(w) != 0;
             w->set_always_on_top(w, onTop ? 1 : 0);
             if (onTop && OperatingSystem.IsWindows()) WindowsWindow.EnsureTopmost((nint)w->get_window_handle(w));
-            if (OperatingSystem.IsMacOS()) MacWindow.SetLevel((nint)w->get_window_handle(w), onTop ? macLevel + relativeLevel : 0);
+            if (OperatingSystem.IsMacOS())
+                SetMacLevel(w, onTop ? ClampMacLevel(macLevel + relativeLevel, MacWindow.LevelRange()) : 0);
             ApplyAlwaysOnTopLevel(w, onTop, level);
             if (wasOnTop != onTop) AlwaysOnTopChanged?.Invoke(this, new AlwaysOnTopChangedEventArgs(onTop));
         });
@@ -801,6 +879,9 @@ public unsafe partial class BaseWindow
     /// <summary>Whether <see cref="SetAlwaysOnTop"/> leaves the window on top: on macOS only if the resulting level is
     /// not the normal one, so <c>normal</c> with no <c>relativeLevel</c> is off; elsewhere <paramref name="flag"/> alone, as Electron.</summary>
     internal static bool StaysOnTop(bool flag, long macLevel, bool mac) => flag && (!mac || macLevel != 0);
+
+    /// <summary>Electron's <c>NativeWindowMac::SetWindowLevel</c>: the level kept within the window server's range.</summary>
+    internal static long ClampMacLevel(long level, (long Min, long Max) range) => Math.Clamp(level, range.Min, range.Max);
 
     /// <summary>Electron's level names as AppKit window levels (NSWindowLevel); any other name is NSNormalWindowLevel.</summary>
     internal static long MacWindowLevel(string level) => level switch
@@ -818,8 +899,8 @@ public unsafe partial class BaseWindow
     /// <summary>Whether the window stays above others. Electron's <c>win.isAlwaysOnTop()</c>.</summary>
     public bool IsAlwaysOnTop => Query(w => w->is_always_on_top(w) != 0, false);
 
-    /// <summary>Shows the window without focusing it. Windows only for now: macOS and Linux show and focus it.
-    /// Electron's <c>win.showInactive()</c>.</summary>
+    /// <summary>Shows the window without focusing it: Windows and macOS (where the app is not activated either); Linux
+    /// shows and focuses it. Electron's <c>win.showInactive()</c>.</summary>
     public void ShowInactive() => Command(w =>
     {
         var wasVisible = w->@base.@base.is_visible(&w->@base.@base) != 0;
@@ -827,20 +908,27 @@ public unsafe partial class BaseWindow
         FlushPendingDisplayMode(w);
         ShowThroughCef(w, activate: false);
         ApplySkipTaskbar(w);
-        if (!wasVisible) Shown?.Invoke(this, EventArgs.Empty);
+        // macOS raises it from the occlusion change instead, as Electron's NativeWindowMac.
+        if (!wasVisible && !OperatingSystem.IsMacOS()) Shown?.Invoke(this, EventArgs.Empty);
     });
 
     // Through CEF, so Views knows the window is shown; without activation the position changes it makes are kept from
     // activating it (Electron's ShowInactive, and every show of a window that cannot activate).
     private void ShowThroughCef(cef_window_t* w, bool activate)
     {
+        if (!activate && OperatingSystem.IsMacOS())
+        {
+            var window = (nint)w;
+            MacWindow.ShowInactive((nint)w->get_window_handle(w), () => ((cef_window_t*)window)->show((cef_window_t*)window));
+            return;
+        }
         if (activate || !OperatingSystem.IsWindows() || !WindowsSubclass.WithoutActivation(Hwnd(w), () => w->show(w))) w->show(w);
         // Handing the foreground back raised the previous window; an inactive show still comes out in front.
         else WindowsWindowStyle.BringToTopInactive(Hwnd(w));
     }
 
-    /// <summary>Sets the window's opacity, clamped to 0–1. Windows only for now: stored but not shown on macOS and
-    /// Linux. Electron's <c>win.setOpacity()</c>.</summary>
+    /// <summary>Sets the window's opacity, clamped to 0–1: Windows and macOS; stored but not shown on Linux. Electron's
+    /// <c>win.setOpacity()</c>.</summary>
     /// <exception cref="ArgumentOutOfRangeException">The opacity is NaN.</exception>
     public void SetOpacity(double opacity)
     {
@@ -849,24 +937,40 @@ public unsafe partial class BaseWindow
         {
             _opacity = clamped;
             if (OperatingSystem.IsWindows()) ApplyOpacity(w);
+            else if (OperatingSystem.IsMacOS()) MacWindow.SetAlphaValue((nint)w->get_window_handle(w), clamped);
         });
     }
 
-    /// <summary>The window's opacity, as set. Electron's <c>win.getOpacity()</c>.</summary>
-    public double GetOpacity() => Query(_ => _opacity, 1.0);
+    /// <summary>The window's opacity: as set, or on macOS the window's <c>alphaValue</c>. Electron's <c>win.getOpacity()</c>.</summary>
+    public double GetOpacity() => Query(w => OperatingSystem.IsMacOS() ? MacWindow.AlphaValue((nint)w->get_window_handle(w)) : _opacity, 1.0);
 
-    /// <summary>Gives the window a shadow or takes it away. Stored only: on Windows, as in Electron, it changes nothing,
-    /// and macOS and Linux are not done yet. Electron's <c>win.setHasShadow()</c>.</summary>
-    public void SetHasShadow(bool hasShadow) => Command(_ => _hasShadow = hasShadow);
+    /// <summary>Gives the window a shadow or takes it away: macOS; stored only elsewhere (on Windows, as in Electron, it
+    /// changes nothing; Linux is not done yet). Electron's <c>win.setHasShadow()</c>.</summary>
+    public void SetHasShadow(bool hasShadow) => Command(w =>
+    {
+        _hasShadow = hasShadow;
+        if (OperatingSystem.IsMacOS()) MacWindow.SetHasShadow((nint)w->get_window_handle(w), hasShadow);
+    });
 
-    /// <summary>Whether the window has a shadow, as set. Electron's <c>win.hasShadow()</c>.</summary>
-    public bool GetHasShadow() => Query(_ => _hasShadow, true);
+    /// <summary>Whether the window has a shadow: on macOS the window's, elsewhere as set. Electron's <c>win.hasShadow()</c>.</summary>
+    public bool GetHasShadow() => Query(w => OperatingSystem.IsMacOS() ? MacWindow.HasShadow((nint)w->get_window_handle(w)) : _hasShadow, true);
+
+    /// <summary>Recomputes the window's shadow from its current shape (macOS); does nothing elsewhere. Electron's
+    /// <c>win.invalidateShadow()</c>.</summary>
+    public void InvalidateShadow()
+    {
+        Command(w =>
+        {
+            if (OperatingSystem.IsMacOS()) MacWindow.InvalidateShadow((nint)w->get_window_handle(w));
+        });
+    }
 
     /// <summary>Lets mouse input pass through the window to whatever is below it, or stops that; with
-    /// <see cref="IgnoreMouseEventsOptions.Forward"/> the page still gets mouse moves. Windows only for now.
+    /// <see cref="IgnoreMouseEventsOptions.Forward"/> the page still gets mouse moves. Windows and macOS.
     /// Electron's <c>win.setIgnoreMouseEvents()</c>.</summary>
     public void SetIgnoreMouseEvents(bool ignore, IgnoreMouseEventsOptions? options = null) => Command(w =>
     {
+        if (OperatingSystem.IsMacOS()) MacWindow.SetIgnoresMouseEvents((nint)w->get_window_handle(w), ignore, options?.Forward == true);
         if (!OperatingSystem.IsWindows()) return;
         var hwnd = Hwnd(w);
         WindowsWindowStyle.SetClickThrough(hwnd, ignore, keepLayered: _layered);
@@ -881,17 +985,39 @@ public unsafe partial class BaseWindow
     {
         if (OperatingSystem.IsWindows() && !WindowsWindowStyle.SetExcludedFromCapture(Hwnd(w), enable))
             Console.Error.WriteLine("[Oriel] Windows did not take the content protection.");
+        if (OperatingSystem.IsMacOS()) MacWindow.SetContentProtected((nint)w->get_window_handle(w), enable);
     });
 
-    /// <summary>Whether the window is kept out of captures, read back from Windows; false elsewhere.
+    /// <summary>Whether the window is kept out of captures, read back from Windows or macOS; false on Linux.
     /// Electron's <c>win.isContentProtected()</c>.</summary>
-    public bool IsContentProtected() => Query(w => OperatingSystem.IsWindows() && WindowsWindowStyle.IsExcludedFromCapture(Hwnd(w)), false);
+    public bool IsContentProtected() => Query(w => OperatingSystem.IsWindows() ? WindowsWindowStyle.IsExcludedFromCapture(Hwnd(w))
+        : OperatingSystem.IsMacOS() && MacWindow.IsContentProtected((nint)w->get_window_handle(w)), false);
 
-    /// <summary>Enters or leaves kiosk mode: full screen. Electron's <c>win.setKiosk()</c>.</summary>
+    /// <summary>Enters or leaves kiosk mode: full screen; on macOS also the Dock and menu bar hidden and app switching,
+    /// Force Quit, logging out and hiding blocked, the earlier options put back on leaving. Electron's <c>win.setKiosk()</c>.</summary>
     public void SetKiosk(bool flag)
     {
+        if (OperatingSystem.IsMacOS())
+        {
+            Command(w => SetMacKiosk(w, flag));
+            return;
+        }
         Command(_ => _kiosk = flag);
         SetFullScreen(flag);
+    }
+
+    // NativeWindowMac::SetKiosk; full screen is simple full screen when the window uses it.
+    private void SetMacKiosk(cef_window_t* w, bool flag)
+    {
+        if (!OperatingSystem.IsMacOS()) return;
+        _macKiosk ??= new MacKiosk(MacApp.CurrentSystemPresentationOptions, MacApp.SetPresentationOptions);
+        var isFullScreen = UsesSimpleFullScreen ? IsMacSimpleFullScreen(w) : w->is_fullscreen(w) != 0;
+        _macKiosk.Set(flag, isFullScreen, full =>
+        {
+            if (UsesSimpleFullScreen && OperatingSystem.IsMacOS()) SetMacSimpleFullScreenOn(w, full);
+            else SetFullScreenOn(w, full);
+        }, optionsAfterFullScreen: UsesSimpleFullScreen);
+        _kiosk = _macKiosk.IsKiosk;
     }
 
     /// <summary>Whether the window is in kiosk mode: on Windows and Linux, whether it is full screen, however it got
@@ -987,6 +1113,7 @@ public unsafe partial class BaseWindow
             CefString.Set(&value, title);
             w->set_title(w, &value);
             CefString.Clear(&value);
+            RedrawMacButtons();
         });
     }
 
@@ -997,11 +1124,14 @@ public unsafe partial class BaseWindow
     /// <remarks>On macOS, <paramref name="animate"/> uses AppKit's animation; elsewhere it is ignored, as in Electron.</remarks>
     public void SetBounds(Rectangle bounds, bool animate = false) => Command(w => ApplyOuterBounds(w, bounds, animate));
 
-    private static void ApplyOuterBounds(cef_window_t* w, Rectangle bounds, bool animate)
+    private void ApplyOuterBounds(cef_window_t* w, Rectangle bounds, bool animate)
     {
         if (animate && OperatingSystem.IsMacOS())
         {
-            MacWindow.AnimateFrame((nint)w->get_window_handle(w), bounds.X, bounds.Y, bounds.Width, bounds.Height);
+            var min = _windowDelegate.MinimumSize;
+            var max = _windowDelegate.MaximumSize;
+            if (MacAnimatedBounds.Frame(bounds, new System.Drawing.Size(min.width, min.height), new System.Drawing.Size(max.width, max.height), w->is_fullscreen(w) != 0) is { } frame)
+                MacWindow.AnimateFrame((nint)w->get_window_handle(w), frame.X, frame.Y, frame.Width, frame.Height);
             return;
         }
         var rect = new cef_rect_t { x = bounds.X, y = bounds.Y, width = bounds.Width, height = bounds.Height };
@@ -1065,11 +1195,71 @@ public unsafe partial class BaseWindow
     });
 
     /// <summary>Lets the user resize the window, or stops. Electron's <c>win.setResizable()</c>.</summary>
-    public void SetResizable(bool flag) => Command(_ =>
+    public void SetResizable(bool flag) => Command(w =>
     {
         _resizable = flag;
         _windowDelegate.Resizable = CanResize(flag) && !_transparent;
+        // Chromium drops the full-screen collection behaviour with resizability; Electron keeps the user's setting.
+        if (OperatingSystem.IsMacOS()) ApplyFullScreenable(w, FullScreenableOn(w));
     });
+
+    /// <summary>Lets the window enter full screen, or stops; on macOS the green button then only zooms. Electron's
+    /// <c>win.setFullScreenable()</c>.</summary>
+    public void SetFullScreenable(bool flag) => Command(w => ApplyFullScreenable(w, flag));
+
+    /// <summary>Whether the window can enter full screen. Electron's <c>win.isFullScreenable()</c>.</summary>
+    public bool IsFullScreenable => Query(FullScreenableOn, false);
+
+    private bool FullScreenableOn(cef_window_t* w)
+        => OperatingSystem.IsMacOS() ? MacWindow.HasCollectionBehavior((nint)w->get_window_handle(w), MacWindow.FullScreenPrimary) : _fullScreenable;
+
+    // NativeWindowMac::SetFullScreenable: the primary behaviour on, and the auxiliary one, which hides the button, off.
+    private void ApplyFullScreenable(cef_window_t* w, bool flag)
+    {
+        _fullScreenable = flag;
+        if (!OperatingSystem.IsMacOS()) return;
+        var view = (nint)w->get_window_handle(w);
+        MacWindow.SetCollectionBehavior(view, MacWindow.FullScreenPrimary, flag);
+        MacWindow.SetCollectionBehavior(view, MacWindow.FullScreenAuxiliary, !flag);
+        UpdateZoomButton(w);
+    }
+
+    // NativeWindowMac::SetWindowLevel as minimise and restore use it: the widget's z-order follows the level, and a change
+    // of z-order raises always-on-top-changed.
+    [System.Runtime.Versioning.SupportedOSPlatform("macos")]
+    private void SetMacWindowLevel(cef_window_t* w, long unboundedLevel)
+    {
+        var (level, onTop) = MacLevel(unboundedLevel, MacWindow.LevelRange());
+        var changed = (w->is_always_on_top(w) != 0) != onTop;
+        w->set_always_on_top(w, onTop ? 1 : 0);
+        SetMacLevel(w, level);
+        if (changed) AlwaysOnTopChanged?.Invoke(this, new AlwaysOnTopChangedEventArgs(onTop));
+    }
+
+    /// <summary>Electron's <c>SetWindowLevel</c> rule: the level kept within the window server's range, and on top unless it
+    /// is the normal level.</summary>
+    internal static (long Level, bool OnTop) MacLevel(long unboundedLevel, (long Min, long Max) range)
+    {
+        var level = ClampMacLevel(unboundedLevel, range);
+        return (level, level != 0);
+    }
+
+    // NativeWindowMac::SetWindowLevel: setLevel: puts the zoom button back to AppKit's default, so it is applied again.
+    [System.Runtime.Versioning.SupportedOSPlatform("macos")]
+    private void SetMacLevel(cef_window_t* w, long level)
+    {
+        MacWindow.SetLevel((nint)w->get_window_handle(w), level);
+        UpdateZoomButton(w);
+    }
+
+    // NativeWindowMac::UpdateZoomButton: resizable, and maximizable or fullscreenable.
+    private void UpdateZoomButton(cef_window_t* w)
+    {
+        if (OperatingSystem.IsMacOS())
+            MacWindow.SetZoomButtonEnabled((nint)w->get_window_handle(w), ZoomButtonEnabled(_windowDelegate.Resizable, _windowDelegate.Maximizable, FullScreenableOn(w)));
+    }
+
+    internal static bool ZoomButtonEnabled(bool resizable, bool maximizable, bool fullScreenable) => resizable && (maximizable || fullScreenable);
 
     // Electron's CanResize: on Windows a framed window without a thick frame cannot be resized.
     private bool CanResize(bool resizable) => OperatingSystem.IsWindows() ? WindowsFrame.CanResize(!IsFrameless, resizable, _options.ThickFrame) : resizable;
@@ -1088,10 +1278,11 @@ public unsafe partial class BaseWindow
     public bool IsMinimizable => Query(_ => _windowDelegate.Minimizable, false);
 
     /// <summary>Lets the window be maximized, or stops. Electron's <c>win.setMaximizable()</c>.</summary>
-    public void SetMaximizable(bool flag) => Command(_ =>
+    public void SetMaximizable(bool flag) => Command(w =>
     {
         _windowDelegate.Maximizable = flag && !_transparent;
         UpdateCaptionButtons();
+        UpdateZoomButton(w);
     });
 
     /// <summary>Whether the window can be maximized. Electron's <c>win.isMaximizable()</c>.</summary>
@@ -1383,9 +1574,12 @@ public unsafe partial class BaseWindow
             SetContentBoundsOn(window, content with { Width = _options.Width, Height = _options.Height });
         }
         ApplyBackgroundColor(window);
-        if (_macTransparent && OperatingSystem.IsMacOS())
-            // Electron hides the traffic lights of a transparent window with the normal title bar style, the only one here.
-            MacWindow.MakeTransparent((nint)window->get_window_handle(window), hideButtons: true);
+        if (_macTransparent && OperatingSystem.IsMacOS()) MacWindow.MakeTransparent((nint)window->get_window_handle(window));
+        if ((_macTransparent || IsFrameless) && OperatingSystem.IsMacOS()) ApplyMacHiddenTitleBar((nint)window->get_window_handle(window));
+        if (MacRoundedCorners.Borderless(_options.RoundedCorners, IsFrameless) && OperatingSystem.IsMacOS())
+            MacWindow.SetBorderless((nint)window->get_window_handle(window), true);
+        if (_macTranslucent && !_macTransparent && OperatingSystem.IsMacOS()) MacWindow.MakeTranslucent((nint)window->get_window_handle(window));
+        if (!string.IsNullOrEmpty(_options.Vibrancy) && OperatingSystem.IsMacOS()) SetVibrancyOn(window, _options.Vibrancy, 0);
         if (OperatingSystem.IsWindows())
         {
             if (_transparent) MakeSeeThrough(window);
@@ -1396,10 +1590,40 @@ public unsafe partial class BaseWindow
         if (_options.DarkTheme && OperatingSystem.IsLinux() && !X11Window.SetGtkThemeVariant(Hwnd(window), dark: true))
             Console.Error.WriteLine("[Oriel] No X display for DarkTheme.");
 
+        if (OperatingSystem.IsMacOS()) _occlusionNSWindow = MacWindow.ObserveOcclusion((nint)window->get_window_handle(window), OnOcclusionChanged);
+        if (OperatingSystem.IsMacOS()) AttachMacTouchBar((nint)window->get_window_handle(window));
+        if (OperatingSystem.IsMacOS()) _eventsNSWindow = MacWindow.ObserveEvents((nint)window->get_window_handle(window), OnMacWindowEvent);
+        if (OperatingSystem.IsMacOS()) _resizeDelegate = MacWindow.RouteWillResize((nint)window->get_window_handle(window), OnMacWillResize);
+        if (OperatingSystem.IsMacOS()) MacWindow.OnFailedFullScreen(_resizeDelegate, () =>
+        {
+            RedrawMacButtons();
+            if (_window is not null && OperatingSystem.IsMacOS()) UpdateVibrancyRadii(_window, false);
+        });
+        if (OperatingSystem.IsMacOS()) MacWindow.OnPositionSheet(_resizeDelegate, () => (_sheetOffsetX, _sheetOffsetY));
+        if (OperatingSystem.IsMacOS()) MacWindow.OnNewWindowForTab(_resizeDelegate, OnMacNewWindowForTab);
+        if (OperatingSystem.IsMacOS()) ObserveMacGestures((nint)window->get_window_handle(window));
+        _accessibleTitle = _options.AccessibleTitle ?? "";
+        if (_accessibleTitle.Length > 0 && OperatingSystem.IsMacOS()) MacWindow.SetAccessibleTitle((nint)window->get_window_handle(window), _accessibleTitle);
+        if (_options.ZoomToPageWidth && OperatingSystem.IsMacOS()) MacWindow.ZoomToPageWidth(_resizeDelegate, () => OwnPage?.PreferredWidth ?? 0);
+        if (_options.EnableLargerThanScreen && OperatingSystem.IsMacOS())
+            _largerThanScreenNSWindow = MacWindow.EnableLargerThanScreen((nint)window->get_window_handle(window), !IsFrameless);
+        if (OperatingSystem.IsMacOS())
+            MacWindow.SetTabbingIdentifier((nint)window->get_window_handle(window), MacTabbing.Identifier(_options.TabbingIdentifier, _macTransparent, IsFrameless));
         if (UsesSimpleFullScreen && OperatingSystem.IsMacOS())
             _routedNSWindow = MacWindow.RouteFullScreenToggle((nint)window->get_window_handle(window), () => SetSimpleFullScreen(!IsSimpleFullScreen));
         if (_options.AlwaysOnTop) window->set_always_on_top(window, 1);
         if (OperatingSystem.IsWindows()) ApplyWindowsStyles(window);
+        if (OperatingSystem.IsMacOS())
+        {
+            // NativeWindow::InitFromOptions: the shadow always, the opacity when given (Oriel cannot tell; 1 is the default).
+            var view = (nint)window->get_window_handle(window);
+            MacWindow.SetHasShadow(view, _hasShadow);
+            if (_opacity < 1) MacWindow.SetAlphaValue(view, _opacity);
+            ApplyMacWindowType(view);
+            // NativeWindowMac and InitFromOptions apply these only when they are set off.
+            if (!_options.Focusable) MacWindow.SetFocusable(view, false);
+            if (!_options.Movable) MacWindow.SetMovable(view, false);
+        }
         // Late, still before the first show: CEF recomputes the styles while the window is set up.
         if (OperatingSystem.IsWindows()) ApplyFrameStyles(window);
         if (TitleBar.HasOverlay(_options.TitleBarStyle, _options.TitleBarOverlay, OperatingSystem.IsMacOS())) AttachTitleBarOverlay(window, _options.TitleBarOverlay!);
@@ -1410,6 +1634,8 @@ public unsafe partial class BaseWindow
         _normalBounds = OuterBoundsOn(window);
         SaveWindowState(window);
         ApplyLinuxEnabled();
+        // Electron applies fullscreenable before restoring a display mode and the initial full screen, which it refuses.
+        ApplyFullScreenable(window, _options.FullScreenable);
         if (_options.Show)
         {
             if (_options.Modal) _options.Parent?.ChangeChildModals(increment: true);
@@ -1420,10 +1646,17 @@ public unsafe partial class BaseWindow
         }
         if (_options.HiddenInMissionControl && OperatingSystem.IsMacOS())
             MacWindow.SetCollectionBehavior((nint)window->get_window_handle(window), MacWindow.Transient, true);
-        if ((_options.FullScreen && !_restoreDisplayMode) || _kiosk)
+        // Electron applies kiosk after the full-screen option; on macOS through SetKiosk, with its presentation options.
+        var macKiosk = _kiosk && OperatingSystem.IsMacOS();
+        if ((_options.FullScreen && !_restoreDisplayMode) || (_kiosk && !macKiosk))
         {
             if (UsesSimpleFullScreen && OperatingSystem.IsMacOS()) MacWindow.SetSimpleFullScreen((nint)window->get_window_handle(window), true);
-            else window->set_fullscreen(window, 1);
+            else if (FullScreenableOn(window)) window->set_fullscreen(window, 1);
+        }
+        if (macKiosk)
+        {
+            _kiosk = false;
+            SetMacKiosk(window, true);
         }
 
         // The show above activates the window before _window is set, so OnActivationChanged could not apply it.
@@ -1539,7 +1772,8 @@ public unsafe partial class BaseWindow
         var maximized = IsMaximizedOn(_window);
         var minimized = _window->is_minimized(_window) != 0;
         if (maximized != _wasMaximized) (maximized ? Maximized : Unmaximized)?.Invoke(this, EventArgs.Empty);
-        if (minimized != _wasMinimized) (minimized ? Minimized : Restored)?.Invoke(this, EventArgs.Empty);
+        // macOS raises these from the miniaturize notifications.
+        if (minimized != _wasMinimized && !OperatingSystem.IsMacOS()) (minimized ? Minimized : Restored)?.Invoke(this, EventArgs.Empty);
         _wasMaximized = maximized;
         _titleBarOverlay?.SetMaximized(maximized);
         _wasMinimized = minimized;
@@ -1558,9 +1792,94 @@ public unsafe partial class BaseWindow
         else (fullscreen ? EnteredFullScreen : LeftFullScreen)?.Invoke(this, EventArgs.Empty);
     }
 
+    /// <summary>Electron's <c>windowDidChangeOcclusionState:</c>, macOS's only source of <c>show</c> and <c>hide</c>.</summary>
+    private void OnOcclusionChanged(bool visible)
+    {
+        if (!visible)
+        {
+            Hidden?.Invoke(this, EventArgs.Empty);
+            return;
+        }
+        // AppKit leaves a minimized child half restored when its parent's activation brings both back, without
+        // windowDidDeminiaturize; Electron deminiaturizes it (only that, unlike Views' Restore) and clears the flag itself.
+        if (_parent is not null && _wasMinimized && _window is not null && OperatingSystem.IsMacOS())
+        {
+            MacWindow.Deminiaturize((nint)_window->get_window_handle(_window));
+            _wasMinimized = false;
+        }
+        Shown?.Invoke(this, EventArgs.Empty);
+    }
+
+    /// <summary>ElectronNSWindowDelegate's <c>windowWillResize:toSize:</c>: the aspect ratio applied, then <c>will-resize</c>
+    /// with the right or bottom edge by the drag's direction; a cancel keeps the current size.</summary>
+    private (double Width, double Height) OnMacWillResize((double Width, double Height) size)
+    {
+        if (_window is null || !OperatingSystem.IsMacOS()) return size;
+        var g = MacWindow.GetResizeGeometry((nint)_window->get_window_handle(_window));
+        var newSize = _macAspectRatio > 0 ? MacWillResize.Constrain(size.Width, size.Height, _macAspectRatio, g, _macAspectExtra, !IsFrameless) : size;
+        _resizingHorizontally ??= MacWillResize.Horizontal(size.Width, size.Height, g);
+        var screen = MacWindow.ScreenRectFromNSRect(g.X, g.Y, newSize.Width, newSize.Height, MacWindow.PrimaryScreenHeight());
+        var args = new WillResizeEventArgs(new Rectangle((int)screen.X, (int)screen.Y, (int)screen.Width, (int)screen.Height),
+            _resizingHorizontally.Value ? ResizeEdge.Right : ResizeEdge.Bottom);
+        WillResize?.Invoke(this, args);
+        return args.Cancel ? (g.Width, g.Height) : newSize;
+    }
+
+    /// <summary>ElectronNSWindowDelegate's move, live-resize and miniaturize handlers.</summary>
+    [System.Runtime.Versioning.SupportedOSPlatform("macos")]
+    private void OnMacWindowEvent(MacWindowEvent e)
+    {
+        if (_window is null) return;
+        var view = (nint)_window->get_window_handle(_window);
+        OnMacTitleBarEvent(e, _window, view);
+        switch (e)
+        {
+            case MacWindowEvent.WillMove:
+                // Electron's will-move on macOS cannot be prevented.
+                var (x, y, width, height) = MacWindow.WillMoveBounds(_eventsNSWindow);
+                WillMove?.Invoke(this, new WillMoveEventArgs(new Rectangle((int)x, (int)y, (int)width, (int)height)));
+                break;
+            case MacWindowEvent.DidMove:
+                MoveFinished?.Invoke(this, EventArgs.Empty);
+                break;
+            case MacWindowEvent.DidEndLiveResize:
+                _resizingHorizontally = null;
+                ResizeFinished?.Invoke(this, EventArgs.Empty);
+                break;
+            case MacWindowEvent.WillMiniaturize:
+                // A floating level would keep the minimized window's slot above others; it comes back on restore.
+                _levelBeforeMiniaturize = MacWindow.GetLevel(view);
+                SetMacWindowLevel(_window, 0);
+                _macLink?.WillMiniaturize();
+                break;
+            case MacWindowEvent.DidMiniaturize:
+                _macLink?.DidMiniaturize();
+                _wasMinimized = true;
+                Minimized?.Invoke(this, EventArgs.Empty);
+                break;
+            case MacWindowEvent.DidDeminiaturize:
+                _macLink?.DidDeminiaturize();
+                SetMacWindowLevel(_window, _levelBeforeMiniaturize);
+                _wasMinimized = false;
+                Restored?.Invoke(this, EventArgs.Empty);
+                break;
+        }
+    }
+
     private void OnWindowDestroyed(cef_window_t* window)
     {
         if (_routedNSWindow != 0 && OperatingSystem.IsMacOS()) MacWindow.UnrouteFullScreenToggle(_routedNSWindow);
+        if (_occlusionNSWindow != 0 && OperatingSystem.IsMacOS()) MacWindow.StopObservingOcclusion(_occlusionNSWindow);
+        if (_touchBarNSWindow != 0 && OperatingSystem.IsMacOS()) MacWindow.UnrouteMakeTouchBar(_touchBarNSWindow);
+        if (_eventsNSWindow != 0 && OperatingSystem.IsMacOS()) MacWindow.StopObservingEvents(_eventsNSWindow);
+        if (_eventsNSWindow != 0 && OperatingSystem.IsMacOS()) MacWindow.ForgetPreviewItem(_eventsNSWindow);
+        if (_eventsNSWindow != 0 && OperatingSystem.IsMacOS()) MacWindow.ForgetFocusable(_eventsNSWindow);
+        if (_eventsNSWindow != 0 && OperatingSystem.IsMacOS()) MacWindow.ForgetVibrancy(_eventsNSWindow);
+        if (_gesturesNSWindow != 0 && OperatingSystem.IsMacOS()) MacWindow.ForgetGestures(_gesturesNSWindow);
+        if (_eventsNSWindow != 0 && OperatingSystem.IsMacOS()) MacWindow.ForgetAccessibleTitle(_eventsNSWindow);
+        if (_largerThanScreenNSWindow != 0 && OperatingSystem.IsMacOS()) MacWindow.ForgetLargerThanScreen(_largerThanScreenNSWindow);
+        DisposeMacButtons();
+        if (_resizeDelegate != 0 && OperatingSystem.IsMacOS()) MacWindow.UnrouteWillResize(_resizeDelegate);
         Menu.ApplicationMenuChanged -= _applicationMenuChanged;
         _menuBar?.Detach();
         _titleBarOverlay?.Detach();
@@ -1587,6 +1906,7 @@ public unsafe partial class BaseWindow
         foreach (var child in _children.ToArray()) child.Destroy();
         DetachFromOpener();
         Closed?.Invoke(this, EventArgs.Empty);
+        _touchBarHostClosed?.Invoke();
         if (s_open.Count == 0) OrielApp.Current.OnAllWindowsClosed();
     }
 

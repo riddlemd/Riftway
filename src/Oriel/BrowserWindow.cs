@@ -91,6 +91,11 @@ public sealed record WebPreferences
     /// contradicts the page's session throws.</summary>
     public bool? Sandbox { get; init; }
 
+    /// <summary>Whether the page rubber-bands when scrolled past its ends (macOS); null follows the session. Electron's
+    /// <c>scrollBounce</c>, which Oriel decides per session (<see cref="SessionOptions.ScrollBounce"/>, drift W55): a value
+    /// that contradicts the page's session throws.</summary>
+    public bool? ScrollBounce { get; init; }
+
     internal void Validate(string paramName)
     {
         // Chrome-style browsers take these from the profile's preferences, over the browser settings.
@@ -102,6 +107,7 @@ public sealed record WebPreferences
     internal Session ResolveSession()
     {
         var session = Session ?? Oriel.Session.FromPartition(Partition ?? "");
+        if (Oriel.Session.ScrollBounceMismatch(ScrollBounce, session.ScrollBounce) is { } bounce) throw new ArgumentException(bounce, "options");
         return Oriel.Session.SandboxMismatch(Sandbox, session.Sandbox) is { } error ? throw new ArgumentException(error, "options") : session;
     }
 }
@@ -145,6 +151,7 @@ public sealed unsafe partial class BrowserWindow : BaseWindow
     private readonly BrowserViewDelegate _viewDelegate;
     private cef_browser_view_t* _browserView;
     private bool _readyToShowRaised;
+    private readonly UnresponsiveSchedule _unresponsive;
     // Popups allowed by on_before_popup whose view CEF has not created yet, by the client CEF will use; UI thread only.
     private static readonly Dictionary<nint, PendingPopup> s_pendingPopups = [];
     private WebContents? _opener;
@@ -181,6 +188,14 @@ public sealed unsafe partial class BrowserWindow : BaseWindow
         WebContents.PageTitleUpdated += (_, e) => PageTitleUpdated?.Invoke(this, e);
         WebContents.EnterHtmlFullScreen += (_, _) => EnterHtmlFullScreen?.Invoke(this, EventArgs.Empty);
         WebContents.LeaveHtmlFullScreen += (_, _) => LeaveHtmlFullScreen?.Invoke(this, EventArgs.Empty);
+        _unresponsive = new UnresponsiveSchedule(CefThread.PostUiDelayed, () => !IsDestroyed && IsEnabled, () => Unresponsive?.Invoke(this, EventArgs.Empty));
+        WebContents.Unresponsive += (_, _) => _unresponsive.PageUnresponsive();
+        WebContents.Responsive += (_, _) =>
+        {
+            _unresponsive.PageResponsive();
+            Responsive?.Invoke(this, EventArgs.Empty);
+        };
+        WebContents.Destroyed += (_, _) => _unresponsive.PageDestroyed();
         WebContents.TitleApplied = SetTitle;
         WebContents.PageMouseDown = () => _menuBar?.OnPageMouseDown();
         WebContents.DidFinishLoad += (_, _) =>
@@ -508,6 +523,13 @@ public sealed unsafe partial class BrowserWindow : BaseWindow
     /// <summary>The page left HTML full screen. Electron's <c>leave-html-full-screen</c>.</summary>
     public event EventHandler? LeaveHtmlFullScreen;
 
+    /// <summary>The page has stopped answering input, 50 ms after its hang is reported, or 5 s after a close goes ahead
+    /// without the page closing; not while the window is disabled. Electron's <c>unresponsive</c>.</summary>
+    public event EventHandler? Unresponsive;
+
+    /// <summary>The page answers input again. Electron's <c>responsive</c>.</summary>
+    public event EventHandler? Responsive;
+
     /// <summary>The page finished its first load, so the window can be shown without a blank flash.
     /// Electron's <c>ready-to-show</c>.</summary>
     public event EventHandler? ReadyToShow;
@@ -522,6 +544,15 @@ public sealed unsafe partial class BrowserWindow : BaseWindow
 
     /// <summary>Reloads the window's page. Electron's <c>win.reload()</c>.</summary>
     public void Reload() => WebContents.Reload();
+
+    /// <summary>Gives the page keyboard focus, leaving the window as it is. Electron's <c>win.focusOnWebView()</c>.</summary>
+    public void FocusOnWebView() => WebContents.SetWidgetFocus(true);
+
+    /// <summary>Takes keyboard focus from the page. Electron's <c>win.blurWebView()</c>.</summary>
+    public void BlurWebView() => WebContents.SetWidgetFocus(false);
+
+    /// <summary>Electron's <c>win.showDefinitionForSelection()</c>: <see cref="WebContents.ShowDefinitionForSelection"/>.</summary>
+    public void ShowDefinitionForSelection() => WebContents.ShowDefinitionForSelection();
 
     // CEF takes only opaque colours for a windowed browser (GetColor in libcef/browser/context.cc) and cannot change the
     // page's after creation; DevTools' default background override can, and lasts across navigations.
@@ -588,6 +619,7 @@ public sealed unsafe partial class BrowserWindow : BaseWindow
     // Lets the page run beforeunload first; the window closes once the browser has gone.
     private protected override bool ContinueClose()
     {
+        _unresponsive.CloseProceeding();
         var browser = WebContents.Browser;
         // A page still waiting for its profile has no beforeunload to run, and is never made.
         if (browser is null)

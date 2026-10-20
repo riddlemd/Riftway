@@ -40,6 +40,46 @@ public sealed class MacParentLinkTests
     }
 
     [Fact]
+    public void Miniaturizing_OrdersTheChildrenOutAndStopsWantingToBeVisible()
+    {
+        var (native, make) = Setup();
+        var parent = make(1, false);
+        var a = make(2, false);
+        var b = make(3, false);
+        parent.Show();
+        a.SetParent(parent, attach: false);
+        b.SetParent(parent, attach: false);
+        native.Log.Clear();
+
+        parent.WillMiniaturize();
+        Assert.Equal(["orderOut 2", "orderOut 3"], native.Log);
+        Assert.True(parent.WantsToBeVisible);
+        parent.DidMiniaturize();
+        Assert.False(parent.WantsToBeVisible);
+    }
+
+    [Fact]
+    public void Deminiaturizing_AttachesTheChildrenThatWantToBeVisible_AndKeepsTheLevel()
+    {
+        var (native, make) = Setup();
+        var parent = make(1, false);
+        var shown = make(2, false);
+        var hidden = make(3, false);
+        shown.SetParent(parent, attach: false);
+        hidden.SetParent(parent, attach: false);
+        shown.Show();
+        native.ParentOf.Clear();
+        parent.DidMiniaturize();
+        native.Levels[1] = 3;
+
+        parent.DidDeminiaturize();
+        Assert.True(parent.WantsToBeVisible);
+        Assert.True(native.IsChildOf(2, 1));
+        Assert.False(native.IsChildOf(3, 1));
+        Assert.Equal(3, native.Levels[1]);
+    }
+
+    [Fact]
     public void SetParent_Attaching_AddsAVisibleChildAbove_AndKeepsTheParentsLevel()
     {
         var (native, make) = Setup();

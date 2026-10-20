@@ -33,7 +33,7 @@ public static unsafe partial class SystemPreferences
         bool? gtk = OrielApp.CurrentOrNull is { IsReady: true }
             ? CefThread.InvokeOnUi(() => LinuxGtkTheme.IsLoaded ? LinuxGtkTheme.AnimationsEnabled() : (bool?)null)
             : null;
-        return LinuxAnimationSettings(Environment.GetCommandLineArgs(), gtk);
+        return LinuxAnimationSettings(CurrentSwitches(), gtk);
     }
 
     // Electron's constructor: observe NativeTheme for native UI. Its updates come from the portal and from GTK's settings.

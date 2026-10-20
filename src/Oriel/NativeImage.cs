@@ -72,7 +72,7 @@ public sealed unsafe partial class NativeImage
     private readonly List<(float Scale, ImageBitmap Bitmap)> _representations = [];
     private volatile bool _template;
 
-    private NativeImage() { }
+    private NativeImage() => GC.SuppressFinalize(this);
 
     /// <summary>An empty image. Electron's <c>nativeImage.createEmpty()</c>.</summary>
     public static NativeImage CreateEmpty() => new();
@@ -140,6 +140,14 @@ public sealed unsafe partial class NativeImage
             throw new ArgumentException($"A {options.Width}x{options.Height} bitmap needs {Math.Max(0, options.Width * options.Height * 4)} bytes, not {buffer.Length}.", nameof(buffer));
         var image = new NativeImage();
         image.Add((float)options.ScaleFactor, new ImageBitmap(options.Width, options.Height, (byte[])buffer.Clone()));
+        return image;
+    }
+
+    /// <summary>An image holding a copy of each premultiplied BGRA bitmap at its scale.</summary>
+    internal static NativeImage FromBitmaps(IEnumerable<(float Scale, int Width, int Height, byte[] Bgra)> bitmaps)
+    {
+        var image = new NativeImage();
+        foreach (var (scale, width, height, bgra) in bitmaps) image.Add(scale, new ImageBitmap(width, height, (byte[])bgra.Clone()));
         return image;
     }
 
@@ -258,7 +266,11 @@ public sealed unsafe partial class NativeImage
     // Electron keeps the flag on the image's cached NSImage, which an empty image (nil) or another OS lacks.
     internal void SetTemplateImage(bool option, bool isMac)
     {
-        if (isMac && !IsEmpty()) _template = option;
+        if (isMac && !IsEmpty())
+        {
+            _template = option;
+            Changed();
+        }
     }
 
     internal bool TemplateFlag() => _template;
@@ -276,6 +288,7 @@ public sealed unsafe partial class NativeImage
             _representations.RemoveAll(r => r.Scale == scale);
             _representations.Add((scale, bitmap));
         }
+        Changed();
     }
 
     private List<(float Scale, ImageBitmap Bitmap)> Snapshot() { lock (_representations) return [.. _representations]; }

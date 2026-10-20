@@ -17,13 +17,13 @@ Counted from the Checklist at the end: `BaseWindow` and `BrowserWindow` are one 
 
 | Area | Items | Done | Partial | Missing | n/a | % done | % done + partial/2 |
 |---|---|---|---|---|---|---|---|
-| BaseWindow + BrowserWindow options | 54 | 32 | 12 | 10 | 0 | 59.3% | 70.4% |
-| webPreferences | 46 | 12 | 5 | 22 | 7 | 30.8% | 37.2% |
-| Instance methods | 143 | 89 | 25 | 23 | 6 | 65.0% | 74.1% |
-| Instance properties | 24 | 13 | 4 | 7 | 0 | 54.2% | 62.5% |
-| Events | 35 | 18 | 10 | 7 | 0 | 51.4% | 65.7% |
+| BaseWindow + BrowserWindow options | 54 | 33 | 20 | 1 | 0 | 61.1% | 79.6% |
+| webPreferences | 46 | 12 | 7 | 20 | 7 | 30.8% | 39.7% |
+| Instance methods | 143 | 98 | 38 | 1 | 6 | 71.5% | 85.4% |
+| Instance properties | 24 | 16 | 8 | 0 | 0 | 66.7% | 83.3% |
+| Events | 35 | 18 | 17 | 0 | 0 | 51.4% | 75.7% |
 | Static methods | 7 | 6 | 0 | 0 | 1 | 100.0% | 100.0% |
-| **Total** | 309 | 170 | 56 | 69 | 14 | 57.6% | 67.1% |
+| **Total** | 309 | 183 | 90 | 22 | 14 | 62.0% | 77.3% |
 
 ## Done since the audit
 
@@ -39,9 +39,8 @@ Counted from the Checklist at the end: `BaseWindow` and `BrowserWindow` are one 
 - `Destroy`.
 - Taskbar: `SetProgressBar` (`ProgressBarOptions.Mode`), `FlashFrame`, `SetSkipTaskbar` and the `SkipTaskbar` option,
   `SetOverlayIcon` (`NativeImage`; the path overload is gone, so `null` is unambiguous), `SetThumbarButtons` (Windows: Windows `ITaskbarList3` and `FlashWindowEx` (`WindowsTaskbar`); macOS the Dock tile
-  (`MacDock`: a progress bar over the icon, `requestUserAttention:`); Linux X11 (`X11Window`: the urgency hint,
+  (`MacDock`: Electron's progress bar over the icon, `requestUserAttention:`); Linux X11 (`X11Window`: the urgency hint,
   `_NET_WM_STATE_SKIP_TASKBAR`) and the Unity launcher entry D-Bus signal for progress (`LinuxLauncherEntry`, DRIFT A20).
-  Gaps: macOS error/paused colours (DRIFT W20, W23).
 - Windows only, as in Electron: `SetAppDetails` (`AppDetailsOptions`: the window property store's
   `PKEY_AppUserModel_*`), `SetThumbnailClip` and `SetThumbnailToolTip` (`ITaskbarList3`; clips run on an STA thread
   because the shell's proxy rejects the NULL clip that clears them), `BackgroundMaterial` option and
@@ -107,8 +106,8 @@ Counted from the Checklist at the end: `BaseWindow` and `BrowserWindow` are one 
   through a runtime-built target class. `getContentBounds` excludes the bar. macOS gets Electron's default
   application menu (app, File, Edit, View, Window) unless the app sets one during `Ready`; unlike Electron,
   Windows and Linux get no default bar. Webcontents gains `undo`, `redo`, `cut`, `copy`, `paste`,
-  `pasteAndMatchStyle`, `delete`, `selectAll`, `reloadIgnoringCache`. Gaps: menu item icons, sublabels, tooltips and `registerAccelerator`; most macOS-only roles (tabs, speech, recent documents,
-  `shareMenu`); the click callback gets no `KeyboardEvent`; `Command`/`Super` accelerators are ignored on Windows
+  `pasteAndMatchStyle`, `delete`, `selectAll`, `reloadIgnoringCache`. Gaps: menu item icons, sublabels, tooltips and `registerAccelerator`; most macOS-only roles (tabs, speech; `recentDocuments` through AppKit's private menu name, M4;
+  `shareMenu` only in natively built macOS menus, M4); the click callback gets no `KeyboardEvent`; `Command`/`Super` accelerators are ignored on Windows
   and Linux (CEF accelerators have no such modifier); Alt shows an auto-hidden bar until pressed again, rather than
   until the menu is used; the bar takes CEF Views' default look.
   `Menu.MenuWillShow`/`MenuWillClose` (Electron's `menu-will-show`/`menu-will-close`) come from CEF's
@@ -165,7 +164,7 @@ Counted from the Checklist at the end: `BaseWindow` and `BrowserWindow` are one 
      `disableHtmlFullscreenWindowResize`, `additionalArguments`.
    - `contextIsolation` is always on; `false` is not offered.
 2. (none: `setParentWindow` is done on every OS; W8 tracks a macOS check.)
-3. `titleBarStyle` on macOS, `trafficLightPosition`, the Window Controls Overlay page API (W34, W37) — OS, Patch.
+3. The Window Controls Overlay page API, and the macOS overlay rectangle beside the traffic lights (W34, W37) — OS, Patch.
 4. `showInactive`, `opacity`, `setIgnoreMouseEvents`, content protection, `will-resize`/`will-move` on macOS and Linux (W30) — OS.
 5. `hasShadow` on macOS and Linux (W31), kiosk presentation options on macOS (W33), the Windows window state on macOS and Linux (W43) — OS.
 
@@ -213,18 +212,18 @@ Parameters in brackets are optional in Electron. `webContents` members are in [w
 | `maxWidth` | `MaxWidth` | done |  |
 | `maxHeight` | `MaxHeight` | done |  |
 | `resizable` | `Resizable` | done |  |
-| `movable` | `Movable` | partial | Windows (`WM_MOVING`), as Electron; ignored on macOS for now (W43). |
+| `movable` | `Movable` | partial | Windows (`WM_MOVING`) and macOS (`setMovable:`), as Electron; Linux has none, as Electron (W43). |
 | `minimizable` | `Minimizable` | done |  |
 | `maximizable` | `Maximizable` | done |  |
 | `closable` | `Closable` | done | Honoured on Linux too (W10, superset). |
-| `focusable` | `Focusable` | partial | Windows `WS_EX_NOACTIVATE`, shown without activation; stored only elsewhere (W43). |
+| `focusable` | `Focusable` | partial | Windows `WS_EX_NOACTIVATE`, shown without activation; macOS `canBecomeKeyWindow`/`canBecomeMainWindow` on Oriel's window subclass, as ElectronNSWindow's `disableKeyOrMainWindow` (Chromium's window has no such flag) _(branch `mac-integration`)_; stored only on Linux (W43). |
 | `alwaysOnTop` | `AlwaysOnTop` | done |  |
 | `fullscreen` | `FullScreen` | done |  |
-| `fullscreenable` | — | missing |  |
+| `fullscreenable` | `FullScreenable` | partial | Refuses `setFullScreen`, the initial and restored full screen; macOS through the collection behaviour and the zoom button (W53); not yet run on screen. |
 | `simpleFullscreen` | `SimpleFullScreen` | done | macOS only, as in Electron. |
 | `skipTaskbar` | `SkipTaskbar` | done |  |
 | `hiddenInMissionControl` | `HiddenInMissionControl` | done | macOS. |
-| `kiosk` | `Kiosk` | partial | Full screen; macOS presentation options not yet (W33). |
+| `kiosk` | `Kiosk` | partial | Full screen; on macOS also Electron's presentation options, not yet run on screen (W33). |
 | `name` | `Name` | done | Unique among open windows; reuse throws `ArgumentException` with Electron's message, free again once destroyed. |
 | `windowStatePersistence` | `WindowStatePersistence` | done | `true` or `{ Bounds, DisplayMode }`; Electron's `windowStates` entry in `Local State` (sessionData), same keys, restore and clamp rules (W51). |
 | `title` | `Title` | done |  |
@@ -233,27 +232,27 @@ Parameters in brackets are optional in Electron. `webContents` members are in [w
 | `frame` | `Frame` | done |  |
 | `parent` | `Parent` | done |  |
 | `modal` | `Modal` | partial | Linux: Oriel disables the parent itself, as Electron; the pointer crossing into or out of it still reaches its page (W5). |
-| `acceptFirstMouse` | — | missing |  |
-| `disableAutoHideCursor` | — | missing |  |
+| `acceptFirstMouse` | `AcceptFirstMouse` | partial | macOS, CEF's `accepts_first_mouse` (enabled or disabled, never CEF's `--accept-first-mouse` default) _(branch `mac-integration`)_; not yet run on screen. |
+| `disableAutoHideCursor` | `DisableAutoHideCursor` | done | Accepted with no effect, as Electron v44: its window stores the flag and neither Electron nor Chromium reads it _(branch `mac-integration`)_. |
 | `autoHideMenuBar` | `AutoHideMenuBar` | done |  |
-| `enableLargerThanScreen` | — | missing |  |
+| `enableLargerThanScreen` | `EnableLargerThanScreen` | partial | macOS `constrainFrameRect:toScreen:` on Oriel's window subclass, as `ElectronNSWindow` _(branch `mac-integration`)_; not yet run on screen. |
 | `backgroundColor` | `BackgroundColor` | done |  |
-| `hasShadow` | `HasShadow` | partial | Stored only, which is Electron's behaviour on Windows; macOS and Linux not yet (W31). |
-| `opacity` | `Opacity` | partial | Windows only for now (W30). |
+| `hasShadow` | `HasShadow` | partial | macOS `NSWindow.hasShadow`; stored only on Windows, as Electron; Linux not yet (W31). |
+| `opacity` | `Opacity` | partial | Windows and macOS (`alphaValue`); Linux not yet (W30). |
 | `darkTheme` | `DarkTheme` | done | Linux: `_GTK_THEME_VARIANT=dark` at creation, as Electron; Chromium 154 already writes dark when its GTK UI is loaded. |
 | `transparent` | `Transparent` | partial | Windows and macOS; Linux only with Oriel's CEF patch, not yet built (W24). |
-| `type` | `Type` | partial | Windows `toolbar` (`WS_EX_TOOLWINDOW`); Linux and macOS types not yet (W43). |
-| `visualEffectState` | — | missing |  |
-| `titleBarStyle` | `TitleBarStyle` | partial | Windows (and Linux, unchecked): anything but `Default` is frameless; macOS keeps its title bar (W37). |
+| `type` | `Type` | partial | Windows `toolbar` (`WS_EX_TOOLWINDOW`); macOS `desktop`, `panel` (floating level; not an `NSPanel`) and `textured`, not yet run on screen; Linux types not yet (W43). |
+| `visualEffectState` | `VisualEffectState` | partial | macOS _(branch `mac-integration`)_ (W54). |
+| `titleBarStyle` | `TitleBarStyle` | partial | Anything but `Default` is frameless, as Electron. macOS: a transparent title bar with the traffic lights moved by Electron's `WindowButtonsProxy` (`hiddenInset` 12 × 11 in, `customButtonsOnHover` shown under the pointer, the overlay height as the container's), redrawn on resize, focus, minimise and full screen; not yet run on screen (W37). |
 | `titleBarOverlay` | `TitleBarOverlay` | partial | Windows: Views buttons docked top right, CSS colours as Chromium parses them; no page API (W34); snap layouts through `HTMAXBUTTON`, buttons follow the window's flags. |
 | `accentColor` | `AccentColor` | done | Windows 11, as in Electron: `bool` or CSS string (`AccentColor`); system changes re-applied on DWM's broadcasts (W39). |
-| `trafficLightPosition` | — | missing |  |
-| `roundedCorners` | `RoundedCorners` | partial | Windows 11 (`DWMWA_WINDOW_CORNER_PREFERENCE`, frameless, off without `thickFrame`, squared in full screen); Linux and the macOS full-screen rule not done (W40). |
+| `trafficLightPosition` | `TrafficLightPosition` | partial | macOS, the proxy's margin; not yet run on screen (W37). |
+| `roundedCorners` | `RoundedCorners` | partial | Windows 11 (`DWMWA_WINDOW_CORNER_PREFERENCE`, frameless, off without `thickFrame`, squared in full screen); macOS a frameless window without them is borderless, titled again in full screen, as Electron _(branch `mac-integration`)_, not yet run on screen; Linux not done (W40). |
 | `thickFrame` | `ThickFrame` | partial | Windows: Electron's frameless `GWL_STYLE`, framed loses `WS_THICKFRAME`; full screen and resize insets follow CEF, not Electron (W40). |
-| `vibrancy` | — | missing |  |
+| `vibrancy` | `Vibrancy` | partial | macOS: Electron's material table, the window translucent and the page transparent without a `backgroundColor` _(branch `mac-integration`)_; the effect view sits under Chromium's content view (W54), corners masked as Electron's; not yet run on screen. |
 | `backgroundMaterial` | `BackgroundMaterial` | done | Windows 11 22H2+ only. |
-| `zoomToPageWidth` | — | missing |  |
-| `tabbingIdentifier` | — | missing |  |
+| `zoomToPageWidth` | `ZoomToPageWidth` | partial | macOS: the window delegate's `windowWillUseStandardFrame:defaultFrame:` widens to the page's preferred width (0 without `EnablePreferredSizeMode`, as Electron's `GetPreferredSize`), never narrower, moved left only to stay on screen; Shift fills the screen _(branch `mac-integration`)_; not yet run on screen. |
+| `tabbingIdentifier` | `TabbingIdentifier` | partial | macOS; without one, or transparent or frameless, the window never tabs (`NSWindowTabbingModeDisallowed`), as Electron _(branch `mac-integration`)_; not yet run on screen. |
 | `webPreferences (BrowserWindow)` | `WebPreferences` | done | Per-option status in the next table. |
 | `paintWhenInitiallyHidden (BrowserWindow)` | — | missing |  |
 
@@ -280,7 +279,7 @@ Parameters in brackets are optional in Electron. `webContents` members are in [w
 | `webgl` | `WebGL` | done |  |
 | `plugins` | — | missing |  |
 | `experimentalFeatures` | — | missing | Process-wide in CEF (W13). |
-| `scrollBounce` | — | missing |  |
+| `scrollBounce` | `ScrollBounce` | partial | Per session (`SessionOptions.ScrollBounce`), with Oriel's patches 0010 and 0012, Electron's `scroll_bounce_flag.patch`; with stock CEF every page rubber-bands (W55). |
 | `enableBlinkFeatures` | — | missing | Process-wide in CEF (W13). |
 | `disableBlinkFeatures` | — | missing | Process-wide in CEF (W13). |
 | `defaultFontFamily` | `DefaultFontFamily` | partial | All families but `math`, which throws (W11). |
@@ -299,7 +298,7 @@ Parameters in brackets are optional in Electron. `webContents` members are in [w
 | `navigateOnDragDrop` | — | missing |  |
 | `autoplayPolicy` | — | missing | Process-wide in CEF (W13). |
 | `disableHtmlFullscreenWindowResize` | — | missing |  |
-| `accessibleTitle` | — | missing |  |
+| `accessibleTitle` | `BaseWindowOptions.AccessibleTitle` | partial | macOS: VoiceOver reads it; Windows/Linux stored only (W58). |
 | `spellcheck` | — | missing | No per-page switch in CEF (E22); the session's `SetSpellCheckerEnabled` covers every page. |
 | `enableWebSQL` | — | n/a | Not applicable (listed in "Not applicable"). |
 | `v8CacheOptions` | — | n/a | Node/V8 option. |
@@ -321,7 +320,7 @@ Parameters in brackets are optional in Electron. `webContents` members are in [w
 | `isFocused()` | `IsFocused` | done |  |
 | `isDestroyed()` | `IsDestroyed` | done |  |
 | `show()` | `Show` | done |  |
-| `showInactive()` | `ShowInactive` | partial | Windows only; macOS and Linux show and focus (W30). |
+| `showInactive()` | `ShowInactive` | partial | Windows and macOS (not key, the app not activated; not yet run on screen); Linux shows and focuses (W30). |
 | `hide()` | `Hide` | done |  |
 | `isVisible()` | `IsVisible` | done |  |
 | `isModal()` | `IsModal` | done |  |
@@ -335,22 +334,22 @@ Parameters in brackets are optional in Electron. `webContents` members are in [w
 | `isFullScreen()` | `IsFullScreen` | done | False in simple full screen, as Electron |
 | `setSimpleFullScreen(flag)` | `SetSimpleFullScreen` | done |  |
 | `isSimpleFullScreen()` | `IsSimpleFullScreen` | done |  |
-| `isNormal()` | — | missing |  |
-| `setAspectRatio(aspectRatio, extraSize)` | `SetAspectRatio` | partial | Windows, Chromium's sizing (whole window, `extraSize` ignored, as Electron there); 0 resets (W46); macOS and Linux not yet (W43). |
+| `isNormal()` | `IsNormal` | done | Not minimised, maximised or full screen, nor in simple full screen on macOS, as Electron _(branch `mac-integration`)_. |
+| `setAspectRatio(aspectRatio, extraSize)` | `SetAspectRatio` | partial | Windows, Chromium's sizing (whole window, `extraSize` ignored, as Electron there); 0 resets (W46); macOS as Electron's delegate (the content's ratio with `extraSize`, rounded, within the limits), not yet run on screen; Linux not yet (W43). |
 | `setBackgroundColor(color)` | `SetBackgroundColor` | done |  |
-| `previewFile(path, displayName)` | — | missing |  |
-| `closeFilePreview()` | — | missing |  |
-| `setBounds(bounds, animate)` | `SetBounds` | partial | No `animate` argument (macOS-only parameter). |
+| `previewFile(path, displayName)` | `PreviewFile` | partial | macOS QuickLook, the window the panel's controller and data source _(branch `mac-integration`)_; not yet run on screen. |
+| `closeFilePreview()` | `CloseFilePreview` | partial | macOS, only the panel this window opened, as Electron _(branch `mac-integration`)_; not yet run on screen. |
+| `setBounds(bounds, animate)` | `SetBounds` | partial | macOS `animate` through `setFrame:display:animate:`, raised to the minimum size, lowered to the maximum and skipped in full screen, as Electron; not yet run on screen; ignored elsewhere, as Electron. |
 | `getBounds()` | `GetBounds` | done |  |
 | `getBackgroundColor()` | `GetBackgroundColor` | done |  |
-| `setContentBounds(bounds, animate)` | `SetContentBounds` | partial | No `animate` argument (macOS-only parameter). |
+| `setContentBounds(bounds, animate)` | `SetContentBounds` | partial | macOS `animate` through `setFrame:display:animate:`, raised to the minimum size, lowered to the maximum and skipped in full screen, as Electron; not yet run on screen; ignored elsewhere, as Electron. |
 | `getContentBounds()` | `GetContentBounds` | done |  |
 | `getNormalBounds()` | `GetNormalBounds` | done | Windows: `GetWindowPlacement`; elsewhere the last bounds seen while normal. |
-| `setEnabled(enable)` | `SetEnabled` | partial | Windows `EnableWindow`, kept disabled under a shown modal; Linux an X11 input cover and dropped keys, the pointer crossing in or out still reaching the page (W5); stored only on macOS (W43). |
-| `isEnabled()` | `IsEnabled` | partial | Windows `IsWindowEnabled`; Linux the state Electron keeps (disabled by `SetEnabled(false)` or a shown modal child); true on macOS (W43). |
-| `setSize(width, height, animate)` | `SetSize` | partial | No `animate` argument (macOS-only parameter). |
+| `setEnabled(enable)` | `SetEnabled` | partial | macOS a half-transparent sheet, as Electron; Windows `EnableWindow`, kept disabled under a shown modal; Linux an X11 input cover and dropped keys, the pointer crossing in or out still reaching the page (W5); stored only on macOS (W43). |
+| `isEnabled()` | `IsEnabled` | partial | Windows `IsWindowEnabled`; Linux the state Electron keeps (disabled by `SetEnabled(false)` or a shown modal child); macOS no attached sheet, as Electron. |
+| `setSize(width, height, animate)` | `SetSize` | partial | macOS `animate` through `setFrame:display:animate:`, raised to the minimum size, lowered to the maximum and skipped in full screen, as Electron; not yet run on screen; ignored elsewhere, as Electron. |
 | `getSize()` | `GetSize` | done |  |
-| `setContentSize(width, height, animate)` | `SetContentSize` | partial | No `animate` argument (macOS-only parameter). |
+| `setContentSize(width, height, animate)` | `SetContentSize` | partial | macOS `animate` through `setFrame:display:animate:`, raised to the minimum size, lowered to the maximum and skipped in full screen, as Electron; not yet run on screen; ignored elsewhere, as Electron. |
 | `getContentSize()` | `GetContentSize` | done |  |
 | `setMinimumSize(width, height)` | `SetMinimumSize` | done |  |
 | `getMinimumSize()` | `GetMinimumSize` | done |  |
@@ -358,34 +357,34 @@ Parameters in brackets are optional in Electron. `webContents` members are in [w
 | `getMaximumSize()` | `GetMaximumSize` | done |  |
 | `setResizable(resizable)` | `SetResizable` | done |  |
 | `isResizable()` | `IsResizable` | done |  |
-| `setMovable(movable)` | `SetMovable` | partial | Windows only (W43). |
-| `isMovable()` | `IsMovable` | partial | Windows; true elsewhere, as Electron on Linux (W43). |
+| `setMovable(movable)` | `SetMovable` | partial | Windows and macOS (W43). |
+| `isMovable()` | `IsMovable` | partial | Windows and macOS (the window's); true on Linux, as Electron (W43). |
 | `setMinimizable(minimizable)` | `SetMinimizable` | done |  |
 | `isMinimizable()` | `IsMinimizable` | done |  |
 | `setMaximizable(maximizable)` | `SetMaximizable` | done |  |
 | `isMaximizable()` | `IsMaximizable` | done |  |
-| `setFullScreenable(fullscreenable)` | — | missing |  |
-| `isFullScreenable()` | — | missing |  |
+| `setFullScreenable(fullscreenable)` | `SetFullScreenable` | done | Not yet run on screen. |
+| `isFullScreenable()` | `IsFullScreenable` | done | macOS reads the collection behaviour, as Electron. |
 | `setClosable(closable)` | `SetClosable` | done |  |
 | `isClosable()` | `IsClosable` | done |  |
 | `setHiddenInMissionControl(hidden)` | `SetHiddenInMissionControl` | done |  |
 | `isHiddenInMissionControl()` | `IsHiddenInMissionControl` | done |  |
 | `setAlwaysOnTop(flag, level, relativeLevel)` | `SetAlwaysOnTop` | done | macOS window levels; Windows: levels below `pop-up-menu` go under the taskbar (again on each activation); `level` `normal` with no `relativeLevel` leaves the window off top on macOS only, as Electron; an unknown level throws nowhere, as Electron: macOS takes it as `normal` (plus `relativeLevel`), Windows keeps the window on top and above the taskbar, and a null level is `floating`. |
 | `isAlwaysOnTop()` | `IsAlwaysOnTop` | done |  |
-| `moveAbove(mediaSourceId)` | `MoveAbove` | partial | Windows, Chromium's id parsing and Electron's error; macOS and Linux not yet (W43). |
-| `moveTop()` | `MoveTop` | partial | Windows only (W43). |
+| `moveAbove(mediaSourceId)` | `MoveAbove` | partial | Windows and macOS (`orderWindowByShuffling:`, the owner checked as WebRTC's `GetWindowOwnerPid`), Chromium's id parsing and Electron's error; Linux not yet (W43). |
+| `moveTop()` | `MoveTop` | partial | Windows and macOS; Linux not yet (W43). |
 | `center()` | `Center` | done |  |
-| `setPosition(x, y, animate)` | `SetPosition` | partial | No `animate` argument (macOS-only parameter). |
+| `setPosition(x, y, animate)` | `SetPosition` | partial | macOS `animate` through `setFrame:display:animate:`, raised to the minimum size, lowered to the maximum and skipped in full screen, as Electron; not yet run on screen; ignored elsewhere, as Electron. |
 | `getPosition()` | `GetPosition` | done |  |
 | `setTitle(title)` | `SetTitle` | done |  |
 | `getTitle()` | `GetTitle` | done |  |
-| `setSheetOffset(offsetY, offsetX)` | — | missing |  |
+| `setSheetOffset(offsetY, offsetX)` | `SetSheetOffset` | partial | macOS through the window delegate's `window:willPositionSheet:usingRect:`, which places every sheet as Electron's does _(branch `mac-integration`)_; not yet run on screen. |
 | `flashFrame(flag)` | `FlashFrame` | done |  |
 | `setSkipTaskbar(skip)` | `SetSkipTaskbar` | done |  |
 | `setKiosk(flag)` | `SetKiosk` | partial | Full screen (W33). |
 | `isKiosk()` | `IsKiosk` | done |  |
 | `isTabletMode()` | `IsTabletMode` | done | Windows `UIViewSettings`; false elsewhere, as Electron. |
-| `getMediaSourceId()` | `GetMediaSourceId` | partial | `window:<HWND or X11 window>:0`; no aura id; throws on macOS (W45). |
+| `getMediaSourceId()` | `GetMediaSourceId` | partial | `window:<HWND, X11 window or macOS window number>:0`; no aura id (W45). |
 | `getNativeWindowHandle()` | `GetNativeWindowHandle` | done | Returns `nint`, not a Buffer (S6). |
 | `hookWindowMessage(message, callback)` | `HookWindowMessage` | done | Windows only, as in Electron; `Action<nint, nint>` with the raw values, not Buffers (W38). |
 | `isWindowMessageHooked(message)` | `IsWindowMessageHooked` | done |  |
@@ -395,20 +394,20 @@ Parameters in brackets are optional in Electron. `webContents` members are in [w
 | `getRepresentedFilename()` | `GetRepresentedFilename` | done |  |
 | `setDocumentEdited(edited)` | `SetDocumentEdited` | done | macOS. |
 | `isDocumentEdited()` | `IsDocumentEdited` | done |  |
-| `focusOnWebView()` | — | missing |  |
-| `blurWebView()` | — | missing |  |
+| `focusOnWebView()` | `FocusOnWebView` | done | CEF's `set_focus(1)` on the page, the window left as it is _(branch `mac-integration`)_. |
+| `blurWebView()` | `BlurWebView` | done | CEF's `set_focus(0)` _(branch `mac-integration`)_. |
 | `capturePage(rect, opts)` | — | missing | `NativeImage` exists; the capture is missing. |
 | `loadURL(url, options)` | `LoadUrl` | partial | Returns Task; `baseURLForDataURL` throws, `UploadFile` offset/length throw, no client hints, reload drops options (C1, C2, C3, C5). |
 | `loadFile(filePath, options)` | `LoadFile` | done | `query`, `search` (raw, replaces `query`), `hash` |
 | `reload()` | `Reload` | done |  |
 | `setMenu(menu)` | `SetMenu` | done | Drawn by CEF Views on Windows/Linux (W16). |
 | `removeMenu()` | `RemoveMenu` | done |  |
-| `setProgressBar(progress, options)` | `SetProgressBar` | partial | macOS error/paused show as plain bar (W20); Linux sends Electron's launcher entry signal (A20). |
+| `setProgressBar(progress, options)` | `SetProgressBar` | partial | macOS Electron's own Dock bar (grey outline, blue fill, full above 1, the mode ignored) _(branch `mac-integration`)_, not yet run on screen; Linux sends Electron's launcher entry signal (A20). |
 | `setOverlayIcon(overlay, description)` | `SetOverlayIcon` | done | Takes a `NativeImage`. |
-| `invalidateShadow()` | — | missing |  |
-| `setHasShadow(hasShadow)` | `SetHasShadow` | partial | Stored only, as Electron on Windows; macOS and Linux not yet (W31). |
-| `hasShadow()` | `GetHasShadow` | done | Returns the value set. |
-| `setOpacity(opacity)` | `SetOpacity` | partial | Windows only for now (W30). |
+| `invalidateShadow()` | `InvalidateShadow` | done | macOS; nothing elsewhere, as Electron. |
+| `setHasShadow(hasShadow)` | `SetHasShadow` | partial | macOS; stored only on Windows, as Electron; Linux not yet (W31). |
+| `hasShadow()` | `GetHasShadow` | done | macOS reads the window's; elsewhere the value set. |
+| `setOpacity(opacity)` | `SetOpacity` | partial | Windows and macOS; Linux not yet (W30). |
 | `getOpacity()` | `GetOpacity` | done |  |
 | `setShape(rects)` | `SetShape` | partial | Windows window region; macOS and Linux not yet (W43). |
 | `setThumbarButtons(buttons)` | `SetThumbarButtons` | done | Windows only, as in Electron: ids `40001 + slot`, icon/tooltip sent only when set, callbacks replaced before a bad flag fails the call, re-added on `TaskbarCreated`. |
@@ -417,9 +416,9 @@ Parameters in brackets are optional in Electron. `webContents` members are in [w
 | `setAppDetails(options)` | `SetAppDetails` | done | Windows only, as in Electron. |
 | `setAccentColor(accentColor)` | `SetAccentColor` | done | Windows only, as in Electron; null follows the system again. |
 | `getAccentColor()` | `GetAccentColor` | done | Returns `AccentColor`: `#RRGGBB`, or `AccentColor.None` for Electron's `false` (W39). |
-| `showDefinitionForSelection()` | — | missing |  |
+| `showDefinitionForSelection()` | `ShowDefinitionForSelection` | partial | The page's `ShowDefinitionForSelection` _(branch `mac-integration`)_; not yet run on screen. |
 | `setIcon(icon)` | `SetIcon` | done | Path or `NativeImage`; Windows and Linux only, as in Electron. |
-| `setWindowButtonVisibility(visible)` | `SetWindowButtonVisibility` | done | macOS. |
+| `setWindowButtonVisibility(visible)` | `SetWindowButtonVisibility` | done | macOS, the proxy's container too; `customButtonsOnHover` leaves the buttons to the pointer, as Electron. `GetWindowButtonVisibility` is Electron's private `_getWindowButtonVisibility`. |
 | `setAutoHideMenuBar(hide)` | `AutoHideMenuBar (set)` | done |  |
 | `isMenuBarAutoHide()` | `AutoHideMenuBar (get)` | done |  |
 | `setMenuBarVisibility(visible)` | `SetMenuBarVisibility` | done |  |
@@ -427,27 +426,27 @@ Parameters in brackets are optional in Electron. `webContents` members are in [w
 | `isSnapped()` | `IsSnapped` | done | Windows `IsWindowArranged`; false elsewhere, as Electron. |
 | `setVisibleOnAllWorkspaces(visible, options)` | `SetVisibleOnAllWorkspaces` | done | macOS and Linux; Windows has no workspaces, as in Electron. |
 | `isVisibleOnAllWorkspaces()` | `IsVisibleOnAllWorkspaces` | done |  |
-| `setIgnoreMouseEvents(ignore, options)` | `SetIgnoreMouseEvents` | partial | Windows only, `forward` included (W30). |
-| `setContentProtection(enable)` | `SetContentProtection` | partial | Windows only for now (W30). |
-| `isContentProtected()` | `IsContentProtected` | partial | Windows only for now (W30). |
-| `setFocusable(focusable)` | `SetFocusable` | partial | Windows: style, taskbar button, blur, as Electron; stored only elsewhere (W43). |
-| `isFocusable()` | `IsFocusable` | partial | Windows reads `WS_EX_NOACTIVATE` too (W43). |
+| `setIgnoreMouseEvents(ignore, options)` | `SetIgnoreMouseEvents` | partial | Windows and macOS (`ignoresMouseEvents`, `acceptsMouseMovedEvents` for `forward`), `forward` included; Linux not yet (W30). |
+| `setContentProtection(enable)` | `SetContentProtection` | partial | Windows and macOS (`sharingType`); Linux not yet (W30). |
+| `isContentProtected()` | `IsContentProtected` | partial | Windows and macOS; false on Linux (W30). |
+| `setFocusable(focusable)` | `SetFocusable` | partial | Windows: style, taskbar button, blur, as Electron; macOS `canBecomeKeyWindow`/`canBecomeMainWindow` on Oriel's window subclass, as ElectronNSWindow's `disableKeyOrMainWindow` (Chromium's window has no such flag) _(branch `mac-integration`)_; stored only on Linux (W43). |
+| `isFocusable()` | `IsFocusable` | partial | Windows reads `WS_EX_NOACTIVATE` too; macOS reads the subclass's flag (W43). |
 | `setParentWindow(parent)` | `SetParentWindow` | done | As Electron on each OS: Windows `GWLP_HWNDPARENT` with re-show, Linux `WM_TRANSIENT_FOR`, macOS `addChildWindow:`; modal throws. macOS checks pass (W8). |
 | `getParentWindow()` | `GetParentWindow` | done |  |
 | `getChildWindows()` | `GetChildWindows` | done |  |
-| `setAutoHideCursor(autoHide)` | — | missing |  |
-| `selectPreviousTab()` | — | missing |  |
-| `selectNextTab()` | — | missing |  |
-| `showAllTabs()` | — | missing |  |
-| `mergeAllWindows()` | — | missing |  |
-| `moveTabToNewWindow()` | — | missing |  |
-| `toggleTabBar()` | — | missing |  |
-| `addTabbedWindow(window)` | — | missing |  |
-| `setVibrancy(type, options)` | — | missing |  |
+| `setAutoHideCursor(autoHide)` | `SetAutoHideCursor` | done | As `disableAutoHideCursor` _(branch `mac-integration`)_. |
+| `selectPreviousTab()` | `SelectPreviousTab` | partial | macOS _(branch `mac-integration`)_; not yet run on screen. |
+| `selectNextTab()` | `SelectNextTab` | partial | macOS _(branch `mac-integration`)_; not yet run on screen. |
+| `showAllTabs()` | `ShowAllTabs` | partial | macOS `toggleTabOverview:` _(branch `mac-integration`)_; not yet run on screen. |
+| `mergeAllWindows()` | `MergeAllWindows` | partial | macOS _(branch `mac-integration`)_; not yet run on screen. |
+| `moveTabToNewWindow()` | `MoveTabToNewWindow` | partial | macOS _(branch `mac-integration`)_; not yet run on screen. |
+| `toggleTabBar()` | `ToggleTabBar` | partial | macOS _(branch `mac-integration`)_; not yet run on screen. |
+| `addTabbedWindow(window)` | `AddTabbedWindow` | partial | macOS, `ordered:NSWindowAbove`; the window itself throws `ArgumentException` with Electron's message _(branch `mac-integration`)_; not yet run on screen. |
+| `setVibrancy(type, options)` | `SetVibrancy` | partial | macOS, `animationDuration` fades through `NSAnimationContext` _(branch `mac-integration`)_ (W54); not yet run on screen. |
 | `setBackgroundMaterial(material)` | `SetBackgroundMaterial` | done | Windows 11 22H2+ only. |
-| `setWindowButtonPosition(position)` | — | missing |  |
-| `getWindowButtonPosition()` | — | missing |  |
-| `setTouchBar(touchBar)` | — | missing |  |
+| `setWindowButtonPosition(position)` | `SetWindowButtonPosition` | partial | macOS; null puts AppKit's margin back; not yet run on screen (W37). |
+| `getWindowButtonPosition()` | `GetWindowButtonPosition` | done | macOS; null elsewhere. |
+| `setTouchBar(touchBar)` | `SetTouchBar` | done | macOS, as `ElectronNSWindow makeTouchBar` and `touch-bar.ts` (the TouchBar module row); null removes it. |
 | `setBrowserView(browserView)` | — | n/a | Deprecated. |
 | `getBrowserView()` | — | n/a | Deprecated. |
 | `addBrowserView(browserView)` | — | n/a | Deprecated. |
@@ -463,26 +462,26 @@ Parameters in brackets are optional in Electron. `webContents` members are in [w
 | `webContents` | `WebContents` | done |  |
 | `id` | `Id` | done |  |
 | `contentView` | `ContentView` | done | Empty in a new window; a `BrowserWindow`'s page (Chrome style) lies below it, as Electron's; views added to it are Alloy style (DRIFT V2) |
-| `tabbingIdentifier` | — | missing |  |
+| `tabbingIdentifier` | `GetTabbingIdentifier` | partial | macOS; null when the window never tabs _(branch `mac-integration`)_. |
 | `autoHideMenuBar` | `AutoHideMenuBar` | done |  |
 | `simpleFullScreen` | `SetSimpleFullScreen / IsSimpleFullScreen` | done |  |
 | `fullScreen` | `SetFullScreen / IsFullScreen` | done |  |
-| `focusable` | `SetFocusable / IsFocusable` | partial | Windows; stored only elsewhere (W43). |
-| `visibleOnAllWorkspaces` | — | missing |  |
-| `shadow` | `SetHasShadow / GetHasShadow` | partial | Stored only, as Electron on Windows (W31). |
+| `focusable` | `SetFocusable / IsFocusable` | partial | Windows and macOS; stored only on Linux (W43). |
+| `visibleOnAllWorkspaces` | `SetVisibleOnAllWorkspaces / IsVisibleOnAllWorkspaces` | done |  |
+| `shadow` | `SetHasShadow / GetHasShadow` | partial | macOS; stored only on Windows, as Electron (W31). |
 | `menuBarVisible` | `SetMenuBarVisibility / IsMenuBarVisible` | done |  |
-| `kiosk` | `SetKiosk / IsKiosk` | partial | Full screen; macOS presentation options not yet (W33). |
-| `documentEdited` | — | missing |  |
-| `representedFilename` | — | missing |  |
+| `kiosk` | `SetKiosk / IsKiosk` | partial | Full screen; on macOS also Electron's presentation options, not yet run on screen (W33). |
+| `documentEdited` | `SetDocumentEdited / IsDocumentEdited` | done | macOS. |
+| `representedFilename` | `SetRepresentedFilename / GetRepresentedFilename` | done | macOS. |
 | `title` | `SetTitle / GetTitle` | done |  |
 | `minimizable` | `SetMinimizable / IsMinimizable` | done |  |
 | `maximizable` | `SetMaximizable / IsMaximizable` | done |  |
-| `fullScreenable` | — | missing |  |
+| `fullScreenable` | `SetFullScreenable / IsFullScreenable` | partial | As the option (W53). |
 | `resizable` | `SetResizable / IsResizable` | done |  |
 | `closable` | `SetClosable / IsClosable` | done |  |
-| `movable` | `SetMovable / IsMovable` | partial | Windows; always true elsewhere (W43). |
-| `excludedFromShownWindowsMenu` | — | missing |  |
-| `accessibleTitle` | — | missing |  |
+| `movable` | `SetMovable / IsMovable` | partial | Windows and macOS; always true on Linux (W43). |
+| `excludedFromShownWindowsMenu` | `SetExcludedFromShownWindowsMenu / IsExcludedFromShownWindowsMenu` | partial | macOS `excludedFromWindowsMenu` _(branch `mac-integration`)_; not yet run on screen. |
+| `accessibleTitle` | `BaseWindow.AccessibleTitle` | partial | macOS: overrides the window's `accessibilityTitle`; Windows/Linux stored only (W58). |
 | `snapped` | `IsSnapped` | done |  |
 
 ### Instance events
@@ -494,8 +493,8 @@ Parameters in brackets are optional in Electron. `webContents` members are in [w
 | `closed` | `Closed` | done |  |
 | `query-session-end` | `QuerySessionEnd` | done | Windows only, as Electron; reasons and the refusal as Electron. |
 | `session-end` | `SessionEnded` | done | Windows only, as Electron: every window, then the process ends unless quitting (that path unverified). |
-| `unresponsive` | — | missing |  |
-| `responsive` | — | missing |  |
+| `unresponsive` | `Unresponsive` | partial | `browser-window.ts`'s timer: 50 ms after the page's `unresponsive`, 5 s after a close goes ahead, cancelled by `responsive` or the page's destruction, never while disabled; a real hang is unverified (C14). |
+| `responsive` | `Responsive` | partial | The page's `responsive`; a real hang is unverified (C14). |
 | `blur` | `Blurred` | done |  |
 | `focus` | `Focused` | done |  |
 | `show` | `Shown` | partial | Fires only from Show(), not when the OS shows the window (W1). |
@@ -503,25 +502,25 @@ Parameters in brackets are optional in Electron. `webContents` members are in [w
 | `ready-to-show` | `ReadyToShow` | done |  |
 | `maximize` | `Maximized` | done |  |
 | `unmaximize` | `Unmaximized` | done |  |
-| `minimize` | `Minimized` | partial | From `WM_SIZE` on Windows; polled every 250 ms on macOS/Linux (W2). |
-| `restore` | `Restored` | partial | From `WM_SIZE` on Windows; polled every 250 ms on macOS/Linux (W2). |
-| `will-resize` | `WillResize` | partial | Windows only for now (W30). |
+| `minimize` | `Minimized` | partial | From `WM_SIZE` on Windows, `NSWindowDidMiniaturizeNotification` on macOS; polled every 250 ms on Linux (W2). |
+| `restore` | `Restored` | partial | From `WM_SIZE` on Windows, `NSWindowDidDeminiaturizeNotification` on macOS; polled every 250 ms on Linux (W2). |
+| `will-resize` | `WillResize` | partial | Windows; macOS from the window delegate's `windowWillResize:toSize:` (right or bottom edge by the drag's direction, as Electron), not yet run on screen; Linux not yet (W30). |
 | `resize` | `Resized` | done |  |
-| `resized` | `ResizeFinished` | partial | Windows (`WM_EXITSIZEMOVE`); macOS not yet (W43). |
-| `will-move` | `WillMove` | partial | Windows only for now (W30). |
+| `resized` | `ResizeFinished` | partial | Windows (`WM_EXITSIZEMOVE`), macOS (`windowDidEndLiveResize`); not Linux, as Electron (W43). |
+| `will-move` | `WillMove` | partial | Windows; macOS (`windowWillMove`, cannot be cancelled there, as Electron); Linux not yet (W30). |
 | `move` | `Moved` | done |  |
-| `moved` | `MoveFinished` | partial | Windows (`WM_EXITSIZEMOVE`); macOS not yet (W43). |
+| `moved` | `MoveFinished` | partial | Windows (`WM_EXITSIZEMOVE`), macOS (each `windowDidMove`, as Electron); not Linux (W43). |
 | `enter-full-screen` | `EnteredFullScreen` | done |  |
 | `leave-full-screen` | `LeftFullScreen` | done |  |
 | `enter-html-full-screen` | `EnterHtmlFullScreen` | done |  |
 | `leave-html-full-screen` | `LeaveHtmlFullScreen` | done |  |
 | `always-on-top-changed` | `AlwaysOnTopChanged` | done | `AlwaysOnTopChangedEventArgs.IsAlwaysOnTop`. Raised by `SetAlwaysOnTop` only when the state changes, not for z-order changes made by other programs, as Electron. |
 | `app-command` | `AppCommand` | partial | Windows `WM_APPCOMMAND` with Electron's names; Linux mouse buttons not yet (W43). |
-| `swipe` | — | missing |  |
-| `rotate-gesture` | — | missing |  |
-| `sheet-begin` | — | missing |  |
-| `sheet-end` | — | missing |  |
-| `new-window-for-tab` | — | missing |  |
+| `swipe` | `Swiped` | partial | macOS: `swipeWithEvent:` on the frame view's class, as Electron swizzles it, other windows keeping AppKit's _(branch `mac-integration`)_; not yet run on screen. |
+| `rotate-gesture` | `RotateGesture` | partial | macOS: `rotateWithEvent:` on Oriel's window subclass _(branch `mac-integration`)_; not yet run on screen. |
+| `sheet-begin` | `SheetBegan` | partial | macOS: `NSWindowWillBeginSheetNotification` _(branch `mac-integration`)_; not yet run on screen. |
+| `sheet-end` | `SheetEnded` | partial | macOS: `NSWindowDidEndSheetNotification` _(branch `mac-integration`)_; not yet run on screen. |
+| `new-window-for-tab` | `NewWindowForTab` | partial | macOS, the tab bar's + button through the window delegate, then the app's event, as Electron _(branch `mac-integration`)_; not yet run on screen. |
 | `system-context-menu` | `SystemContextMenu` | partial | Windows: framed windows (`WM_CONTEXTMENU`) and a right click on a frameless window's drag region, as Electron. |
 | `persisted-state-restored` | `PersistedStateRestored` | done | Posted to the UI thread, as Electron's `EmitEventSoon` (W51). |
 

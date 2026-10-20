@@ -47,7 +47,7 @@ public unsafe partial class BaseWindow
         return new Rectangle(bounds.Width - overlay.Width, 0, overlay.Width, overlay.Height);
     }, default);
 
-    private bool IsFrameless => TitleBar.IsFrameless(_options.Frame, _options.TitleBarStyle, OperatingSystem.IsMacOS());
+    private bool IsFrameless => TitleBar.IsFrameless(_options.Frame, _options.TitleBarStyle);
 
     private (uint Color, uint Symbol) _titleBarColors;
 

@@ -12,13 +12,13 @@ Percentages are over the non-n/a items; the second counts a partial item as half
 |---|---|---|---|---|---|---|---|
 | Static methods | 5 | 3 | 2 | 0 | 0 | 60.0% | 80.0% |
 | Instance events | 59 | 31 | 18 | 8 | 2 | 54.4% | 70.2% |
-| Instance methods | 118 | 43 | 38 | 29 | 8 | 39.1% | 56.4% |
+| Instance methods | 118 | 43 | 39 | 28 | 8 | 39.1% | 56.8% |
 | Instance properties | 18 | 10 | 3 | 4 | 1 | 58.8% | 67.6% |
 | navigationHistory | 14 | 12 | 0 | 2 | 0 | 85.7% | 85.7% |
 | WebFrameMain events and statics | 3 | 1 | 1 | 1 | 0 | 33.3% | 50.0% |
 | WebFrameMain methods | 9 | 1 | 5 | 3 | 0 | 11.1% | 38.9% |
 | WebFrameMain properties | 15 | 10 | 3 | 2 | 0 | 66.7% | 76.7% |
-| **Total** | 241 | 111 | 70 | 49 | 11 | 48.3% | 63.5% |
+| **Total** | 241 | 111 | 71 | 48 | 11 | 48.3% | 63.7% |
 
 ## Checklist
 
@@ -186,9 +186,9 @@ Percentages are over the non-n/a items; the second counts a partial item as half
 | `disableDeviceEmulation()` | `DisableDeviceEmulation` | done |  |
 | `beginFrameSubscription()` | — | missing |  |
 | `endFrameSubscription()` | — | missing |  |
-| `startDrag()` | `StartDrag` | partial | Windows only; the drag blocks queued UI tasks and its image is painted with GDI (C40). |
+| `startDrag()` | `StartDrag` | partial | Windows (the drag blocks queued UI tasks, its image painted with GDI) and macOS (Electron's `NSDraggingSession`, _branch `mac-integration`_, not yet run on screen); not Linux (C40). |
 | `savePage()` | `SavePageAsync` | partial | Through DevTools; `HTMLComplete` saves only the main document and its images, scripts and style sheets (C50). |
-| `showDefinitionForSelection()` | — | missing |  |
+| `showDefinitionForSelection()` | `ShowDefinitionForSelection` | partial | macOS: Chromium's `ShowDictionaryOverlayForSelection` on the page's `RenderWidgetHostViewCocoa`, found under the browser's view; nothing elsewhere, as Electron _(branch `mac-integration`)_; not yet run on screen. |
 | `isOffscreen()` | `IsOffscreen` | done | Always false: Oriel has no offscreen rendering (webPreferences `offscreen` is missing). |
 | `startPainting()` | — | missing |  |
 | `stopPainting()` | — | missing |  |

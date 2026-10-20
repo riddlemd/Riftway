@@ -81,9 +81,11 @@ static unsafe class MacAppEventsTest
         app.SetActivationPolicy(ActivationPolicy.Regular);
         check("SetActivationPolicy sets NSApp's policy", accessory && Eventually(() => CefThread.InvokeOnUi(MacApp.ActivationPolicy) == 0, step));
 
+        // Secure event input blocks every other app's key taps; it must not outlive this check.
+        bool secure;
         app.SetSecureKeyboardEntryEnabled(true);
-        var secure = app.IsSecureKeyboardEntryEnabled() && IsSecureEventInputEnabled() != 0;
-        app.SetSecureKeyboardEntryEnabled(false);
+        try { secure = app.IsSecureKeyboardEntryEnabled() && IsSecureEventInputEnabled() != 0; }
+        finally { app.SetSecureKeyboardEntryEnabled(false); }
         check("SetSecureKeyboardEntryEnabled turns secure event input on and off", secure && !app.IsSecureKeyboardEntryEnabled());
 
         app.SetAboutPanelOptions(new AboutPanelOptions { ApplicationName = "Oriel About", ApplicationVersion = "9.9", Credits = "credits" });

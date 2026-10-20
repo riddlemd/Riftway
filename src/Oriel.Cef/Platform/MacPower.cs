@@ -130,7 +130,11 @@ public static unsafe class MacPower
         var service = PowerSourceService();
         if (service == 0) return false;
         var port = IONotificationPortCreate(0);
-        if (port == 0) return false;
+        if (port == 0)
+        {
+            IOObjectRelease(service);
+            return false;
+        }
         IONotificationPortSetDispatchQueue(port, MainQueue());
         s_powerSource = changed;
         uint notification;
@@ -138,6 +142,8 @@ public static unsafe class MacPower
             if (IOServiceAddInterestNotification(port, service, interest, &OnPowerSource, 0, &notification) != 0)
             {
                 s_powerSource = null;
+                IONotificationPortDestroy(port);
+                IOObjectRelease(service);
                 return false;
             }
         return true;
@@ -296,14 +302,24 @@ public static unsafe class MacPower
         return result;
     }
 
-    /// <summary>Posts a distributed notification, as the system does for the screen lock; for tests.</summary>
-    public static void PostDistributed(string name)
-        => ((delegate* unmanaged<nint, nint, nint, nint, nint, byte, void>)s_msgSend)(Send(Class("NSDistributedNotificationCenter"u8), Sel("defaultCenter"u8)),
-            Sel("postNotificationName:object:userInfo:deliverImmediately:"u8), NSString(name), 0, 0, 1);
+    // What Observe registered, so tests can deliver a notification to Oriel alone.
+    private static readonly List<(string Name, string Selector)> s_observed = [];
+
+    /// <summary>Hands Oriel's observer the notification <paramref name="name"/> as the system would deliver it; for tests.
+    /// Posting it on the distributed center instead would tell every app in the session the screen locked.</summary>
+    public static void DeliverDistributed(string name)
+    {
+        var notification = ((delegate* unmanaged<nint, nint, nint, nint, nint>)s_msgSend)(Class("NSNotification"u8), Sel("notificationWithName:object:"u8), NSString(name), 0);
+        foreach (var (observed, selector) in s_observed.ToArray())
+            if (observed == name) ((delegate* unmanaged<nint, nint, nint, void>)s_msgSend)(Observer(), Sel(selector), notification);
+    }
 
     private static void Observe(nint center, string selector, string name)
-        => ((delegate* unmanaged<nint, nint, nint, nint, nint, nint, void>)s_msgSend)(center, Sel("addObserver:selector:name:object:"u8),
+    {
+        s_observed.Add((name, selector));
+        ((delegate* unmanaged<nint, nint, nint, nint, nint, nint, void>)s_msgSend)(center, Sel("addObserver:selector:name:object:"u8),
             Observer(), Sel(selector), NSString(name), 0);
+    }
 
     // One instance of a runtime NSObject subclass receives every notification.
     private static nint Observer()
@@ -463,6 +479,7 @@ public static unsafe class MacPower
     [DllImport(IOKit)] private static extern uint IOServiceGetMatchingService(uint mainPort, nint matching);
     [DllImport(IOKit)] private static extern int IORegistryEntryCreateCFProperties(uint entry, nint* properties, nint allocator, uint options);
     [DllImport(IOKit)] private static extern int IOObjectRelease(uint obj);
+    [DllImport(IOKit)] private static extern void IONotificationPortDestroy(nint notify);
     [DllImport(IOKit)] private static extern int IOPMAssertionCreateWithName(nint type, uint level, nint name, uint* id);
     [DllImport(IOKit)] private static extern int IOPMAssertionRelease(uint id);
     [DllImport(IOKit)] private static extern int IOPMCopyCPUPowerStatus(nint* status);

@@ -55,16 +55,23 @@ public static unsafe class MacAppearance
         Observe(Send(Send(Class("NSWorkspace"), "sharedWorkspace"), "notificationCenter"), "NSWorkspaceAccessibilityDisplayOptionsDidChangeNotification");
     }
 
-    /// <summary>Posts the system's appearance-changed notification, as the system does; for tests.</summary>
-    public static void PostThemeChanged()
-        => Send4(Send(Class("NSDistributedNotificationCenter"), "defaultCenter"), "postNotificationName:object:userInfo:deliverImmediately:",
-            NSString("AppleInterfaceThemeChangedNotification"), 0, 0, 1);
+    /// <summary>Hands the observer the system's appearance-changed notification; for tests. Posting it on the distributed
+    /// center would make every app in the session read its appearance again.</summary>
+    public static void DeliverThemeChanged()
+    {
+        if (s_observer != 0) Send(s_observer, "changed:", 0);
+    }
 
     private static void Observe(nint center, string notification)
         => Send4(center, "addObserver:selector:name:object:", s_observer, Selector("changed:"), NSString(notification), 0);
 
     [UnmanagedCallersOnly]
-    private static void OnChanged(nint self, nint cmd, nint notification) => s_changed?.Invoke();
+    private static void OnChanged(nint self, nint cmd, nint notification)
+    {
+        // An exception must not unwind into AppKit's notification dispatch.
+        try { s_changed?.Invoke(); }
+        catch (Exception e) { Console.Error.WriteLine($"[Oriel] Unhandled exception after an appearance change: {e}"); }
+    }
 
     private static bool Flag(string selector) => (byte)Send(Send(Class("NSWorkspace"), "sharedWorkspace"), selector) != 0;
 

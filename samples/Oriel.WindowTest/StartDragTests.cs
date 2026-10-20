@@ -20,7 +20,9 @@ static class StartDragTests
                 File = "/tmp/x",
                 Icon = NativeImage.CreateFromBitmap(new byte[16], new NativeImageBitmapOptions { Width = 2, Height = 2 }),
             }));
-            check("startDrag throws PlatformNotSupportedException off Windows (drift C40)", thrown is PlatformNotSupportedException, thrown?.GetType().Name);
+            // macOS starts an NSDraggingSession, which ends at once with no mouse button down.
+            if (OperatingSystem.IsMacOS()) check("startDrag starts a drag session on macOS without throwing", thrown is null, thrown?.ToString());
+            else check("startDrag throws PlatformNotSupportedException on Linux (drift C40)", thrown is PlatformNotSupportedException, thrown?.GetType().Name);
             return;
         }
 

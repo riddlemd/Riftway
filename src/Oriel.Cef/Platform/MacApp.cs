@@ -10,7 +10,7 @@ public sealed class MacAppDelegateHandlers
     public Action? WillFinishLaunching { get; init; }
 
     /// <summary><c>applicationDidFinishLaunching:</c>, with whether the launch was as a login item.</summary>
-    public Action<bool>? DidFinishLaunching { get; init; }
+    public Action<bool, System.Text.Json.Nodes.JsonObject>? DidFinishLaunching { get; init; }
 
     /// <summary><c>applicationDidBecomeActive:</c>.</summary>
     public Action? DidBecomeActive { get; init; }
@@ -26,6 +26,29 @@ public sealed class MacAppDelegateHandlers
 
     /// <summary><c>applicationShouldHandleReopen:hasVisibleWindows:</c>, with the flag.</summary>
     public Action<bool>? Reopen { get; init; }
+
+    /// <summary><c>application:willContinueUserActivityWithType:</c>; returns whether the app handles it.</summary>
+    public Func<string, bool>? WillContinueUserActivity { get; init; }
+
+    /// <summary><c>application:continueUserActivity:restorationHandler:</c>, with the type, the user info and the webpage
+    /// URL (null without one); returns whether the app handled it.</summary>
+    public Func<string, System.Text.Json.Nodes.JsonObject, string?, bool>? ContinueUserActivity { get; init; }
+
+    /// <summary><c>application:didFailToContinueUserActivityWithType:error:</c>, with the error's description.</summary>
+    public Action<string, string>? DidFailToContinueUserActivity { get; init; }
+
+    /// <summary><c>newWindowForTab:</c> with no window to answer it: the tab bar's + button.</summary>
+    public Action? NewWindowForTab { get; init; }
+
+    /// <summary><c>application:didRegisterForRemoteNotificationsWithDeviceToken:</c>, with the token's bytes.</summary>
+    public Action<byte[]>? DidRegisterForRemoteNotifications { get; init; }
+
+    /// <summary><c>application:didFailToRegisterForRemoteNotificationsWithError:</c>, with Electron's
+    /// <c>"%ld %@ %@"</c> of the error's code, domain and user info.</summary>
+    public Action<string>? DidFailToRegisterForRemoteNotifications { get; init; }
+
+    /// <summary><c>application:didReceiveRemoteNotification:</c>, with the user info as dict_util converts it.</summary>
+    public Action<System.Text.Json.Nodes.JsonObject>? DidReceiveRemoteNotification { get; init; }
 }
 
 /// <summary>The AppKit, LaunchServices and ServiceManagement calls behind Electron's macOS <c>app</c>
@@ -86,9 +109,16 @@ public static unsafe class MacApp
         Add(cls, "applicationDidFinishLaunching:"u8, (delegate* unmanaged<nint, nint, nint, void>)&OnDidFinishLaunching, "v@:@"u8);
         Add(cls, "applicationDidBecomeActive:"u8, (delegate* unmanaged<nint, nint, nint, void>)&OnDidBecomeActive, "v@:@"u8);
         Add(cls, "applicationDidResignActive:"u8, (delegate* unmanaged<nint, nint, nint, void>)&OnDidResignActive, "v@:@"u8);
-        Add(cls, "application:openFile:"u8, (delegate* unmanaged<nint, nint, nint, nint, byte>)&OnOpenFile, "c@:@@"u8);
-        Add(cls, "applicationShouldHandleReopen:hasVisibleWindows:"u8, (delegate* unmanaged<nint, nint, nint, byte, byte>)&OnReopen, "c@:@c"u8);
-        Add(cls, "applicationSupportsSecureRestorableState:"u8, (delegate* unmanaged<nint, nint, nint, byte>)&SupportsSecureRestorableState, "c@:@"u8);
+        Add(cls, "newWindowForTab:"u8, (delegate* unmanaged<nint, nint, nint, void>)&OnNewWindowForTab, "v@:@"u8);
+        Add(cls, "application:openFile:"u8, (delegate* unmanaged<nint, nint, nint, nint, byte>)&OnOpenFile, ObjCEncoding.Of("B@:@@"));
+        Add(cls, "applicationShouldHandleReopen:hasVisibleWindows:"u8, (delegate* unmanaged<nint, nint, nint, byte, byte>)&OnReopen, ObjCEncoding.Of("B@:@B"));
+        Add(cls, "application:willContinueUserActivityWithType:"u8, (delegate* unmanaged<nint, nint, nint, nint, byte>)&OnWillContinueUserActivity, ObjCEncoding.Of("B@:@@"));
+        Add(cls, "application:continueUserActivity:restorationHandler:"u8, (delegate* unmanaged<nint, nint, nint, nint, nint, byte>)&OnContinueUserActivity, ObjCEncoding.Of("B@:@@@?"));
+        Add(cls, "application:didFailToContinueUserActivityWithType:error:"u8, (delegate* unmanaged<nint, nint, nint, nint, nint, void>)&OnDidFailToContinueUserActivity, "v@:@@@"u8);
+        Add(cls, "application:didRegisterForRemoteNotificationsWithDeviceToken:"u8, (delegate* unmanaged<nint, nint, nint, nint, void>)&OnDidRegisterForRemoteNotifications, "v@:@@"u8);
+        Add(cls, "application:didFailToRegisterForRemoteNotificationsWithError:"u8, (delegate* unmanaged<nint, nint, nint, nint, void>)&OnDidFailToRegisterForRemoteNotifications, "v@:@@"u8);
+        Add(cls, "application:didReceiveRemoteNotification:"u8, (delegate* unmanaged<nint, nint, nint, nint, void>)&OnDidReceiveRemoteNotification, "v@:@@"u8);
+        Add(cls, "applicationSupportsSecureRestorableState:"u8, (delegate* unmanaged<nint, nint, nint, byte>)&SupportsSecureRestorableState, ObjCEncoding.Of("B@:@"));
         Add(cls, "orielHandleURLEvent:withReplyEvent:"u8, (delegate* unmanaged<nint, nint, nint, nint, void>)&OnUrlEvent, "v@:@@"u8);
         var target = existing;
         if (target == 0)
@@ -124,14 +154,67 @@ public static unsafe class MacApp
             var data = ((delegate* unmanaged<nint, nint, uint, nint>)s_msgSend)(appleEvent, Sel("paramDescriptorForKeyword:"u8), PropData);
             atLogin = data != 0 && (uint)Send(data, Sel("enumCodeValue"u8)) == LaunchedAsLogInItem;
         }
-        s_handlers?.DidFinishLaunching?.Invoke(atLogin);
+        s_finishedLaunching = true;
+        s_handlers?.DidFinishLaunching?.Invoke(atLogin, LaunchInfo(notification));
     });
+
+    private static bool s_finishedLaunching;
+
+    /// <summary>Whether AppKit has delivered <c>applicationDidFinishLaunching:</c> to Oriel's delegate.</summary>
+    public static bool HasFinishedLaunching => s_finishedLaunching;
+
+    // Electron's applicationDidFinishLaunching: launch info: the notification the app was launched from, an
+    // NSUserNotification's user info or a UNNotificationResponse's fields, through dict_util; empty for a plain launch.
+    internal static System.Text.Json.Nodes.JsonObject LaunchInfo(nint notification)
+    {
+        var pool = objc_autoreleasePoolPush();
+        try
+        {
+            var userInfo = notification == 0 ? 0 : Send(notification, Sel("userInfo"u8));
+            var key = *(nint*)NativeLibrary.GetExport(s_appKit, "NSApplicationLaunchUserNotificationKey");
+            var launchedFrom = userInfo == 0 ? 0 : Send(userInfo, Sel("objectForKey:"u8), key);
+            if (launchedFrom == 0) return [];
+            var legacy = Class("NSUserNotification"u8);
+            var info = legacy != 0 && (byte)Send(launchedFrom, Sel("isKindOfClass:"u8), legacy) != 0
+                ? Send(launchedFrom, Sel("userInfo"u8))
+                : ResponseDictionary(launchedFrom);
+            return MacUserActivity.ToJson(info);
+        }
+        finally { objc_autoreleasePoolPop(pool); }
+    }
+
+    private static bool RespondsTo(nint receiver, nint selector) => (byte)Send(receiver, Sel("respondsToSelector:"u8), selector) != 0;
+
+    // UNNotificationResponseToNSDictionary.
+    private static nint ResponseDictionary(nint response)
+    {
+        if (!RespondsTo(response, Sel("actionIdentifier"u8)) || !RespondsTo(response, Sel("notification"u8))) return 0;
+        var result = Send(Class("NSMutableDictionary"u8), Sel("dictionary"u8));
+        void Put(string name, nint value)
+        {
+            var nameString = NSString(name);
+            // setObject:forKeyedSubscript: drops the key for nil, as Objective-C subscripting does.
+            ((delegate* unmanaged<nint, nint, nint, nint, void>)s_msgSend)(result, Sel("setObject:forKeyedSubscript:"u8), value, nameString);
+        }
+        var shown = Send(response, Sel("notification"u8));
+        var request = Send(shown, Sel("request"u8));
+        Put("actionIdentifier", Send(response, Sel("actionIdentifier"u8)));
+        var since1970 = ((delegate* unmanaged<nint, nint, double>)s_msgSend)(Send(shown, Sel("date"u8)), Sel("timeIntervalSince1970"u8));
+        Put("date", ((delegate* unmanaged<nint, nint, double, nint>)s_msgSend)(Class("NSNumber"u8), Sel("numberWithDouble:"u8), since1970));
+        Put("identifier", Send(request, Sel("identifier"u8)));
+        Put("userInfo", Send(Send(request, Sel("content"u8)), Sel("userInfo"u8)));
+        if (RespondsTo(response, Sel("userText"u8))) Put("userText", Send(response, Sel("userText"u8)));
+        return result;
+    }
 
     [UnmanagedCallersOnly]
     private static void OnDidBecomeActive(nint self, nint cmd, nint notification) => Guard(() => s_handlers?.DidBecomeActive?.Invoke());
 
     [UnmanagedCallersOnly]
     private static void OnDidResignActive(nint self, nint cmd, nint notification) => Guard(() => s_handlers?.DidResignActive?.Invoke());
+
+    [UnmanagedCallersOnly]
+    private static void OnNewWindowForTab(nint self, nint cmd, nint sender) => Guard(() => s_handlers?.NewWindowForTab?.Invoke());
 
     [UnmanagedCallersOnly]
     private static byte OnOpenFile(nint self, nint cmd, nint sender, nint filename)
@@ -157,6 +240,59 @@ public static unsafe class MacApp
         var url = ((delegate* unmanaged<nint, nint, uint, nint>)s_msgSend)(appleEvent, Sel("paramDescriptorForKeyword:"u8), DirectObject);
         s_handlers?.OpenUrl?.Invoke(url == 0 ? "" : ReadString(Send(url, Sel("stringValue"u8))));
     });
+
+    [UnmanagedCallersOnly]
+    private static byte OnWillContinueUserActivity(nint self, nint cmd, nint app, nint type)
+    {
+        var handled = false;
+        Guard(() => handled = s_handlers?.WillContinueUserActivity?.Invoke(ReadString(type)) ?? false);
+        return handled ? (byte)1 : (byte)0;
+    }
+
+    [UnmanagedCallersOnly]
+    private static byte OnContinueUserActivity(nint self, nint cmd, nint app, nint activity, nint restorationHandler)
+    {
+        var handled = false;
+        Guard(() =>
+        {
+            var url = Send(activity, Sel("webpageURL"u8));
+            var userInfo = MacUserActivity.ToJson(Send(activity, Sel("userInfo"u8)));
+            handled = s_handlers?.ContinueUserActivity?.Invoke(ReadString(Send(activity, Sel("activityType"u8))), userInfo,
+                url == 0 ? null : ReadString(Send(url, Sel("absoluteString"u8)))) ?? false;
+        });
+        return handled ? (byte)1 : (byte)0;
+    }
+
+    [UnmanagedCallersOnly]
+    private static void OnDidFailToContinueUserActivity(nint self, nint cmd, nint app, nint type, nint error)
+        => Guard(() => s_handlers?.DidFailToContinueUserActivity?.Invoke(ReadString(type), ReadString(Send(error, Sel("localizedDescription"u8)))));
+
+    [UnmanagedCallersOnly]
+    private static void OnDidRegisterForRemoteNotifications(nint self, nint cmd, nint app, nint token) => Guard(() =>
+    {
+        var length = (int)Send(token, Sel("length"u8));
+        var bytes = new byte[length];
+        if (length > 0) Marshal.Copy(Send(token, Sel("bytes"u8)), bytes, 0, length);
+        s_handlers?.DidRegisterForRemoteNotifications?.Invoke(bytes);
+    });
+
+    [UnmanagedCallersOnly]
+    private static void OnDidFailToRegisterForRemoteNotifications(nint self, nint cmd, nint app, nint error)
+        => Guard(() => s_handlers?.DidFailToRegisterForRemoteNotifications?.Invoke(RemoteNotificationError(error)));
+
+    [UnmanagedCallersOnly]
+    private static void OnDidReceiveRemoteNotification(nint self, nint cmd, nint app, nint userInfo)
+        => Guard(() => s_handlers?.DidReceiveRemoteNotification?.Invoke(MacUserActivity.ToJson(userInfo)));
+
+    /// <summary>Electron's <c>[NSString stringWithFormat:@"%ld %@ %@", error.code, error.domain, error.userInfo]</c>.</summary>
+    public static string RemoteNotificationError(nint error)
+        => $"{(long)Send(error, Sel("code"u8))} {ReadString(Send(Send(error, Sel("domain"u8)), Sel("description"u8)))} {ReadString(Send(Send(error, Sel("userInfo"u8)), Sel("description"u8)))}";
+
+    /// <summary><c>[NSApp registerForRemoteNotifications]</c>.</summary>
+    public static void RegisterForRemoteNotifications() => Send(App(), Sel("registerForRemoteNotifications"u8));
+
+    /// <summary><c>[NSApp unregisterForRemoteNotifications]</c>.</summary>
+    public static void UnregisterForRemoteNotifications() => Send(App(), Sel("unregisterForRemoteNotifications"u8));
 
     private static void Guard(Action action)
     {
@@ -187,6 +323,12 @@ public static unsafe class MacApp
 
     /// <summary>[NSApp isActive].</summary>
     public static bool IsActive() => (byte)Send(App(), Sel("isActive"u8)) != 0;
+
+    /// <summary><c>[NSApp currentSystemPresentationOptions]</c>.</summary>
+    public static nuint CurrentSystemPresentationOptions() => (nuint)Send(App(), Sel("currentSystemPresentationOptions"u8));
+
+    /// <summary><c>[NSApp setPresentationOptions:]</c>.</summary>
+    public static void SetPresentationOptions(nuint options) => Send(App(), Sel("setPresentationOptions:"u8), (nint)options);
 
     /// <summary>[NSApp setActivationPolicy:]: 0 regular, 1 accessory, 2 prohibited.</summary>
     public static void SetActivationPolicy(nint policy) => Send(App(), Sel("setActivationPolicy:"u8), policy);
@@ -449,6 +591,8 @@ public static unsafe class MacApp
     }
 
     [DllImport(ObjC)] private static extern nint objc_getClass(byte* name);
+    [DllImport(ObjC)] private static extern nint objc_autoreleasePoolPush();
+    [DllImport(ObjC)] private static extern void objc_autoreleasePoolPop(nint pool);
     [DllImport(ObjC)] private static extern nint sel_registerName(byte* name);
     [DllImport(ObjC)] private static extern nint object_getClass(nint obj);
     [DllImport(ObjC)] private static extern nint class_getName(nint cls);

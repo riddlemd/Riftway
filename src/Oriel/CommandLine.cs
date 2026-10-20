@@ -55,6 +55,13 @@ public sealed class CommandLine
         lock (_gate) _changes.Add(new AppendedArgument(value));
     }
 
+    /// <summary>The switches as they stand, as <c>--name</c> arguments after a program name, for code that reads
+    /// base::CommandLine's way.</summary>
+    internal IReadOnlyList<string> SwitchArguments()
+    {
+        lock (_gate) return ["", .. _switches.Keys.Select(name => "--" + name)];
+    }
+
     /// <summary>Whether the switch is present. Electron's <c>commandLine.hasSwitch()</c>.</summary>
     public bool HasSwitch(string name)
     {

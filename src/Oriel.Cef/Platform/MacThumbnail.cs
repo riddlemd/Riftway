@@ -163,9 +163,7 @@ public static unsafe class MacThumbnail
         handle.Free();
         try { callback(thumbnail, error); }
         catch (Exception e) { Console.Error.WriteLine($"[Oriel] Unhandled exception in a thumbnail callback: {e}"); }
-        // The caller may still Block_release (reading the flags) after the call returns; free well after that.
-        var address = (nint)block;
-        _ = Task.Delay(TimeSpan.FromSeconds(10)).ContinueWith(_ => NativeMemory.Free((void*)address), TaskScheduler.Default);
+        // Never freed: a copy of a global block is the block itself, so whoever holds it may read its flags at any time.
     }
 
     private static nint NSString(string s)

@@ -353,7 +353,7 @@ public static partial class SystemPreferences
     [SupportedOSPlatform("macos")]
     private static MediaAccessStatus MacMediaAccessStatus(MediaAccessType mediaType) => mediaType switch
     {
-        MediaAccessType.Camera or MediaAccessType.Microphone when HasSwitch(Environment.GetCommandLineArgs(), "use-fake-device-for-media-stream", windows: false)
+        MediaAccessType.Camera or MediaAccessType.Microphone when HasSwitch(CurrentSwitches(), "use-fake-device-for-media-stream", windows: false)
             => MediaAccessStatus.Granted,
         MediaAccessType.Camera => ToMacMediaAccessStatus(MacSystemPreferences.MediaAuthorizationStatus(video: true)),
         MediaAccessType.Microphone => ToMacMediaAccessStatus(MacSystemPreferences.MediaAuthorizationStatus(video: false)),
@@ -363,7 +363,7 @@ public static partial class SystemPreferences
 
     [SupportedOSPlatform("macos")]
     private static AnimationSettings MacAnimationSettings()
-        => MacAnimationSettings(Environment.GetCommandLineArgs(), () => OnUi(() => MacSystemPreferences.ReduceMotion),
+        => MacAnimationSettings(CurrentSwitches(), () => OnUi(() => MacSystemPreferences.ReduceMotion),
             MacSystemPreferences.DefaultsFlag("NSScrollAnimationEnabled"));
 
     /// <summary>gfx::Animation on macOS: rich animation is the inverse of <c>PrefersReducedMotion</c> (switches, then "Reduce

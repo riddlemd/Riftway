@@ -46,6 +46,23 @@ public sealed class WindowTopmostTests
     public void MacWindowLevel_MapsElectronNames_UnknownIsNormal(string level, long expected)
         => Assert.Equal(expected, BrowserWindow.MacWindowLevel(level));
 
+    [Theory]
+    [InlineData(3L, 3L)]
+    [InlineData(-5L, -5L)]
+    [InlineData(10L, 10L)]
+    [InlineData(-6L, -5L)]
+    [InlineData(11L, 10L)]
+    [InlineData(1000L + int.MaxValue, 10L)]
+    public void ClampMacLevel_KeepsTheLevelInTheWindowServersRange(long level, long expected)
+        => Assert.Equal(expected, BrowserWindow.ClampMacLevel(level, (-5, 10)));
+
+    [Fact]
+    public void MacLevelRange_IsTheWindowServersMinimumAndMaximum()
+    {
+        if (!OperatingSystem.IsMacOS()) return;
+        Assert.Equal((int.MinValue + 5, int.MaxValue - 16), MacWindow.LevelRange());
+    }
+
     // An unknown level: macOS reads it as NSNormalWindowLevel, Windows and Linux only look at the flag.
     [Theory]
     [InlineData(0, true, false)]
@@ -77,4 +94,12 @@ public sealed class WindowTopmostTests
     [DllImport("user32.dll")]
     [return: MarshalAs(UnmanagedType.Bool)]
     private static extern bool DestroyWindow(nint hwnd);
+
+    [Theory]
+    [InlineData(0, 0, false)]
+    [InlineData(3, 3, true)]
+    [InlineData(-9, -5, true)]
+    [InlineData(99, 10, true)]
+    public void MacLevel_IsOnTopForAnyLevelButNormal_AfterTheClamp(long level, long clamped, bool onTop)
+        => Assert.Equal((clamped, onTop), BrowserWindow.MacLevel(level, (-5, 10)));
 }

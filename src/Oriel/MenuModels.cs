@@ -32,18 +32,18 @@ internal static unsafe class MenuModels
                 case MenuItemType.Separator:
                     model->add_separator(model);
                     break;
-                case MenuItemType.Submenu when item.Submenu is { } submenu:
+                case MenuItemType.Submenu or MenuItemType.Palette when item.Submenu is { } submenu:
                     var child = model->add_sub_menu(model, id, &label);
                     FillMenu(child, submenu, isSubmenu: true);
                     NativeObject.Release(child);
                     break;
                 case MenuItemType.Checkbox:
                     model->add_check_item(model, id, &label);
-                    model->set_checked(model, id, item.Checked ? 1 : 0);
+                    model->set_checked(model, id, item.CheckStatus ? 1 : 0);
                     break;
                 case MenuItemType.Radio:
                     model->add_radio_item(model, id, &label, item.GroupId);
-                    model->set_checked(model, id, item.Checked ? 1 : 0);
+                    model->set_checked(model, id, item.CheckStatus ? 1 : 0);
                     break;
                 default:
                     model->add_item(model, id, &label);
@@ -51,7 +51,7 @@ internal static unsafe class MenuModels
             }
             CefString.Clear(&label);
             if (item.Type == MenuItemType.Separator) continue;
-            model->set_enabled(model, id, item.Enabled ? 1 : 0);
+            model->set_enabled(model, id, item.CommandEnabled ? 1 : 0);
             if (CefAccelerator(item) is { } a)
                 model->set_accelerator(model, id, a.KeyCode, Has(a, AcceleratorModifiers.Shift), Has(a, AcceleratorModifiers.Control), Has(a, AcceleratorModifiers.Alt));
         }

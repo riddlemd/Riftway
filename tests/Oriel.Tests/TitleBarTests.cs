@@ -5,15 +5,14 @@ namespace Oriel.Tests;
 public sealed class TitleBarTests
 {
     [Theory]
-    [InlineData(true, TitleBarStyle.Default, false, false)]
-    [InlineData(false, TitleBarStyle.Default, false, true)]
-    [InlineData(true, TitleBarStyle.Hidden, false, true)]
-    [InlineData(true, TitleBarStyle.HiddenInset, false, true)]
-    [InlineData(true, TitleBarStyle.CustomButtonsOnHover, false, true)]
-    [InlineData(true, TitleBarStyle.Hidden, true, false)]
-    [InlineData(false, TitleBarStyle.Hidden, true, true)]
-    public void IsFrameless_NoFrame_OrHiddenTitleBarOffMac(bool frame, TitleBarStyle style, bool isMacOS, bool frameless)
-        => Assert.Equal(frameless, TitleBar.IsFrameless(frame, style, isMacOS));
+    [InlineData(true, TitleBarStyle.Default, false)]
+    [InlineData(false, TitleBarStyle.Default, true)]
+    [InlineData(true, TitleBarStyle.Hidden, true)]
+    [InlineData(true, TitleBarStyle.HiddenInset, true)]
+    [InlineData(true, TitleBarStyle.CustomButtonsOnHover, true)]
+    [InlineData(false, TitleBarStyle.Hidden, true)]
+    public void IsFrameless_NoFrame_OrAnyHiddenTitleBar(bool frame, TitleBarStyle style, bool frameless)
+        => Assert.Equal(frameless, TitleBar.IsFrameless(frame, style));
 
     [Fact]
     public void HasOverlay_NeedsOptions_AHiddenTitleBar_AndNotMac()

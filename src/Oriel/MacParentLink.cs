@@ -84,6 +84,23 @@ internal sealed class MacParentLink(IMacChildWindows native, Func<nint> handle, 
         if (Parent is { } parent) SetParent(parent, attach: false);
     }
 
+    /// <summary>Electron's <c>windowWillMiniaturize:</c> <c>DetachChildren</c>: the children ordered out first, so the
+    /// minimize does not take them along.</summary>
+    internal void WillMiniaturize()
+    {
+        foreach (var child in _children) native.OrderOut(child.Handle);
+    }
+
+    /// <summary><c>windowDidMiniaturize:</c>: no longer wanting to be visible.</summary>
+    internal void DidMiniaturize() => WantsToBeVisible = false;
+
+    /// <summary><c>windowDidDeminiaturize:</c>: wanting to be visible again, with the children that want it attached.</summary>
+    internal void DidDeminiaturize()
+    {
+        WantsToBeVisible = true;
+        AttachChildren();
+    }
+
     /// <summary>Drops the links when the window is gone, without AppKit calls: its NSWindow no longer exists.</summary>
     internal void Forget()
     {

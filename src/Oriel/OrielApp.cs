@@ -99,11 +99,13 @@ public sealed unsafe partial class OrielApp
 
     private bool _sandboxRequested;
 
-    /// <summary>Whether <see cref="Ready"/> has fired.</summary>
+    /// <summary>Whether Chromium is initialised: when <see cref="Ready"/> fires, or on macOS just before, while AppKit
+    /// finishes launching (drift A23).</summary>
     public bool IsReady { get; private set; }
 
-    /// <summary>Chromium is initialised and windows can be created. Electron's <c>ready</c>.</summary>
-    public event EventHandler? Ready;
+    /// <summary>Chromium is initialised and windows can be created; on macOS once AppKit has finished launching, after
+    /// <see cref="WillFinishLaunching"/> and the launch's <see cref="OpenFile"/> and <see cref="OpenUrl"/>. Electron's <c>ready</c>.</summary>
+    public event EventHandler<ReadyEventArgs>? Ready;
 
     /// <summary>The app was launched again while running; the new launch has already exited. Electron's
     /// <c>second-instance</c>. With no handler the existing windows come to the front.</summary>
@@ -425,14 +427,37 @@ public sealed unsafe partial class OrielApp
         if (OperatingSystem.IsMacOS()) MacApplication.Quit = Quit;
         // macOS raises it from the app delegate, as Electron's does.
         if (!OperatingSystem.IsMacOS()) RaiseWillFinishLaunching();
+        // CEF is ready inside cef_initialize, before [NSApp run] launches: Electron's ready comes from AppKit's
+        // applicationDidFinishLaunching:, after will-finish-launching and the launch's open-file and open-url.
+        // CEF can take UI-thread work from here on, which IsReady gates throughout Oriel.
         IsReady = true;
-        Ready?.Invoke(this, EventArgs.Empty);
+        _readyGate.ContextReady(waitForLaunch: OperatingSystem.IsMacOS() && !MacApp.HasFinishedLaunching);
+    }
+
+    private ReadyGate? _readyGateField;
+    private ReadyGate _readyGate => _readyGateField ??= new ReadyGate(RaiseReady);
+
+    // DidFinishLaunching: the deferred Ready, with the launch info.
+    internal void OnMacFinishedLaunching(System.Text.Json.Nodes.JsonObject launchInfo) => _readyGate.FinishedLaunching(launchInfo);
+
+    private void RaiseReady(System.Text.Json.Nodes.JsonObject launchInfo)
+    {
+        Ready?.Invoke(this, new ReadyEventArgs(launchInfo));
         _whenReady.TrySetResult();
         // After Ready, so an app that sets its own menu there never shows the default (Electron sets it just before
         // ready and lets the app replace it, which ends the same way).
         Menu.SetDefaultApplicationMenuIfUnset();
         if (OperatingSystem.IsMacOS()) MacApplicationMenu.Install();
     }
+}
+
+/// <summary>Arguments for <see cref="OrielApp.Ready"/>.</summary>
+public sealed class ReadyEventArgs(System.Text.Json.Nodes.JsonObject launchInfo) : EventArgs
+{
+    /// <summary>macOS: the user info of the notification the app was launched from (a notification response's
+    /// <c>actionIdentifier</c>, <c>date</c>, <c>identifier</c>, <c>userInfo</c> and <c>userText</c>); empty otherwise.
+    /// Electron's <c>launchInfo</c>.</summary>
+    public System.Text.Json.Nodes.JsonObject LaunchInfo { get; } = launchInfo;
 }
 
 /// <summary>How the application is quitting; Electron's <c>quit</c> event arguments.</summary>

@@ -96,11 +96,13 @@ public sealed unsafe partial class Session
     {
         if (options is { Sandbox: false })
             throw new ArgumentException("The default session is sandboxed as the app; use a partition for an unsandboxed session.", nameof(options));
+        if (options is { ScrollBounce: true })
+            throw new ArgumentException("The default session does not rubber-band, as Electron's default; use a partition for SessionOptions.ScrollBounce.", nameof(options));
         return DefaultSession;
     }
 
     private static Session Matching(Session existing, SessionOptions? options)
-        => OptionsMismatch(existing.Sandbox, options) is { } error ? throw new InvalidOperationException(error) : existing;
+        => OptionsMismatch(existing.Sandbox, options, existing.ScrollBounce) is { } error ? throw new InvalidOperationException(error) : existing;
 
     /// <summary>The session stored at <paramref name="path"/>. Electron's <c>session.fromPath()</c>.</summary>
     /// <remarks>Unlike Electron, the path must be a directory directly inside the app's data directory: Chrome-style CEF
@@ -322,7 +324,9 @@ public sealed unsafe partial class Session
         if (context == 0) throw new InvalidOperationException($"CEF could not create a session{(path is null ? "" : $" at {path}")}.");
         // Before any page of the session can start a renderer.
         if (!sandbox) AddUnsandboxed((cef_request_context_t*)context);
-        return session = new Session((cef_request_context_t*)context, path, handler) { _initialized = initialized.Task, Sandbox = sandbox };
+        var scrollBounce = options?.ScrollBounce ?? false;
+        if (scrollBounce) AddScrollBounce((cef_request_context_t*)context);
+        return session = new Session((cef_request_context_t*)context, path, handler) { _initialized = initialized.Task, Sandbox = sandbox, ScrollBounce = scrollBounce };
     }
 
     // The global context can have no handler, but CEF hands a profile's worker requests to the handler of any context

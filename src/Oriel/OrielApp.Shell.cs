@@ -86,15 +86,26 @@ public sealed partial class OrielApp
     /// <summary>macOS: the app is no longer the active app. Electron's <c>did-resign-active</c>.</summary>
     public event EventHandler? DidResignActive;
 
+    /// <summary>macOS: the user clicked the + button of a native tab bar; the app opens the new tab. Electron's
+    /// <c>new-window-for-tab</c>.</summary>
+    public event EventHandler? NewWindowForTab;
+
+    internal void RaiseNewWindowForTab() => NewWindowForTab?.Invoke(this, EventArgs.Empty);
+
     private void InstallMacDelegate()
     {
         if (!OperatingSystem.IsMacOS()) return;
         MacApp.InstallDelegate(new MacAppDelegateHandlers
         {
             WillFinishLaunching = RaiseWillFinishLaunching,
-            DidFinishLaunching = atLogin => s_launchedAtLogin = atLogin,
+            DidFinishLaunching = (atLogin, launchInfo) =>
+            {
+                s_launchedAtLogin = atLogin;
+                OnMacFinishedLaunching(launchInfo);
+            },
             DidBecomeActive = () => DidBecomeActive?.Invoke(this, EventArgs.Empty),
             DidResignActive = () => DidResignActive?.Invoke(this, EventArgs.Empty),
+            NewWindowForTab = RaiseNewWindowForTab,
             OpenFile = path =>
             {
                 var args = new OpenFileEventArgs(path);
@@ -103,7 +114,15 @@ public sealed partial class OrielApp
             },
             OpenUrl = url => OpenUrl?.Invoke(this, new OpenUrlEventArgs(url)),
             Reopen = visible => Activate?.Invoke(this, new ActivateEventArgs(visible)),
+            WillContinueUserActivity = RaiseWillContinueActivity,
+            ContinueUserActivity = RaiseContinueActivity,
+            DidFailToContinueUserActivity = RaiseContinueActivityError,
+            DidRegisterForRemoteNotifications = token => PushNotifications.Resolve(PushNotifications.TokenString(token)),
+            DidFailToRegisterForRemoteNotifications = PushNotifications.Reject,
+            DidReceiveRemoteNotification = PushNotifications.OnReceived,
         });
+        MacUserActivity.WillSave = RaiseUpdateActivityState;
+        MacUserActivity.WasContinued = RaiseActivityWasContinued;
     }
 
     /// <summary>Whether the app is the active app (macOS); false elsewhere. Electron's <c>app.isActive()</c>.</summary>

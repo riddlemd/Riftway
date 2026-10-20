@@ -20,6 +20,7 @@ Base: CEF `a03e714` (branch 8037, CEF 154, Chromium 154.0.8037.94), the version 
 | [`cef/0009-process-accessibility-mode.patch`](patches/cef/0009-process-accessibility-mode.patch) | `chromium/src/cef` | Adds the static `CefBrowserHost::GetProcessAccessibilityMode` and `SetProcessAccessibilityMode` (`ui::AXMode` flags) and `CefBrowserProcessHandler::OnAccessibilityModeChanged`: the getter reads `BrowserAccessibilityState::GetAccessibilityMode`, the setter keeps one `ScopedAccessibilityMode` for the process (Electron's `scoped_accessibility_mode_`), and a `ui::AXModeObserver` reports the flags Chromium adds by itself, not the setter's. `BUILD.gn` gains `//ui/accessibility:ax_base` and `//ui/accessibility/platform`. | A28 |
 | [`cef/0010-browser-process-handler-before-render-process-launch.patch`](patches/cef/0010-browser-process-handler-before-render-process-launch.patch) | `chromium/src/cef` | Adds `CefBrowserProcessHandler::OnBeforeRenderProcessLaunch(command_line, request_context)`, called from `ChromeContentBrowserClientCef::AppendExtraCommandLineSwitches` after `OnBeforeChildProcessLaunch`, for renderers only, with an existing request context (`CefBrowserContext::GetAnyRequestContext`, preferring one without a handler) of the profile `RenderProcessHost::FromID(child_process_id)` serves: a client with one context per profile gets its own back. Chromium never shares a renderer between profiles, so a switch added there holds through every process reuse. | W13 (per session) |
 | [`chromium/0011-renderer-no-zygote-per-process.patch`](patches/chromium/0011-renderer-no-zygote-per-process.patch) | `chromium/src` | On Linux, `RenderProcessHostImpl::Init` gives `RendererSandboxedProcessLauncherDelegate` `use_zygote = false` when the renderer's own command line has `--no-zygote`, and `GetZygote` then returns null, so the renderer is launched directly instead of forked from the sandboxed generic zygote: Electron's `support_mixed_sandbox_with_zygote.patch`. Without it, 0010's `--no-sandbox` on Linux changes nothing. Off `USE_ZYGOTE` builds it compiles to nothing. | W13 (Linux) |
+| [`chromium/0012-renderer-scroll-bounce-switch.patch`](patches/chromium/0012-renderer-scroll-bounce-switch.patch) | `chromium/src` | `RenderThreadImpl::IsElasticOverscrollSupported` and `IsElasticOverscrollEnabledOnRoot` answer whether the renderer's command line has `--scroll-bounce`, so pages rubber-band only when asked: Electron's `scroll_bounce_flag.patch`. Oriel adds the switch through 0010's `OnBeforeRenderProcessLaunch` for a session created with `SessionOptions.ScrollBounce`, on macOS only. No API change. _(branch `mac-integration`; not yet built)_ | W55 |
 
 CEF patches apply first, then Chromium patches (`patches/chromium/`, in `chromium/src`), each set in name order; the
 numbers are shared, so their order is the order they were written in. Later patches change the context of earlier ones
@@ -28,15 +29,9 @@ in `cef_browser_process_handler.h`), so
 `apply-patches.sh` works out each patch's state on a copy of the files they touch: it takes the applied ones out newest
 first, then puts them back in order.
 
-Not patched: A23 (macOS: `ready` after AppKit's `applicationDidFinishLaunching:`, with `launchInfo`). CEF calls
-`on_context_initialized` from `CefContext::OnContextInitialized` while `cef_initialize` runs, before `[NSApp run]`
-finishes launching. The patch would, on macOS, check `[NSApp isRunning]` / the launch state there and, if launching is
-not finished, observe `NSApplicationDidFinishLaunchingNotification` and call the handler from it, passing the
-notification's `userInfo` (a new `on_context_initialized` variant or a `CefDictionaryValue` getter at `CEF_NEXT`). That
-needs Objective-C++ in `context.cc` (or a new `.mm` file in `BUILD.gn`), and a check that nothing CEF starts itself
-(the Chrome-style startup browser, `CefBrowserProcessHandler::GetDefaultClient`, the external message pump) relies on the
-early call; Oriel would then raise `WillFinishLaunching`, the launch's `OpenFile` / `OpenUrl` and `Ready` in Electron's
-order. Larger than 0007-0009, so left for its own branch.
+No patch needed: A23. CEF calls `on_context_initialized` from `cef_initialize`, before `[NSApp run]` finishes launching, but
+Oriel decides when its own `Ready` fires: on macOS it waits for its app delegate's `applicationDidFinishLaunching:`, which
+also carries Electron's `launchInfo` _(branch `mac-integration`)_.
 
 Not patched: T6 (export the tray through Chromium's `dbus::Bus`). `dbus::Bus` has no public accessor for its
 `DBusConnection`, and it runs on Chromium's D-Bus thread with its own dispatch, so exposing it means either a Chromium

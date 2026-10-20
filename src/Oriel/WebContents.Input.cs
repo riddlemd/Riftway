@@ -85,6 +85,9 @@ public sealed partial class WebContents
         RaisePreferredSize();
     }
 
+    // BrowserWindow::RequestPreferredWidth: GetPreferredSize's width, 0 until preferred-size mode is on.
+    internal double PreferredWidth => _preferredSizeMode ? _preferredSize.Width : 0;
+
     private void RaisePreferredSize()
     {
         if (_measuredPreferredSize is not var (width, height, ratio)) return;

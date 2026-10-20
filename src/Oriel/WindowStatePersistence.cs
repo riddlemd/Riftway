@@ -25,6 +25,10 @@ internal sealed record SavedWindowState(Rectangle Bounds, Rectangle WorkArea);
 /// <summary>Electron's save and restore rules (<c>native_window.cc</c>), without the window.</summary>
 internal static class WindowStateRules
 {
+    /// <summary>Electron's <c>IsNormal</c>: NativeWindow's three states, and NativeWindowMac's simple full screen.</summary>
+    internal static bool IsNormal(bool minimized, bool maximized, bool fullScreen, bool simpleFullScreen)
+        => !minimized && !maximized && !fullScreen && !simpleFullScreen;
+
     // Electron's kMinVisibleWidth / kMinVisibleHeight.
     internal const int MinVisible = 100;
 

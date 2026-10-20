@@ -24,12 +24,17 @@ public enum ProgressBarMode
 /// <summary>Options for <see cref="BaseWindow.SetProgressBar"/>; Electron's <c>options</c> argument.</summary>
 public sealed record ProgressBarOptions
 {
-    /// <summary>How the bar shows. Electron's <c>mode</c>.</summary>
+    /// <summary>How the bar shows (Windows; macOS ignores it, as Electron). Electron's <c>mode</c>.</summary>
     public ProgressBarMode Mode { get; init; } = ProgressBarMode.Normal;
 }
 
 internal static class ProgressBar
 {
+    /// <summary>Electron's macOS rule, which ignores the mode: below 0 hides the Dock bar, above 1 fills it (indeterminate
+    /// at 1), otherwise the raw value. NaN, which no comparison catches, draws as an empty bar.</summary>
+    internal static (bool Hidden, bool Indeterminate, double Value) MacDock(double progress)
+        => progress < 0 ? (true, false, 0) : progress > 1 ? (false, true, 1) : (false, false, double.IsNaN(progress) ? 0 : progress);
+
     /// <summary>Electron's Windows rule: above 1 or <see cref="ProgressBarMode.Indeterminate"/> cycles; below 0 or
     /// <see cref="ProgressBarMode.None"/> removes the bar; otherwise the mode's colour at the value as a percentage.</summary>
     internal static (TaskbarProgressState State, int? Percent) Map(double progress, ProgressBarMode mode)

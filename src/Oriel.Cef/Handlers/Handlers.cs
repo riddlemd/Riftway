@@ -1155,6 +1155,7 @@ public sealed unsafe class WindowDelegate
         Native->on_window_bounds_changed = &OnBoundsChanged;
         Native->on_window_fullscreen_transition = &OnFullscreenTransition;
         Native->is_frameless = &IsFrameless;
+        Native->accepts_first_mouse = &AcceptsFirstMouse;
         Native->get_initial_show_state = &GetInitialShowState;
         Native->get_parent_window = &GetParentWindow;
         Native->is_window_modal_dialog = &IsWindowModalDialog;
@@ -1203,6 +1204,9 @@ public sealed unsafe class WindowDelegate
 
     /// <summary>No title bar or border.</summary>
     public bool Frameless { get; init; }
+
+    /// <summary>A click on the inactive window also reaches the page (macOS), asked once at creation.</summary>
+    public bool AcceptFirstMouse { get; init; }
 
     /// <summary>Created translucent (<c>Widget::InitParams::opacity</c>), so that what the window leaves clear shows
     /// the desktop behind it. Only a patched libcef asks (<see cref="CefRuntime.IsPatched"/>).</summary>
@@ -1259,6 +1263,14 @@ public sealed unsafe class WindowDelegate
     {
         NativeObject.Release(window);
         return NativeObject.Owner<WindowDelegate>(self).Frameless ? 1 : 0;
+    }
+
+    // Disabled rather than default: CEF's default follows --accept-first-mouse, which Electron does not read.
+    [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])]
+    private static cef_state_t AcceptsFirstMouse(cef_window_delegate_t* self, cef_window_t* window)
+    {
+        NativeObject.Release(window);
+        return NativeObject.Owner<WindowDelegate>(self).AcceptFirstMouse ? cef_state_t.STATE_ENABLED : cef_state_t.STATE_DISABLED;
     }
 
     [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])]

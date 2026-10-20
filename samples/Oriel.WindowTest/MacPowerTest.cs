@@ -67,10 +67,10 @@ static class MacPowerTest
         check("getSystemIdleState() is active right after input", PowerMonitor.GetSystemIdleState(60) == SystemIdleState.Active);
         check("getSystemIdleState() rejects a threshold of 0", Throws<ArgumentOutOfRangeException>(() => PowerMonitor.GetSystemIdleState(0)));
 
-        // Chromium's screen monitor hears the system's distributed notifications; posting them here is what the system does.
-        CefThread.InvokeOnUi(() => { MacPower.PostDistributed("com.apple.screensaver.didstart"); return true; });
+        // The system's distributed notifications, delivered to Oriel's observer only: posting them would reach every app.
+        CefThread.InvokeOnUi(() => { MacPower.DeliverDistributed("com.apple.screensaver.didstart"); return true; });
         check("a running screen saver makes the idle state locked", Eventually(() => PowerMonitor.GetSystemIdleState(60) == SystemIdleState.Locked, step));
-        CefThread.InvokeOnUi(() => { MacPower.PostDistributed("com.apple.screensaver.didstop"); return true; });
+        CefThread.InvokeOnUi(() => { MacPower.DeliverDistributed("com.apple.screensaver.didstop"); return true; });
         check("and stopping it makes it active again", Eventually(() => PowerMonitor.GetSystemIdleState(60) == SystemIdleState.Active, step));
     }
 
@@ -85,10 +85,10 @@ static class MacPowerTest
         PowerMonitor.UserDidResignActive += resigned;
         try
         {
-            CefThread.InvokeOnUi(() => { MacPower.PostDistributed("com.apple.screenIsLocked"); return true; });
+            CefThread.InvokeOnUi(() => { MacPower.DeliverDistributed("com.apple.screenIsLocked"); return true; });
             check("com.apple.screenIsLocked raises lock-screen and makes the idle state locked",
                 Eventually(() => log.Contains("lock") && PowerMonitor.GetSystemIdleState(60) == SystemIdleState.Locked, step), string.Join(",", log));
-            CefThread.InvokeOnUi(() => { MacPower.PostDistributed("com.apple.screenIsUnlocked"); return true; });
+            CefThread.InvokeOnUi(() => { MacPower.DeliverDistributed("com.apple.screenIsUnlocked"); return true; });
             check("com.apple.screenIsUnlocked raises unlock-screen", Eventually(() => log.Contains("unlock") && PowerMonitor.GetSystemIdleState(60) != SystemIdleState.Locked, step), string.Join(",", log));
 
             CefThread.InvokeOnUi(() => { PostWorkspace("NSWorkspaceSessionDidResignActiveNotification"); PostWorkspace("NSWorkspaceSessionDidBecomeActiveNotification"); return true; });

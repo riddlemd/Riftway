@@ -12,10 +12,10 @@ Percentages are over the non-n/a items; the second counts a partial item as half
 
 | Area | Items | Done | Partial | Missing | n/a | % done | % done + partial/2 |
 |---|---|---|---|---|---|---|---|
-| Events | 30 | 16 | 7 | 7 | 0 | 53.3% | 65.0% |
-| Methods | 75 | 44 | 20 | 10 | 1 | 59.5% | 73.0% |
+| Events | 30 | 23 | 6 | 1 | 0 | 76.7% | 86.7% |
+| Methods | 75 | 49 | 21 | 4 | 1 | 66.2% | 80.4% |
 | Properties | 10 | 7 | 3 | 0 | 0 | 70.0% | 85.0% |
-| **Total** | 115 | 67 | 30 | 17 | 1 | 58.8% | 71.9% |
+| **Total** | 115 | 79 | 30 | 5 | 1 | 69.3% | 82.5% |
 
 ## Checklist
 
@@ -23,23 +23,23 @@ Percentages are over the non-n/a items; the second counts a partial item as half
 
 | Electron | Oriel | Status | Note |
 |---|---|---|---|
-| `will-finish-launching` | `WillFinishLaunching` | partial | Windows, Linux: just before `Ready`, as Electron. macOS: from the app delegate's `applicationWillFinishLaunching:`, which CEF reaches only after `Ready` (A23). |
-| `ready` | `Ready` | partial | No `launchInfo` (the macOS launch notification's user info) (A23). |
+| `will-finish-launching` | `WillFinishLaunching` | done | Windows, Linux: just before `Ready`, as Electron. macOS: the app delegate's `applicationWillFinishLaunching:`, before `Ready`, which waits for AppKit's launch _(branch `mac-integration`)_. |
+| `ready` | `Ready` | done | macOS: from `applicationDidFinishLaunching:`, with `LaunchInfo` (the launch notification's, as Electron's) _(branch `mac-integration`)_; `IsReady` turns true when CEF is, a moment before (A23). |
 | `window-all-closed` | `WindowAllClosed` | done | Quits when unhandled, as Electron. |
 | `before-quit` | `BeforeQuit` | done | Cancellable. |
 | `will-quit` | `WillQuit` | done | Cancellable. |
 | `quit` | `Exited` | done | Named for the method it would collide with; carries the exit code. |
-| `open-file` | `OpenFile` | partial | macOS app delegate's `application:openFile:`; `Cancel` is `preventDefault()`. Files the app is launched with arrive after `Ready` (A23). |
-| `open-url` | `OpenUrl` | partial | macOS `kAEGetURL` Apple event handler, as Electron's `registerURLHandler`. Launch URLs arrive after `Ready` (A23). |
+| `open-file` | `OpenFile` | partial | macOS app delegate's `application:openFile:`; `Cancel` is `preventDefault()`. Files the app is launched with arrive before `Ready`, as Electron _(branch `mac-integration`)_. |
+| `open-url` | `OpenUrl` | partial | macOS `kAEGetURL` Apple event handler, as Electron's `registerURLHandler`. Launch URLs arrive before `Ready`, as Electron _(branch `mac-integration`)_. |
 | `activate` | `Activate` | done | macOS `applicationShouldHandleReopen:hasVisibleWindows:`, answering the flag as Electron. |
 | `did-become-active` | `DidBecomeActive` | done | macOS app delegate. |
 | `did-resign-active` | `DidResignActive` | done | macOS app delegate. |
-| `continue-activity` | — | missing | Handoff is not ported (A32). |
-| `will-continue-activity` | — | missing | A32. |
-| `continue-activity-error` | — | missing | A32. |
-| `activity-was-continued` | — | missing | A32. |
-| `update-activity-state` | — | missing | A32. |
-| `new-window-for-tab` | — | missing | No native window tabbing (A32). |
+| `continue-activity` | `ContinueActivity` | done | `Cancel` is `preventDefault()`; `Details.WebpageUrl`. Not run against a real Handoff from another device. |
+| `will-continue-activity` | `WillContinueActivity` | done | Not run against a real Handoff. |
+| `continue-activity-error` | `ContinueActivityError` | done | Not run against a real Handoff. |
+| `activity-was-continued` | `ActivityWasContinued` | done | Not run against a real Handoff. |
+| `update-activity-state` | `UpdateActivityState` | done | `Cancel` holds the save for `UpdateCurrentActivity`, a second at most per wake. |
+| `new-window-for-tab` | `NewWindowForTab` | partial | macOS: the app delegate's `newWindowForTab:`, and after a window's own event _(branch `mac-integration`)_; not yet run on screen. |
 | `browser-window-blur` | `BrowserWindowBlur` | done |  |
 | `browser-window-focus` | `BrowserWindowFocus` | done |  |
 | `browser-window-created` | `BrowserWindowCreated` | done |  |
@@ -71,7 +71,7 @@ Percentages are over the non-n/a items; the second counts a partial item as half
 | `setAppLogsPath([path])` | `SetAppLogsPath` | done | Made and resolved as `PathService::Override`; macOS default from `CFBundleName`, printed `(null)` when there is none, as Electron's `%@`. |
 | `getAppPath()` | `GetAppPath` | done | The entry assembly's directory, Oriel's counterpart of the package directory. |
 | `getPath(name)` | `GetPath` | done | Every Electron name, `cache`, `userCache` and `userDesktop` included; `assets` fails on macOS and `recent` off Windows, as Electron; `userData`, `userCache`, `logs`, `crashDumps` and `recent` are made on first use; answers cached until the next `SetPath`, as PathService. A14: `assets` checked on Windows only. |
-| `getFileIcon(path[, options])` | `GetFileIcon` | partial | Windows only (A12). |
+| `getFileIcon(path[, options])` | `GetFileIcon` | partial | Windows and macOS; not Linux (A12). macOS by content type, as `icon_loader_mac.mm`, at 1x and 2x; `large` faults instead of crashing (A40). |
 | `setPath(name, path)` | `SetPath` | done | A missing directory is accepted and not made, as Electron's code and spec (its docs say otherwise). |
 | `getVersion()` | `Version` | done | The project's `Version`. |
 | `getName()` | `Name` | done |  |
@@ -95,11 +95,11 @@ Percentages are over the non-n/a items; the second counts a partial item as half
 | `requestSingleInstanceLock([additionalData])` | `RequestSingleInstanceLock` | partial | Always single-instance (A2); notifies the running instance over Chromium's singleton socket (macOS, Linux) or message window (Windows), with the data (A29). |
 | `hasSingleInstanceLock()` | `HasSingleInstanceLock` | done |  |
 | `releaseSingleInstanceLock()` | `ReleaseSingleInstanceLock` | partial | CEF keeps the data directory locked (A2). |
-| `setUserActivity(type, userInfo[, webpageURL])` | — | missing | A32. |
-| `getCurrentActivityType()` | — | missing | A32. |
-| `invalidateCurrentActivity()` | — | missing | A32. |
-| `resignCurrentActivity()` | — | missing | A32. |
-| `updateCurrentActivity(type, userInfo)` | — | missing | A32. |
+| `setUserActivity(type, userInfo[, webpageURL])` | `SetUserActivity` | done | `userInfo` is a `JsonObject`, numbers stored as V8 would hand them over; a non-http(s) URL throws (A41). |
+| `getCurrentActivityType()` | `GetCurrentActivityType` | done |  |
+| `invalidateCurrentActivity()` | `InvalidateCurrentActivity` | done |  |
+| `resignCurrentActivity()` | `ResignCurrentActivity` | done |  |
+| `updateCurrentActivity(type, userInfo)` | `UpdateCurrentActivity` | done | `type` is ignored, as in Electron. |
 | `setAppUserModelId(id)` | `SetAppUserModelId` | done | Windows. |
 | `setToastActivatorCLSID(id)` | `SetToastActivatorClsid` | done | Windows. |
 | `setActivationPolicy(policy)` | `SetActivationPolicy` | done | macOS. |
@@ -127,7 +127,7 @@ Percentages are over the non-n/a items; the second counts a partial item as half
 | `startAccessingSecurityScopedResource(bookmarkData)` | — | n/a | Mac App Store builds only; Oriel has none. |
 | `enableSandbox()` | `EnableSandbox` | partial | A1. |
 | `isInApplicationsFolder()` | `IsInApplicationsFolder` | done | macOS. |
-| `moveToApplicationsFolder([options])` | — | missing | A33. |
+| `moveToApplicationsFolder([options])` | `MoveToApplicationsFolder` | partial | Ported with `ConflictHandler`; the privileged copy, relaunch and disk-image detach not yet run (A33). |
 | `isSecureKeyboardEntryEnabled()` | `IsSecureKeyboardEntryEnabled` | done | macOS. |
 | `setSecureKeyboardEntryEnabled(enabled)` | `SetSecureKeyboardEntryEnabled` | partial | Oriel's switch is separate from Chromium's password-field counter (A37). |
 | `setProxy(config)` | `SetProxyAsync` | partial | The global `proxy` preference, which the system network context follows, with Electron's choices; completes before the context applies it (A35). |

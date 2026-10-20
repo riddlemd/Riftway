@@ -297,30 +297,7 @@ public static unsafe class MacStatusItem
 
     private static void UpdateDimensions(nint view) => SendRect(view, Sel("setFrame:"u8), Frame(Button(view)));
 
-    private static nint Image(IReadOnlyList<(byte[] Png, double Scale)> representations, bool template)
-    {
-        if (representations.Count == 0) return 0;
-        var image = Send(Send(Class("NSImage"u8), Sel("alloc"u8)), Sel("init"u8));
-        NSPoint? size = null;
-        WithPool(() =>
-        {
-            foreach (var (png, scale) in representations)
-            {
-                nint data;
-                fixed (byte* p = png) data = ((delegate* unmanaged<nint, nint, byte*, nuint, nint>)s_msgSend)(Class("NSData"u8), Sel("dataWithBytes:length:"u8), p, (nuint)png.Length);
-                var rep = Send(Class("NSBitmapImageRep"u8), Sel("imageRepWithData:"u8), data);
-                if (rep == 0) continue;
-                var points = new NSPoint { X = Send(rep, Sel("pixelsWide"u8)) / scale, Y = Send(rep, Sel("pixelsHigh"u8)) / scale };
-                ((delegate* unmanaged<nint, nint, NSPoint, void>)s_msgSend)(rep, Sel("setSize:"u8), points);
-                Send(image, Sel("addRepresentation:"u8), rep);
-                size ??= points;
-            }
-        });
-        // gfx's NSImageFromImageSkia sizes the image in DIPs.
-        if (size is { } s) ((delegate* unmanaged<nint, nint, NSPoint, void>)s_msgSend)(image, Sel("setSize:"u8), s);
-        if (template) ((delegate* unmanaged<nint, nint, byte, void>)s_msgSend)(image, Sel("setTemplate:"u8), 1);
-        return image;
-    }
+    private static nint Image(IReadOnlyList<(byte[] Png, double Scale)> representations, bool template) => MacImages.FromRepresentations(representations, template);
 
     private static nint Color(int rgb)
         => ((delegate* unmanaged<nint, nint, double, double, double, double, nint>)s_msgSend)(Class("NSColor"u8), Sel("colorWithCalibratedRed:green:blue:alpha:"u8),
@@ -372,7 +349,7 @@ public static unsafe class MacStatusItem
         fixed (byte* v = "v@:@"u8)
         fixed (byte* v0 = "v@:"u8)
         fixed (byte* q = "Q@:@"u8)
-        fixed (byte* b = "B@:@"u8)
+        fixed (byte* b = ObjCEncoding.Of("B@:@"))
         {
             var cls = objc_allocateClassPair(s_nsView, name, 0);
             class_addMethod(cls, Sel("mouseDown:"u8), (delegate* unmanaged<nint, nint, nint, void>)&OnMouseDown, v);

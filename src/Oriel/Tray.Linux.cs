@@ -174,7 +174,7 @@ internal static class LinuxTrayRules
                 MenuItemType.Separator => LinuxGtkMenuItemType.Separator,
                 MenuItemType.Checkbox => LinuxGtkMenuItemType.Check,
                 MenuItemType.Radio => LinuxGtkMenuItemType.Radio,
-                MenuItemType.Submenu when item.Submenu is not null => LinuxGtkMenuItemType.Submenu,
+                MenuItemType.Submenu or MenuItemType.Palette when item.Submenu is not null => LinuxGtkMenuItemType.Submenu,
                 _ => LinuxGtkMenuItemType.Command,
             };
             var separator = type == LinuxGtkMenuItemType.Separator;
@@ -185,9 +185,9 @@ internal static class LinuxTrayRules
                 GroupId = item.GroupId,
                 Submenu = type == LinuxGtkMenuItemType.Submenu ? GtkModel(item.Submenu) : null,
                 SubmenuWillShow = type == LinuxGtkMenuItemType.Submenu ? () => item.Submenu!.OnMenuWillShow() : null,
-                IsEnabled = () => separator || item.Enabled,
+                IsEnabled = () => separator || item.CommandEnabled,
                 IsVisible = () => separator || item.Visible,
-                IsChecked = () => item.Checked,
+                IsChecked = () => item.CheckStatus,
                 Activated = separator ? null : (shift, ctrl, alt) => item.Run(BaseWindow.GetFocusedWindow(), new KeyboardEvent { ShiftKey = shift, CtrlKey = ctrl, AltKey = alt }),
             });
         }
@@ -318,7 +318,7 @@ internal sealed class DbusMenu
             return properties;
         }
         if (item.Label.Length > 0) properties["label"] = new("s", LinuxTrayRules.MenuLabel(item.Label));
-        if (!item.Enabled) properties["enabled"] = new("b", false);
+        if (!item.CommandEnabled) properties["enabled"] = new("b", false);
         if (!item.Visible) properties["visible"] = new("b", false);
         // GetAcceleratorForCommandId asks without the role's default accelerator.
         if (item.ExplicitAccelerator is { } accelerator && LinuxTrayRules.Shortcut(accelerator) is { } parts)
@@ -327,9 +327,9 @@ internal sealed class DbusMenu
         {
             case MenuItemType.Checkbox or MenuItemType.Radio:
                 properties["toggle-type"] = new("s", item.Type == MenuItemType.Checkbox ? "checkmark" : "radio");
-                properties["toggle-state"] = new("i", item.Checked ? 1 : 0);
+                properties["toggle-state"] = new("i", item.CheckStatus ? 1 : 0);
                 break;
-            case MenuItemType.Submenu when item.Submenu is not null:
+            case MenuItemType.Submenu or MenuItemType.Palette when item.Submenu is not null:
                 properties["children-display"] = new("s", "submenu");
                 break;
         }
@@ -337,7 +337,7 @@ internal sealed class DbusMenu
     }
 
     // Electron inserts a submenu model only for a submenu item.
-    private static Menu? SubmenuOf(MenuItem item) => item.Type == MenuItemType.Submenu ? item.Submenu : null;
+    private static Menu? SubmenuOf(MenuItem item) => item.Type is MenuItemType.Submenu or MenuItemType.Palette ? item.Submenu : null;
 
     private List<int> ConvertMenu(Menu? menu)
     {

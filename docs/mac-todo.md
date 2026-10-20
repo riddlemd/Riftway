@@ -41,5 +41,5 @@ General items: [todo.md](todo.md).
       open-file and activate from dispatched Apple events, did-resign/become-active, activation policy, secure keyboard
       entry, about panel) and SessionTest `AppAuditChecks` (launch order, single-instance lock, paths, locale, GPU status,
       accessibility, host resolver, app render-process-gone, protocol info, delegate class). Not run: login items and
-      protocol registration writes (need a signed, bundled app); Handoff (A32) and `moveToApplicationsFolder` (A33) are
-      not ported
+      protocol registration writes (need a signed, bundled app); Handoff and `moveToApplicationsFolder` (A33) are
+      ported on branch `mac-integration`, not yet run

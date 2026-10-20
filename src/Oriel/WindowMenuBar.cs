@@ -198,7 +198,7 @@ internal sealed unsafe class WindowMenuBar
         var button = CefNative.cef_menu_button_create(buttonDelegate.Native, &text);
         CefString.Clear(&text);
         var view = (cef_view_t*)button;
-        view->set_enabled(view, item.Enabled ? 1 : 0);
+        view->set_enabled(view, item.CommandEnabled ? 1 : 0);
         if (MnemonicOf(item.Label) is { } letter) _mnemonics.TryAdd(letter, (int)_panel->get_child_view_count(_panel));
         // The panel takes the creation reference.
         _panel->add_child_view(_panel, view);
@@ -275,7 +275,7 @@ internal sealed unsafe class WindowMenuBar
 
     private void RegisterAccelerator(MenuItem item)
     {
-        if (item.Type is MenuItemType.Separator or MenuItemType.Submenu || MenuModels.CefAccelerator(item) is not { } a) return;
+        if (item.Type is MenuItemType.Separator or MenuItemType.Submenu or MenuItemType.Palette || MenuModels.CefAccelerator(item) is not { } a) return;
         // Low priority: the page sees the key first, so editing keys keep working in text fields.
         _window->set_accelerator(_window, item.CommandId, a.KeyCode,
             MenuModels.Has(a, AcceleratorModifiers.Shift), MenuModels.Has(a, AcceleratorModifiers.Control), MenuModels.Has(a, AcceleratorModifiers.Alt), 0);

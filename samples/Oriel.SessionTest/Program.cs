@@ -3163,9 +3163,9 @@ async Task SandboxSessionChecks()
 
 async Task AppAuditChecks()
 {
-    Check("WillFinishLaunching (Windows, Linux) comes before Ready, and WhenReady after the Ready handlers",
+    Check("WillFinishLaunching comes before Ready (macOS: from AppKit's launch), and WhenReady after the Ready handlers",
         await Task.WhenAny(whenReady, Task.Delay(5000)) == whenReady
-        && string.Join(",", launchOrder) == (OperatingSystem.IsMacOS() ? "ready,whenReady,will-finish-launching" : "will-finish-launching,ready,whenReady"),
+        && string.Join(",", launchOrder) == "will-finish-launching,ready,whenReady",
         string.Join(",", launchOrder));
     Check("RequestSingleInstanceLock was granted with no other run, and HasSingleInstanceLock says so", gotSingleInstanceLock && app.HasSingleInstanceLock());
     app.ReleaseSingleInstanceLock();

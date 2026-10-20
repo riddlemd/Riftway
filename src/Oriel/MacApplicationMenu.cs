@@ -15,6 +15,17 @@ internal static class MacApplicationMenu
     private static MacMenuController? s_barController;
     private static MacMenuController? s_dockController;
     private static readonly List<MacMenuController> s_popupControllers = [];
+    private static readonly List<MacSharePopup> s_sharePopups = [];
+
+    /// <summary>Routes a <see cref="ShareMenu"/> popup's menu events to it until <see cref="UntrackSharePopup"/>. UI thread.</summary>
+    internal static void TrackSharePopup(MacSharePopup popup)
+    {
+        MacMenu.Chosen = OnChosen;
+        InstallMenuEvents();
+        s_sharePopups.Add(popup);
+    }
+
+    internal static void UntrackSharePopup(MacSharePopup popup) => s_sharePopups.Remove(popup);
 
     /// <summary>Starts following the application menu; call on the UI thread once CEF is ready.</summary>
     internal static void Install()
@@ -119,14 +130,25 @@ internal static class MacApplicationMenu
         var accelerator = MacMenuItemState.ShownAccelerator(item, inMenuBar) is { } text ? Accelerator.Parse(text, macOS: true) : (Accelerator?)null;
         var native = MacMenu.AddItem(nsMenu, MenuLabels.WithoutMnemonics(item.Label), item.CommandId,
             accelerator?.MacKeyEquivalent ?? string.Empty, accelerator is { } a ? MaskOf(a.MacMenuModifiers) : 0,
-            MenuRoles.MacSelector(item.Role));
+            MenuRoles.MacSelector(item.Role), sectionHeader: item.Type == MenuItemType.Header);
         if (MacMenuItemState.Of(item) is { } state) MacMenuTree.Instance.Apply(native, state);
+
+        if (item.Role == MenuItemRole.ShareMenu)
+        {
+            var (texts, files, urls) = (item.SharingItem ?? new SharingItem()).ForMac();
+            var shareMenu = MacMenu.CreateShareMenu(texts, files, urls);
+            MacMenu.SetSubmenu(native, shareMenu);
+            MacMenu.Release(shareMenu);
+            return;
+        }
 
         if (item.Submenu is not { } submenu) return;
         var nsSubmenu = MacMenu.CreateMenu(MenuLabels.WithoutMnemonics(item.Label));
         foreach (var child in submenu.Items) AddItem(nsSubmenu, child, inMenuBar);
+        if (item.Type == MenuItemType.Palette) MacMenu.SetPalette(nsSubmenu);
         MacMenu.SetSubmenu(native, nsSubmenu);
-        MacMenu.SetDelegate(nsSubmenu);
+        // Electron moves these items into its nib's Open Recent menu; AppKit, not Oriel, is that menu's delegate.
+        if (item.Role != MenuItemRole.RecentDocuments || !MacMenu.MarkRecentDocumentsMenu(nsSubmenu)) MacMenu.SetDelegate(nsSubmenu);
         // Only the menu bar's submenus become the app's Services, Window and Help menus.
         if (inMenuBar) switch (item.Role)
         {
@@ -141,9 +163,18 @@ internal static class MacApplicationMenu
     // one Menu it was made for: the application menu, or the Dock menu.
     private static void InstallMenuEvents()
     {
+        MacMenu.ShareSourceWindow = () => BaseWindow.GetFocusedWindow()?.GetNativeWindowHandle() is { } view ? MacWindow.NSWindowOf(view) : 0;
         MacMenu.NeedsUpdate = menu => ControllerOf(menu)?.NeedsUpdate(menu);
-        MacMenu.Opened = menu => ControllerOf(menu)?.WillOpen(menu, RemoveInjectedFullScreenItems);
-        MacMenu.Closed = menu => ControllerOf(menu)?.DidClose(menu, MacMenu.Supermenu(menu));
+        MacMenu.Opened = menu =>
+        {
+            if (SharePopupOf(menu) is { } share) share.WillOpen();
+            else ControllerOf(menu)?.WillOpen(menu, RemoveInjectedFullScreenItems);
+        };
+        MacMenu.Closed = menu =>
+        {
+            if (SharePopupOf(menu) is { } share) share.DidClose(menu);
+            else ControllerOf(menu)?.DidClose(menu, MacMenu.Supermenu(menu));
+        };
     }
 
     private static MacMenuController? ControllerOf(nint menu)
@@ -153,6 +184,13 @@ internal static class MacApplicationMenu
         if (s_barController?.NativeMenu == top) return s_barController;
         if (s_dockController?.NativeMenu == top) return s_dockController;
         return s_popupControllers.Find(c => c.NativeMenu == top);
+    }
+
+    private static MacSharePopup? SharePopupOf(nint menu)
+    {
+        var top = menu;
+        for (var up = MacMenu.Supermenu(top); up != 0; up = MacMenu.Supermenu(top)) top = up;
+        return s_sharePopups.Find(p => p.NativeMenu == top);
     }
 
     // macOS adds a hidden duplicate "Toggle Full Screen" to a submenu that has a delegate; Electron removes it.
@@ -191,7 +229,8 @@ internal static class MacApplicationMenu
 /// <summary>What Electron's <c>applyStateToMenuItem</c> writes to an NSMenuItem from its model.</summary>
 /// <remarks><see cref="Checked"/> applies to any item type, as Electron's <c>IsItemCheckedAt</c> reads <c>checked</c>
 /// whatever the type. <see cref="RoleSelector"/> is the role's AppKit action, set again after the image is cleared.</remarks>
-internal readonly record struct MacMenuItemState(bool Enabled, bool Hidden, bool Checked, string Title, string? RoleSelector)
+internal readonly record struct MacMenuItemState(bool Enabled, bool Hidden, bool Checked, string Title, string? RoleSelector,
+    NativeImage? Icon = null, string Subtitle = "", string ToolTip = "", MenuItemBadge? Badge = null)
 {
     /// <summary>Electron's <c>useDefaultAccelerator</c>: YES for the menu bar, NO for the Dock and tray menus, where a
     /// role shows only an accelerator set on the item.</summary>
@@ -201,7 +240,8 @@ internal readonly record struct MacMenuItemState(bool Enabled, bool Hidden, bool
     /// (separators, the Services submenu), which it leaves alone.</summary>
     internal static MacMenuItemState? Of(MenuItem item)
         => item.Type == MenuItemType.Separator || item.Role == MenuItemRole.Services ? null
-            : new(item.Enabled, !item.Visible, item.Checked, MenuLabels.WithoutMnemonics(item.Label), MenuRoles.MacSelector(item.Role));
+            : new(item.CommandEnabled, !item.Visible, item.CheckStatus, MenuLabels.WithoutMnemonics(item.Label), MenuRoles.MacSelector(item.Role),
+                item.Icon is { } icon && !icon.IsEmpty() ? icon : null, MenuLabels.WithoutMnemonics(item.Sublabel ?? ""), item.ToolTip ?? "", item.Badge);
 }
 
 /// <summary>The NSMenu calls <see cref="MacMenuController"/> makes; a seam for tests.</summary>
@@ -238,7 +278,12 @@ internal sealed class MacMenuTree : IMacMenuTree
         MacMenu.SetHidden(item, state.Hidden);
         MacMenu.SetChecked(item, state.Checked);
         MacMenu.SetTitle(item, state.Title);
-        MacMenu.ClearImage(item, state.RoleSelector);
+        // applyStateToMenuItem: a subtitle only when there is one, the tooltip always, the image or none.
+        if (state.Subtitle.Length > 0) MacMenu.SetSubtitle(item, state.Subtitle);
+        MacMenu.SetToolTip(item, state.ToolTip);
+        if (state.Icon is { } icon) MacMenu.SetImage(item, icon.NativeHandle());
+        else MacMenu.ClearImage(item, state.RoleSelector);
+        MacMenu.SetBadge(item, state.Badge is { } badge ? (int)badge.Type : null, state.Badge?.Count ?? 0, state.Badge?.Content);
     }
 }
 

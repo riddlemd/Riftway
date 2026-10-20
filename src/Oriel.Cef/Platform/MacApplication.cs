@@ -32,6 +32,14 @@ public static unsafe class MacApplication
     /// own when null.</summary>
     public static Action? Quit { get; set; }
 
+    /// <summary>CrAppControlProtocol's flag, which <c>base::mac::ScopedSendingEvent</c> sets around a nested menu loop
+    /// so that a window closed from it waits for the loop to end.</summary>
+    public static bool HandlingSendEvent
+    {
+        get => s_handlingSendEvent;
+        set => s_handlingSendEvent = value;
+    }
+
     /// <summary>Registers the subclass and creates the shared application from it; idempotent.</summary>
     /// <exception cref="InvalidOperationException">NSApp already exists as another class.</exception>
     public static void Install()
@@ -42,8 +50,8 @@ public static unsafe class MacApplication
         var cls = objc_allocateClassPair(s_nsApplication, Utf8("OrielApplication"), 0);
         if (cls == 0) throw new InvalidOperationException("OrielApplication is already registered with the Objective-C runtime.");
 
-        class_addMethod(cls, Selector("isHandlingSendEvent"), (delegate* unmanaged<nint, nint, byte>)&IsHandlingSendEvent, Utf8("B@:"));
-        class_addMethod(cls, Selector("setHandlingSendEvent:"), (delegate* unmanaged<nint, nint, byte, void>)&SetHandlingSendEvent, Utf8("v@:B"));
+        class_addMethod(cls, Selector("isHandlingSendEvent"), (delegate* unmanaged<nint, nint, byte>)&IsHandlingSendEvent, Utf8(ObjCEncoding.Types("B@:")));
+        class_addMethod(cls, Selector("setHandlingSendEvent:"), (delegate* unmanaged<nint, nint, byte, void>)&SetHandlingSendEvent, Utf8(ObjCEncoding.Types("v@:B")));
         class_addMethod(cls, Selector("sendEvent:"), (delegate* unmanaged<nint, nint, nint, void>)&SendEvent, Utf8("v@:@"));
         class_addMethod(cls, Selector("terminate:"), (delegate* unmanaged<nint, nint, nint, void>)&Terminate, Utf8("v@:@"));
         class_addMethod(cls, Selector("orielWillPowerOff:"), (delegate* unmanaged<nint, nint, nint, void>)&WillPowerOff, Utf8("v@:@"));

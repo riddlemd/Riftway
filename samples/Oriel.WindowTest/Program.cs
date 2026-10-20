@@ -1718,6 +1718,238 @@ async Task MacWindowApisAsync()
     w.SetHiddenInMissionControl(false);
     Check("HiddenInMissionControl sets the Transient behaviour; SetHiddenInMissionControl(false) clears it",
         transientAtStart && Eventually(() => (Behavior() & 8) == 0, step) && !w.IsHiddenInMissionControl(), Behavior());
+    bool Prop(string selector) => MacInterop.SendBool(NSWindow(), MacInterop.sel_registerName(selector)) != 0;
+    var shadowAtStart = Prop("hasShadow") && w.GetHasShadow();
+    w.SetHasShadow(false);
+    var shadowOff = Eventually(() => !Prop("hasShadow"), step) && !w.GetHasShadow();
+    w.InvalidateShadow();
+    w.SetHasShadow(true);
+    Check("SetHasShadow sets NSWindow.hasShadow both ways, and GetHasShadow reads it (macOS)", shadowAtStart && shadowOff && Eventually(() => Prop("hasShadow"), step) && w.GetHasShadow());
+    w.SetOpacity(0.25);
+    var faded = Eventually(() => MacInterop.SendDouble(NSWindow(), MacInterop.sel_registerName("alphaValue")) == 0.25, step) && w.GetOpacity() == 0.25;
+    w.SetOpacity(1);
+    Check("SetOpacity sets the alphaValue, and GetOpacity reads it (macOS)", faded && Eventually(() => MacInterop.SendDouble(NSWindow(), MacInterop.sel_registerName("alphaValue")) == 1, step));
+    w.SetIgnoreMouseEvents(true, new IgnoreMouseEventsOptions { Forward = true });
+    var ignoring = Eventually(() => Prop("ignoresMouseEvents") && Prop("acceptsMouseMovedEvents"), step);
+    w.SetIgnoreMouseEvents(false, new IgnoreMouseEventsOptions { Forward = true });
+    Check("SetIgnoreMouseEvents passes the mouse through, forwarding moves only while ignoring (macOS)",
+        ignoring && Eventually(() => !Prop("ignoresMouseEvents") && !Prop("acceptsMouseMovedEvents"), step));
+    nint Sharing() => MacInterop.Send(NSWindow(), MacInterop.sel_registerName("sharingType"));
+    w.SetContentProtection(true);
+    var protectedNow = Eventually(() => Sharing() == 0, step) && w.IsContentProtected();
+    w.SetContentProtection(false);
+    Check("SetContentProtection sets sharingType none and back to read-only, and IsContentProtected reads it (macOS)",
+        protectedNow && Eventually(() => Sharing() == 1, step) && !w.IsContentProtected(), Sharing());
+    bool Flag(string selector) => MacInterop.SendBool(NSWindow(), MacInterop.sel_registerName(selector)) != 0;
+    w.SetMovable(false);
+    var fixedInPlace = Eventually(() => !Flag("isMovable"), step) && !w.IsMovable;
+    w.SetMovable(true);
+    Check("SetMovable sets NSWindow.movable both ways, and IsMovable reads it (macOS)", fixedInPlace && Eventually(() => Flag("isMovable"), step) && w.IsMovable);
+    w.SetFocusable(false);
+    var unfocusable = Eventually(() => !Flag("canBecomeKeyWindow") && !Flag("canBecomeMainWindow"), step) && !w.IsFocusable;
+    w.SetFocusable(true);
+    Check("SetFocusable turns canBecomeKeyWindow and canBecomeMainWindow off and back on (macOS)", unfocusable && Eventually(() => Flag("canBecomeKeyWindow"), step) && w.IsFocusable);
+    nint Sheet() => MacInterop.Send(NSWindow(), MacInterop.sel_registerName("attachedSheet"));
+    w.SetEnabled(false);
+    var covered = Eventually(() => Sheet() != 0, step) && !w.IsEnabled;
+    w.SetEnabled(true);
+    Check("SetEnabled(false) attaches a sheet and SetEnabled(true) ends it; IsEnabled follows (macOS)", covered && Eventually(() => Sheet() == 0, step) && w.IsEnabled);
+    var number = MacInterop.Send(NSWindow(), MacInterop.sel_registerName("windowNumber"));
+    Check("GetMediaSourceId is window:<window number>:0 (macOS)", w.GetMediaSourceId() == $"window:{number}:0", w.GetMediaSourceId());
+    w.Focus();
+    Eventually(() => w.IsFocused, step);
+    w.BlurWebView();
+    var pageBlurred = Eventually(() => !w.WebContents.IsFocused(), step);
+    w.FocusOnWebView();
+    Check("BlurWebView takes the page's focus and FocusOnWebView gives it back (macOS)", pageBlurred && Eventually(() => w.WebContents.IsFocused(), step));
+    string AxTitle() => System.Runtime.InteropServices.Marshal.PtrToStringUTF8(MacInterop.Send(MacInterop.Send(NSWindow(), MacInterop.sel_registerName("accessibilityTitle")), MacInterop.sel_registerName("UTF8String"))) ?? "";
+    var ownAxTitle = AxTitle();
+    w.AccessibleTitle = "Oriel accessible title";
+    var announced = Eventually(() => AxTitle() == "Oriel accessible title", step) && w.AccessibleTitle == "Oriel accessible title";
+    w.AccessibleTitle = "";
+    Check("AccessibleTitle replaces accessibilityTitle and empty gives the window's own back (macOS)", announced && Eventually(() => AxTitle() == ownAxTitle, step), ownAxTitle);
+    var quiet = new BrowserWindow(new BrowserWindowOptions { Title = "Oriel window test: show inactive", Width = 200, Height = 150, Show = false });
+    quiet.ShowInactive();
+    nint QuietWindow() => MacInterop.Send(quiet.GetNativeWindowHandle(), MacInterop.sel_registerName("window"));
+    var quietShown = Eventually(() => quiet.IsVisible, step);
+    Check("ShowInactive shows the window without making it key, and the focused window keeps focus (macOS)",
+        quietShown && MacInterop.SendBool(QuietWindow(), MacInterop.sel_registerName("isKeyWindow")) == 0 && w.IsFocused && !quiet.IsFocused);
+    quiet.Destroy();
+    w.SetAspectRatio(2);
+    var ratio = MacInterop.SendSize(NSWindow(), MacInterop.sel_registerName("contentAspectRatio"));
+    w.SetAspectRatio(0);
+    var increments = MacInterop.SendSize(NSWindow(), MacInterop.sel_registerName("resizeIncrements"));
+    Check("SetAspectRatio sets the content aspect ratio, and 0 restores 1 × 1 resize increments (macOS)",
+        ratio.X == 2 && ratio.Y == 1 && increments.X == 1 && increments.Y == 1, $"{ratio.X}x{ratio.Y} {increments.X}x{increments.Y}");
+    var sliding = new BrowserWindow(new BrowserWindowOptions { Title = "Oriel window test: animated bounds", Width = 300, Height = 200, MinWidth = 250, MinHeight = 180 });
+    Eventually(() => sliding.IsVisible, step);
+    sliding.SetBounds(new Rectangle(120, 140, 100, 100), animate: true);
+    var slid = Eventually(() => sliding.GetBounds() == new Rectangle(120, 140, 250, 180), step);
+    Check("SetBounds(animate) lands on the bounds, raised to the minimum size as Electron clamps it (macOS)", slid, sliding.GetBounds().ToString());
+    sliding.Destroy();
+    nint Button(BrowserWindow b, nuint kind) => MacInterop.SendNUInt(MacInterop.Send(b.GetNativeWindowHandle(), MacInterop.sel_registerName("window")), MacInterop.sel_registerName("standardWindowButton:"), kind);
+    bool Hidden(nint view) => MacInterop.SendBool(view, MacInterop.sel_registerName("isHidden")) != 0;
+    double LeftOf(nint view) => MacInterop.SendRect(view, MacInterop.sel_registerName("frame")).X;
+    var plain = new BrowserWindow(new BrowserWindowOptions { Title = "Oriel window test: frameless buttons", Width = 300, Height = 200, Frame = false });
+    Eventually(() => plain.IsVisible, step);
+    Check("a frameless window with the default title bar style hides the traffic lights, as Electron (macOS)", Hidden(Button(plain, 0)) && !plain.GetWindowButtonVisibility());
+    plain.Destroy();
+    var inset = new BrowserWindow(new BrowserWindowOptions { Title = "Oriel window test: hiddenInset", Width = 300, Height = 200, TitleBarStyle = TitleBarStyle.HiddenInset });
+    Eventually(() => inset.IsVisible, step);
+    var insetLeft = LeftOf(Button(inset, 0));
+    inset.SetWindowButtonPosition(new Point(30, 20));
+    var movedLeft = LeftOf(Button(inset, 0));
+    inset.SetWindowButtonPosition(null);
+    Check("hiddenInset keeps the traffic lights 12 points in; SetWindowButtonPosition moves them and null puts back AppKit's place (macOS)",
+        insetLeft == 12 && movedLeft == 30 && inset.GetWindowButtonPosition() is null && inset.GetWindowButtonVisibility() && !Hidden(Button(inset, 0)),
+        $"{insetLeft} {movedLeft} {LeftOf(Button(inset, 0))}");
+    inset.SetWindowButtonVisibility(false);
+    var insetHidden = !inset.GetWindowButtonVisibility();
+    inset.SetWindowButtonVisibility(true);
+    Check("SetWindowButtonVisibility hides and shows a hidden title bar's traffic lights (macOS)", insetHidden && inset.GetWindowButtonVisibility());
+    inset.Destroy();
+    var hover = new BrowserWindow(new BrowserWindowOptions { Title = "Oriel window test: customButtonsOnHover", Width = 300, Height = 200, TitleBarStyle = TitleBarStyle.CustomButtonsOnHover, TrafficLightPosition = new Point(16, 16) });
+    Eventually(() => hover.IsVisible, step);
+    Check("customButtonsOnHover starts with the traffic lights hidden, laid out at trafficLightPosition (macOS)",
+        Hidden(Button(hover, 0)) && LeftOf(Button(hover, 0)) == 16 && hover.GetWindowButtonPosition() == new Point(16, 16), LeftOf(Button(hover, 0)).ToString());
+    hover.Destroy();
+    using (var trustKey = System.Security.Cryptography.ECDsa.Create())
+    {
+        using var self = new System.Security.Cryptography.X509Certificates.CertificateRequest("CN=Oriel trust test", trustKey, System.Security.Cryptography.HashAlgorithmName.SHA256)
+            .CreateSelfSigned(DateTimeOffset.UtcNow.AddDays(-1), DateTimeOffset.UtcNow.AddDays(1));
+        var principal = new CertificatePrincipal { CommonName = "Oriel trust test" };
+        var trustCert = new Certificate { Data = self.ExportCertificatePem(), Issuer = principal, IssuerName = "Oriel trust test", Subject = principal,
+            SubjectName = "Oriel trust test", SerialNumber = self.SerialNumber, ValidStart = 0, ValidExpiry = 0, Fingerprint = "" };
+        var trusting = Dialog.ShowCertificateTrustDialogAsync(w, new CertificateTrustDialogOptions { Certificate = trustCert, Message = "Oriel window test" });
+        var sheetShown = Eventually(() => Sheet() != 0, step);
+        // [window endSheet:] ends the panel as a click would.
+        if (sheetShown) MacInterop.SendNUInt(NSWindow(), MacInterop.sel_registerName("endSheet:"), (nuint)Sheet());
+        Check("ShowCertificateTrustDialogAsync shows SFCertificateTrustPanel as a sheet and completes when it ends (macOS)",
+            sheetShown && Eventually(() => trusting.IsCompleted, step));
+    }
+    Check("IsNormal for a window neither minimised, maximised nor full screen (macOS)", w.IsNormal());
+    w.SetExcludedFromShownWindowsMenu(true);
+    var excluded = Eventually(() => w.IsExcludedFromShownWindowsMenu(), step);
+    w.SetExcludedFromShownWindowsMenu(false);
+    Check("SetExcludedFromShownWindowsMenu sets excludedFromWindowsMenu both ways (macOS)", excluded && !w.IsExcludedFromShownWindowsMenu());
+    var sheetEvents = new List<string>();
+    EventHandler began = (_, _) => sheetEvents.Add("begin"), ended = (_, _) => sheetEvents.Add("end");
+    w.SheetBegan += began;
+    w.SheetEnded += ended;
+    w.SetSheetOffset(40);
+    var offsetBox = Dialog.ShowMessageBoxAsync(w, new MessageBoxOptions { Message = "Oriel window test: sheet offset", Signal = new CancellationTokenSource(TimeSpan.FromSeconds(5)).Token });
+    var offsetShown = Eventually(() => Sheet() != 0, step);
+    var sheetTop = offsetShown ? MacInterop.SendRect(Sheet(), MacInterop.sel_registerName("frame")) : default;
+    var ownerFrame = MacInterop.SendRect(NSWindow(), MacInterop.sel_registerName("frame"));
+    var contentTop = ownerFrame.Y + MacInterop.SendRect(MacInterop.Send(NSWindow(), MacInterop.sel_registerName("contentView")), MacInterop.sel_registerName("frame")).Height;
+    await offsetBox;
+    w.SetSheetOffset(0);
+    w.SheetBegan -= began;
+    w.SheetEnded -= ended;
+    Check("a message box sheet raises SheetBegan and SheetEnded (macOS)", Eventually(() => sheetEvents.SequenceEqual(["begin", "end"]), step), string.Join(",", sheetEvents));
+    Check("SetSheetOffset hangs a sheet 40 points below the content's top (macOS)", offsetShown && sheetTop.Y + sheetTop.Height == contentTop - 40,
+        $"{sheetTop.Y + sheetTop.Height} {contentTop}");
+    Check("a window without a tabbing identifier never tabs, as Electron (macOS)", w.GetTabbingIdentifier() is null);
+    var tabA = new BrowserWindow(new BrowserWindowOptions { Title = "Oriel window test: tab A", Width = 300, Height = 200, TabbingIdentifier = "oriel-test" });
+    var tabB = new BrowserWindow(new BrowserWindowOptions { Title = "Oriel window test: tab B", Width = 300, Height = 200, TabbingIdentifier = "oriel-test" });
+    Eventually(() => tabA.IsVisible && tabB.IsVisible, step);
+    nint Tabs(BrowserWindow b) => MacInterop.Send(MacInterop.Send(b.GetNativeWindowHandle(), MacInterop.sel_registerName("window")), MacInterop.sel_registerName("tabbedWindows"));
+    long TabCount(BrowserWindow b) => Tabs(b) is var t && t != 0 ? (long)MacInterop.Send(t, MacInterop.sel_registerName("count")) : 0;
+    tabA.AddTabbedWindow(tabB);
+    var grouped = Eventually(() => TabCount(tabA) == 2, step);
+    var selfRefused = false;
+    try { tabA.AddTabbedWindow(tabA); } catch (ArgumentException) { selfRefused = true; }
+    tabB.MoveTabToNewWindow();
+    var split = Eventually(() => TabCount(tabA) <= 1, step);
+    Check("TabbingIdentifier tabs a window, AddTabbedWindow groups two, MoveTabToNewWindow splits them, and a window cannot tab itself (macOS)",
+        tabA.GetTabbingIdentifier() == "oriel-test" && grouped && selfRefused && split, $"{TabCount(tabA)}");
+    tabA.Destroy();
+    tabB.Destroy();
+    var previewPath = Path.Combine(Path.GetTempPath(), "oriel-quicklook-test.txt");
+    File.WriteAllText(previewPath, "Oriel QuickLook test");
+    nint Panel() => MacInterop.Send(MacInterop.objc_getClass("QLPreviewPanel"), MacInterop.sel_registerName("sharedPreviewPanel"));
+    w.PreviewFile(previewPath, "Oriel preview");
+    var previewing = Eventually(() => MacInterop.SendBool(Panel(), MacInterop.sel_registerName("isVisible")) != 0, step);
+    w.CloseFilePreview();
+    Check("PreviewFile opens QuickLook and CloseFilePreview closes it (macOS)",
+        previewing && Eventually(() => MacInterop.SendBool(Panel(), MacInterop.sel_registerName("isVisible")) == 0, step));
+    File.Delete(previewPath);
+    var screenHeight = Screen.GetPrimaryDisplay().Bounds.Height;
+    var tall = new BrowserWindow(new BrowserWindowOptions { Title = "Oriel window test: larger than screen", Width = 300, Height = 200, EnableLargerThanScreen = true });
+    Eventually(() => tall.IsVisible, step);
+    tall.SetSize(300, screenHeight + 400);
+    var tallEnough = Eventually(() => tall.GetBounds().Height == screenHeight + 400, step);
+    Check("EnableLargerThanScreen keeps a window taller than its screen (macOS)", tallEnough, tall.GetBounds().ToString());
+    tall.Destroy();
+    var zoomer = new BrowserWindow(new BrowserWindowOptions { Title = "Oriel window test: zoom to page width", Width = 400, Height = 300, ZoomToPageWidth = true });
+    Eventually(() => zoomer.IsVisible, step);
+    var beforeZoom = zoomer.GetBounds();
+    MacInterop.SendNUInt(MacInterop.Send(zoomer.GetNativeWindowHandle(), MacInterop.sel_registerName("window")), MacInterop.sel_registerName("zoom:"), 0);
+    var zoomedTall = Eventually(() => zoomer.GetBounds().Height > beforeZoom.Height, step);
+    Check("ZoomToPageWidth: the zoom button keeps the width (no preferred size) and takes the screen's height (macOS)",
+        zoomedTall && zoomer.GetBounds().Width == beforeZoom.Width, $"{beforeZoom} -> {zoomer.GetBounds()}");
+    zoomer.Destroy();
+    var vibrant = new BrowserWindow(new BrowserWindowOptions { Title = "Oriel window test: vibrancy", Width = 300, Height = 200, Vibrancy = "sidebar" });
+    Eventually(() => vibrant.IsVisible, step);
+    var vibrantView = Oriel.Cef.CefThread.InvokeOnUi(() => OperatingSystem.IsMacOS() && Oriel.Cef.Platform.MacWindow.HasVibrancy(vibrant.GetNativeWindowHandle()));
+    vibrant.SetVibrancy(null);
+    var removed = Eventually(() => !Oriel.Cef.CefThread.InvokeOnUi(() => OperatingSystem.IsMacOS() && Oriel.Cef.Platform.MacWindow.HasVibrancy(vibrant.GetNativeWindowHandle())), step);
+    Check("Vibrancy puts a visual effect view behind the page and SetVibrancy(null) removes it; look: the sidebar material shows through (macOS)",
+        vibrantView && removed);
+    vibrant.Destroy();
+    var named = NativeImage.CreateFromNamedImage("NSImageNameActionTemplate");
+    var symbol = NativeImage.CreateFromNamedImage("square.and.pencil", new NamedImageOptions { PointSize = 20, Weight = SymbolWeight.Bold });
+    var menuSymbol = NativeImage.CreateMenuSymbol("folder.badge.plus");
+    var handle = named.GetNativeHandle();
+    var sameHandle = named.GetNativeHandle();
+    named.SetTemplateImage(true);
+    var newHandle = named.GetNativeHandle();
+    Check("createFromNamedImage reads AppKit names and SF Symbols, createMenuSymbol is a 15-point-wide template, getNativeHandle is a stable NSImage* until the image changes (macOS)",
+        !named.IsEmpty() && !symbol.IsEmpty() && NativeImage.CreateFromNamedImage("no.such.symbol").IsEmpty() && menuSymbol.IsTemplateImage()
+            && menuSymbol.GetSize().Width <= 15 && handle.Length == 8 && handle.SequenceEqual(sameHandle) && !handle.SequenceEqual(newHandle),
+        $"{named.GetSize()} {symbol.GetSize()} {menuSymbol.GetSize()}");
+    var iconItem = new MenuItem { Label = "Oriel icon item", Icon = NativeImage.CreateMenuSymbol("folder"), Sublabel = "a second line", ToolTip = "Oriel tip", Badge = new MenuItemBadge { Type = MenuItemBadgeType.Alerts, Count = 3 } };
+    var previousMenu = Menu.GetApplicationMenu();
+    Menu.SetApplicationMenu(new Menu { new MenuItem { Label = "Oriel", Submenu = new Menu { iconItem } } });
+    nint NativeIconItem() => Oriel.Cef.CefThread.InvokeOnUi(() =>
+    {
+        var main = MacInterop.Send(MacInterop.Send(MacInterop.objc_getClass("NSApplication"), MacInterop.sel_registerName("sharedApplication")), MacInterop.sel_registerName("mainMenu"));
+        var top = MacInterop.SendNUInt(main, MacInterop.sel_registerName("itemAtIndex:"), 0);
+        var sub = MacInterop.Send(top, MacInterop.sel_registerName("submenu"));
+        return sub == 0 ? 0 : MacInterop.SendNUInt(sub, MacInterop.sel_registerName("itemAtIndex:"), 0);
+    });
+    var nativeIcon = Eventually(() => NativeIconItem() != 0, step) ? NativeIconItem() : 0;
+    Check("a menu item's Icon and ToolTip reach its NSMenuItem in the application menu (macOS)",
+        nativeIcon != 0 && MacInterop.Send(nativeIcon, MacInterop.sel_registerName("image")) != 0 && MacInterop.Send(nativeIcon, MacInterop.sel_registerName("toolTip")) != 0);
+    var badgeShown = !OperatingSystem.IsMacOSVersionAtLeast(14) || MacInterop.Send(nativeIcon, MacInterop.sel_registerName("badge")) != 0;
+    Check("a menu item's Badge reaches its NSMenuItem on macOS 14 and later", nativeIcon != 0 && badgeShown);
+    Menu.SetApplicationMenu(previousMenu);
+    // The panel cannot be read back; this shows the call finds the page's view and runs (look: a Look Up panel may appear).
+    w.ShowDefinitionForSelection();
+    Check("ShowDefinitionForSelection runs on the page's Chromium view (macOS)", true);
+    var desk = new BrowserWindow(new BrowserWindowOptions { Title = "Oriel window test: desktop type", Width = 200, Height = 150, Type = "desktop" });
+    Eventually(() => desk.IsVisible, step);
+    nint DeskWindow() => MacInterop.Send(desk.GetNativeWindowHandle(), MacInterop.sel_registerName("window"));
+    var deskBehavior = (nuint)MacInterop.Send(DeskWindow(), MacInterop.sel_registerName("collectionBehavior"));
+    var deskLevel = (long)MacInterop.Send(DeskWindow(), MacInterop.sel_registerName("level"));
+    Check("type desktop puts the window below the desktop, unfocusable, on every Space and out of the cycle (macOS)",
+        deskBehavior == 81 && deskLevel < 0 && !desk.IsFocusable, $"{deskBehavior} {deskLevel}");
+    desk.Destroy();
+    var other = new BrowserWindow(new BrowserWindowOptions { Title = "Oriel window test: move above", Width = 200, Height = 150 });
+    Eventually(() => other.IsVisible, step);
+    w.MoveAbove(other.GetMediaSourceId());
+    w.MoveTop();
+    var refused = false;
+    try { w.MoveAbove("window:4294967280:0"); } catch (ArgumentException) { refused = true; }
+    Check("MoveAbove takes another window's id and refuses one no process owns; MoveTop runs (macOS)", refused);
+    other.Destroy();
+    nint PresentationOptions() => MacInterop.Send(MacInterop.Send(MacInterop.objc_getClass("NSApplication"), MacInterop.sel_registerName("sharedApplication")), MacInterop.sel_registerName("presentationOptions"));
+    var optionsBefore = PresentationOptions();
+    w.SetKiosk(true);
+    var kiosked = Eventually(() => PresentationOptions() == 506 && w.IsFullScreen, TimeSpan.FromSeconds(5)) && w.IsKiosk();
+    w.SetKiosk(false);
+    Check("SetKiosk sets Electron's presentation options and full screen, and puts both back (macOS)",
+        kiosked && Eventually(() => PresentationOptions() == optionsBefore && !w.IsFullScreen, TimeSpan.FromSeconds(5)) && !w.IsKiosk(), $"{optionsBefore} {PresentationOptions()}");
     w.SetVisibleOnAllWorkspaces(true, new VisibleOnAllWorkspacesOptions { SkipTransformProcessType = true });
     var allSpaces = Eventually(() => (Behavior() & 1) != 0 && (Behavior() & 256) == 0, step) && w.IsVisibleOnAllWorkspaces();
     w.SetVisibleOnAllWorkspaces(true, new VisibleOnAllWorkspacesOptions { VisibleOnFullScreen = true, SkipTransformProcessType = true });
@@ -6221,13 +6453,14 @@ async Task MacTaskbarAsync()
     tb.SetProgressBar(0.5);
     Check("SetProgressBar shows the value on the Dock icon", Eventually(() => Dock() is (0.5, false), step), Dock());
     tb.SetProgressBar(0.25, new ProgressBarOptions { Mode = ProgressBarMode.Error });
-    Check("error mode still shows the value (macOS has no colours)", Eventually(() => Dock() is (0.25, false), step), Dock());
+    Check("error mode still shows the value: macOS ignores the mode, as Electron", Eventually(() => Dock() is (0.25, false), step), Dock());
     tb.SetProgressBar(2);
-    Check("above 1 the Dock bar cycles", Eventually(() => Dock() is (_, true), step), Dock());
+    Check("above 1 the Dock bar is full and indeterminate, as Electron's", Eventually(() => Dock() is (1, true), step), Dock());
     tb.SetProgressBar(-1);
-    Check("below 0 removes the Dock bar", Eventually(() => Dock() is null, step), Dock());
+    Check("below 0 hides the Dock bar", Eventually(() => Dock() is null, step), Dock());
     tb.SetProgressBar(0.5, new ProgressBarOptions { Mode = ProgressBarMode.None });
-    Check("mode None removes it too", Eventually(() => Dock() is null, step), Dock());
+    Check("mode None still shows the value on macOS, as Electron", Eventually(() => Dock() is (0.5, _), step), Dock());
+    tb.SetProgressBar(-1);
     // A bounce only happens while the app is inactive and cannot be read back; this only shows the calls are safe.
     tb.FlashFrame(true);
     tb.FlashFrame(false);
@@ -6441,7 +6674,7 @@ async Task ThemeAsync(BrowserWindow win)
         await Task.Delay(2500);
         Check("NativeTheme: macOS waits for the system's notification instead of polling", NativeTheme.Checks == idleChecks,
             $"{idleChecks} -> {NativeTheme.Checks}");
-        Oriel.Cef.CefThread.RunOnUi(Oriel.Cef.Platform.MacAppearance.PostThemeChanged);
+        Oriel.Cef.CefThread.RunOnUi(Oriel.Cef.Platform.MacAppearance.DeliverThemeChanged);
         Check("NativeTheme: a system appearance change is checked at once", Eventually(() => NativeTheme.Checks > idleChecks, TimeSpan.FromSeconds(1)),
             $"{idleChecks} -> {NativeTheme.Checks}");
     }
@@ -8106,6 +8339,17 @@ static class MacInterop
     [System.Runtime.InteropServices.DllImport("/usr/lib/libobjc.A.dylib")] internal static extern nint sel_registerName(string name);
     [System.Runtime.InteropServices.DllImport("/usr/lib/libobjc.A.dylib", EntryPoint = "objc_msgSend")] internal static extern NSPoint MouseLocation(nint cls, nint selector);
     [System.Runtime.InteropServices.DllImport("/usr/lib/libobjc.A.dylib", EntryPoint = "objc_msgSend")] internal static extern byte SendBool(nint receiver, nint selector);
+    [System.Runtime.InteropServices.DllImport("/usr/lib/libobjc.A.dylib", EntryPoint = "objc_msgSend")] internal static extern double SendDouble(nint receiver, nint selector);
+    [System.Runtime.InteropServices.DllImport("/usr/lib/libobjc.A.dylib", EntryPoint = "objc_msgSend")] internal static extern NSPoint SendSize(nint receiver, nint selector);
+    // CGRect is four doubles: arm64 returns it in registers, x64 through a hidden pointer (_stret).
+    internal static CGRect SendRect(nint receiver, nint selector)
+    {
+        if (System.Runtime.InteropServices.RuntimeInformation.ProcessArchitecture == System.Runtime.InteropServices.Architecture.Arm64) return SendRectArm64(receiver, selector);
+        SendRectStret(out var rect, receiver, selector);
+        return rect;
+    }
+    [System.Runtime.InteropServices.DllImport("/usr/lib/libobjc.A.dylib", EntryPoint = "objc_msgSend")] private static extern CGRect SendRectArm64(nint receiver, nint selector);
+    [System.Runtime.InteropServices.DllImport("/usr/lib/libobjc.A.dylib", EntryPoint = "objc_msgSend_stret")] private static extern void SendRectStret(out CGRect result, nint receiver, nint selector);
     [System.Runtime.InteropServices.DllImport("/usr/lib/libobjc.A.dylib", EntryPoint = "objc_msgSend")] internal static extern nint SendNUInt(nint receiver, nint selector, nuint value);
     [System.Runtime.InteropServices.DllImport("/System/Library/Frameworks/CoreGraphics.framework/CoreGraphics")] internal static extern uint CGMainDisplayID();
     [System.Runtime.InteropServices.DllImport("/System/Library/Frameworks/CoreGraphics.framework/CoreGraphics")] internal static extern CGRect CGDisplayBounds(uint display);

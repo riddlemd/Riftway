@@ -127,8 +127,13 @@ public static partial class SystemPreferences
         var animation = WindowsSystemPreferences.ClientAreaAnimation();
         var rich = ShouldRenderRichAnimation(animation, WindowsSystemPreferences.IsCurrentSessionRemote);
         // ScrollAnimationsEnabledBySystem is ShouldRenderRichAnimation on Windows.
-        return new AnimationSettings(rich, rich, PrefersReducedMotion(Environment.GetCommandLineArgs(), animation));
+        return new AnimationSettings(rich, rich, PrefersReducedMotion(CurrentSwitches(), animation));
     }
+
+    /// <summary>The switches Chromium's process command line has: the app's <see cref="OrielApp.CommandLine"/> with what
+    /// <c>appendSwitch</c> and <c>removeSwitch</c> did, else the process's arguments.</summary>
+    internal static IReadOnlyList<string> CurrentSwitches()
+        => OrielApp.CurrentOrNull?.CommandLine.SwitchArguments() ?? Environment.GetCommandLineArgs();
 
     /// <summary>The accent colour changed. Electron's <c>accent-color-changed</c>.</summary>
     /// <remarks>Windows: raised when the DWM registry key changes and the colour read back differs from the last one. Linux:

@@ -35,8 +35,31 @@ public sealed unsafe partial class WebContents
     {
         ArgumentNullException.ThrowIfNull(item);
         if (ResolveDragItem(item, NativeImage.CreateFromPath) is not var (files, icon)) return;
-        if (!OperatingSystem.IsWindows()) throw new PlatformNotSupportedException("startDrag is supported on Windows only.");
+        if (OperatingSystem.IsMacOS())
+        {
+            DragOnMac(files, icon);
+            return;
+        }
+        if (!OperatingSystem.IsWindows()) throw new PlatformNotSupportedException("startDrag is supported on Windows and macOS only.");
         DragOnWindows(files, icon);
+    }
+
+    [System.Runtime.Versioning.SupportedOSPlatform("macos")]
+    private void DragOnMac(IReadOnlyList<string> files, NativeImage icon)
+    {
+        var representations = icon.GetScaleFactors().Select(scale => (icon.ToPng(scale), scale)).ToList();
+        CefThread.InvokeOnUi(() =>
+        {
+            if (_browser is null) return 0;
+            var host = _browser->get_host(_browser);
+            nint view;
+            try { view = (nint)host->get_window_handle(host); }
+            finally { NativeObject.Release(host); }
+            var image = MacImages.FromRepresentations(representations, icon.IsTemplateImage());
+            try { MacDrag.DragFiles(view, files, image); }
+            finally { MacImages.Release(image); }
+            return 0;
+        });
     }
 
     [System.Runtime.Versioning.SupportedOSPlatform("windows")]

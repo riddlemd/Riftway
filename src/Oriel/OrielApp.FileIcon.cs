@@ -13,7 +13,7 @@ public enum FileIconSize
     Normal,
 
     /// <summary>48 × 48 on Linux, and on Windows for .exe and .dll files; 32 × 32 for other types on Windows, as in
-    /// Electron.</summary>
+    /// Electron. Not supported on macOS.</summary>
     Large,
 }
 
@@ -31,17 +31,19 @@ public sealed partial class OrielApp
 {
     private static readonly object s_fileIconLock = new();
     private static readonly Dictionary<string, string> s_fileIconGroups = new(StringComparer.Ordinal);
-    private static readonly Dictionary<(string Group, FileIconSize Size), FileIconPixels> s_fileIcons = [];
+    private static readonly Dictionary<(string Group, FileIconSize Size), FileIconPixels[]> s_fileIcons = [];
 
-    internal static IFileIconBackend FileIconBackend { get; set; } = OperatingSystem.IsWindows()
-        ? new WindowsFileIconBackend()
+    internal static IFileIconBackend FileIconBackend { get; set; } = OperatingSystem.IsWindows() ? new WindowsFileIconBackend()
+        : OperatingSystem.IsMacOS() ? new MacFileIconBackend()
         : new UnsupportedFileIconBackend();
 
     /// <summary>The icon the OS shows for <paramref name="path"/>; Electron's <c>app.getFileIcon()</c>. On Windows an
     /// .exe or .dll gives its own first icon, anything else (or an .exe that cannot be read) its type's icon, so the file
-    /// need not exist. Results are cached per path for the life of the process, as Chromium's <c>IconManager</c> does.</summary>
-    /// <remarks>A type icon's image has the system DPI scale as its scale factor; an .exe's has 1.</remarks>
+    /// need not exist. On macOS the icon of the file's content type, else of its extension's, 16 or 32 points with 1x and
+    /// 2x representations. Results are cached per path for the life of the process, as Chromium's <c>IconManager</c> does.</summary>
+    /// <remarks>On Windows a type icon's image has the system DPI scale as its scale factor; an .exe's has 1.</remarks>
     /// <exception cref="InvalidOperationException">The OS has no icon for it (the task faults).</exception>
+    /// <exception cref="NotSupportedException"><see cref="FileIconSize.Large"/> on macOS (the task faults).</exception>
     /// <exception cref="PlatformNotSupportedException">Not yet implemented on this OS (the task faults).</exception>
     public Task<NativeImage> GetFileIcon(string path, FileIconOptions? options = null) => LoadFileIcon(path, options);
 
@@ -53,8 +55,8 @@ public sealed partial class OrielApp
         return Task.Run(() => FileIconImage(LookupFileIcon(normalized, size)));
     }
 
-    internal static NativeImage FileIconImage(FileIconPixels? icon) => icon is { } i
-        ? NativeImage.CreateFromBitmap(i.Bgra, new NativeImageBitmapOptions { Width = i.Width, Height = i.Height, ScaleFactor = i.Scale })
+    internal static NativeImage FileIconImage(FileIconPixels[]? icon) => icon is { Length: > 0 }
+        ? NativeImage.FromBitmaps(icon.Select(i => (i.Scale, i.Width, i.Height, i.Bgra)))
         : throw new InvalidOperationException("Failed to get file icon.");
 
     // base::FilePath::NormalizePathSeparators, a no-op off Windows.
@@ -62,7 +64,7 @@ public sealed partial class OrielApp
 
     /// <summary>Chromium's <c>IconManager</c>: a path seen before with its group's icon cached is answered from the
     /// cache; otherwise <c>IconLoader</c> loads the group and the cache keeps any icon it found.</summary>
-    internal static FileIconPixels? LookupFileIcon(string path, FileIconSize size)
+    internal static FileIconPixels[]? LookupFileIcon(string path, FileIconSize size)
     {
         lock (s_fileIconLock)
         {
@@ -70,10 +72,10 @@ public sealed partial class OrielApp
                 return cached;
         }
 
-        var group = IconGroup(path);
-        var icon = group == path
-            ? FileIconBackend.FromFile(path, FileIconPixelSize(size)) ?? FileIconBackend.ForExtension(FilePathExtension(path), size)
-            : FileIconBackend.ForExtension(group, size);
+        var (group, fromFile) = FileIconBackend.GroupFor(path);
+        var icon = fromFile
+            ? FileIconBackend.FromFile(path, FileIconPixelSize(size)) ?? FileIconBackend.ForGroup(FilePathExtension(path), size)
+            : FileIconBackend.ForGroup(group, size);
         lock (s_fileIconLock)
         {
             if (icon is { } found) s_fileIcons[(group, size)] = found;
@@ -92,8 +94,8 @@ public sealed partial class OrielApp
         }
     }
 
-    /// <summary>Chromium's <c>IconLoader::GroupForFilepath</c>: .exe, .dll and .ico files by path, everything else by
-    /// extension, which is empty for a file without one.</summary>
+    /// <summary>Chromium's <c>IconLoader::GroupForFilepath</c> on Windows: .exe, .dll and .ico files by path, everything
+    /// else by extension, which is empty for a file without one.</summary>
     internal static string IconGroup(string path)
     {
         var extension = FilePathExtension(path);
@@ -103,12 +105,39 @@ public sealed partial class OrielApp
             : extension;
     }
 
+    internal static (string Group, bool FromFile) WindowsIconGroup(string path)
+    {
+        var group = IconGroup(path);
+        return (group, group == path);
+    }
+
+    /// <summary><c>base::FilePath::FinalExtension()</c> on POSIX: from the last dot of the base name, a leading dot
+    /// included; empty without one.</summary>
+    internal static string PosixFinalExtension(string path)
+    {
+        var end = path.Length;
+        while (end > 1 && path[end - 1] == '/') end--;
+        var name = path.AsSpan(0, end);
+        name = name[(name.LastIndexOf('/') + 1)..];
+        if (name is "." or "..") return "";
+        var dot = name.LastIndexOf('.');
+        return dot < 0 ? "" : name[dot..].ToString();
+    }
+
     // UtilReadIcon's sizes, at the scale 1 Electron asks for.
     internal static int FileIconPixelSize(FileIconSize size) => size switch
     {
         FileIconSize.Small => 16,
         FileIconSize.Large => 48,
         _ => 32,
+    };
+
+    // icon_loader_mac.mm's ReadIcon sizes in points; its LARGE is NOTREACHED, which crashes Electron.
+    internal static int MacFileIconPoints(FileIconSize size) => size switch
+    {
+        FileIconSize.Small => 16,
+        FileIconSize.Normal => 32,
+        _ => throw new NotSupportedException("FileIconSize.Large is not supported on macOS."),
     };
 
     private static readonly string[] s_doubleExtensionSuffixes = ["bz", "bz2", "gz", "lz", "lzma", "lzo", "xz", "z", "zst"];
@@ -144,30 +173,62 @@ public sealed partial class OrielApp
 /// <summary>A platform's file-icon lookups behind <see cref="OrielApp.GetFileIcon"/>.</summary>
 internal interface IFileIconBackend
 {
-    /// <summary>The OS's icon for the type <paramref name="extension"/> (possibly empty); null when there is none.</summary>
-    FileIconPixels? ForExtension(string extension, FileIconSize size);
+    /// <summary>Chromium's <c>IconLoader::GroupForFilepath</c>: the cache group of <paramref name="path"/>, and whether its
+    /// icon is read from the file itself.</summary>
+    (string Group, bool FromFile) GroupFor(string path);
+
+    /// <summary>The OS's icon for <paramref name="group"/> (Windows: an extension, possibly empty; macOS: a type
+    /// identifier), one bitmap per scale; null when there is none.</summary>
+    FileIconPixels[]? ForGroup(string group, FileIconSize size);
 
     /// <summary>The file's own first icon at <paramref name="pixels"/> square; null on any failure.</summary>
-    FileIconPixels? FromFile(string path, int pixels);
+    FileIconPixels[]? FromFile(string path, int pixels);
 }
 
 [SupportedOSPlatform("windows")]
 internal sealed class WindowsFileIconBackend : IFileIconBackend
 {
-    public FileIconPixels? ForExtension(string extension, FileIconSize size)
-        => WindowsFileIcon.LoadForExtension(extension, size == FileIconSize.Small) is var (bgra, w, h)
-            ? new FileIconPixels(bgra, w, h, WindowsFileIcon.SystemDpiScale())
+    public (string Group, bool FromFile) GroupFor(string path) => OrielApp.WindowsIconGroup(path);
+
+    public FileIconPixels[]? ForGroup(string group, FileIconSize size)
+        => WindowsFileIcon.LoadForExtension(group, size == FileIconSize.Small) is var (bgra, w, h)
+            ? [new FileIconPixels(bgra, w, h, WindowsFileIcon.SystemDpiScale())]
             : null;
 
-    public FileIconPixels? FromFile(string path, int pixels)
-        => WindowsFileIcon.LoadFromFile(path, pixels) is var (bgra, w, h) ? new FileIconPixels(bgra, w, h, 1f) : null;
+    public FileIconPixels[]? FromFile(string path, int pixels)
+        => WindowsFileIcon.LoadFromFile(path, pixels) is var (bgra, w, h) ? [new FileIconPixels(bgra, w, h, 1f)] : null;
+}
+
+/// <summary>chrome/browser/icon_loader_mac.mm: every file by content type, never from the file itself.</summary>
+[SupportedOSPlatform("macos")]
+internal sealed class MacFileIconBackend : IFileIconBackend
+{
+    // gfx's supported resource scales on macOS, each of which ImageSkiaFromResizedNSImage draws.
+    private static readonly double[] s_scales = [1, 2];
+
+    public (string Group, bool FromFile) GroupFor(string path)
+    {
+        var extension = OrielApp.PosixFinalExtension(path);
+        return (MacFileIcon.TypeFor(path, extension.Length == 0 ? null : extension[1..]), false);
+    }
+
+    public FileIconPixels[]? ForGroup(string group, FileIconSize size)
+    {
+        var points = OrielApp.MacFileIconPoints(size);
+        var bitmaps = MacFileIcon.Icon(group, points, s_scales);
+        return bitmaps.Count == 0 ? null : [.. bitmaps.Select(b => new FileIconPixels(b.Bgra, b.Width, b.Height, (float)b.Scale))];
+    }
+
+    public FileIconPixels[]? FromFile(string path, int pixels) => null;
 }
 
 internal sealed class UnsupportedFileIconBackend : IFileIconBackend
 {
-    public FileIconPixels? ForExtension(string extension, FileIconSize size) => throw Unsupported();
+    public (string Group, bool FromFile) GroupFor(string path) => throw Unsupported();
 
-    public FileIconPixels? FromFile(string path, int pixels) => throw Unsupported();
+    public FileIconPixels[]? ForGroup(string group, FileIconSize size) => throw Unsupported();
+
+    public FileIconPixels[]? FromFile(string path, int pixels) => throw Unsupported();
 
     private static PlatformNotSupportedException Unsupported() => new("getFileIcon is not implemented on this platform.");
 }

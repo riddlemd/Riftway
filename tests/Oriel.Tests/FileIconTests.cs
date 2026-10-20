@@ -118,7 +118,8 @@ public sealed class GetFileIconTests : IDisposable
     public async Task TheImageCarriesTheBackendsScale()
     {
         var type = await OrielApp.LoadFileIcon("a.txt", null);
-        Assert.Equal([2.0], type.GetScaleFactors());
+        Assert.Equal([2.0, 4.0], type.GetScaleFactors());
+        Assert.Equal((1, 1), type.GetSize(4));
         Assert.Equal((1, 1), type.GetSize(2));
         var file = await OrielApp.LoadFileIcon("a.exe", null);
         Assert.Equal([1.0], file.GetScaleFactors());
@@ -151,6 +152,32 @@ public sealed class GetFileIconTests : IDisposable
         Assert.Equal(2, _backend.Calls.Count);
     }
 
+    [Fact]
+    public async Task AGroupNotReadFromTheFileNeverReadsIt()
+    {
+        _backend.ByType = true;
+        await OrielApp.LoadFileIcon("/a/app.exe", null);
+        Assert.Equal(["type:type..exe:Normal"], _backend.Calls);
+    }
+
+    [Fact]
+    public async Task PathsInOneGroupShareItsCachedIcon()
+    {
+        _backend.ByType = true;
+        await OrielApp.LoadFileIcon("/a/x.txt", null);
+        await OrielApp.LoadFileIcon("/b/y.txt", null);
+        await OrielApp.LoadFileIcon("/b/y.txt", null);
+        Assert.Equal(["type:type..txt:Normal", "type:type..txt:Normal"], _backend.Calls);
+    }
+
+    [Fact]
+    public async Task TheCachedIconIsCopiedIntoEachImage()
+    {
+        var first = await OrielApp.LoadFileIcon("a.txt", null);
+        var second = await OrielApp.LoadFileIcon("a.txt", null);
+        Assert.NotSame(first.BitmapAt(2).Bgra, second.BitmapAt(2).Bgra);
+    }
+
     // The Windows getApplicationInfoForProtocol path, with Windows path normalization.
     [WindowsOnlyFact]
     public async Task ApplicationInfoUsesTheLargeIconOfTheNormalizedPath()
@@ -167,18 +194,21 @@ public sealed class GetFileIconTests : IDisposable
     {
         public static readonly byte[] Pixels = [1, 2, 3, 255, 4, 5, 6, 255, 7, 8, 9, 255, 10, 11, 12, 255];
         public List<string> Calls { get; } = [];
-        public bool None, NoFile;
+        public bool None, NoFile, ByType;
 
-        public FileIconPixels? ForExtension(string extension, FileIconSize size)
+        public (string Group, bool FromFile) GroupFor(string path)
+            => ByType ? ("type." + OrielApp.PosixFinalExtension(path), false) : OrielApp.WindowsIconGroup(path);
+
+        public FileIconPixels[]? ForGroup(string group, FileIconSize size)
         {
-            Calls.Add($"type:{extension}:{size}");
-            return None ? null : new FileIconPixels((byte[])Pixels.Clone(), 2, 2, 2f);
+            Calls.Add($"type:{group}:{size}");
+            return None ? null : [new FileIconPixels((byte[])Pixels.Clone(), 2, 2, 2f), new FileIconPixels([.. Pixels, .. Pixels, .. Pixels, .. Pixels], 4, 4, 4f)];
         }
 
-        public FileIconPixels? FromFile(string path, int pixels)
+        public FileIconPixels[]? FromFile(string path, int pixels)
         {
             Calls.Add($"file:{path}:{pixels}");
-            return NoFile ? null : new FileIconPixels((byte[])Pixels.Clone(), 2, 2, 1f);
+            return NoFile ? null : [new FileIconPixels((byte[])Pixels.Clone(), 2, 2, 1f)];
         }
     }
 }
@@ -237,5 +267,110 @@ public sealed class WindowsFileIconTests
         var large = await OrielApp.LoadFileIcon(s_notepad, new FileIconOptions { Size = FileIconSize.Large });
         Assert.Equal([1.0], large.GetScaleFactors());
         Assert.Equal((48, 48), large.GetSize());
+    }
+}
+
+public sealed class MacFileIconRuleTests
+{
+    [Theory]
+    [InlineData("/a/notes.TXT", ".TXT")]
+    [InlineData("/a/b.tar.gz", ".gz")]
+    [InlineData("/a/README", "")]
+    [InlineData("/dir.v2/README", "")]
+    [InlineData("/a/.bashrc", ".bashrc")]
+    [InlineData("/a/trailing.", ".")]
+    [InlineData("/a/x.txt/", ".txt")]
+    [InlineData(@"/a/back\slash.v1\name", @".v1\name")]
+    [InlineData("/", "")]
+    [InlineData("..", "")]
+    [InlineData("a/.", "")]
+    [InlineData("", "")]
+    public void PosixFinalExtension_IsChromiums(string path, string extension)
+        => Assert.Equal(extension, OrielApp.PosixFinalExtension(path));
+
+    [Theory]
+    [InlineData(FileIconSize.Small, 16)]
+    [InlineData(FileIconSize.Normal, 32)]
+    public void MacSizes_AreReadIconsPoints(FileIconSize size, int points)
+        => Assert.Equal(points, OrielApp.MacFileIconPoints(size));
+
+    [Fact]
+    public void MacLarge_IsNotSupported()
+        => Assert.Throws<NotSupportedException>(() => OrielApp.MacFileIconPoints(FileIconSize.Large));
+}
+
+[Collection(nameof(FileIconCollection))]
+public sealed class MacFileIconTests
+{
+    [Fact]
+    public void AMissingFileIsTypedByItsExtension()
+    {
+        if (!OperatingSystem.IsMacOS()) return;
+        Assert.Equal("public.plain-text", MacFileIcon.TypeFor("/no/such/dir/a.txt", "txt"));
+        Assert.Equal("public.png", MacFileIcon.TypeFor("/no/such/dir/a.PNG", "PNG"));
+    }
+
+    [Fact]
+    public void AnExistingFileIsTypedByItsContentNotItsName()
+    {
+        if (!OperatingSystem.IsMacOS()) return;
+        var dir = Directory.CreateTempSubdirectory("oriel-icon").FullName;
+        try
+        {
+            var folder = Directory.CreateDirectory(Path.Combine(dir, "looks.txt")).FullName;
+            Assert.Equal("public.folder", MacFileIcon.TypeFor(folder, "txt"));
+        }
+        finally { Directory.Delete(dir, true); }
+    }
+
+    [Fact]
+    public void NoNameAndNoExtensionIsPublicContent()
+    {
+        if (!OperatingSystem.IsMacOS()) return;
+        Assert.Equal("public.content", MacFileIcon.TypeFor("", null));
+        Assert.StartsWith("dyn.", MacFileIcon.TypeFor("/no/such/dir/a.zzqqxv", "zzqqxv"));
+    }
+
+    [Fact]
+    public void ATypeIconIsDrawnAtEachScale()
+    {
+        if (!OperatingSystem.IsMacOS()) return;
+        var icon = MacFileIcon.Icon("public.plain-text", 16, [1, 2]);
+        Assert.Equal([(1.0, 16, 16), (2.0, 32, 32)], icon.Select(b => (b.Scale, b.Width, b.Height)));
+        foreach (var b in icon)
+        {
+            Assert.Equal(b.Width * b.Height * 4, b.Bgra.Length);
+            Assert.True(IconPixels.HasAlpha(b.Bgra));
+            // Premultiplied: no colour channel exceeds its alpha.
+            for (var i = 0; i < b.Bgra.Length; i += 4) Assert.True(Math.Max(b.Bgra[i], Math.Max(b.Bgra[i + 1], b.Bgra[i + 2])) <= b.Bgra[i + 3]);
+        }
+    }
+
+    [Fact]
+    public void TheBackendGroupsByTypeFromTheExtensionWithoutItsDot()
+    {
+        if (!OperatingSystem.IsMacOS()) return;
+        Assert.Equal(("public.plain-text", false), new MacFileIconBackend().GroupFor("/no/such/dir/a.txt"));
+        Assert.Equal(("public.content", false), new MacFileIconBackend().GroupFor("/no/such/dir/README"));
+    }
+
+    [Fact]
+    public void AnUnknownIdentifierHasNoIcon()
+    {
+        if (!OperatingSystem.IsMacOS()) return;
+        Assert.Empty(MacFileIcon.Icon("", 16, [1, 2]));
+    }
+
+    [Fact]
+    public async Task GetFileIcon_HasOneAndTwoTimesRepresentations()
+    {
+        if (!OperatingSystem.IsMacOS()) return;
+        OrielApp.ClearFileIconCache();
+        var image = await OrielApp.LoadFileIcon("/no/such/dir/a.txt", new FileIconOptions { Size = FileIconSize.Small });
+        Assert.Equal([1.0, 2.0], image.GetScaleFactors());
+        Assert.Equal((16, 16), image.GetSize(1));
+        Assert.Equal((16, 16), image.GetSize(2));
+        Assert.Equal(32, image.BitmapAt(2).Width);
+        await Assert.ThrowsAsync<NotSupportedException>(() => OrielApp.LoadFileIcon("/no/such/dir/a.txt", new FileIconOptions { Size = FileIconSize.Large }));
     }
 }
