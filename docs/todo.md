@@ -119,8 +119,10 @@ Cross-platform work. Platform-specific items: [linux-todo.md](linux-todo.md), [w
       resources); `vpk pack` makes a Setup.exe of that layout; Velopack's hook arguments reach `Main` through
       bootstrap.exe and exit there. linux-x64 (154 MB, libcef.so stripped): an app published from the packages lays out
       with `locales/` and exec bits, opens a window and runs a page under Xvfb unsandboxed and with a setuid
-      chrome-sandbox, and `vpk pack` makes an AppImage that runs the same way (Docker, 2026-10-20, Wojtek). Open: a
-      real Windows install, update and launch on a desktop; an update rolled through a feed; signing; fuses and the
+      chrome-sandbox, and `vpk pack` makes an AppImage that runs the same way; an AppImage at 1.0.0 updates itself to
+      2.0.0 from a local feed through `AutoUpdater` (checking, available, downloaded 2.0.0, before-quit, Velopack applies
+      after the exit and restarts 2.0.0) (Docker, 2026-10-20, Wojtek). Open: a real Windows install, update and launch
+      on a desktop; signing; fuses and the
       packed app archive; the Linux sandbox story for AppImages (user namespaces or documented off); macOS (bundle,
       sign, notarise: Ise)
 - [ ] M3 Blazor Hybrid · M5 desktop integration · M6 session/network/processes · M7 own CEF builds
