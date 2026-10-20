@@ -232,6 +232,7 @@ Entries marked _(branch `x`)_ are on that branch and not yet in `main`.
 | DC3 | Windows: screens through DXGI duplication, listed in DXGI output order with `display_id` from the device names; windows through webrtc's GDI capturer (border-cropped `BitBlt`, `PrintWindow` when covered, WGC fallback on Windows 11) | Screens listed in `EnumDisplayDevices` order (the same ids) with the same `display_id`, captured with a GDI `BitBlt` of the monitor; windows with `PrintWindow(PW_RENDERFULLCONTENT)` of the whole window rectangle | OS: DXGI duplication and WGC need D3D11 and WinRT plumbing Oriel does not have | OS |
 | DC4 | Thumbnails scaled by libyuv's `ARGBScale` (bilinear) | The same letterboxed size and sample positions, blended in plain C#: pixel values may differ by a level or two | .NET: no libyuv | — |
 | DC5 | The lists refresh every second while `getSources` waits (up to 3 s) for every thumbnail | Each list is read once per call and each thumbnail captured once (macOS: 25 per second, as `ThumbnailCapturerMac`); a source whose capture fails still waits out the 3 s, as in Electron | .NET: one-shot reads are enough for a single answer | — |
+| DC6 _(branch `desktopcapturer-win`)_ | Windows: Chromium's own-window path reads this process's titles on the UI thread without a responsiveness test | An own window that does not answer `WM_NULL` within 50 ms gets no title and is left out | .NET: Oriel reads titles off the UI thread, where `GetWindowText` on a hung window of this process would block | — (not testable without hanging a UI thread) |
 
 ## dialog
 

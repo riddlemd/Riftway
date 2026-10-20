@@ -70,10 +70,17 @@ General items: [todo.md](todo.md). Windows work runs on the Windows laptop.
       (2026-10-13, d07986c, Wojtek). The submenu, Escape and nested-menu checks drive xdotool and run on Linux only
 - [ ] `desktopCapturer`: WindowTest `DesktopCapturerChecks` passes on Windows (13 checks: the window listed by title,
       its thumbnail's aspect and pixels, `fetchWindowIcons` app icons, one screen per display, `display_id` equal to
-      `Screen.GetAllDisplays`, Chromium's names; 2026-10-13, d07986c, Wojtek). Still open: no check covers the
-      Windows-specific rules (z-order merge of this process's windows, `EnumDisplayDevices`, GDI thumbnails, `WM_GETICON`)
-      beyond those, and SessionTest's two `chromeMediaSourceId` checks fail on main (empty `displaySurface`, fixed on
-      `win-fixes`); DXGI and WGC capture are DRIFT DC3
+      `Screen.GetAllDisplays`, Chromium's names; 2026-10-13, d07986c, Wojtek). Still open: SessionTest's two
+      `chromeMediaSourceId` checks fail on main (empty `displaySurface`, fixed on `win-fixes`); DXGI and WGC capture
+      are DRIFT DC3
+  - [ ] Windows-specific checks written on branch `desktopcapturer-win`, not yet run (need an unlocked console): own
+        windows follow Chromium's collector (hidden, minimized, untitled, owned out; owned `WS_EX_APPWINDOW` in), a
+        cloaked own window still listed, another process's window merged between two of ours by z-order and dropped
+        once minimized, own titles read past 500 characters (fixed on the branch), the primary device's screen
+        carries `Screen.GetPrimaryDisplay`'s id, each screen's display matches its device's mode size, window
+        thumbnails upright and in colour order, a screen thumbnail shows a window where it sits and has the
+        letterboxed size, `appIcon` order (big `WM_GETICON` before small, class icon before small) and an empty
+        `appIcon` for a window without one
 - [ ] `app` audit (branch `app-audit`): `showEmojiPanel` (Win+. through `SendInput`) and the singleton's
       WM_COPYDATA client for `requestSingleInstanceLock` data are ported (SessionTest's second-launch check passes;
       the emoji picker is unverified, DRIFT A25); still to run: the about panel's message box and
