@@ -791,6 +791,9 @@ public unsafe partial class BaseWindow
             // The widget's z-order level, which Electron compares against too; z-order changes made elsewhere raise nothing.
             var wasOnTop = w->is_always_on_top(w) != 0;
             w->set_always_on_top(w, onTop ? 1 : 0);
+            // CEF skips the request when X11Window's level, which a late PropertyNotify can leave stale, already matches;
+            // Electron always sends it, or a quick true-then-false leaves the window above.
+            if (OperatingSystem.IsLinux()) X11Window.SetAbove(Hwnd(w), onTop);
             if (onTop && OperatingSystem.IsWindows()) WindowsWindow.EnsureTopmost((nint)w->get_window_handle(w));
             if (OperatingSystem.IsMacOS()) MacWindow.SetLevel((nint)w->get_window_handle(w), onTop ? macLevel + relativeLevel : 0);
             ApplyAlwaysOnTopLevel(w, onTop, level);

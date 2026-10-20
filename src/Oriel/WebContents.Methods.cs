@@ -301,7 +301,17 @@ public sealed unsafe partial class WebContents
                     }
                     var image = NativeImage.CreateFromBuffer(Convert.FromBase64String(shot.GetProperty("data").GetString()!));
                     var (width, height) = image.GetSize();
-                    done.TrySetResult(CapturePixels(rect, scale, width, height) is { } crop ? image.Crop(crop) : image);
+                    if (CapturePixels(rect, scale, width, height) is not { } crop)
+                    {
+                        done.TrySetResult(image);
+                        return;
+                    }
+                    var cropped = image.Crop(crop);
+                    var (outWidth, outHeight) = CaptureSize(rect!.Value, scale);
+                    // Viz scales the rounded area to the ceiled size; a rect clipped by the view keeps its crop.
+                    done.TrySetResult(CaptureInside(rect.Value, scale, width, height) &&(crop.Width != outWidth || crop.Height != outHeight)
+                        ? cropped.Resize(new ResizeOptions { Width = outWidth, Height = outHeight })
+                        : cropped);
                 });
             });
         });
@@ -309,20 +319,36 @@ public sealed unsafe partial class WebContents
     }
 
     /// <summary>The device-pixel rectangle of the view's capture that <paramref name="rect"/> (DIPs) covers, clipped to
-    /// the image; null for the whole image (no rect, or an empty one, as Electron's).</summary>
+    /// the image; null for the whole image (no rect, or an empty one, as Electron's). Each edge is rounded half away
+    /// from zero, as <c>gfx::ScaleToRoundedRect</c> in Electron's <c>CopyFromSurface</c>.</summary>
     internal static Rectangle? CapturePixels(Rectangle? rect, double scale, int imageWidth, int imageHeight)
     {
         if (rect is not { Width: > 0, Height: > 0 } area) return null;
-        var left = (int)Math.Floor(area.X * scale);
-        var top = (int)Math.Floor(area.Y * scale);
-        var width = (int)Math.Ceiling(area.Width * scale);
-        var height = (int)Math.Ceiling(area.Height * scale);
-        var right = Math.Min(left + width, imageWidth);
-        var bottom = Math.Min(top + height, imageHeight);
-        left = Math.Max(left, 0);
-        top = Math.Max(top, 0);
-        return new Rectangle(left, top, Math.Max(right - left, 0), Math.Max(bottom - top, 0));
+        var (l, t, r, b) = RoundedEdges(area, scale);
+        var left = Math.Max(l, 0);
+        var top = Math.Max(t, 0);
+        var right = Math.Min(r, imageWidth);
+        var bottom = Math.Min(b, imageHeight);
+        return new Rectangle((int)left, (int)top, (int)Math.Max(right - left, 0), (int)Math.Max(bottom - top, 0));
     }
+
+    /// <summary>Whether <paramref name="rect"/>'s rounded pixel area lies wholly inside the image.</summary>
+    internal static bool CaptureInside(Rectangle rect, double scale, int imageWidth, int imageHeight)
+    {
+        var (left, top, right, bottom) = RoundedEdges(rect, scale);
+        return left >= 0 && top >= 0 && right <= imageWidth && bottom <= imageHeight;
+    }
+
+    private static (long Left, long Top, long Right, long Bottom) RoundedEdges(Rectangle rect, double scale)
+    {
+        static long Round(double value) => (long)Math.Round(value, MidpointRounding.AwayFromZero);
+        return (Round(rect.X * scale), Round(rect.Y * scale), Round((rect.X + rect.Width) * scale), Round((rect.Y + rect.Height) * scale));
+    }
+
+    /// <summary>The capture's size in pixels for <paramref name="rect"/> (DIPs): Electron's
+    /// <c>ScaleToCeiledSize(rect.size, scale)</c>, which can be a pixel larger than the rounded area.</summary>
+    internal static (int Width, int Height) CaptureSize(Rectangle rect, double scale)
+        => ((int)Math.Ceiling(rect.Width * scale), (int)Math.Ceiling(rect.Height * scale));
 
     /// <summary>Runs <paramref name="scripts"/> in the main frame's world <paramref name="worldId"/>, in order, and returns
     /// the first one's value, awaiting it if it is a promise. World 0 is the page's main world and 999 the preload's,

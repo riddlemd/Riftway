@@ -1,0 +1,8 @@
+<Project>
+  <!-- Packed as buildTransitive/Oriel.Runtime.<rid>.targets. NuGet flattens native assets, and CEF looks for its
+       locales in a locales folder beside libcef, so they travel here instead. -->
+  <ItemGroup Condition="'$(RuntimeIdentifier)' != ''">
+    <None Include="$(MSBuildThisFileDirectory)..\locales\*.pak" Link="locales\%(Filename)%(Extension)" Visible="false"
+          CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
+  </ItemGroup>
+</Project>

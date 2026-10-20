@@ -97,21 +97,35 @@ Cross-platform work. Platform-specific items: [linux-todo.md](linux-todo.md), [w
 - [x] `GlobalShortcut`, `PowerMonitor`, `PowerSaveBlocker` on Windows (branch `power-shortcuts`) and Linux (branch `linux-power-shortcuts`); `PowerMonitor` and `PowerSaveBlocker` on macOS (branch `mac-power-tray`); macOS `GlobalShortcut` (branch `mac-shell-shortcut`, WindowTest checks pass: DRIFT J1)
 - [x] `Tray` on Windows (branch `tray`), Linux (branch `linux-tray`) and macOS (branch `mac-power-tray`)
 - [x] `systemPreferences` on macOS and Linux (branch `system-preferences`; was DRIFT SP1): unit and host-side macOS tests
-      pass; the macOS GUI and Linux WindowTest checks are written, not run ([mac-todo.md](mac-todo.md), [linux-todo.md](linux-todo.md))
+      pass; the Linux WindowTest checks pass (2026-10-20, 82655fa, linux-x64 stock CEF); the macOS GUI checks are written,
+      not run ([mac-todo.md](mac-todo.md))
 - [ ] `DownloadItem` parity (branch `download-item`, [parity/download-item.md](parity/download-item.md)): Chromium's resume
       rules, the save dialog's URL title and Windows filters, `savePath`, `hasUserGesture`/`getETag`/`getLastModifiedTime`
       (DRIFT E13), pause/cancel before CEF hands a control. Unit tests pass; the SessionTest `HTTP:` download checks
       (local server: redirect, Content-Disposition, ETag, pause/resume, reset and Range resume, 403) pass on Linux; run them on macOS.
       CEF patch 0005 (in [eng/cef](../eng/cef/README.md)) covers E13 and E40; E14-E16, E39 and E41 still need patches
-- [ ] `Notification`: Windows (branch `notify-storage`) and Linux (branch `linux-notification`, WindowTest checks written,
-      not run: [linux-todo.md](linux-todo.md)); macOS not started (DRIFT Q3)
+- [ ] `Notification`: Windows (branch `notify-storage`) and Linux (branch `linux-notification`; WindowTest's
+      `LinuxNotificationTest` passes, 2026-10-20, 82655fa, linux-x64 stock CEF; real servers open in
+      [linux-todo.md](linux-todo.md)); macOS not started (DRIFT Q3)
 - [ ] `session.serviceWorkers` / `ServiceWorkerMain` (branch `service-workers`): done over DevTools (DRIFT SW1-SW8); SessionTest's
       `ServiceWorkerChecks` pass on Linux, not yet run on macOS and Windows; `send`, `ipc` and `ipcMainServiceWorker` wait on the
       service worker patch described after DRIFT SW8
 - [ ] `CrashReporter` on macOS and Linux (branch `crash-reporter-mac-linux`): CrashTest passes on macOS (48 checks);
       the Linux run is pending ([linux-todo.md](linux-todo.md)). Open: CR11 (keys in GPU/utility children), CR16 (.NET
       breakpoint hook on macOS threads other than the UI thread)
-- [ ] M3 Blazor Hybrid · M4 ship it · M5 desktop integration · M6 session/network/processes · M7 own CEF builds
+- [ ] M4 ship it, windows-x64 and linux-x64 (branch `m4-packaging`): `eng/pack.ps1` packs Oriel, Oriel.Cef and
+      Oriel.AutoUpdater; `eng/runtime/` stages and packs `Oriel.Runtime.<rid>` (win-x64 184 MB); `Oriel.targets` lays out
+      `dotnet publish -r <rid>` (Windows: the same files as `layout-windows.ps1`, the exe stamped with the app's version
+      resources); `vpk pack` makes a Setup.exe of that layout; Velopack's hook arguments reach `Main` through
+      bootstrap.exe and exit there. linux-x64 (154 MB, libcef.so stripped): an app published from the packages lays out
+      with `locales/` and exec bits, opens a window and runs a page under Xvfb unsandboxed and with a setuid
+      chrome-sandbox, and `vpk pack` makes an AppImage that runs the same way; an AppImage at 1.0.0 updates itself to
+      2.0.0 from a local feed through `AutoUpdater` (checking, available, downloaded 2.0.0, before-quit, Velopack applies
+      after the exit and restarts 2.0.0) (Docker, 2026-10-20, Wojtek). Open: a real Windows install, update and launch
+      on a desktop; signing; fuses and the
+      packed app archive; the Linux sandbox story for AppImages (user namespaces or documented off); macOS (bundle,
+      sign, notarise: Ise)
+- [ ] M3 Blazor Hybrid · M5 desktop integration · M6 session/network/processes · M7 own CEF builds
       (see [PLAN.md](PLAN.md#milestones))
 - [ ] M7: CEF patches in [eng/cef](../eng/cef/README.md): 0001 `CefWindowDelegate::IsTranslucent` (W24), 0002
       `CefWindow::SetEventListeningEnabled` (W5), 0003 GTK style colour cache, a Chromium patch (Y2), 0004
