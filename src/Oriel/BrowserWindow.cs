@@ -151,6 +151,7 @@ public sealed unsafe partial class BrowserWindow : BaseWindow
     private readonly BrowserViewDelegate _viewDelegate;
     private cef_browser_view_t* _browserView;
     private bool _readyToShowRaised;
+    private bool _panelHoldsFocus;
     private readonly UnresponsiveSchedule _unresponsive;
     // Popups allowed by on_before_popup whose view CEF has not created yet, by the client CEF will use; UI thread only.
     private static readonly Dictionary<nint, PendingPopup> s_pendingPopups = [];
@@ -196,6 +197,7 @@ public sealed unsafe partial class BrowserWindow : BaseWindow
             Responsive?.Invoke(this, EventArgs.Empty);
         };
         WebContents.Destroyed += (_, _) => _unresponsive.PageDestroyed();
+        WebContents.Focused += (_, _) => ReleasePanelFocus();
         WebContents.TitleApplied = SetTitle;
         WebContents.PageMouseDown = () => _menuBar?.OnPageMouseDown();
         WebContents.DidFinishLoad += (_, _) =>
@@ -549,7 +551,26 @@ public sealed unsafe partial class BrowserWindow : BaseWindow
     public void FocusOnWebView() => WebContents.SetWidgetFocus(true);
 
     /// <summary>Takes keyboard focus from the page. Electron's <c>win.blurWebView()</c>.</summary>
-    public void BlurWebView() => WebContents.SetWidgetFocus(false);
+    public void BlurWebView() => Command(_ =>
+    {
+        // CEF's set_focus(0) does nothing for a Views-hosted page, so the window's own panel takes the focus, focusable
+        // only while it holds it so Tab never stops there.
+        var panel = _contentsView.NativeView;
+        if (panel is null || !WebContents.ViewHasFocus()) return;
+        panel->set_focusable(panel, 1);
+        panel->request_focus(panel);
+        _panelHoldsFocus = true;
+        WebContents.OnViewBlurred();
+    });
+
+    // UI thread: the page has the focus back, so the panel can stop being focusable without Views moving focus.
+    private void ReleasePanelFocus()
+    {
+        var panel = _contentsView.NativeView;
+        if (!_panelHoldsFocus || panel is null) return;
+        _panelHoldsFocus = false;
+        panel->set_focusable(panel, 0);
+    }
 
     /// <summary>Electron's <c>win.showDefinitionForSelection()</c>: <see cref="WebContents.ShowDefinitionForSelection"/>.</summary>
     public void ShowDefinitionForSelection() => WebContents.ShowDefinitionForSelection();

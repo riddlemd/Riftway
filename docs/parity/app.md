@@ -39,7 +39,7 @@ Percentages are over the non-n/a items; the second counts a partial item as half
 | `continue-activity-error` | `ContinueActivityError` | done | Not run against a real Handoff. |
 | `activity-was-continued` | `ActivityWasContinued` | done | Not run against a real Handoff. |
 | `update-activity-state` | `UpdateActivityState` | done | `Cancel` holds the save for `UpdateCurrentActivity`, a second at most per wake. |
-| `new-window-for-tab` | `NewWindowForTab` | partial | macOS: the app delegate's `newWindowForTab:`, and after a window's own event _(branch `mac-integration`)_; not yet run on screen. |
+| `new-window-for-tab` | `NewWindowForTab` | partial | macOS: the app delegate's `newWindowForTab:`, and after a window's own event; the window's event passes on screen (macOS 26), the app's is unchecked. |
 | `browser-window-blur` | `BrowserWindowBlur` | done |  |
 | `browser-window-focus` | `BrowserWindowFocus` | done |  |
 | `browser-window-created` | `BrowserWindowCreated` | done |  |

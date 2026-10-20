@@ -81,8 +81,10 @@ static unsafe class SystemPreferencesChecks
             check("systemPreferences (macOS): GetEffectiveAppearance follows the app's appearance (Dark, then Light)",
                 darkAppearance == SystemAppearance.Dark && lightAppearance == SystemAppearance.Light && SystemPreferences.EffectiveAppearance == SystemAppearance.Light,
                 $"{darkAppearance} / {lightAppearance}");
-            check("systemPreferences (macOS): GetColor(label) resolves against the app's appearance (light text on dark)",
-                Convert.ToInt32(darkLabel[1..3], 16) > 0xC0 && Convert.ToInt32(lightLabel[1..3], 16) < 0x40, $"dark={darkLabel} light={lightLabel}");
+            // Outside drawing, macOS 26 resolves dynamic colours against the system appearance, not NSApp's (checked with a bare
+            // Swift app); Electron looks the colour up the same way, so ThemeSource does not move it.
+            check("systemPreferences (macOS): GetColor(label) is the system appearance's, whatever ThemeSource says, as Electron's lookup",
+                darkLabel.Length == 9 && darkLabel == lightLabel, $"dark={darkLabel} light={lightLabel}");
             NativeTheme.ThemeSource = ThemeSource.System;
             var systemDark = Defaults("read -g AppleInterfaceStyle") == "Dark";
             check("systemPreferences (macOS): with ThemeSource System the appearance is the system's (defaults AppleInterfaceStyle)",
@@ -104,9 +106,10 @@ static unsafe class SystemPreferencesChecks
         {
             var s = SystemPreferences.GetAnimationSettings();
             var reduce = Defaults("read com.apple.universalaccess reduceMotion") == "1";
-            var scroll = Defaults("read -g NSScrollAnimationEnabled");
-            return (s.PrefersReducedMotion == reduce && s.ShouldRenderRichAnimation == !reduce && s.ScrollAnimationsEnabledBySystem == (scroll == "1"),
-                $"{s} vs reduceMotion={reduce} NSScrollAnimationEnabled={scroll ?? "unset"}");
+            // Chromium reads the app's standard defaults, where AppKit registers a value when the global domain has none.
+            var scroll = SystemPreferences.GetUserDefault("NSScrollAnimationEnabled", UserDefaultType.Boolean) is true;
+            return (s.PrefersReducedMotion == reduce && s.ShouldRenderRichAnimation == !reduce && s.ScrollAnimationsEnabledBySystem == scroll,
+                $"{s} vs reduceMotion={reduce} NSScrollAnimationEnabled={scroll}");
         });
         Try("systemPreferences (macOS): IsTrustedAccessibilityClient(false) is AXIsProcessTrusted", () =>
             (SystemPreferences.IsTrustedAccessibilityClient(false) == Oriel.Cef.Platform.MacHotKeys.IsTrustedAccessibilityClient(), SystemPreferences.IsTrustedAccessibilityClient(false)));

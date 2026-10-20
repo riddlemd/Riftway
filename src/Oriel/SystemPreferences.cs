@@ -89,6 +89,8 @@ public static partial class SystemPreferences
     /// <c>"3d-face"</c>; on macOS e.g. <c>"control-background"</c>, <c>"label"</c> or <c>"window-background"</c>.</param>
     /// <exception cref="ArgumentException"><paramref name="color"/> is not one of the names (<c>Unknown color: …</c>).</exception>
     /// <exception cref="PlatformNotSupportedException">Linux, where Electron has no <c>getColor</c>.</exception>
+    /// <remarks>On macOS 26 a dynamic colour resolves against the system appearance, not <see cref="NativeTheme.ThemeSource"/>,
+    /// as Electron's lookup does.</remarks>
     public static string GetColor(string color)
     {
         if (OperatingSystem.IsMacOS()) return MacColor(color);

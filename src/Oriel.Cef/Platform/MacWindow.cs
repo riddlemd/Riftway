@@ -257,50 +257,41 @@ public static unsafe class MacWindow
     [UnmanagedCallersOnly]
     private static nint PreviewItemAtIndex(nint self, nint cmd, nint panel, nint index) => s_previewItems.GetValueOrDefault(self);
 
-    // The window's class gains a runtime subclass holding Oriel's overrides; windows without a handler reach super.
+    // Oriel's overrides go onto the window's own class (CEF's CefNSWindow, which implements none of them), never onto a
+    // subclass swapped in: AppKit removes its KVO registrations on dealloc by the class they were made under, and throws.
     private static void UseOrielSubclass(nint window)
     {
         var cls = object_getClass(window);
-        var className = Marshal.PtrToStringUTF8((nint)class_getName(cls)) ?? "";
         if (IsOrielSubclassed(cls)) return;
-        var name = System.Text.Encoding.UTF8.GetBytes("Oriel_" + className + "\0");
-        fixed (byte* n = name)
+        while (class_getSuperclass(cls) != 0 && (Marshal.PtrToStringUTF8((nint)class_getName(cls)) ?? "").StartsWith("NSKVONotifying_", StringComparison.Ordinal))
+            cls = class_getSuperclass(cls);
+        s_orielClasses.Add(cls);
+        fixed (byte* types = "v@:@"u8)
+            class_addMethod(cls, Sel("toggleFullScreen:"u8), (delegate* unmanaged<nint, nint, nint, void>)&OnToggleFullScreen, types);
+        fixed (byte* types = "@@:"u8)
+            class_addMethod(cls, Sel("makeTouchBar"u8), (delegate* unmanaged<nint, nint, nint>)&OnMakeTouchBar, types);
+        fixed (byte* types = "{CGRect={CGPoint=dd}{CGSize=dd}}@:{CGRect={CGPoint=dd}{CGSize=dd}}@"u8)
+            class_addMethod(cls, Sel("constrainFrameRect:toScreen:"u8), (delegate* unmanaged<nint, nint, NSRect, nint, NSRect>)&OnConstrainFrameRect, types);
+        fixed (byte* types = "@@:"u8)
+            class_addMethod(cls, Sel("accessibilityTitle"u8), (delegate* unmanaged<nint, nint, nint>)&OnAccessibilityTitle, types);
+        fixed (byte* types = "v@:@"u8)
+            class_addMethod(cls, Sel("rotateWithEvent:"u8), (delegate* unmanaged<nint, nint, nint, void>)&OnRotateWithEvent, types);
+        fixed (byte* types = ObjCEncoding.Of("B@:"))
         {
-            var subclass = objc_getClass(n);
-            if (subclass == 0)
-            {
-                subclass = objc_allocateClassPair(cls, n, 0);
-                s_orielClasses.Add(subclass);
-                fixed (byte* types = "v@:@"u8)
-                    class_addMethod(subclass, Sel("toggleFullScreen:"u8), (delegate* unmanaged<nint, nint, nint, void>)&OnToggleFullScreen, types);
-                fixed (byte* types = "@@:"u8)
-                    class_addMethod(subclass, Sel("makeTouchBar"u8), (delegate* unmanaged<nint, nint, nint>)&OnMakeTouchBar, types);
-                fixed (byte* types = "{CGRect={CGPoint=dd}{CGSize=dd}}@:{CGRect={CGPoint=dd}{CGSize=dd}}@"u8)
-                    class_addMethod(subclass, Sel("constrainFrameRect:toScreen:"u8), (delegate* unmanaged<nint, nint, NSRect, nint, NSRect>)&OnConstrainFrameRect, types);
-                fixed (byte* types = "@@:"u8)
-                    class_addMethod(subclass, Sel("accessibilityTitle"u8), (delegate* unmanaged<nint, nint, nint>)&OnAccessibilityTitle, types);
-                fixed (byte* types = "v@:@"u8)
-                    class_addMethod(subclass, Sel("rotateWithEvent:"u8), (delegate* unmanaged<nint, nint, nint, void>)&OnRotateWithEvent, types);
-                fixed (byte* types = ObjCEncoding.Of("B@:"))
-                {
-                    class_addMethod(subclass, Sel("canBecomeKeyWindow"u8), (delegate* unmanaged<nint, nint, byte>)&CanBecomeKeyOrMain, types);
-                    class_addMethod(subclass, Sel("canBecomeMainWindow"u8), (delegate* unmanaged<nint, nint, byte>)&CanBecomeKeyOrMain, types);
-                }
-                fixed (byte* types = ObjCEncoding.Of("B@:@"))
-                    class_addMethod(subclass, Sel("acceptsPreviewPanelControl:"u8), (delegate* unmanaged<nint, nint, nint, byte>)&AcceptsPreviewPanelControl, types);
-                fixed (byte* types = "v@:@"u8)
-                {
-                    class_addMethod(subclass, Sel("beginPreviewPanelControl:"u8), (delegate* unmanaged<nint, nint, nint, void>)&BeginPreviewPanelControl, types);
-                    class_addMethod(subclass, Sel("endPreviewPanelControl:"u8), (delegate* unmanaged<nint, nint, nint, void>)&EndPreviewPanelControl, types);
-                }
-                fixed (byte* types = "q@:@"u8)
-                    class_addMethod(subclass, Sel("numberOfPreviewItemsInPreviewPanel:"u8), (delegate* unmanaged<nint, nint, nint, nint>)&NumberOfPreviewItems, types);
-                fixed (byte* types = "@@:@q"u8)
-                    class_addMethod(subclass, Sel("previewPanel:previewItemAtIndex:"u8), (delegate* unmanaged<nint, nint, nint, nint, nint>)&PreviewItemAtIndex, types);
-                objc_registerClassPair(subclass);
-            }
-            object_setClass(window, subclass);
+            class_addMethod(cls, Sel("canBecomeKeyWindow"u8), (delegate* unmanaged<nint, nint, byte>)&CanBecomeKeyOrMain, types);
+            class_addMethod(cls, Sel("canBecomeMainWindow"u8), (delegate* unmanaged<nint, nint, byte>)&CanBecomeKeyOrMain, types);
         }
+        fixed (byte* types = ObjCEncoding.Of("B@:@"))
+            class_addMethod(cls, Sel("acceptsPreviewPanelControl:"u8), (delegate* unmanaged<nint, nint, nint, byte>)&AcceptsPreviewPanelControl, types);
+        fixed (byte* types = "v@:@"u8)
+        {
+            class_addMethod(cls, Sel("beginPreviewPanelControl:"u8), (delegate* unmanaged<nint, nint, nint, void>)&BeginPreviewPanelControl, types);
+            class_addMethod(cls, Sel("endPreviewPanelControl:"u8), (delegate* unmanaged<nint, nint, nint, void>)&EndPreviewPanelControl, types);
+        }
+        fixed (byte* types = "q@:@"u8)
+            class_addMethod(cls, Sel("numberOfPreviewItemsInPreviewPanel:"u8), (delegate* unmanaged<nint, nint, nint, nint>)&NumberOfPreviewItems, types);
+        fixed (byte* types = "@@:@q"u8)
+            class_addMethod(cls, Sel("previewPanel:previewItemAtIndex:"u8), (delegate* unmanaged<nint, nint, nint, nint, nint>)&PreviewItemAtIndex, types);
     }
 
     private static readonly nint s_msgSend = NativeLibrary.GetExport(NativeLibrary.Load(ObjC), "objc_msgSend");
@@ -880,7 +871,12 @@ public static unsafe class MacWindow
     [UnmanagedCallersOnly]
     private static void OnRotateWithEvent(nint self, nint cmd, nint e)
     {
-        if (!s_rotateHandlers.TryGetValue(self, out var handler)) return;
+        if (!s_rotateHandlers.TryGetValue(self, out var handler))
+        {
+            var super = new ObjcSuper { Receiver = self, SuperClass = OrielSuperclass(self) };
+            ((delegate* unmanaged<ObjcSuper*, nint, nint, void>)s_msgSendSuper)(&super, cmd, e);
+            return;
+        }
         try { handler(((delegate* unmanaged<nint, nint, float>)s_msgSend)(e, Sel("rotation"u8))); }
         catch (Exception ex) { Console.Error.WriteLine($"[Oriel] Unhandled exception in rotate-gesture: {ex}"); }
     }

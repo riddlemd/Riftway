@@ -1790,6 +1790,17 @@ async Task MacWindowApisAsync()
     sliding.SetBounds(new Rectangle(120, 140, 100, 100), animate: true);
     var slid = Eventually(() => sliding.GetBounds() == new Rectangle(120, 140, 250, 180), step);
     Check("SetBounds(animate) lands on the bounds, raised to the minimum size as Electron clamps it (macOS)", slid, sliding.GetBounds().ToString());
+    sliding.SetSize(300, 220, animate: true);
+    var sized = Eventually(() => sliding.GetSize() == (300, 220), step);
+    sliding.SetPosition(160, 180, animate: true);
+    var placed = Eventually(() => sliding.GetPosition() == (160, 180), step);
+    Check("SetSize and SetPosition with animate land where asked (macOS)", sized && placed, sliding.GetBounds().ToString());
+    sliding.SetContentSize(320, 240, animate: true);
+    var contentSized = Eventually(() => sliding.GetContentSize() == (320, 240), step);
+    var contentTarget = new Rectangle(140, 200, 340, 260);
+    sliding.SetContentBounds(contentTarget, animate: true);
+    Check("SetContentSize and SetContentBounds with animate land where asked (macOS)", contentSized && Eventually(() => sliding.GetContentBounds() == contentTarget, step),
+        sliding.GetContentBounds().ToString());
     sliding.Destroy();
     nint Button(BrowserWindow b, nuint kind) => MacInterop.SendNUInt(MacInterop.Send(b.GetNativeWindowHandle(), MacInterop.sel_registerName("window")), MacInterop.sel_registerName("standardWindowButton:"), kind);
     bool Hidden(nint view) => MacInterop.SendBool(view, MacInterop.sel_registerName("isHidden")) != 0;
@@ -1826,8 +1837,8 @@ async Task MacWindowApisAsync()
             SubjectName = "Oriel trust test", SerialNumber = self.SerialNumber, ValidStart = 0, ValidExpiry = 0, Fingerprint = "" };
         var trusting = Dialog.ShowCertificateTrustDialogAsync(w, new CertificateTrustDialogOptions { Certificate = trustCert, Message = "Oriel window test" });
         var sheetShown = Eventually(() => Sheet() != 0, step);
-        // [window endSheet:] ends the panel as a click would.
-        if (sheetShown) MacInterop.SendNUInt(NSWindow(), MacInterop.sel_registerName("endSheet:"), (nuint)Sheet());
+        // [window endSheet:] ends the panel as a click would; on the main thread, as AppKit off it spins on macOS 26.
+        if (sheetShown) Oriel.Cef.CefThread.InvokeOnUi(() => MacInterop.SendNUInt(NSWindow(), MacInterop.sel_registerName("endSheet:"), (nuint)Sheet()));
         Check("ShowCertificateTrustDialogAsync shows SFCertificateTrustPanel as a sheet and completes when it ends (macOS)",
             sheetShown && Eventually(() => trusting.IsCompleted, step));
     }
@@ -1863,20 +1874,64 @@ async Task MacWindowApisAsync()
     var grouped = Eventually(() => TabCount(tabA) == 2, step);
     var selfRefused = false;
     try { tabA.AddTabbedWindow(tabA); } catch (ArgumentException) { selfRefused = true; }
+    nint TabWindow(BrowserWindow b) => MacInterop.Send(b.GetNativeWindowHandle(), MacInterop.sel_registerName("window"));
+    nint TabGroup() => MacInterop.Send(TabWindow(tabA), MacInterop.sel_registerName("tabGroup"));
+    nint SelectedTab() => Oriel.Cef.CefThread.InvokeOnUi(() => MacInterop.Send(TabGroup(), MacInterop.sel_registerName("selectedWindow")));
+    bool GroupFlag(string selector) => Oriel.Cef.CefThread.InvokeOnUi(() => MacInterop.SendBool(TabGroup(), MacInterop.sel_registerName(selector)) != 0);
+    var firstTab = SelectedTab();
+    var selectedOwner = firstTab == TabWindow(tabA) ? tabA : tabB;
+    selectedOwner.SelectNextTab();
+    var movedOn = Eventually(() => SelectedTab() != firstTab, step);
+    (SelectedTab() == TabWindow(tabA) ? tabA : tabB).SelectPreviousTab();
+    Check("SelectNextTab and SelectPreviousTab move the tab group's selection (macOS)", grouped && movedOn && Eventually(() => SelectedTab() == firstTab, step));
+    // The overview opens over the key window, as a click on the tab bar's button would ask for it.
+    var overviewOwner = SelectedTab() == TabWindow(tabA) ? tabA : tabB;
+    overviewOwner.Focus();
+    Eventually(() => overviewOwner.IsFocused, step);
+    overviewOwner.ShowAllTabs();
+    var overview = Eventually(() => GroupFlag("isOverviewVisible"), step);
+    // AppKit ignores a toggle while the overview is still animating in.
+    await Task.Delay(1500);
+    overviewOwner.ShowAllTabs();
+    var overviewClosed = Eventually(() => !GroupFlag("isOverviewVisible"), step);
+    Check("ShowAllTabs opens the tab overview and a second call closes it (macOS)", overview && overviewClosed, $"opened={overview} closed={overviewClosed}");
+    if (GroupFlag("isOverviewVisible")) overviewOwner.ShowAllTabs();
     tabB.MoveTabToNewWindow();
     var split = Eventually(() => TabCount(tabA) <= 1, step);
+    var barBefore = GroupFlag("isTabBarVisible");
+    tabA.ToggleTabBar();
+    var barToggled = Eventually(() => GroupFlag("isTabBarVisible") != barBefore, step);
+    tabA.ToggleTabBar();
+    Check("ToggleTabBar shows and hides a lone tab's tab bar (macOS)", split && barToggled && Eventually(() => GroupFlag("isTabBarVisible") == barBefore, step),
+        $"split={split} before={barBefore} toggled={barToggled}");
+    tabA.MergeAllWindows();
+    Check("MergeAllWindows gathers the group's windows into tabs of one (macOS)", Eventually(() => TabCount(tabA) == 2, step), TabCount(tabA));
     Check("TabbingIdentifier tabs a window, AddTabbedWindow groups two, MoveTabToNewWindow splits them, and a window cannot tab itself (macOS)",
         tabA.GetTabbingIdentifier() == "oriel-test" && grouped && selfRefused && split, $"{TabCount(tabA)}");
+    var tabRequests = 0;
+    EventHandler onNewTab = (_, _) => Interlocked.Increment(ref tabRequests);
+    tabA.NewWindowForTab += onNewTab;
+    tabA.Focus();
+    Eventually(() => tabA.IsFocused, step);
+    // The tab bar's + button sends newWindowForTab: down the key window's responder chain, to the window's delegate.
+    var tabActionTaken = Oriel.Cef.CefThread.InvokeOnUi(() => MacInterop.SendAction(MacInterop.Send(MacInterop.objc_getClass("NSApplication"), MacInterop.sel_registerName("sharedApplication")),
+        MacInterop.sel_registerName("sendAction:to:from:"), MacInterop.sel_registerName("newWindowForTab:"), 0, 0) != 0);
+    Check("newWindowForTab: on a tabbing window raises its NewWindowForTab (macOS)", tabActionTaken && Eventually(() => tabRequests == 1, step), tabRequests);
+    tabA.NewWindowForTab -= onNewTab;
     tabA.Destroy();
     tabB.Destroy();
     var previewPath = Path.Combine(Path.GetTempPath(), "oriel-quicklook-test.txt");
     File.WriteAllText(previewPath, "Oriel QuickLook test");
-    nint Panel() => MacInterop.Send(MacInterop.objc_getClass("QLPreviewPanel"), MacInterop.sel_registerName("sharedPreviewPanel"));
+    // Touching sharedPreviewPanel brings a closed panel back (Electron's CloseFilePreview says so), so the app's windows are searched.
+    bool PanelVisible() => Oriel.Cef.CefThread.InvokeOnUi(() => MacInterop.VisibleWindowOf("QLPreviewPanel"));
+    // The panel takes its controller from the key window's responder chain; the tab windows just closed held the focus.
+    w.Focus();
+    Eventually(() => w.IsFocused, step);
     w.PreviewFile(previewPath, "Oriel preview");
-    var previewing = Eventually(() => MacInterop.SendBool(Panel(), MacInterop.sel_registerName("isVisible")) != 0, step);
+    var previewing = Eventually(() => PanelVisible(), step);
     w.CloseFilePreview();
-    Check("PreviewFile opens QuickLook and CloseFilePreview closes it (macOS)",
-        previewing && Eventually(() => MacInterop.SendBool(Panel(), MacInterop.sel_registerName("isVisible")) == 0, step));
+    var previewClosed = Eventually(() => !PanelVisible(), step);
+    Check("PreviewFile opens QuickLook and CloseFilePreview closes it (macOS)", previewing && previewClosed, $"opened={previewing} closed={previewClosed}");
     File.Delete(previewPath);
     var screenHeight = Screen.GetPrimaryDisplay().Bounds.Height;
     var tall = new BrowserWindow(new BrowserWindowOptions { Title = "Oriel window test: larger than screen", Width = 300, Height = 200, EnableLargerThanScreen = true });
@@ -1888,7 +1943,8 @@ async Task MacWindowApisAsync()
     var zoomer = new BrowserWindow(new BrowserWindowOptions { Title = "Oriel window test: zoom to page width", Width = 400, Height = 300, ZoomToPageWidth = true });
     Eventually(() => zoomer.IsVisible, step);
     var beforeZoom = zoomer.GetBounds();
-    MacInterop.SendNUInt(MacInterop.Send(zoomer.GetNativeWindowHandle(), MacInterop.sel_registerName("window")), MacInterop.sel_registerName("zoom:"), 0);
+    var zoomView = zoomer.GetNativeWindowHandle();
+    Oriel.Cef.CefThread.InvokeOnUi(() => MacInterop.SendNUInt(MacInterop.Send(zoomView, MacInterop.sel_registerName("window")), MacInterop.sel_registerName("zoom:"), 0));
     var zoomedTall = Eventually(() => zoomer.GetBounds().Height > beforeZoom.Height, step);
     Check("ZoomToPageWidth: the zoom button keeps the width (no preferred size) and takes the screen's height (macOS)",
         zoomedTall && zoomer.GetBounds().Width == beforeZoom.Width, $"{beforeZoom} -> {zoomer.GetBounds()}");
@@ -1936,9 +1992,22 @@ async Task MacWindowApisAsync()
     nint DeskWindow() => MacInterop.Send(desk.GetNativeWindowHandle(), MacInterop.sel_registerName("window"));
     var deskBehavior = (nuint)MacInterop.Send(DeskWindow(), MacInterop.sel_registerName("collectionBehavior"));
     var deskLevel = (long)MacInterop.Send(DeskWindow(), MacInterop.sel_registerName("level"));
+    // 81 is all Spaces, stationary, out of the cycle; Electron's InitFromOptions then adds FullScreenPrimary (128) as fullscreenable.
     Check("type desktop puts the window below the desktop, unfocusable, on every Space and out of the cycle (macOS)",
-        deskBehavior == 81 && deskLevel < 0 && !desk.IsFocusable, $"{deskBehavior} {deskLevel}");
+        deskBehavior == (81 | 128) && deskLevel < 0 && !desk.IsFocusable, $"{deskBehavior} {deskLevel}");
     desk.Destroy();
+    var fixedScreen = new BrowserWindow(new BrowserWindowOptions { Title = "Oriel window test: not fullscreenable", Width = 200, Height = 150, FullScreenable = false });
+    Eventually(() => fixedScreen.IsVisible, step);
+    // NSWindowCollectionBehaviorFullScreenPrimary (128) and FullScreenAuxiliary (256), which Electron's SetFullScreenable swaps.
+    nuint FixedBehavior() => Oriel.Cef.CefThread.InvokeOnUi(() => (nuint)MacInterop.Send(MacInterop.Send(fixedScreen.GetNativeWindowHandle(), MacInterop.sel_registerName("window")), MacInterop.sel_registerName("collectionBehavior")));
+    var refusedBehavior = FixedBehavior();
+    fixedScreen.SetFullScreen(true);
+    var stayedWindowed = !Eventually(() => fixedScreen.IsFullScreen, TimeSpan.FromSeconds(2));
+    fixedScreen.SetFullScreenable(true);
+    Check("fullscreenable: false keeps the window out of full screen, and SetFullScreenable(true) lets it in, by the collection behaviour (macOS)",
+        (refusedBehavior & 128) == 0 && (refusedBehavior & 256) != 0 && stayedWindowed && fixedScreen.IsFullScreenable
+        && Eventually(() => (FixedBehavior() & 128) != 0 && (FixedBehavior() & 256) == 0, step), $"{refusedBehavior} -> {FixedBehavior()}");
+    fixedScreen.Destroy();
     var other = new BrowserWindow(new BrowserWindowOptions { Title = "Oriel window test: move above", Width = 200, Height = 150 });
     Eventually(() => other.IsVisible, step);
     w.MoveAbove(other.GetMediaSourceId());
@@ -5845,7 +5914,8 @@ async Task NativeImageAsync()
         var template = NativeImage.CreateFromPath(templatePath);
         Check("macOS: CreateFromPath marks *Template.png a template image, as Electron", template.IsTemplateImage() && !fromPath.IsTemplateImage());
         app.Dock.SetIcon(template);
-        Check("macOS: Dock.SetIcon carries the template flag to the NSImage, as Electron's AsNSImage", Eventually(() => OperatingSystem.IsMacOS() && Oriel.Cef.CefThread.InvokeOnUi(Oriel.Cef.Platform.MacActivation.IconIsTemplate), step));
+        // AppKit keeps a copy without the template flag (checked with a bare Swift app on macOS 26), so only the size shows the icon took.
+        Check("macOS: Dock.SetIcon with a template image sets the icon, at the image's size", Eventually(() => OperatingSystem.IsMacOS() && Oriel.Cef.CefThread.InvokeOnUi(Oriel.Cef.Platform.MacActivation.IconSize) == ((double)template.GetSize().Width, (double)template.GetSize().Height), step), Oriel.Cef.CefThread.InvokeOnUi(Oriel.Cef.Platform.MacActivation.IconSize));
         app.Dock.SetIcon(NativeImage.CreateEmpty());
         Check("macOS: an empty Dock icon restores the bundle's, not a template", !Oriel.Cef.CefThread.InvokeOnUi(Oriel.Cef.Platform.MacActivation.IconIsTemplate));
     }
@@ -8362,6 +8432,23 @@ static unsafe class HangProbe
 
 static class MacInterop
 {
+    [System.Runtime.InteropServices.DllImport("/usr/lib/libobjc.A.dylib", EntryPoint = "objc_msgSend")] internal static extern byte SendAction(nint receiver, nint selector, nint action, nint to, nint from);
+
+    /// <summary>Whether one of the app's windows of <paramref name="className"/> is visible. Main thread.</summary>
+    internal static bool VisibleWindowOf(string className)
+    {
+        var cls = objc_getClass(className);
+        if (cls == 0) return false;
+        var windows = Send(Send(objc_getClass("NSApplication"), sel_registerName("sharedApplication")), sel_registerName("windows"));
+        var count = (int)Send(windows, sel_registerName("count"));
+        for (var i = 0; i < count; i++)
+        {
+            var window = Send(windows, sel_registerName("objectAtIndex:"), i);
+            if ((byte)Send(window, sel_registerName("isKindOfClass:"), cls) != 0 && SendBool(window, sel_registerName("isVisible")) != 0) return true;
+        }
+        return false;
+    }
+
     [System.Runtime.InteropServices.StructLayout(System.Runtime.InteropServices.LayoutKind.Sequential)]
     internal struct NSPoint { public double X; public double Y; }
 

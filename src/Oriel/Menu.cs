@@ -655,12 +655,23 @@ public sealed class Menu : IEnumerable<MenuItem>
             throw new ArgumentException("Set both X and Y, or neither.", nameof(options));
         var window = options?.Window ?? BaseWindow.GetFocusedWindow()
             ?? throw new InvalidOperationException("No window to show the menu in: set PopupOptions.Window or focus a window.");
-        window.ShowPopup(this, options?.X, options?.Y, options?.Closed);
+        var token = _popups.Opened(window);
+        var closed = options?.Closed;
+        window.ShowPopup(this, options?.X, options?.Y, () =>
+        {
+            _popups.Closed(token);
+            closed?.Invoke();
+        });
     }
 
-    /// <summary>Closes this menu's popup in <paramref name="window"/>, by default the focused window.
+    private readonly MenuPopups<BaseWindow> _popups = new();
+
+    /// <summary>Closes this menu's popup in <paramref name="window"/>, or in every window it is popped up in.
     /// Electron's <c>menu.closePopup()</c>.</summary>
-    public void ClosePopup(BaseWindow? window = null) => (window ?? BaseWindow.GetFocusedWindow())?.ClosePopup();
+    public void ClosePopup(BaseWindow? window = null)
+    {
+        foreach (var target in _popups.Targets(window)) target.ClosePopup();
+    }
 
     /// <summary>The first item, here or in a submenu, whose <see cref="MenuItem.Id"/> is <paramref name="id"/>.
     /// Electron's <c>menu.getMenuItemById()</c>.</summary>

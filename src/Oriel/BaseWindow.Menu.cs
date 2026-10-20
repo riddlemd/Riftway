@@ -42,10 +42,23 @@ public unsafe partial class BaseWindow
 
     // The popup menu showing in this window, if any; UI thread.
     private MenuRun? _popupRun;
+    private readonly PopupCancelGate _popupCancels = new();
 
     /// <summary>Shows <paramref name="menu"/> at a point in the page, by default at the pointer.</summary>
-    internal void ShowPopup(Menu menu, int? x, int? y, Action? closed) => Command(w =>
+    internal void ShowPopup(Menu menu, int? x, int? y, Action? closed)
     {
+        var request = _popupCancels.Request();
+        Command(w => ShowPopupOn(w, menu, x, y, closed, request));
+    }
+
+    private void ShowPopupOn(cef_window_t* w, Menu menu, int? x, int? y, Action? closed, long request)
+    {
+        // Closed before it opened: Electron's popup is open by the time closePopup can run, so it reports closing.
+        if (_popupCancels.IsCancelled(request))
+        {
+            closed?.Invoke();
+            return;
+        }
         var content = ContentBoundsOn(w);
         var at = x is { } ax && y is { } ay ? new Point(content.X + ax, content.Y + ay) : Screen.GetCursorScreenPoint();
         var screen = new cef_point_t { x = at.X, y = at.Y };
@@ -69,11 +82,12 @@ public unsafe partial class BaseWindow
         MenuModels.Fill(model, menu);
         // The model reference passes to CEF, which keeps it, and through it the delegate, until the menu closes.
         w->show_menu(w, model, &screen, cef_menu_anchor_position_t.CEF_MENU_ANCHOR_TOPLEFT);
-    });
+    }
 
     /// <summary>Closes a menu shown by <see cref="ShowPopup"/>.</summary>
     internal void ClosePopup()
     {
+        _popupCancels.CancelAll();
         // An open popup holds macOS in AppKit's menu loop, where a posted CEF task would wait for the menu to close.
         if (OperatingSystem.IsMacOS()) MacMenu.PerformOnMainThread(() => { if (_window is not null) _window->cancel_menu(_window); });
         else Command(w => w->cancel_menu(w));

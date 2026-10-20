@@ -84,9 +84,10 @@ static unsafe class MacAppEventsTest
         // Secure event input blocks every other app's key taps; it must not outlive this check.
         bool secure;
         app.SetSecureKeyboardEntryEnabled(true);
-        try { secure = app.IsSecureKeyboardEntryEnabled() && IsSecureEventInputEnabled() != 0; }
+        // The setter runs on the main thread, after it returns.
+        try { secure = Eventually(() => app.IsSecureKeyboardEntryEnabled() && IsSecureEventInputEnabled() != 0, step); }
         finally { app.SetSecureKeyboardEntryEnabled(false); }
-        check("SetSecureKeyboardEntryEnabled turns secure event input on and off", secure && !app.IsSecureKeyboardEntryEnabled());
+        check("SetSecureKeyboardEntryEnabled turns secure event input on and off", secure && Eventually(() => !app.IsSecureKeyboardEntryEnabled(), step));
 
         app.SetAboutPanelOptions(new AboutPanelOptions { ApplicationName = "Oriel About", ApplicationVersion = "9.9", Credits = "credits" });
         app.ShowAboutPanel();
