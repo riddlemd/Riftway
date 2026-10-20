@@ -287,6 +287,14 @@ public sealed class DesktopCapturerTests
         Assert.Equal(expected, DesktopMedia.IsWindowsOwnCapturable(facts));
     }
 
+    [Theory]
+    [InlineData(false, 10, 500)]
+    [InlineData(false, 600, 500)]
+    [InlineData(true, 10, 11)]
+    [InlineData(true, 600, 601)]
+    public void WindowsTitleBuffer_WebrtcCapsOthers_OwnReadInFull(bool ours, int length, int expected)
+        => Assert.Equal(expected, DesktopMedia.WindowsTitleBuffer(ours, length));
+
     [Fact]
     public void MergeByZOrder_InterleavesByZOrder_FirstListWinsTies()
     {

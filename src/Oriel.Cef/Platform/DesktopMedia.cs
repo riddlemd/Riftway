@@ -300,6 +300,14 @@ public static class DesktopMedia
     public static bool IsWindowsOwnCapturable(WindowsWindowFacts w)
         => w.OwnedByCurrentProcess && w.Visible && !w.Iconic && !(w.Owned && (w.ExStyle & WsExAppWindow) == 0) && w.Title.Length > 0;
 
+    /// <summary>The <c>GetWindowText</c> buffer for a title of <paramref name="length"/> characters: webrtc's 500 for
+    /// other processes' windows; for this process's, the full title plus its terminator, as Chromium rereads those on
+    /// the UI thread.</summary>
+    public static int WindowsTitleBuffer(bool ownedByCurrentProcess, int length)
+        => ownedByCurrentProcess ? length + 1 : WindowsTitleLength;
+
+    private const int WindowsTitleLength = 500;
+
     /// <summary>Chromium's <c>MergeAndSortWindowSources</c>: both lists in <c>EnumWindows</c> z-order, the first list
     /// winning a tie; without a z-order, simply concatenated.</summary>
     public static IReadOnlyList<CaptureSource> MergeByZOrder(IReadOnlyList<CaptureSource> a, IReadOnlyList<CaptureSource> b, IReadOnlyList<long>? zOrder)

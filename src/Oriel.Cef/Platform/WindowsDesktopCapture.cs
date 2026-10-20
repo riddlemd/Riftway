@@ -62,10 +62,12 @@ public static unsafe class WindowsDesktopCapture
         var responding = SendMessageTimeoutW(hwnd, WmNull, 0, 0, SmtoAbortIfHung, ResponseTimeoutMs, null) != 0;
         var title = "";
         // GetWindowText on a hung window of this process would block, so webrtc skips it.
-        if (!ownedByUs || responding)
+        if ((!ownedByUs || responding) && GetWindowTextLengthW(hwnd) is var length && length != 0)
         {
-            var buffer = stackalloc char[500];
-            if (GetWindowTextLengthW(hwnd) != 0 && GetWindowTextW(hwnd, buffer, 500) is var n && n > 0) title = new string(buffer, 0, n);
+            var size = DesktopMedia.WindowsTitleBuffer(ownedByUs, length);
+            var buffer = new char[size];
+            fixed (char* b = buffer)
+                if (GetWindowTextW(hwnd, b, size) is var n && n > 0) title = new string(b, 0, n);
         }
         var className = stackalloc char[256];
         var classLength = GetClassNameW(hwnd, className, 256);
