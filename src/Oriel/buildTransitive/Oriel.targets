@@ -1,0 +1,145 @@
+<Project>
+  <!-- dotnet publish -r <rid> of an app that also references Oriel.Runtime.<rid>, whose native files the publish has
+       already copied beside the app. Windows: CEF's bootstrap.exe becomes <OrielExeName>.exe and Oriel.Host.dll
+       <OrielExeName>.dll, so every process runs sandboxed (README, Windows). Linux: the native executables get their
+       exec bits. OrielLayout=false leaves the publish as it is. -->
+  <PropertyGroup>
+    <!-- <Exe>.dll is the native host, so the exe cannot take the managed assembly's name. -->
+    <OrielExeName Condition="'$(OrielExeName)' == ''">$(AssemblyName)Run</OrielExeName>
+  </PropertyGroup>
+
+  <Target Name="OrielWindowsLayout" AfterTargets="Publish"
+          Condition="'$(OrielLayout)' != 'false' and $(RuntimeIdentifier.StartsWith('win-'))">
+    <PropertyGroup>
+      <_OrielPublish>$([MSBuild]::NormalizeDirectory('$(MSBuildProjectDirectory)', '$(PublishDir)'))</_OrielPublish>
+    </PropertyGroup>
+    <Error Condition="'$(SelfContained)' != 'true'" Text="Oriel's Windows layout needs a self-contained publish (--self-contained): bootstrap.exe starts .NET through hostfxr beside it. OrielLayout=false skips the layout." />
+    <Error Condition="'$(PublishSingleFile)' == 'true'" Text="Oriel's Windows layout cannot lay out a single-file publish." />
+    <Error Condition="'$(OrielExeName)' == '$(AssemblyName)'" Text="OrielExeName '$(OrielExeName)' is the managed assembly's name; $(OrielExeName).dll must be the native host." />
+    <Error Condition="!Exists('$(_OrielPublish)bootstrap.exe') or !Exists('$(_OrielPublish)Oriel.Host.dll')"
+           Text="No CEF beside the published app: add a PackageReference to Oriel.Runtime.$(RuntimeIdentifier)." />
+
+    <Copy SourceFiles="$(_OrielPublish)bootstrap.exe" DestinationFiles="$(_OrielPublish)$(OrielExeName).exe" />
+    <!-- The shell names taskbar buttons after FileDescription, which bootstrap.exe gives as "CEF Bootstrap Application". -->
+    <OrielCopyExeResources Condition="Exists('$(_OrielPublish)$(AssemblyName).exe')"
+                           From="$(_OrielPublish)$(AssemblyName).exe" To="$(_OrielPublish)$(OrielExeName).exe" />
+    <Copy SourceFiles="$(_OrielPublish)Oriel.Host.dll" DestinationFiles="$(_OrielPublish)$(OrielExeName).dll" />
+    <!-- The apphost would start the app unsandboxed, and Oriel.Subprocess.exe would take the sandbox from children. -->
+    <Delete Files="$(_OrielPublish)bootstrap.exe;$(_OrielPublish)bootstrapc.exe;$(_OrielPublish)Oriel.Host.dll;$(_OrielPublish)Oriel.Subprocess.exe;$(_OrielPublish)$(AssemblyName).exe" />
+    <Message Importance="high" Text="$(MSBuildProjectName) -> $(_OrielPublish)$(OrielExeName).exe (Oriel layout)" />
+  </Target>
+
+  <Target Name="OrielLinuxLayout" AfterTargets="Publish"
+          Condition="'$(OrielLayout)' != 'false' and $(RuntimeIdentifier.StartsWith('linux-'))">
+    <PropertyGroup>
+      <_OrielPublish>$([MSBuild]::NormalizeDirectory('$(MSBuildProjectDirectory)', '$(PublishDir)'))</_OrielPublish>
+    </PropertyGroup>
+    <Error Condition="!Exists('$(_OrielPublish)libcef.so') or !Exists('$(_OrielPublish)Oriel.Subprocess')"
+           Text="No CEF beside the published app: add a PackageReference to Oriel.Runtime.$(RuntimeIdentifier)." />
+    <!-- NuGet keeps no file modes. chrome-sandbox also needs root:root and 4755, which only an installer can give. -->
+    <Exec Condition="'$(OS)' != 'Windows_NT'" Command="chmod +x &quot;$(_OrielPublish)Oriel.Subprocess&quot; &quot;$(_OrielPublish)chrome-sandbox&quot;" />
+    <Warning Condition="'$(OS)' == 'Windows_NT'" Text="Published for Linux on Windows: give Oriel.Subprocess and chrome-sandbox their exec bits (chmod +x) when packaging." />
+  </Target>
+
+  <UsingTask TaskName="OrielCopyExeResources" TaskFactory="RoslynCodeTaskFactory" AssemblyFile="$(MSBuildToolsPath)\Microsoft.Build.Tasks.Core.dll">
+    <ParameterGroup>
+      <From ParameterType="System.String" Required="true" />
+      <To ParameterType="System.String" Required="true" />
+    </ParameterGroup>
+    <Task>
+      <Code Type="Class" Language="cs"><![CDATA[
+using System;
+using System.Collections.Generic;
+using System.Runtime.InteropServices;
+
+// Gives one exe another's version information and icons: eng/copy-windows-resources.ps1 as a task.
+public sealed class OrielCopyExeResources : Microsoft.Build.Utilities.Task
+{
+    public string From { get; set; }
+    public string To { get; set; }
+
+    const uint DataFile = 0x2, ImageResource = 0x20;
+    const int Icon = 3, GroupIcon = 14, Version = 16;
+
+    delegate bool EnumNames(IntPtr module, IntPtr type, IntPtr name, IntPtr param);
+    delegate bool EnumLanguages(IntPtr module, IntPtr type, IntPtr name, ushort language, IntPtr param);
+    [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)] static extern IntPtr LoadLibraryExW(string path, IntPtr file, uint flags);
+    [DllImport("kernel32.dll")] static extern bool FreeLibrary(IntPtr module);
+    [DllImport("kernel32.dll")] static extern bool EnumResourceNamesW(IntPtr module, IntPtr type, EnumNames callback, IntPtr param);
+    [DllImport("kernel32.dll")] static extern bool EnumResourceLanguagesW(IntPtr module, IntPtr type, IntPtr name, EnumLanguages callback, IntPtr param);
+    [DllImport("kernel32.dll")] static extern IntPtr FindResourceExW(IntPtr module, IntPtr type, IntPtr name, ushort language);
+    [DllImport("kernel32.dll")] static extern IntPtr LoadResource(IntPtr module, IntPtr resource);
+    [DllImport("kernel32.dll")] static extern IntPtr LockResource(IntPtr data);
+    [DllImport("kernel32.dll")] static extern uint SizeofResource(IntPtr module, IntPtr resource);
+    [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)] static extern IntPtr BeginUpdateResourceW(string path, bool deleteExisting);
+    [DllImport("kernel32.dll", SetLastError = true)] static extern bool UpdateResourceW(IntPtr update, IntPtr type, IntPtr name, ushort language, byte[] data, uint size);
+    [DllImport("kernel32.dll", SetLastError = true)] static extern bool EndUpdateResourceW(IntPtr update, bool discard);
+
+    sealed class Entry { public int Type; public object Name; public ushort Language; public byte[] Data; }
+
+    // Names are integer ids or strings (IS_INTRESOURCE).
+    static object NameOf(IntPtr name) => ((long)name >> 16) == 0 ? (object)(int)name : Marshal.PtrToStringUni(name);
+
+    static List<Entry> Read(string path, int type)
+    {
+        var entries = new List<Entry>();
+        IntPtr module = LoadLibraryExW(path, IntPtr.Zero, DataFile | ImageResource);
+        if (module == IntPtr.Zero) throw new System.ComponentModel.Win32Exception();
+        try
+        {
+            EnumResourceNamesW(module, (IntPtr)type, (m, t, name, p) =>
+            {
+                EnumResourceLanguagesW(m, t, name, (m2, t2, n2, language, p2) =>
+                {
+                    IntPtr resource = FindResourceExW(m2, t2, n2, language);
+                    var data = new byte[SizeofResource(m2, resource)];
+                    Marshal.Copy(LockResource(LoadResource(m2, resource)), data, 0, data.Length);
+                    entries.Add(new Entry { Type = type, Name = NameOf(n2), Language = language, Data = data });
+                    return true;
+                }, IntPtr.Zero);
+                return true;
+            }, IntPtr.Zero);
+        }
+        finally { FreeLibrary(module); }
+        return entries;
+    }
+
+    static void Update(IntPtr update, Entry entry, byte[] data)
+    {
+        IntPtr name = entry.Name is int id ? (IntPtr)id : Marshal.StringToHGlobalUni((string)entry.Name);
+        try
+        {
+            if (!UpdateResourceW(update, (IntPtr)entry.Type, name, entry.Language, data, data == null ? 0u : (uint)data.Length))
+                throw new System.ComponentModel.Win32Exception();
+        }
+        finally { if (!(entry.Name is int)) Marshal.FreeHGlobal(name); }
+    }
+
+    public override bool Execute()
+    {
+        var types = new List<int> { Version };
+        // Icons only when the source has some: an apphost without ApplicationIcon has none, and CEF's beats a blank one.
+        if (Read(From, GroupIcon).Count > 0) { types.Add(GroupIcon); types.Add(Icon); }
+        var remove = new List<Entry>();
+        var add = new List<Entry>();
+        foreach (var type in types)
+        {
+            remove.AddRange(Read(To, type));
+            add.AddRange(Read(From, type));
+        }
+        IntPtr update = BeginUpdateResourceW(To, false);
+        if (update == IntPtr.Zero) throw new System.ComponentModel.Win32Exception();
+        try
+        {
+            foreach (var entry in remove) Update(update, entry, null);
+            foreach (var entry in add) Update(update, entry, entry.Data);
+        }
+        catch { EndUpdateResourceW(update, true); throw; }
+        if (!EndUpdateResourceW(update, false)) throw new System.ComponentModel.Win32Exception();
+        return true;
+    }
+}
+]]></Code>
+    </Task>
+  </UsingTask>
+</Project>
