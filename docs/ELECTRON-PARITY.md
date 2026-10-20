@@ -9,7 +9,7 @@ These figures are counted from the rows: after changing a row or checklist item,
 
 | Measure | Done | Partial | Not started | Total |
 |---|---|---|---|---|
-| Module rows below | 8 | 42 | 17 | 67 |
+| Module rows below | 8 | 43 | 16 | 67 |
 | M2 rows | 3 | 18 | 0 | 21 |
 
 The 67 rows include `BrowserView` (deprecated, never implemented; counted as not started).

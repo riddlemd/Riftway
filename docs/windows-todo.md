@@ -76,10 +76,11 @@ General items: [todo.md](todo.md). Windows work runs on the Windows laptop.
       `Screen.GetAllDisplays`, Chromium's names; 2026-10-13, d07986c, Wojtek). Still open: SessionTest's two
       `chromeMediaSourceId` checks fail on main (empty `displaySurface`, fixed on `win-fixes`); DXGI and WGC capture
       are DRIFT DC3
-  - [ ] Windows-specific checks written on branch `desktopcapturer-win`, not yet run (need an unlocked console): own
+  - [x] Windows-specific checks pass (2026-10-20, 9d3735c, Wojtek at 125%; swept with 29 production mutations, all
+        red; "fetchWindowIcons gives an appIcon" only checks non-null, so a broken icon lookup still passes it): own
         windows follow Chromium's collector (hidden, minimized, untitled, owned out; owned `WS_EX_APPWINDOW` in), a
         cloaked own window still listed, another process's window merged between two of ours by z-order and dropped
-        once minimized, own titles read past 500 characters (fixed on the branch), the primary device's screen
+        once minimized, own titles read past 500 characters, the primary device's screen
         carries `Screen.GetPrimaryDisplay`'s id, each screen's display matches its device's mode size, window
         thumbnails upright and in colour order, a screen thumbnail shows a window where it sits and has the
         letterboxed size, `appIcon` order (big `WM_GETICON` before small, class icon before small) and an empty
