@@ -113,7 +113,17 @@ Cross-platform work. Platform-specific items: [linux-todo.md](linux-todo.md), [w
 - [ ] `CrashReporter` on macOS and Linux (branch `crash-reporter-mac-linux`): CrashTest passes on macOS (48 checks);
       the Linux run is pending ([linux-todo.md](linux-todo.md)). Open: CR11 (keys in GPU/utility children), CR16 (.NET
       breakpoint hook on macOS threads other than the UI thread)
-- [ ] M3 Blazor Hybrid · M4 ship it · M5 desktop integration · M6 session/network/processes · M7 own CEF builds
+- [ ] M4 ship it, windows-x64 and linux-x64 (branch `m4-packaging`): `eng/pack.ps1` packs Oriel, Oriel.Cef and
+      Oriel.AutoUpdater; `eng/runtime/` stages and packs `Oriel.Runtime.<rid>` (win-x64 184 MB); `Oriel.targets` lays out
+      `dotnet publish -r <rid>` (Windows: the same files as `layout-windows.ps1`, the exe stamped with the app's version
+      resources); `vpk pack` makes a Setup.exe of that layout; Velopack's hook arguments reach `Main` through
+      bootstrap.exe and exit there. linux-x64 (154 MB, libcef.so stripped): an app published from the packages lays out
+      with `locales/` and exec bits, opens a window and runs a page under Xvfb unsandboxed and with a setuid
+      chrome-sandbox, and `vpk pack` makes an AppImage that runs the same way (Docker, 2026-10-20, Wojtek). Open: a
+      real Windows install, update and launch on a desktop; an update rolled through a feed; signing; fuses and the
+      packed app archive; the Linux sandbox story for AppImages (user namespaces or documented off); macOS (bundle,
+      sign, notarise: Ise)
+- [ ] M3 Blazor Hybrid · M5 desktop integration · M6 session/network/processes · M7 own CEF builds
       (see [PLAN.md](PLAN.md#milestones))
 - [ ] M7: CEF patches in [eng/cef](../eng/cef/README.md): 0001 `CefWindowDelegate::IsTranslucent` (W24), 0002
       `CefWindow::SetEventListeningEnabled` (W5), 0003 GTK style colour cache, a Chromium patch (Y2), 0004

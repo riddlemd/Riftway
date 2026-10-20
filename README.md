@@ -93,7 +93,18 @@ eng/runtime/stage-windows.ps1 artifacts/runtime/win-x64 # needs MSVC, as above
 dotnet pack eng/runtime/Oriel.Runtime.csproj -c Release -p:OrielRuntimeRid=win-x64 -p:OrielRuntimeStage=artifacts/runtime/win-x64 -o artifacts/pkg
 ```
 
-For linux-x64, stage with `eng/runtime/stage-linux.sh artifacts/runtime/linux-x64` in the `oriel-linux-dev` image (it strips libcef.so, over 1 GB with symbols) and pack the same way.
+For linux-x64, stage with `eng/runtime/stage-linux.sh artifacts/runtime/linux-x64` in the `oriel-linux-dev` image (it strips libcef.so, over 1 GB with symbols) and pack the same way; the package is 154 MB, win-x64's 184 MB.
+
+### Installers and updates
+
+[Velopack](https://velopack.io)'s `vpk` (a dotnet tool, the same version as the `Velopack` package `Oriel.AutoUpdater` uses) packs the published folder:
+
+```powershell
+vpk pack --packId MyApp --packVersion 1.0.0 --packDir <publish-dir> --mainExe MyAppRun.exe --skipVeloAppCheck   # Windows: Setup.exe
+vpk pack --packId MyApp --packVersion 1.0.0 --packDir <publish-dir> --mainExe MyApp                              # Linux: an AppImage (needs mksquashfs)
+```
+
+`--skipVeloAppCheck`: on Windows the main exe is CEF's native bootstrap, which vpk cannot inspect for a `VelopackApp` call. The installer runs that exe with hook arguments (`--veloapp-install` and others), which reach `Main` like any others; call `AutoUpdater.HandleInstallerHooks()` first in `Main`, before `OrielApp.Create()`, so those runs exit before a window opens. `AutoUpdater.Default` then checks a feed and installs an update, as Electron's `autoUpdater`. An AppImage mounts `nosuid`, so `chrome-sandbox` cannot be setuid in one: leave the sandbox off (Oriel's Linux default) or rely on unprivileged user namespaces.
 
 ## Known issues
 
