@@ -108,10 +108,12 @@ Cross-platform work. Platform-specific items: [linux-todo.md](linux-todo.md), [w
       `LinuxNotificationTest` passes, 2026-10-20, 82655fa, linux-x64 stock CEF; real servers open in
       [linux-todo.md](linux-todo.md)); macOS not started (DRIFT Q3)
 - [ ] `session.serviceWorkers` / `ServiceWorkerMain` (branch `service-workers`): done over DevTools (DRIFT SW1-SW8); SessionTest's
-      `ServiceWorkerChecks` pass on Linux, not yet run on macOS and Windows; `send`, `ipc` and `ipcMainServiceWorker` wait on the
+      `ServiceWorkerChecks` pass on Linux and Windows (2026-10-20, b39de8c, windows-x64 stock CEF, sandboxed layout,
+      Wojtek), not yet run on macOS; `send`, `ipc` and `ipcMainServiceWorker` wait on the
       service worker patch described after DRIFT SW8
 - [ ] `CrashReporter` on macOS and Linux (branch `crash-reporter-mac-linux`): CrashTest passes on macOS (48 checks);
-      the Linux run is pending ([linux-todo.md](linux-todo.md)). Open: CR11 (keys in GPU/utility children), CR16 (.NET
+      it passes on linux-x64 too (2026-10-20, 82655fa, patched 0001-0013 in Docker, 0 failures, with the GPU
+      child's report carrying the app's global keys and not the launch's: CR11 with patch 0012). Open: CR16 (.NET
       breakpoint hook on macOS threads other than the UI thread)
 - [ ] M4 ship it, windows-x64 and linux-x64 (branch `m4-packaging`): `eng/pack.ps1` packs Oriel, Oriel.Cef and
       Oriel.AutoUpdater; `eng/runtime/` stages and packs `Oriel.Runtime.<rid>` (win-x64 184 MB); `Oriel.targets` lays out
@@ -136,7 +138,8 @@ Cross-platform work. Platform-specific items: [linux-todo.md](linux-todo.md), [w
       `CefPatchedApi`): WindowTest's 0001-0004 checks pass on linux-x64 (2026-10-14, 63ac6f1) and SessionTest's
       `patched (0005)` and `(0006)` on linux-x64 and windows-x64 (2026-10-13, f01f7e8). macOS: not built
 - [ ] `session` audit (branch `session-audit`, [parity/session.md](parity/session.md)): SessionTest
-      `SessionAuditChecks` pass on Linux; run them on macOS and Windows: `StoragePath`, `SpellCheckerEnabled`,
+      `SessionAuditChecks` pass on Linux and Windows (2026-10-20, b39de8c, windows-x64 stock CEF, sandboxed layout,
+      Wojtek); run them on macOS: `StoragePath`, `SpellCheckerEnabled`,
       `EnableNetworkEmulation` offline and latency on open and later pages, another session untouched (DRIFT E43),
-      `SetSslConfig` and `AllowNtlmCredentialsForDomains` accepted by Chromium's local state (E44). Not checked: a
-      TLS 1.2-only server refused after `MinVersion = tls1.3`, and NTLM credentials sent to an allow-listed server
+      `SetSslConfig` and `AllowNtlmCredentialsForDomains` accepted by Chromium's local state (E44), a TLS 1.2-only
+      server refused after `MinVersion = tls1.3`, and (Windows) NTLM credentials sent to an allow-listed server only

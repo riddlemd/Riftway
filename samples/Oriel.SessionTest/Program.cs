@@ -2296,7 +2296,12 @@ async Task UiThreadFreshSessionChecks()
         && laterBounds == wanted && !early.Window.IsDestroyed, $"{earlyLoad?.GetType().Name} {laterBounds}");
     var content = early.Window.GetContentBounds();
     var pageSize = (await early.Window.WebContents.ExecuteJavaScriptAsync("innerWidth + 'x' + innerHeight"))?.ToString();
-    Check("the late page fills the content area", pageSize == $"{content.Width}x{content.Height}", $"{pageSize} vs {content.Width}x{content.Height}");
+    // At a fractional scale the content's DIP size is rounded and the page's viewport is not, so they can differ by one.
+    var pageSlack = Screen.GetDisplayMatching(content).ScaleFactor % 1 == 0 ? 0 : 1;
+    var pageDims = pageSize?.Split('x') is [var pw, var ph] && int.TryParse(pw, out var pwi) && int.TryParse(ph, out var phi) ? (pwi, phi) : (-99, -99);
+    Check("the late page fills the content area (a DIP of slack at a fractional scale)",
+        Math.Abs(pageDims.Item1 - content.Width) <= pageSlack && Math.Abs(pageDims.Item2 - content.Height) <= pageSlack,
+        $"{pageSize} vs {content.Width}x{content.Height}, slack {pageSlack}");
     early.Window.Destroy();
 
     foreach (var destroy in new[] { false, true })
