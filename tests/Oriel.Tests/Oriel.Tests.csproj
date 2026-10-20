@@ -23,6 +23,7 @@
 
   <ItemGroup>
     <ProjectReference Include="..\..\src\Oriel\Oriel.csproj" />
+    <ProjectReference Include="..\..\src\Oriel.AutoUpdater\Oriel.AutoUpdater.csproj" />
   </ItemGroup>
 
 </Project>
