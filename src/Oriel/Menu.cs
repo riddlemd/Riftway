@@ -754,13 +754,16 @@ public sealed class Menu : IEnumerable<MenuItem>
     /// <summary>Raised on the setting thread when <see cref="SetApplicationMenu"/> is called.</summary>
     internal static event Action<Menu?>? ApplicationMenuChanged;
 
-    /// <summary>Sets the default application menu unless the app has set one.</summary>
+    /// <summary>Sets the default application menu on macOS unless the app has set one.</summary>
     internal static void SetDefaultApplicationMenuIfUnset()
     {
-        lock (s_gate)
-        {
-            if (s_applicationMenuSet) return;
-        }
-        SetApplicationMenu(MenuRoles.DefaultApplicationMenu());
+        bool appSetOne;
+        lock (s_gate) appSetOne = s_applicationMenuSet;
+        if (NeedsDefaultApplicationMenu(OperatingSystem.IsMacOS(), appSetOne))
+            SetApplicationMenu(MenuRoles.DefaultApplicationMenu());
     }
+
+    /// <summary>Whether the default application menu goes in: only on macOS, where copy, paste and quit shortcuts
+    /// need one; on Windows and Linux it would be a File/Edit/View/Window bar on every window.</summary>
+    internal static bool NeedsDefaultApplicationMenu(bool isMacOS, bool appSetOne) => isMacOS && !appSetOne;
 }

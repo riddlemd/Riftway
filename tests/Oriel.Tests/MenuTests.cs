@@ -2,6 +2,22 @@ namespace Oriel.Tests;
 
 public sealed class MenuTests
 {
+    [Theory]
+    [InlineData(true, false, true)]
+    [InlineData(true, true, false)]
+    [InlineData(false, false, false)]
+    [InlineData(false, true, false)]
+    public void Given_AnOsAndWhetherTheAppSetAMenu_When_ReadyEnds_Then_OnlyMacOSWithoutOneGetsTheDefault(bool isMacOS, bool appSetOne, bool expected)
+    {
+        // Given: the OS and whether the app set its own menu in Ready (the parameters)
+
+        // When
+        var needed = Menu.NeedsDefaultApplicationMenu(isMacOS, appSetOne);
+
+        // Then
+        Assert.Equal(expected, needed);
+    }
+
     [Fact]
     public void Type_IsSubmenuWhenASubmenuIsSet()
     {

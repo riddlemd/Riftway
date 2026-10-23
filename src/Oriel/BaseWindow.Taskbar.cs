@@ -6,12 +6,20 @@ namespace Oriel;
 
 public unsafe partial class BaseWindow
 {
-    /// <summary>Sets the window and taskbar icon from a PNG or JPEG file (Windows, Linux). Electron's <c>win.setIcon()</c>.</summary>
+    /// <summary>Sets the window and taskbar icon from a PNG or JPEG file, or on Windows an <c>.ico</c> (Windows,
+    /// Linux). Electron's <c>win.setIcon()</c>.</summary>
     public void SetIcon(string path)
     {
         ArgumentNullException.ThrowIfNull(path);
-        SetIcon(NativeImage.CreateFromBuffer(File.ReadAllBytes(path)));
+        SetIcon(LoadIcon(path));
     }
+
+    /// <summary>The icon a window takes: the image if given, else the file, else none.</summary>
+    internal static NativeImage? ResolveIcon(NativeImage? image, string? path)
+        => image ?? (path is null ? null : LoadIcon(path));
+
+    // As a path Electron reads an icon through createFromPath, which takes .ico on Windows; createFromBuffer never does.
+    private static NativeImage LoadIcon(string path) => NativeImage.CreateFromPath(path);
 
     /// <summary>Sets the window and taskbar icon, every scale factor of it (Windows, Linux). Electron's <c>win.setIcon()</c>.</summary>
     public void SetIcon(NativeImage icon)

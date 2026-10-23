@@ -91,7 +91,8 @@ public partial record BaseWindowOptions
     /// <summary>Linux: asks GTK window managers for the dark variant of the window's frame. Electron's <c>darkTheme</c>.</summary>
     public bool DarkTheme { get; init; }
 
-    /// <summary>A PNG or JPEG for the window and taskbar icon (Windows, Linux). Electron's <c>icon</c> as a path.</summary>
+    /// <summary>A PNG or JPEG, or on Windows an <c>.ico</c>, for the window and taskbar icon (Windows, Linux); an
+    /// unreadable file gives none. Electron's <c>icon</c> as a path.</summary>
     public string? Icon { get; init; }
 
     /// <summary>The window and taskbar icon as an image; wins over <see cref="Icon"/>. Electron's <c>icon</c> as a
@@ -344,7 +345,7 @@ public unsafe partial class BaseWindow
         _parent = _options.Parent;
         if (OperatingSystem.IsMacOS())
             _macLink = new MacParentLink(MacChildWindows.Instance, () => _window is null ? 0 : (nint)_window->get_window_handle(_window), _options.Modal);
-        _icon = _options.IconImage ?? (_options.Icon is { } iconPath ? NativeImage.CreateFromBuffer(File.ReadAllBytes(iconPath)) : null);
+        _icon = ResolveIcon(_options.IconImage, _options.Icon);
 
         ClaimName();
         Id = Interlocked.Increment(ref s_nextId);

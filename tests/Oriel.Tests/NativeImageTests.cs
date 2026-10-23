@@ -303,6 +303,68 @@ public sealed class NativeImageTests
         => IcoDecoderTests.Ico((1, 1, 24, IcoDecoderTests.Dib(1, 1, 24, [IcoDecoderTests.Px(0, 0, 255)], [IcoDecoderTests.Px(0)])));
 
     [Fact]
+    public void Given_AnIcoPathOnWindows_When_AWindowResolvesItsIcon_Then_TheIconIsTheIcosPixels()
+    {
+        if (!OperatingSystem.IsWindows()) return;
+
+        // Given
+        var dir = Directory.CreateTempSubdirectory();
+        try
+        {
+            var path = Path.Combine(dir.FullName, "app.ico");
+            File.WriteAllBytes(path, OneRedPixelIco());
+
+            // When
+            var icon = BaseWindow.ResolveIcon(null, path);
+
+            // Then
+            Assert.NotNull(icon);
+            Assert.Equal((256, 256), icon.GetSize());
+            Assert.Equal(new byte[] { 0, 0, 255, 255 }, icon.ToBitmap()[..4]);
+        }
+        finally { dir.Delete(true); }
+    }
+
+    [Fact]
+    public void Given_AnImageAndAPath_When_AWindowResolvesItsIcon_Then_TheImageWins()
+    {
+        // Given
+        var image = Bitmap(2, 2);
+
+        // When
+        var icon = BaseWindow.ResolveIcon(image, Path.Combine(Path.GetTempPath(), "unused.ico"));
+
+        // Then
+        Assert.Same(image, icon);
+    }
+
+    [Fact]
+    public void Given_NoImageAndNoPath_When_AWindowResolvesItsIcon_Then_ItHasNone()
+    {
+        // Given: neither
+
+        // When
+        var icon = BaseWindow.ResolveIcon(null, null);
+
+        // Then
+        Assert.Null(icon);
+    }
+
+    [Fact]
+    public void Given_APathToNoFile_When_AWindowResolvesItsIcon_Then_TheIconIsEmptyRatherThanAThrow()
+    {
+        // Given
+        var path = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString("N") + ".ico");
+
+        // When
+        var icon = BaseWindow.ResolveIcon(null, path);
+
+        // Then
+        Assert.NotNull(icon);
+        Assert.True(icon.IsEmpty());
+    }
+
+    [Fact]
     public void CreateFromPath_IcoWhereIcoIsRead_GivesTheIconAsTheOnlyScaleOneRepresentation()
     {
         var dir = Directory.CreateTempSubdirectory();
