@@ -9,6 +9,15 @@ cef="$("$here/../../eng/fetch-cef.sh" $platform)"
 version="$(grep -oE 'Version = [0-9]+' "$here/../Oriel.Cef/Interop/CefApiVersion.cs" | grep -oE '[0-9]+')"
 
 mkdir -p "$(dirname "$out")"
+case "$platform" in
+  macosarm64|macosx64)
+    # macOS: the framework is opened at run time, after the sandbox (subprocess.c), so nothing is linked.
+    arch=arm64; [ "$platform" = macosx64 ] && arch=x86_64
+    ${CC:-clang} -std=c11 -O2 -Wall -Werror -arch "$arch" -mmacosx-version-min=12.0 \
+      -DCEF_API_VERSION="$version" -I"$cef" "$here/subprocess.c" -o "$out"
+    echo "$out"
+    exit 0 ;;
+esac
 # libcef sits beside the exe in the Linux layout, hence $ORIGIN.
 ${CC:-clang} -std=c11 -O2 -Wall -Werror \
   -DCEF_API_VERSION="$version" -I"$cef" \

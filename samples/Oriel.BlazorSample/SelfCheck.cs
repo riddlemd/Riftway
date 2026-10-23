@@ -73,6 +73,13 @@ internal static class SelfCheck
         var afterReload = await Poll(page, "document.querySelector('#count')?.textContent ?? ''", v => v == "3").ConfigureAwait(false);
         Check(afterReload == "3", $"after a reload clicks still reach the component (#count = '{afterReload}')");
 
+        if (OrielApp.Current.IsSandboxed)
+        {
+            var renderers = OrielApp.Current.GetAppMetrics().Where(m => m.Type == "Tab").ToList();
+            Check(renderers.Count > 0 && renderers.All(m => m.Sandboxed == true),
+                $"every renderer runs sandboxed ({string.Join(", ", renderers.Select(m => $"{m.Pid}:{m.Sandboxed}"))})");
+        }
+
         Console.WriteLine(failures == 0 ? "SELF-CHECK OK" : $"SELF-CHECK FAILED ({failures})");
         return failures == 0 ? 0 : 1;
     }

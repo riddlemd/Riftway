@@ -10,13 +10,17 @@
   </Target>
 
   <!-- In-repo apps reference Oriel by project, so its buildTransitive targets are imported here; with no
-       Oriel.Runtime package, the CEF framework comes from eng/fetch-cef.sh's cache and the helper from a publish
-       of Oriel.Subprocess. dotnet build|run|watch -p:OrielMacBundle=true runs an app as a bundle on a Mac. -->
+       Oriel.Runtime package, the CEF framework comes from eng/fetch-cef.sh's cache and the helper from
+       src/Oriel.Subprocess.Native/build.sh. dotnet build|run|watch -p:OrielMacBundle=true runs an app as a bundle on a Mac; dotnet publish -r osx-*
+       -p:OrielMacBundle=true lays the publish out as one. -->
   <Import Project="src/Oriel/buildTransitive/Oriel.targets" Condition="'$(OrielMacBundle)' == 'true' and '$(OutputType)' == 'Exe'" />
 
-  <Target Name="_OrielRepoMacInputs" BeforeTargets="OrielMacDevBundle" Condition="'$(OrielMacBundle)' == 'true' and '$(OrielCefFramework)' == ''">
+  <Target Name="_OrielRepoMacInputs" BeforeTargets="OrielMacDevBundle;OrielMacLayout" Condition="'$(OrielMacBundle)' == 'true' and '$(OrielCefFramework)' == ''">
     <PropertyGroup>
-      <_OrielRepoCefPlatform Condition="'$([System.Runtime.InteropServices.RuntimeInformation]::OSArchitecture)' == 'Arm64'">macosarm64</_OrielRepoCefPlatform>
+      <!-- A publish's RID picks the CEF build; a dev build runs on this Mac. -->
+      <_OrielRepoCefPlatform Condition="'$(RuntimeIdentifier)' == 'osx-arm64'">macosarm64</_OrielRepoCefPlatform>
+      <_OrielRepoCefPlatform Condition="'$(RuntimeIdentifier)' == 'osx-x64'">macosx64</_OrielRepoCefPlatform>
+      <_OrielRepoCefPlatform Condition="'$(_OrielRepoCefPlatform)' == '' and '$([System.Runtime.InteropServices.RuntimeInformation]::OSArchitecture)' == 'Arm64'">macosarm64</_OrielRepoCefPlatform>
       <_OrielRepoCefPlatform Condition="'$(_OrielRepoCefPlatform)' == ''">macosx64</_OrielRepoCefPlatform>
       <_OrielRepoRid Condition="'$(_OrielRepoCefPlatform)' == 'macosarm64'">osx-arm64</_OrielRepoRid>
       <_OrielRepoRid Condition="'$(_OrielRepoRid)' == ''">osx-x64</_OrielRepoRid>
@@ -25,9 +29,9 @@
     <Exec Command="&quot;$(MSBuildThisFileDirectory)eng/fetch-cef.sh&quot; $(_OrielRepoCefPlatform)" ConsoleToMSBuild="true" StandardOutputImportance="low">
       <Output TaskParameter="ConsoleOutput" PropertyName="_OrielRepoCef" />
     </Exec>
-    <!-- NativeAOT; published once and reused. -->
-    <Exec Condition="!Exists('$(_OrielRepoHelperDir)Oriel.Subprocess')"
-          Command="dotnet publish &quot;$(MSBuildThisFileDirectory)src/Oriel.Subprocess&quot; -r $(_OrielRepoRid) -c Release -o &quot;$(_OrielRepoHelperDir)&quot; -nologo -v q" />
+    <!-- The native helper (sandbox-capable); rebuilt when its source changes. -->
+    <Exec Condition="!Exists('$(_OrielRepoHelperDir)Oriel.Subprocess') or $([System.IO.File]::GetLastWriteTime('$(MSBuildThisFileDirectory)src/Oriel.Subprocess.Native/subprocess.c').Ticks) &gt; $([System.IO.File]::GetLastWriteTime('$(_OrielRepoHelperDir)Oriel.Subprocess').Ticks)"
+          Command="&quot;$(MSBuildThisFileDirectory)src/Oriel.Subprocess.Native/build.sh&quot; &quot;$(_OrielRepoHelperDir)Oriel.Subprocess&quot; $(_OrielRepoCefPlatform)" StandardOutputImportance="low" />
     <PropertyGroup>
       <OrielCefFramework>$(_OrielRepoCef)/Release/Chromium Embedded Framework.framework</OrielCefFramework>
       <OrielMacHelper>$(_OrielRepoHelperDir)Oriel.Subprocess</OrielMacHelper>

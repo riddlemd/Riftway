@@ -20,6 +20,72 @@
 #include "include/capi/cef_crash_util_capi.h"
 #include "include/cef_api_hash.h"
 
+#ifdef __APPLE__
+// macOS: Chromium's sandbox must be entered before the framework loads, so the framework is not linked: it is opened
+// after cef_sandbox_initialize, and every CEF function this file calls goes through a pointer resolved from it.
+#include <dlfcn.h>
+#include <limits.h>
+#include <mach-o/dyld.h>
+
+#define ORIEL_CEF_FUNCTIONS(X) \
+  X(cef_api_hash) X(cef_execute_process) X(cef_string_utf8_to_utf16) X(cef_string_utf16_to_utf8) \
+  X(cef_string_utf16_clear) X(cef_string_utf8_clear) X(cef_string_userfree_utf16_free) \
+  X(cef_set_crash_key_value) X(cef_command_line_get_global)
+#define ORIEL_DECLARE(name) static __typeof__(&name) p_##name;
+ORIEL_CEF_FUNCTIONS(ORIEL_DECLARE)
+#define cef_api_hash p_cef_api_hash
+#define cef_execute_process p_cef_execute_process
+#define cef_string_utf8_to_utf16 p_cef_string_utf8_to_utf16
+#define cef_string_utf16_to_utf8 p_cef_string_utf16_to_utf8
+#define cef_string_utf16_clear p_cef_string_utf16_clear
+#define cef_string_utf8_clear p_cef_string_utf8_clear
+#define cef_string_userfree_utf16_free p_cef_string_userfree_utf16_free
+#define cef_set_crash_key_value p_cef_set_crash_key_value
+#define cef_command_line_get_global p_cef_command_line_get_global
+
+static void* g_sandbox;
+
+// The helper is <App>.app/Contents/Frameworks/<App> Helper (<type>).app/Contents/MacOS/<exe>; the framework sits
+// beside the helper apps. Returns 0 when the sandbox or the framework cannot be loaded.
+static int mac_load(int argc, char* argv[]) {
+  char exe[PATH_MAX], real[PATH_MAX], path[PATH_MAX];
+  uint32_t size = sizeof exe;
+  if (_NSGetExecutablePath(exe, &size) != 0 || !realpath(exe, real)) return 0;
+  char* slash = strrchr(real, '/');
+  if (!slash) return 0;
+  *slash = '\0';
+  const char* framework = "../../../Chromium Embedded Framework.framework";
+
+  // CEF's helper does the same: the sandbox library decides from the switches whether this process is sandboxed.
+  snprintf(path, sizeof path, "%s/%s/Libraries/libcef_sandbox.dylib", real, framework);
+  void* sandbox = dlopen(path, RTLD_LAZY | RTLD_LOCAL);
+  void* (*initialize)(int, char**) = sandbox ? (void* (*)(int, char**))dlsym(sandbox, "cef_sandbox_initialize") : NULL;
+  if (!initialize) {
+    fprintf(stderr, "Oriel.Subprocess: cannot load %s: %s\n", path, dlerror());
+    return 0;
+  }
+  g_sandbox = initialize(argc, argv);
+  if (!g_sandbox) {
+    fprintf(stderr, "Oriel.Subprocess: cef_sandbox_initialize failed\n");
+    return 0;
+  }
+
+  snprintf(path, sizeof path, "%s/%s/Chromium Embedded Framework", real, framework);
+  void* cef = dlopen(path, RTLD_LAZY | RTLD_LOCAL);
+  if (!cef) {
+    fprintf(stderr, "Oriel.Subprocess: cannot load %s: %s\n", path, dlerror());
+    return 0;
+  }
+#define ORIEL_RESOLVE(name) \
+  if (!(p_##name = (__typeof__(p_##name))dlsym(cef, #name))) { \
+    fprintf(stderr, "Oriel.Subprocess: %s missing from the framework\n", #name); \
+    return 0; \
+  }
+  ORIEL_CEF_FUNCTIONS(ORIEL_RESOLVE)
+  return 1;
+}
+#endif
+
 #if defined(__linux__) && defined(__aarch64__)
 #define HWCAP_SVE_BIT (1UL << 22)
 #define HWCAP2_SME_ALL ((1UL << 23) | (0x7fUL << 24) | (0x3fUL << 37))
@@ -230,6 +296,9 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE prev, PWSTR command_line, int 
 }
 #else
 int main(int argc, char* argv[]) {
+#ifdef __APPLE__
+  if (!mac_load(argc, argv)) return 1;
+#endif
   if (!check_api_hash()) return 1;
 
   const char* schemes = NULL;
@@ -239,7 +308,12 @@ int main(int argc, char* argv[]) {
   }
 
   cef_main_args_t args = {argc, argv};
-  return cef_execute_process(&args, app_for(schemes), NULL);
+  int code = cef_execute_process(&args, app_for(schemes), NULL);
+#ifdef __APPLE__
+  void (*destroy)(void*) = (void (*)(void*))dlsym(RTLD_DEFAULT, "cef_sandbox_destroy");
+  if (destroy) destroy(g_sandbox);
+#endif
+  return code;
 }
 #endif
 #endif  // ORIEL_SUBPROCESS_NO_MAIN

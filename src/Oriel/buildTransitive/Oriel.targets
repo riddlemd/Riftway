@@ -51,7 +51,8 @@
     <OrielMacBundleId Condition="'$(OrielMacBundleId)' == ''">dev.oriel.$(AssemblyName.ToLowerInvariant())</OrielMacBundleId>
     <OrielMacBundleVersion Condition="'$(OrielMacBundleVersion)' == ''">$(Version)</OrielMacBundleVersion>
     <OrielMacBundleVersion Condition="'$(OrielMacBundleVersion)' == ''">1.0.0</OrielMacBundleVersion>
-    <_OrielMacDevBundle Condition="'$(OrielMacBundle)' == 'true' and $([MSBuild]::IsOSPlatform('OSX'))">true</_OrielMacDevBundle>
+    <!-- On by default with Oriel.Runtime.osx-*, whose props set OrielCefFramework: on a Mac nothing else runs. -->
+    <_OrielMacDevBundle Condition="$([MSBuild]::IsOSPlatform('OSX')) and ('$(OrielMacBundle)' == 'true' or ('$(OrielMacBundle)' != 'false' and '$(OrielCefFramework)' != ''))">true</_OrielMacDevBundle>
   </PropertyGroup>
 
   <PropertyGroup Condition="'$(_OrielMacDevBundle)' == 'true'">
@@ -60,9 +61,10 @@
     <RunWorkingDirectory>$(_OrielMacDevApp)/Contents/MacOS</RunWorkingDirectory>
   </PropertyGroup>
 
-  <Target Name="OrielMacDevBundle" AfterTargets="Build" Condition="'$(_OrielMacDevBundle)' == 'true' and '$(OutputType)' != 'Library'">
+  <!-- Not on a publish: OrielMacLayout lays the publish out instead. -->
+  <Target Name="OrielMacDevBundle" AfterTargets="Build" Condition="'$(_OrielMacDevBundle)' == 'true' and '$(OutputType)' != 'Library' and '$(_IsPublishing)' != 'true'">
     <MSBuild Projects="$(MSBuildProjectFullPath)" Targets="_OrielMacBundle"
-             Properties="_OrielMacFiles=$([MSBuild]::NormalizeDirectory('$(MSBuildProjectDirectory)', '$(OutDir)'));_OrielMacApp=$(_OrielMacDevApp);_OrielMacExclude=$(OrielMacBundleName).app;OrielCefFramework=$(OrielCefFramework);OrielMacHelper=$(OrielMacHelper)" />
+             Properties="_OrielMacFiles=$([MSBuild]::NormalizeDirectory('$(MSBuildProjectDirectory)', '$(OutDir)'));_OrielMacApp=$(_OrielMacDevApp);_OrielMacExclude=$(OrielMacBundleName).app;OrielCefFramework=$(OrielCefFramework);OrielMacHelper=$(OrielMacHelper);OrielMacSignIdentity=$(OrielMacSignIdentity);OrielMacNotaryProfile=$(OrielMacNotaryProfile);_IsPublishing=$(_IsPublishing)" />
   </Target>
 
   <Target Name="OrielMacLayout" AfterTargets="Publish"
@@ -71,8 +73,17 @@
       <_OrielPublish>$([MSBuild]::NormalizeDirectory('$(MSBuildProjectDirectory)', '$(PublishDir)'))</_OrielPublish>
     </PropertyGroup>
     <MSBuild Projects="$(MSBuildProjectFullPath)" Targets="_OrielMacBundle"
-             Properties="_OrielMacFiles=$(_OrielPublish);_OrielMacApp=$(_OrielPublish)$(OrielMacBundleName).app;_OrielMacExclude=$(OrielMacBundleName).app;OrielCefFramework=$(OrielCefFramework);OrielMacHelper=$(OrielMacHelper)" />
+             Properties="_OrielMacFiles=$(_OrielPublish);_OrielMacApp=$(_OrielPublish)$(OrielMacBundleName).app;_OrielMacExclude=$(OrielMacBundleName).app;OrielCefFramework=$(OrielCefFramework);OrielMacHelper=$(OrielMacHelper);OrielMacSignIdentity=$(OrielMacSignIdentity);OrielMacNotaryProfile=$(OrielMacNotaryProfile);_IsPublishing=$(_IsPublishing)" />
   </Target>
+
+  <!-- One helper app per Chromium process type; static, so _OrielMacSign (a CallTarget) sees them too. -->
+  <ItemGroup>
+    <_OrielMacHelperSuffix Include="main" Suffix="" Id="" />
+    <_OrielMacHelperSuffix Include="alerts" Suffix=" (Alerts)" Id=".alerts" />
+    <_OrielMacHelperSuffix Include="gpu" Suffix=" (GPU)" Id=".gpu" />
+    <_OrielMacHelperSuffix Include="plugin" Suffix=" (Plugin)" Id=".plugin" />
+    <_OrielMacHelperSuffix Include="renderer" Suffix=" (Renderer)" Id=".renderer" />
+  </ItemGroup>
 
   <Target Name="_OrielMacBundle">
     <Error Condition="'$(OrielCefFramework)' == '' or !Exists('$(OrielCefFramework)/Chromium Embedded Framework')"
@@ -94,13 +105,6 @@
       <_OrielPlistTail>&lt;/dict&gt;
 &lt;/plist&gt;</_OrielPlistTail>
     </PropertyGroup>
-    <ItemGroup>
-      <_OrielMacHelperSuffix Include="main" Suffix="" Id="" />
-      <_OrielMacHelperSuffix Include="alerts" Suffix=" (Alerts)" Id=".alerts" />
-      <_OrielMacHelperSuffix Include="gpu" Suffix=" (GPU)" Id=".gpu" />
-      <_OrielMacHelperSuffix Include="plugin" Suffix=" (Plugin)" Id=".plugin" />
-      <_OrielMacHelperSuffix Include="renderer" Suffix=" (Renderer)" Id=".renderer" />
-    </ItemGroup>
 
     <!-- rsync, not Copy: a publish has thousands of files, and the framework is cloned (cp -c) instead of copied. -->
     <MakeDir Directories="$(_OrielMacApp)/Contents/MacOS;$(_OrielMacApp)/Contents/Frameworks;$(_OrielMacApp)/Contents/Resources" />
@@ -116,6 +120,44 @@
     <WriteLinesToFile File="$(_OrielMacApp)/Contents/Frameworks/$(OrielMacBundleName) Helper%(_OrielMacHelperSuffix.Suffix).app/Contents/Info.plist" Overwrite="true" WriteOnlyWhenDifferent="true"
                       Lines="$(_OrielPlistHead);  &lt;key&gt;CFBundleExecutable&lt;/key&gt;&lt;string&gt;$(OrielMacBundleName) Helper%(_OrielMacHelperSuffix.Suffix)&lt;/string&gt;;  &lt;key&gt;CFBundleIdentifier&lt;/key&gt;&lt;string&gt;$(OrielMacBundleId).helper%(_OrielMacHelperSuffix.Id)&lt;/string&gt;;  &lt;key&gt;CFBundleName&lt;/key&gt;&lt;string&gt;$(OrielMacBundleName) Helper%(_OrielMacHelperSuffix.Suffix)&lt;/string&gt;;  &lt;key&gt;LSUIElement&lt;/key&gt;&lt;string&gt;1&lt;/string&gt;;  &lt;key&gt;LSEnvironment&lt;/key&gt;&lt;dict&gt;&lt;key&gt;MallocNanoZone&lt;/key&gt;&lt;string&gt;0&lt;/string&gt;&lt;/dict&gt;;$(_OrielPlistTail)" />
     <Message Importance="high" Text="$(MSBuildProjectName) -> $(_OrielMacApp)" />
+    <CallTarget Targets="_OrielMacSign" Condition="'$(OrielMacSignIdentity)' != ''" />
+  </Target>
+
+  <!-- OrielMacSignIdentity: a "Developer ID Application: ..." identity, or "-" to sign ad hoc (runs on this Mac only).
+       Signs inside out with the hardened runtime, as notarisation needs: every Mach-O in Contents/MacOS (the .NET
+       host and runtime), the framework's libraries and the framework, each helper app, then the app.
+       OrielMacEntitlements and OrielMacHelperEntitlements replace the default entitlements. -->
+  <Target Name="_OrielMacSign">
+    <PropertyGroup>
+      <OrielMacEntitlements Condition="'$(OrielMacEntitlements)' == ''">$(MSBuildThisFileDirectory)Oriel.mac.entitlements</OrielMacEntitlements>
+      <OrielMacHelperEntitlements Condition="'$(OrielMacHelperEntitlements)' == ''">$(MSBuildThisFileDirectory)Oriel.mac.helper.entitlements</OrielMacHelperEntitlements>
+      <_OrielSign>codesign --force --timestamp --options runtime --sign &quot;$(OrielMacSignIdentity)&quot;</_OrielSign>
+      <_OrielSign Condition="'$(OrielMacSignIdentity)' == '-'">codesign --force --options runtime --sign -</_OrielSign>
+      <_OrielFw>$(_OrielMacApp)/Contents/Frameworks/Chromium Embedded Framework.framework</_OrielFw>
+    </PropertyGroup>
+    <!-- codesign seals everything in Contents/MacOS as code, managed assemblies and JSON too (their signatures go in
+         extended attributes, which a DMG or ditto keeps). The app's own executable is signed with the bundle. -->
+    <Exec Command="cd &quot;$(_OrielMacApp)/Contents/MacOS&quot; &amp;&amp; find . -type f ! -path ./$(AssemblyName) -print0 | xargs -0 -n 200 $(_OrielSign)" />
+    <Exec Command="for f in &quot;$(_OrielFw)/Libraries/&quot;*.dylib; do $(_OrielSign) &quot;$f&quot; || exit 1; done" />
+    <Exec Command="$(_OrielSign) &quot;$(_OrielFw)&quot;" />
+    <Exec Command="$(_OrielSign) --entitlements &quot;$(OrielMacHelperEntitlements)&quot; &quot;$(_OrielMacApp)/Contents/Frameworks/$(OrielMacBundleName) Helper%(_OrielMacHelperSuffix.Suffix).app&quot;" />
+    <Exec Command="$(_OrielSign) --entitlements &quot;$(OrielMacEntitlements)&quot; &quot;$(_OrielMacApp)&quot;" />
+    <Exec Command="codesign --verify --strict --deep &quot;$(_OrielMacApp)&quot;" />
+    <Message Importance="high" Text="$(MSBuildProjectName) -> $(_OrielMacApp) (signed: $(OrielMacSignIdentity))" />
+    <CallTarget Targets="_OrielMacNotarize" Condition="'$(OrielMacNotaryProfile)' != '' and '$(_IsPublishing)' == 'true'" />
+  </Target>
+
+  <!-- OrielMacNotaryProfile: a notarytool keychain profile (xcrun notarytool store-credentials <profile> ...). After a
+       Developer ID signature, a publish sends the app to Apple's notary service, waits, and staples the ticket. -->
+  <Target Name="_OrielMacNotarize">
+    <Error Condition="'$(OrielMacSignIdentity)' == '-'" Text="Notarisation needs a Developer ID signature, not an ad-hoc one." />
+    <PropertyGroup>
+      <_OrielNotaryZip>$(IntermediateOutputPath)$(OrielMacBundleName)-notarize.zip</_OrielNotaryZip>
+    </PropertyGroup>
+    <Exec Command="ditto -c -k --keepParent &quot;$(_OrielMacApp)&quot; &quot;$(_OrielNotaryZip)&quot;" />
+    <Exec Command="xcrun notarytool submit &quot;$(_OrielNotaryZip)&quot; --keychain-profile &quot;$(OrielMacNotaryProfile)&quot; --wait" />
+    <Exec Command="xcrun stapler staple &quot;$(_OrielMacApp)&quot;" />
+    <Delete Files="$(_OrielNotaryZip)" />
   </Target>
 
   <UsingTask TaskName="OrielCopyExeResources" TaskFactory="RoslynCodeTaskFactory" AssemblyFile="$(MSBuildToolsPath)\Microsoft.Build.Tasks.Core.dll">

@@ -4,6 +4,8 @@ using Oriel.Blazor;
 using Oriel.BlazorSample;
 
 var app = OrielApp.Create();
+// Electron's command-line switch of the same name.
+if (args.Contains("--enable-sandbox")) app.EnableSandbox();
 
 var services = new ServiceCollection();
 services.AddOrielBlazor();

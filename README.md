@@ -23,7 +23,7 @@ Oriel runs on stock CEF: open codecs (AV1, VP9, Opus, …), no H.264 or AAC. A d
 ## Try it (macOS)
 
 ```sh
-dotnet publish src/Oriel.Subprocess -r osx-arm64 -c Release -o artifacts/subprocess
+src/Oriel.Subprocess.Native/build.sh artifacts/subprocess/Oriel.Subprocess macosarm64   # sandbox-capable helper
 dotnet publish samples/Oriel.Sample -r osx-arm64 -c Release --self-contained -o artifacts/sample
 eng/bundle-macos.sh artifacts/sample Oriel.Sample artifacts/subprocess/Oriel.Subprocess artifacts
 open artifacts/Oriel.Sample.app
@@ -103,7 +103,7 @@ Renderers run in Chromium's sandbox, as in Electron. Only CEF's `bootstrap.exe` 
 
 For Windows on Arm, pass `windowsarm64` to the build and layout scripts and publish with `-r win-arm64`; it cross-builds from x64 too, with the "MSVC ARM64 build tools" component installed. Not yet run on Arm hardware.
 
-## Build an app from packages (Windows, Linux)
+## Build an app from packages
 
 Outside this repo an app references `Oriel` and one `Oriel.Runtime.<rid>` per RID it ships. The runtime package carries CEF and Oriel's native host, and `Oriel`'s build targets lay out the publish folder, with no Git Bash, MSVC or scripts:
 
@@ -128,6 +128,33 @@ dotnet pack eng/runtime/Oriel.Runtime.csproj -c Release -p:OrielRuntimeRid=win-x
 
 For linux-x64, stage with `eng/runtime/stage-linux.sh artifacts/runtime/linux-x64` in the `oriel-linux-dev` image (it strips libcef.so, over 1 GB with symbols) and pack the same way; the package is 154 MB, win-x64's 184 MB.
 
+### macOS
+
+Reference `Oriel.Runtime.osx-arm64` and/or `osx-x64`; each carries CEF's framework and the helper executable, and
+Oriel's targets put them into an app bundle. With both referenced, a publish takes the one for its `-r`, and a build
+takes the one for the Mac it runs on. On a Mac, `dotnet build`, `dotnet run` and `dotnet watch` then run the app as
+`bin/<config>/<tfm>/<App>.app` with no extra flags (`-p:OrielMacBundle=false` turns that off), and
+`dotnet publish -r osx-arm64 --self-contained` lays out `<publish-dir>/<App>.app`:
+
+```sh
+dotnet publish -c Release -r osx-arm64 --self-contained \
+  -p:OrielMacSignIdentity="Developer ID Application: Name (TEAMID)" \
+  -p:OrielMacNotaryProfile=<notarytool-profile>      # optional: notarise and staple
+```
+
+`OrielMacSignIdentity` signs inside out with the hardened runtime (`-` signs ad hoc, for this Mac only);
+`OrielMacEntitlements` and `OrielMacHelperEntitlements` replace the default entitlements (JIT and unsigned executable
+memory for .NET and V8, library validation off). `OrielMacBundleName`, `OrielMacBundleId` and `OrielMacBundleVersion`
+fill `Info.plist`. A Developer ID-signed app keeps Chromium's cookie key in the real Keychain; unsigned and ad-hoc
+builds use Chromium's mock keychain, as their identity changes every build. Stage and pack the runtime on a Mac:
+
+```sh
+eng/runtime/stage-macos.sh artifacts/runtime/osx-arm64 osx-arm64
+dotnet pack eng/runtime/Oriel.Runtime.csproj -c Release -p:OrielRuntimeRid=osx-arm64 -p:OrielRuntimeStage=$PWD/artifacts/runtime/osx-arm64 -o artifacts/pkg
+```
+
+In this repo, `-p:OrielMacBundle=true` does the same for the samples without the package (CEF from `eng/fetch-cef.sh`).
+
 ### Installers and updates
 
 [Velopack](https://velopack.io)'s `vpk` (a dotnet tool, the same version as the `Velopack` package `Oriel.AutoUpdater` uses) packs the published folder:
@@ -135,6 +162,17 @@ For linux-x64, stage with `eng/runtime/stage-linux.sh artifacts/runtime/linux-x6
 ```powershell
 vpk pack --packId MyApp --packVersion 1.0.0 --packDir <publish-dir> --mainExe MyAppRun.exe --skipVeloAppCheck   # Windows: Setup.exe
 vpk pack --packId MyApp --packVersion 1.0.0 --packDir <publish-dir> --mainExe MyApp                              # Linux: an AppImage (needs mksquashfs)
+```
+
+On macOS `--packDir` is the app bundle, and vpk makes a `.pkg` installer and a portable zip. vpk adds its updater to
+the bundle, which breaks a signature made before it, so give vpk the identity too; it re-signs the bundle with
+`--deep`, which keeps the helpers' entitlements and needs the per-file signatures `OrielMacSignIdentity` already made:
+
+```sh
+dotnet publish -c Release -r osx-arm64 --self-contained -p:OrielMacSignIdentity="Developer ID Application: ..."
+vpk pack --packId MyApp --packVersion 1.0.0 --packDir <publish-dir>/MyApp.app --mainExe MyApp \
+  --signAppIdentity "Developer ID Application: ..." --signEntitlements <Oriel package>/buildTransitive/Oriel.mac.entitlements \
+  --notaryProfile <profile>
 ```
 
 `--skipVeloAppCheck`: on Windows the main exe is CEF's native bootstrap, which vpk cannot inspect for a `VelopackApp` call. The installer runs that exe with hook arguments (`--veloapp-install` and others), which reach `Main` like any others; call `AutoUpdater.HandleInstallerHooks()` first in `Main`, before `OrielApp.Create()`, so those runs exit before a window opens. `AutoUpdater.Default` then checks a feed and installs an update, as Electron's `autoUpdater`. An AppImage mounts `nosuid`, so `chrome-sandbox` cannot be setuid in one: leave the sandbox off (Oriel's Linux default) or rely on unprivileged user namespaces.

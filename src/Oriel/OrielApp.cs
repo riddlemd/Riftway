@@ -190,8 +190,8 @@ public sealed unsafe partial class OrielApp
 
     /// <summary>Turns on Chromium's sandbox for every child process, renderers included. Electron's <c>app.enableSandbox()</c>.</summary>
     /// <remarks>Call before <see cref="Run"/>. In the Windows bootstrap layout (eng/layout-windows.ps1) every child is
-    /// already sandboxed; only a session can opt out (<see cref="SessionOptions.Sandbox"/>, drift W13). Elsewhere on Windows and on macOS <see cref="Run"/>
-    /// throws: only the bootstrap exe holds Chromium's sandbox broker, and the macOS helper lacks the sandbox library.</remarks>
+    /// already sandboxed; only a session can opt out (<see cref="SessionOptions.Sandbox"/>, drift W13). Elsewhere on Windows <see cref="Run"/>
+    /// throws: only the bootstrap exe holds Chromium's sandbox broker. On macOS the helper must be the native one.</remarks>
     /// <exception cref="InvalidOperationException">The application is already running.</exception>
     public void EnableSandbox()
     {
@@ -221,7 +221,8 @@ public sealed unsafe partial class OrielApp
     {
         void* sandboxInfo = null;
         var bootstrap = OperatingSystem.IsWindows() && BootstrapHost.TryGetSandboxInfo(out sandboxInfo);
-        IsSandboxed = SandboxChildren(_sandboxRequested, sandboxInfo is not null, OperatingSystem.IsLinux(), Environment.GetCommandLineArgs());
+        // macOS: the native helper (Oriel.Subprocess.Native) enters the sandbox; the NativeAOT one cannot.
+        IsSandboxed = SandboxChildren(_sandboxRequested, sandboxInfo is not null, OperatingSystem.IsLinux() || OperatingSystem.IsMacOS(), Environment.GetCommandLineArgs());
 
         CefRuntime.Load(CefLayout.MainProcessLibrary());
         if (OperatingSystem.IsMacOS())
@@ -368,10 +369,11 @@ public sealed unsafe partial class OrielApp
 
     private static void OnBeforeCommandLineProcessing(string processType, cef_command_line_t* commandLine)
     {
-        // Chromium keeps its cookie-encryption key in the Keychain, whose access follows the code
-        // signature; ad-hoc dev builds change it every build and macOS prompts for a password.
-        // TODO(M4): use the real Keychain for signed builds, as Electron's safeStorage does.
-        if (OperatingSystem.IsMacOS() && processType.Length == 0) AppendSwitch(commandLine, "use-mock-keychain");
+        // Chromium keeps its cookie-encryption key in the Keychain, whose access follows the code signature; an unsigned
+        // or ad-hoc build changes identity every build and macOS would prompt for a password. A team-signed app uses the
+        // real Keychain, as Electron does.
+        if (OperatingSystem.IsMacOS() && processType.Length == 0 && Oriel.Cef.Platform.MacCodeSignature.TeamIdentifier() is null)
+            AppendSwitch(commandLine, "use-mock-keychain");
         // Chrome style otherwise hands page auth challenges to Chrome's own login prompt and never calls
         // get_auth_credentials, so the login event would not fire.
         if (processType.Length == 0) AppendSwitch(commandLine, "disable-chrome-login-prompt");

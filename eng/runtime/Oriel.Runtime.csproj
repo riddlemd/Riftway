@@ -22,11 +22,15 @@
     <!-- NuGet flattens native subfolders; the targets file copies these into locales/. -->
     <None Include="$(OrielRuntimeStage)/native/locales/*.pak" Pack="true" PackagePath="locales/" />
     <None Include="Oriel.Runtime.targets" Pack="true" PackagePath="buildTransitive/$(PackageId).targets" />
+    <!-- macOS: the framework and the helper go into the app bundle, not beside the app, so they stay out of runtimes/. -->
+    <None Include="$(OrielRuntimeStage)/framework/**" Pack="true" PackagePath="framework/" />
+    <None Include="$(OrielRuntimeStage)/helper/*" Pack="true" PackagePath="helper/" />
+    <None Include="Oriel.Runtime.props" Pack="true" PackagePath="buildTransitive/$(PackageId).props" Condition="Exists('$(OrielRuntimeStage)/framework')" />
     <None Include="$(OrielRuntimeStage)/LICENSE.txt" Pack="true" PackagePath="" />
   </ItemGroup>
 
   <Target Name="_OrielCheckRuntimeStage" BeforeTargets="GenerateNuspec">
     <Error Condition="'$(OrielRuntimeRid)' == ''" Text="Set OrielRuntimeRid (for example linux-x64)." />
-    <Error Condition="!Exists('$(OrielRuntimeStage)/native')" Text="OrielRuntimeStage '$(OrielRuntimeStage)' has no native folder: run an eng/runtime/stage-* script first." />
+    <Error Condition="!Exists('$(OrielRuntimeStage)/native') and !Exists('$(OrielRuntimeStage)/framework')" Text="OrielRuntimeStage '$(OrielRuntimeStage)' has no native or framework folder: run an eng/runtime/stage-* script first." />
   </Target>
 </Project>

@@ -123,10 +123,15 @@ Cross-platform work. Platform-specific items: [linux-todo.md](linux-todo.md), [w
       with `locales/` and exec bits, opens a window and runs a page under Xvfb unsandboxed and with a setuid
       chrome-sandbox, and `vpk pack` makes an AppImage that runs the same way; an AppImage at 1.0.0 updates itself to
       2.0.0 from a local feed through `AutoUpdater` (checking, available, downloaded 2.0.0, before-quit, Velopack applies
-      after the exit and restarts 2.0.0) (Docker, 2026-10-20, Wojtek). Open: a real Windows install, update and launch
-      on a desktop; signing; fuses and the
-      packed app archive; the Linux sandbox story for AppImages (user namespaces or documented off); macOS (bundle,
-      sign, notarise: Ise)
+      after the exit and restarts 2.0.0) (Docker, 2026-10-20, Wojtek). macOS (branch `blazor-hybrid`, 2026-10-22): `eng/runtime/stage-macos.sh` + `Oriel.Runtime.osx-arm64` (143 MB: the
+      framework and the helper); `Oriel.targets` lays out `<App>.app` on build (dev, `dotnet run`/`watch`) and on an osx
+      publish, and signs it (`OrielMacSignIdentity`); an app outside the repo built from the local feed runs and
+      publishes with no flags, BlazorSample self-check 10/10 both ways; renderers sandboxed with `EnableSandbox()` (native helper, [mac-todo.md](mac-todo.md)); `Oriel.Runtime.osx-x64` (149 MB) too: one app
+      referencing both builds for the host and publishes `-r osx-x64`, which passes sandboxed under Rosetta; `vpk pack` of the bundle, installed from its
+      portable zip at 1.0.0, updates itself to 2.0.0 through `AutoUpdater` and restarts as 2.0.0, and vpk's ad-hoc
+      `--deep` re-sign after Oriel's verifies and runs. Open: a real Windows install, update and launch
+      on a desktop; Windows signing; notarisation with a Developer ID (Oriel's target and vpk's); fuses and the
+      packed app archive; the Linux sandbox story for AppImages (user namespaces or documented off)
 - [ ] M3 Blazor Hybrid (branch `blazor-hybrid`): `Oriel.Blazor` (`AddOrielBlazor`, `LoadBlazor<T>`, `app://localhost/`,
       `window.external` over IPC), `samples/Oriel.BlazorSample` (`--self-check`: render, events, JS interop both ways, a
       second window on shared services, close disposes components, reload) 10/10 on macOS arm64 and linux-arm64 (Docker, test-linux.sh with `ORIEL_EXTRA_ARGS=--self-check`) (2026-10-22);
