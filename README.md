@@ -127,8 +127,10 @@ The packages are not published to a feed yet. Build them into a local folder fee
 ```powershell
 eng/pack.ps1                                            # Oriel, Oriel.Cef
 eng/runtime/stage-windows.ps1 artifacts/runtime/win-x64 # needs MSVC, as above
-dotnet pack eng/runtime/Oriel.Runtime.csproj -c Release -p:OrielRuntimeRid=win-x64 -p:OrielRuntimeStage=artifacts/runtime/win-x64 -o artifacts/pkg
+dotnet pack eng/runtime/Oriel.Runtime.csproj -c Release -p:OrielRuntimeRid=win-x64 -p:OrielRuntimeStage=$PWD/artifacts/runtime/win-x64 -o artifacts/pkg
 ```
+
+`OrielRuntimeStage` must be absolute: a relative path resolves against `eng/runtime/`. A `dotnet build` or `dotnet run` with no RID on the machine a runtime package is for puts its CEF beside the app too, as a RID build does.
 
 For linux-x64, stage with `eng/runtime/stage-linux.sh artifacts/runtime/linux-x64` in the `oriel-linux-dev` image (it strips libcef.so, over 1 GB with symbols) and pack the same way; the package is 154 MB, win-x64's 184 MB.
 
