@@ -108,7 +108,8 @@ public sealed partial class OrielApp
         var diskImageDevice = ops.ContainingDiskImageDevice(bundlePath);
         var applicationsDirectory = ops.LocalApplicationsDirectory();
         var bundleName = Path.GetFileName(bundlePath);
-        var destinationPath = Path.Combine(applicationsDirectory, bundleName);
+        // macOS paths: Path.Combine would join with a backslash when the flow runs (as in tests) on Windows.
+        var destinationPath = applicationsDirectory.TrimEnd('/') + "/" + bundleName;
         var needAuthorization = !ops.IsWritable(applicationsDirectory) || (ops.Exists(destinationPath) && !ops.IsWritable(destinationPath));
 
         // Works around focus trouble with the "downloaded from the internet" dialog.
@@ -134,7 +135,7 @@ public sealed partial class OrielApp
                     return true;
                 }
                 if (conflictHandler?.Invoke(BundleMoverConflictType.Exists) == false) return false;
-                if (!ops.Trash(Path.Combine(applicationsDirectory, bundleName))) throw new InvalidOperationException("Failed to delete existing application");
+                if (!ops.Trash(destinationPath)) throw new InvalidOperationException("Failed to delete existing application");
             }
             if (!ops.Copy(bundlePath, destinationPath)) throw new InvalidOperationException("Failed to copy current bundle to the applications folder");
         }
