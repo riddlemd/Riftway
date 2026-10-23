@@ -54,6 +54,10 @@ The app project uses `Microsoft.NET.Sdk.Razor`; its `wwwroot/index.html` loads `
 window shares the app's services. `samples/Oriel.BlazorSample` has two windows on one counter and JS interop both ways;
 `--self-check` drives it and exits non-zero on a failure.
 
+`BlazorWebViewOptions` takes more root components (e.g. `HeadOutlet` at `head::after`) and a `RequestHandler`, asked
+first for every request to `app://localhost/` (MAUI's `WebResourceRequested`): an app that also runs ASP.NET Core
+endpoints answers them there, and a null response falls through to `wwwroot` and the host page.
+
 On a Mac, `-p:OrielMacBundle=true` (or `OrielMacBundle=true` in the environment) makes `dotnet build` lay the output
 out as an `.app`, and `dotnet run` and `dotnet watch` start it. Hot reload of `.razor` and C# edits reaches the running
 window without a restart:

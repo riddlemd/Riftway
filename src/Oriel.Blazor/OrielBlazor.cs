@@ -76,6 +76,12 @@ public static class OrielBlazor
         ArgumentNullException.ThrowIfNull(componentType);
         ArgumentNullException.ThrowIfNull(services);
         ArgumentNullException.ThrowIfNull(selector);
+        foreach (var root in options?.RootComponents ?? [])
+        {
+            ArgumentNullException.ThrowIfNull(root);
+            if (!typeof(IComponent).IsAssignableFrom(root.ComponentType))
+                throw new ArgumentException($"{root.ComponentType} is not a component.", nameof(options));
+        }
 
         EnsureHandled();
         EnsurePreload(window.WebContents.Session);
@@ -93,17 +99,17 @@ public static class OrielBlazor
             if (s_handled) return;
             if (!s_schemeRegistered)
                 throw new InvalidOperationException("Call services.AddOrielBlazor() (or OrielBlazor.RegisterScheme()) before OrielApp.Run().");
-            Protocol.Handle(Scheme, Serve);
+            Protocol.Handle(Scheme, ServeAsync);
             s_handled = true;
         }
     }
 
-    private static ProtocolResponse Serve(ProtocolRequest request)
+    private static async Task<ProtocolResponse> ServeAsync(ProtocolRequest request, CancellationToken cancellationToken)
     {
         // Every view serves the same app, so any live one answers; the newest has the latest host page options.
         var view = s_views.Keys.LastOrDefault();
         if (view is null) return new ProtocolResponse { StatusCode = 404, StatusText = "Not Found" };
-        return view.Serve(request.Url);
+        return await view.HandleAsync(request, cancellationToken).ConfigureAwait(false) ?? view.Serve(request.Url);
     }
 
     private static void EnsurePreload(Session session)

@@ -5,9 +5,11 @@
   <title>Oriel Blazor Sample</title>
   <base href="/" />
   <style>body { font-family: system-ui, sans-serif; margin: 2rem; } button { margin-right: .5rem; }</style>
+  <link rel="stylesheet" href="app.css?v=1">
 </head>
 <body>
   <div id="app">Loading…</div>
+  <div id="footer"></div>
   <script>
     window.orielSample = { callBack: (dotnet) => dotnet.invokeMethodAsync('Echo', 'from js') };
   </script>

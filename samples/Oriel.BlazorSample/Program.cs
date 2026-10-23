@@ -33,4 +33,12 @@ app.Ready += (_, _) =>
     });
 };
 
+// An app that runs a program before Chromium starts (KHost probes ffmpeg) has .NET's child-exit handling in place
+// first; the self-check's later child must still be seen to exit.
+if (exitAfterCheck)
+{
+    using var early = System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo("/bin/sh", "-c true") { UseShellExecute = false })!;
+    early.WaitForExit();
+}
+
 return app.Run() is var exit && exit != 0 ? exit : Environment.ExitCode;

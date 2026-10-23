@@ -11,7 +11,14 @@ public sealed class WindowOpener(IServiceProvider services)
     {
         var n = Interlocked.Increment(ref _count);
         var window = new BrowserWindow(new BrowserWindowOptions { Width = 900, Height = 640, Title = $"Oriel Blazor Sample {n}" });
-        window.LoadBlazor<App>(services);
+        window.LoadBlazor<App>(services, options: new BlazorWebViewOptions
+        {
+            RootComponents = [new BlazorRootComponent(typeof(Footer), "#footer")],
+            // Answers what no static file holds: an app's own endpoints, here one greeting.
+            RequestHandler = (request, _) => Task.FromResult(new Uri(request.Url).AbsolutePath == "/api/greeting"
+                ? ProtocolResponse.Text($"hello {request.Method}")
+                : null),
+        });
         return window;
     }
 }

@@ -1,6 +1,7 @@
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Nodes;
+using System.Threading.Channels;
 using Microsoft.AspNetCore.Components;
 using Microsoft.AspNetCore.Components.Web;
 using Microsoft.AspNetCore.Components.WebView;
@@ -18,6 +19,8 @@ public sealed class BlazorWebView : WebViewManager
 
     private readonly WebContents _webContents;
     private readonly BlazorWebViewOptions _options;
+    // The page's messages in arrival order, handled off Chromium's UI thread; see OnMessage.
+    private readonly Channel<string> _inbox = Channel.CreateUnbounded<string>(new UnboundedChannelOptions { SingleReader = true });
     private int _disposed;
 
     internal event Action? Disposed;
@@ -35,6 +38,7 @@ public sealed class BlazorWebView : WebViewManager
         _options = options;
         _webContents.Ipc.On(OrielBlazor.Channel, OnMessage);
         _webContents.Destroyed += OnDestroyed;
+        _ = Task.Run(PumpAsync);
     }
 
     /// <summary>The window this view renders into.</summary>
@@ -42,9 +46,19 @@ public sealed class BlazorWebView : WebViewManager
 
     internal void Start(Type componentType, string selector)
     {
-        _ = Dispatcher.InvokeAsync(() => AddRootComponentAsync(componentType, selector, ParameterView.Empty));
+        // Off the UI thread, like every render: the components' first lifecycle runs inside.
+        _ = Task.Run(() => Dispatcher.InvokeAsync(async () =>
+        {
+            await AddRootComponentAsync(componentType, selector, ParameterView.Empty).ConfigureAwait(false);
+            foreach (var root in _options.RootComponents)
+                await AddRootComponentAsync(root.ComponentType, root.Selector, ParameterView.Empty).ConfigureAwait(false);
+        }));
         Navigate(_options.StartPath);
     }
+
+    /// <summary>The app's handler for a request, if it has one and answers it.</summary>
+    internal Task<ProtocolResponse?> HandleAsync(ProtocolRequest request, CancellationToken cancellationToken)
+        => _options.RequestHandler is { } handler ? handler(request, cancellationToken) : Task.FromResult<ProtocolResponse?>(null);
 
     /// <inheritdoc />
     protected override void NavigateCore(Uri absoluteUri) => _ = _webContents.LoadUrl(absoluteUri.AbsoluteUri);
@@ -56,16 +70,38 @@ public sealed class BlazorWebView : WebViewManager
         _webContents.Send(OrielBlazor.Channel, JsonValue.Create(message));
     }
 
+    // Arrives on Chromium's UI thread. The default dispatcher would run the component's handler right here, and a
+    // handler that blocks (a sync process wait inside a library) would freeze every window; Blazor Server hands
+    // a circuit's messages to the thread pool, which is what components are written for.
     private void OnMessage(IpcMainEvent e)
     {
         if (e.Args.Count == 0 || e.Args[0].ValueKind != JsonValueKind.String) return;
-        var message = e.Args[0].GetString()!;
-        // Blazor's message handling is not thread-safe; the dispatcher runs messages one at a time, in order.
-        _ = Dispatcher.InvokeAsync(() => MessageReceived(OrielBlazor.AppBaseUri, message));
+        _inbox.Writer.TryWrite(e.Args[0].GetString()!);
+    }
+
+    // One message at a time and in order: Blazor's message handling is not thread-safe.
+    private async Task PumpAsync()
+    {
+        await foreach (var message in _inbox.Reader.ReadAllAsync().ConfigureAwait(false))
+        {
+            try
+            {
+                await Dispatcher.InvokeAsync(() => MessageReceived(OrielBlazor.AppBaseUri, message)).ConfigureAwait(false);
+            }
+            catch (Exception ex)
+            {
+                // The renderer has already reported it to the page; one bad message must not stop the rest.
+                Console.Error.WriteLine($"[Oriel.Blazor] A page message failed: {ex}");
+            }
+        }
     }
 
     internal ProtocolResponse Serve(string url)
     {
+        // The file is looked up by the whole URL, so a cache-busting query (font.woff2?v=1) would miss it and get the
+        // host page instead; MAUI's handlers strip it too.
+        var query = url.IndexOfAny(['?', '#']);
+        if (query >= 0) url = url[..query];
         if (!TryGetResponseContent(url, allowFallbackOnHostPage: true, out var status, out var statusText, out var content, out var headers))
             return new ProtocolResponse { StatusCode = 404, StatusText = "Not Found" };
 
@@ -93,6 +129,7 @@ public sealed class BlazorWebView : WebViewManager
         if (Interlocked.Exchange(ref _disposed, 1) != 0) return;
         _webContents.Destroyed -= OnDestroyed;
         _webContents.Ipc.RemoveAllListeners(OrielBlazor.Channel);
+        _inbox.Writer.TryComplete();
         Disposed?.Invoke();
         await base.DisposeAsyncCore().ConfigureAwait(false);
     }

@@ -57,7 +57,7 @@
 
   <PropertyGroup Condition="'$(_OrielMacDevBundle)' == 'true'">
     <_OrielMacDevApp>$([MSBuild]::NormalizeDirectory('$(MSBuildProjectDirectory)', '$(OutDir)'))$(OrielMacBundleName).app</_OrielMacDevApp>
-    <RunCommand>$(_OrielMacDevApp)/Contents/MacOS/$(AssemblyName)</RunCommand>
+    <RunCommand>$(_OrielMacDevApp)/Contents/MacOS/$(OrielMacBundleName)</RunCommand>
     <RunWorkingDirectory>$(_OrielMacDevApp)/Contents/MacOS</RunWorkingDirectory>
   </PropertyGroup>
 
@@ -109,11 +109,15 @@
     <!-- rsync, not Copy: a publish has thousands of files, and the framework is cloned (cp -c) instead of copied. -->
     <MakeDir Directories="$(_OrielMacApp)/Contents/MacOS;$(_OrielMacApp)/Contents/Frameworks;$(_OrielMacApp)/Contents/Resources" />
     <Exec Command="rsync -a --delete --exclude &quot;/$(_OrielMacExclude)&quot; &quot;$(_OrielMacFiles)&quot; &quot;$(_OrielMacApp)/Contents/MacOS/&quot;" />
+    <!-- Chromium finds its helpers by the executable's name ("<exe> Helper (<type>).app"), so the executable is named
+         for the bundle, as Electron's is for the product. The .NET host finds its app by the name built into it. -->
+    <Exec Condition="'$(OrielMacBundleName)' != '$(AssemblyName)'"
+          Command="mv -f &quot;$(_OrielMacApp)/Contents/MacOS/$(AssemblyName)&quot; &quot;$(_OrielMacApp)/Contents/MacOS/$(OrielMacBundleName)&quot;" />
     <Exec Condition="!Exists('$(_OrielMacApp)/Contents/Frameworks/Chromium Embedded Framework.framework/Chromium Embedded Framework')"
           Command="cp -c -R &quot;$(OrielCefFramework)&quot; &quot;$(_OrielMacApp)/Contents/Frameworks/&quot; || cp -R &quot;$(OrielCefFramework)&quot; &quot;$(_OrielMacApp)/Contents/Frameworks/&quot;" />
     <WriteLinesToFile File="$(_OrielMacApp)/Contents/Info.plist" Overwrite="true" WriteOnlyWhenDifferent="true"
-                      Lines="$(_OrielPlistHead);  &lt;key&gt;CFBundleExecutable&lt;/key&gt;&lt;string&gt;$(AssemblyName)&lt;/string&gt;;  &lt;key&gt;CFBundleIdentifier&lt;/key&gt;&lt;string&gt;$(OrielMacBundleId)&lt;/string&gt;;  &lt;key&gt;CFBundleName&lt;/key&gt;&lt;string&gt;$(OrielMacBundleName)&lt;/string&gt;;$(_OrielPlistTail)" />
-    <!-- Chromium finds its helpers by name: "<CFBundleName> Helper (<type>).app" in Contents/Frameworks. -->
+                      Lines="$(_OrielPlistHead);  &lt;key&gt;CFBundleExecutable&lt;/key&gt;&lt;string&gt;$(OrielMacBundleName)&lt;/string&gt;;  &lt;key&gt;CFBundleIdentifier&lt;/key&gt;&lt;string&gt;$(OrielMacBundleId)&lt;/string&gt;;  &lt;key&gt;CFBundleName&lt;/key&gt;&lt;string&gt;$(OrielMacBundleName)&lt;/string&gt;;$(_OrielPlistTail)" />
+    <!-- The helpers, "<exe> Helper (<type>).app" in Contents/Frameworks. -->
     <MakeDir Directories="@(_OrielMacHelperSuffix->'$(_OrielMacApp)/Contents/Frameworks/$(OrielMacBundleName) Helper%(Suffix).app/Contents/MacOS')" />
     <Copy SourceFiles="$(OrielMacHelper)" DestinationFiles="$(_OrielMacApp)/Contents/Frameworks/$(OrielMacBundleName) Helper%(_OrielMacHelperSuffix.Suffix).app/Contents/MacOS/$(OrielMacBundleName) Helper%(_OrielMacHelperSuffix.Suffix)" SkipUnchangedFiles="true" />
     <Exec Command="chmod +x &quot;$(_OrielMacApp)/Contents/Frameworks/$(OrielMacBundleName) Helper&quot;*.app/Contents/MacOS/*" />
@@ -137,7 +141,7 @@
     </PropertyGroup>
     <!-- codesign seals everything in Contents/MacOS as code, managed assemblies and JSON too (their signatures go in
          extended attributes, which a DMG or ditto keeps). The app's own executable is signed with the bundle. -->
-    <Exec Command="cd &quot;$(_OrielMacApp)/Contents/MacOS&quot; &amp;&amp; find . -type f ! -path ./$(AssemblyName) -print0 | xargs -0 -n 200 $(_OrielSign)" />
+    <Exec Command="cd &quot;$(_OrielMacApp)/Contents/MacOS&quot; &amp;&amp; find . -type f ! -path &quot;./$(OrielMacBundleName)&quot; -print0 | xargs -0 -n 200 $(_OrielSign)" />
     <Exec Command="for f in &quot;$(_OrielFw)/Libraries/&quot;*.dylib; do $(_OrielSign) &quot;$f&quot; || exit 1; done" />
     <Exec Command="$(_OrielSign) &quot;$(_OrielFw)&quot;" />
     <Exec Command="$(_OrielSign) --entitlements &quot;$(OrielMacHelperEntitlements)&quot; &quot;$(_OrielMacApp)/Contents/Frameworks/$(OrielMacBundleName) Helper%(_OrielMacHelperSuffix.Suffix).app&quot;" />

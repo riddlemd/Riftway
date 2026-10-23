@@ -40,6 +40,15 @@ public static class CefLayout
         throw new PlatformNotSupportedException($"Oriel does not run on {Environment.OSVersion} yet.");
     }
 
+    /// <summary>This app's own bundle, for <c>cef_settings_t.main_bundle_path</c>; null off macOS.</summary>
+    /// <remarks>CEF's default is the top-level bundle, so an app shipped inside another (a helper app in
+    /// <c>Contents/Helpers</c>) would look for its helpers and framework in the outer app's.</remarks>
+    public static string? MacMainBundlePath()
+        => OperatingSystem.IsMacOS()
+            // <App>.app/Contents/MacOS/<exe>: two folders up.
+            ? Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, "..", ".."))
+            : null;
+
     /// <summary>The subprocess exe to name in <c>cef_settings_t.browser_subprocess_path</c>, or null
     /// where CEF finds it itself (macOS looks for the <c>&lt;App&gt; Helper</c> bundles).</summary>
     public static string? SubprocessPath()

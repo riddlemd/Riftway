@@ -278,19 +278,24 @@ public sealed unsafe partial class OrielApp
         CefString.Set(&settings.cache_path, dataDirectory);
         // Under bootstrap every child runs as this same exe; naming another would make CEF drop the sandbox.
         if (!bootstrap) CefString.Set(&settings.browser_subprocess_path, CefLayout.SubprocessPath());
+        CefString.Set(&settings.main_bundle_path, CefLayout.MacMainBundlePath());
 
         // Before Chromium starts its own portal reads, so both see the portal from the same moment.
         if (OperatingSystem.IsLinux()) LinuxPortalSettings.Start();
         NativeObject.AddRef(app.Native);
         var crashDumps = OperatingSystem.IsWindows() ? null : CrashReporter.PrepareDatabase(GetPath("crashDumps"));
         var linuxLang = OperatingSystem.IsLinux() ? LinuxLangScope.Begin(_linuxLang = CommandLine.GetSwitchValue("lang")) : null;
-        var initialized = CefNative.cef_initialize((cef_main_args_t*)&args, &settings, app.Native, sandboxInfo) != 0;
+        bool initialized;
+        // Chromium replaces SIGCHLD in here; .NET's child processes need theirs back. See ChildSignal.
+        using (Oriel.Cef.Platform.ChildSignal.Preserve())
+            initialized = CefNative.cef_initialize((cef_main_args_t*)&args, &settings, app.Native, sandboxInfo) != 0;
         linuxLang?.Dispose();
         crashDumps?.Dispose();
         CefString.Clear(&settings.user_agent);
         CefString.Clear(&settings.root_cache_path);
         CefString.Clear(&settings.cache_path);
         CefString.Clear(&settings.browser_subprocess_path);
+        CefString.Clear(&settings.main_bundle_path);
         // Also false when another instance owns this data directory: CEF has already forwarded this
         // launch to it (SecondInstance there), and this process should just end.
         if (!initialized)

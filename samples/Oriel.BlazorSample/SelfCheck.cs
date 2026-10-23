@@ -22,6 +22,16 @@ internal static class SelfCheck
             return 1;
         }
 
+        var footer = await Poll(page, "document.querySelector('#footer-text')?.textContent ?? ''", v => v == "footer root").ConfigureAwait(false);
+        Check(footer == "footer root", $"a second root component renders into its own element ('{footer}')");
+
+        var greeting = await Poll(page, "(async () => { const r = await fetch('/api/greeting'); return r.status + ' ' + await r.text(); })()", v => v == "200 hello GET").ConfigureAwait(false);
+        Check(greeting == "200 hello GET", $"the app's request handler answers a fetch ('{greeting}')");
+        var host = await Poll(page, "(async () => { const r = await fetch('/index.html'); return r.status + ' ' + (await r.text()).includes('footer'); })()", v => v == "200 true").ConfigureAwait(false);
+        Check(host == "200 true", $"a request the handler leaves alone still gets the static file ('{host}')");
+        var asset = await Poll(page, "(async () => { const r = await fetch('/app.css?v=1'); return r.status + ' ' + r.headers.get('content-type'); })()", v => v.StartsWith("200 text/css", StringComparison.Ordinal)).ConfigureAwait(false);
+        Check(asset.StartsWith("200 text/css", StringComparison.Ordinal), $"a static file is found past a query string ('{asset}')");
+
         await page.ExecuteJavaScriptAsync("document.querySelector('#increment').click()").ConfigureAwait(false);
         var after = await Poll(page, "document.querySelector('#count')?.textContent ?? ''", v => v == "1").ConfigureAwait(false);
         Check(after == "1", $"a click reaches the component and re-renders (#count = '{after}')");
@@ -32,6 +42,28 @@ internal static class SelfCheck
 
         var echoed = await Poll(page, "document.querySelector('#echo')?.textContent ?? ''", v => v == "from js").ConfigureAwait(false);
         Check(echoed == "from js", $"the page calls a .NET method ([JSInvokable] echo = '{echoed}')");
+
+        // A child process started after Chromium is up must still be seen to exit (.NET learns it from SIGCHLD).
+        var exited = await Task.Run(() =>
+        {
+            using var child = System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo("/bin/sh", "-c true") { UseShellExecute = false })!;
+            return child.WaitForExit(5000);
+        }).ConfigureAwait(false);
+        Check(exited, $"a child process's exit is seen after Chromium starts (exited = {exited})");
+
+        // A component that blocks must not take the browser with it: Chromium's UI thread (which every window
+        // query waits on) still answers meanwhile.
+        // The click is deferred: evaluating it directly would only return once a blocked UI thread let the
+        // reply through, so the probe below would start after the block instead of during it.
+        await page.ExecuteJavaScriptAsync("setTimeout(() => document.querySelector('#block').click(), 0)").ConfigureAwait(false);
+        await Task.Delay(500).ConfigureAwait(false);
+        var clock = System.Diagnostics.Stopwatch.StartNew();
+        // Its reply comes back through the UI thread.
+        await page.ExecuteJavaScriptAsync("1 + 1").ConfigureAwait(false);
+        var answeredIn = clock.ElapsedMilliseconds;
+        Check(answeredIn < 1000, $"the UI thread answers while a component's handler blocks ({answeredIn} ms)");
+        var unblocked = await Poll(page, "document.querySelector('#blocked')?.textContent ?? ''", v => v == "done").ConfigureAwait(false);
+        Check(unblocked == "done", $"the blocking handler still finishes and re-renders ('{unblocked}')");
 
         // A second window shares the app's services: one count, re-rendered in both.
         await page.ExecuteJavaScriptAsync("document.querySelector('#open').click()").ConfigureAwait(false);
