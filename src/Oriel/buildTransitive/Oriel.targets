@@ -13,17 +13,32 @@
     <PropertyGroup>
       <_OrielPublish>$([MSBuild]::NormalizeDirectory('$(MSBuildProjectDirectory)', '$(PublishDir)'))</_OrielPublish>
     </PropertyGroup>
+    <!-- From where the publish took them, not from the folder: a second Oriel app published into the same folder
+         finds them already renamed and deleted by the first one's layout. -->
+    <ItemGroup>
+      <_OrielBootstrap Include="@(ResolvedFileToPublish)" Condition="'%(ResolvedFileToPublish.RelativePath)' == 'bootstrap.exe'" />
+      <_OrielHost Include="@(ResolvedFileToPublish)" Condition="'%(ResolvedFileToPublish.RelativePath)' == 'Oriel.Host.dll'" />
+    </ItemGroup>
+    <PropertyGroup>
+      <_OrielBootstrapSource>@(_OrielBootstrap->'%(FullPath)')</_OrielBootstrapSource>
+      <_OrielBootstrapSource Condition="'$(_OrielBootstrapSource)' == ''">$(_OrielPublish)bootstrap.exe</_OrielBootstrapSource>
+      <_OrielHostSource>@(_OrielHost->'%(FullPath)')</_OrielHostSource>
+      <_OrielHostSource Condition="'$(_OrielHostSource)' == ''">$(_OrielPublish)Oriel.Host.dll</_OrielHostSource>
+    </PropertyGroup>
     <Error Condition="'$(SelfContained)' != 'true'" Text="Oriel's Windows layout needs a self-contained publish (--self-contained): bootstrap.exe starts .NET through hostfxr beside it. OrielLayout=false skips the layout." />
     <Error Condition="'$(PublishSingleFile)' == 'true'" Text="Oriel's Windows layout cannot lay out a single-file publish." />
     <Error Condition="'$(OrielExeName)' == '$(AssemblyName)'" Text="OrielExeName '$(OrielExeName)' is the managed assembly's name; $(OrielExeName).dll must be the native host." />
-    <Error Condition="!Exists('$(_OrielPublish)bootstrap.exe') or !Exists('$(_OrielPublish)Oriel.Host.dll')"
+    <Error Condition="!Exists('$(_OrielBootstrapSource)') or !Exists('$(_OrielHostSource)')"
            Text="No CEF beside the published app: add a PackageReference to Oriel.Runtime.$(RuntimeIdentifier)." />
 
-    <Copy SourceFiles="$(_OrielPublish)bootstrap.exe" DestinationFiles="$(_OrielPublish)$(OrielExeName).exe" />
+    <Copy SourceFiles="$(_OrielBootstrapSource)" DestinationFiles="$(_OrielPublish)$(OrielExeName).exe" />
     <!-- The shell names taskbar buttons after FileDescription, which bootstrap.exe gives as "CEF Bootstrap Application". -->
     <OrielCopyExeResources Condition="Exists('$(_OrielPublish)$(AssemblyName).exe')"
                            From="$(_OrielPublish)$(AssemblyName).exe" To="$(_OrielPublish)$(OrielExeName).exe" />
-    <Copy SourceFiles="$(_OrielPublish)Oriel.Host.dll" DestinationFiles="$(_OrielPublish)$(OrielExeName).dll" />
+    <Copy SourceFiles="$(_OrielHostSource)" DestinationFiles="$(_OrielPublish)$(OrielExeName).dll" />
+    <!-- Names the exe's managed assembly for the native host, which otherwise has to find the one runtimeconfig left
+         without an apphost: with two Oriel apps in a folder there are two. -->
+    <WriteLinesToFile File="$(_OrielPublish)$(OrielExeName).oriel-app" Lines="$(AssemblyName).dll" Overwrite="true" WriteOnlyWhenDifferent="true" />
     <!-- The apphost would start the app unsandboxed, and Oriel.Subprocess.exe would take the sandbox from children. -->
     <Delete Files="$(_OrielPublish)bootstrap.exe;$(_OrielPublish)bootstrapc.exe;$(_OrielPublish)Oriel.Host.dll;$(_OrielPublish)Oriel.Subprocess.exe;$(_OrielPublish)$(AssemblyName).exe" />
     <Message Importance="high" Text="$(MSBuildProjectName) -> $(_OrielPublish)$(OrielExeName).exe (Oriel layout)" />

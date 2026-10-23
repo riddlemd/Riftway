@@ -6,6 +6,7 @@
 #include "../Oriel.Subprocess.Native/subprocess.c"
 
 #include <shellapi.h>
+#include <string.h>
 #include <wchar.h>
 
 #include "include/cef_sandbox_win.h"
@@ -78,6 +79,28 @@ static int find_managed_app(const wchar_t* dir, wchar_t* app, size_t capacity) {
   return count;
 }
 
+// <Exe>.oriel-app, written by the publish layout, names the exe's managed assembly: several Oriel apps can share one
+// folder, and once their apphosts are gone the runtimeconfig scan cannot tell them apart.
+static int read_app_marker(const wchar_t* exe, const wchar_t* dir, wchar_t* app, size_t capacity) {
+  wchar_t marker[MAX_PATH];
+  size_t stem = wcslen(exe) - 4;  // drop ".exe"
+  if (swprintf(marker, MAX_PATH, L"%.*ls.oriel-app", (int)stem, exe) < 0) return 0;
+  HANDLE file = CreateFileW(marker, GENERIC_READ, FILE_SHARE_READ, NULL, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL);
+  if (file == INVALID_HANDLE_VALUE) return 0;
+  char name[MAX_PATH];
+  DWORD read = 0;
+  BOOL ok = ReadFile(file, name, sizeof(name) - 1, &read, NULL);
+  CloseHandle(file);
+  if (!ok) return 0;
+  while (read > 0 && (name[read - 1] == '\r' || name[read - 1] == '\n' || name[read - 1] == ' ')) read--;
+  name[read] = '\0';
+  // A bare file name only: the marker must not point the browser process outside its own folder.
+  if (read == 0 || strpbrk(name, "\\/:") != NULL) return 0;
+  wchar_t wide[MAX_PATH];
+  if (MultiByteToWideChar(CP_UTF8, 0, name, -1, wide, MAX_PATH) == 0) return 0;
+  return swprintf(app, capacity, L"%ls\\%ls", dir, wide) > 0 && GetFileAttributesW(app) != INVALID_FILE_ATTRIBUTES;
+}
+
 static int run_dotnet(void) {
   wchar_t exe[MAX_PATH], dir[MAX_PATH], app[MAX_PATH], fxr[MAX_PATH];
   DWORD n = GetModuleFileNameW(NULL, exe, MAX_PATH);
@@ -85,7 +108,7 @@ static int run_dotnet(void) {
   wcscpy_s(dir, MAX_PATH, exe);
   *wcsrchr(dir, L'\\') = L'\0';
 
-  int apps = find_managed_app(dir, app, MAX_PATH);
+  int apps = read_app_marker(exe, dir, app, MAX_PATH) ? 1 : find_managed_app(dir, app, MAX_PATH);
   if (apps != 1) {
     report_error(apps == 0 ? L"No <app>.runtimeconfig.json beside the exe: publish the app self-contained."
                            : L"More than one *.runtimeconfig.json without its own apphost beside the exe; keep only the app's.");
