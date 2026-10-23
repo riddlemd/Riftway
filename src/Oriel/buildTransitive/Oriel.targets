@@ -41,6 +41,83 @@
     <Warning Condition="'$(OS)' == 'Windows_NT'" Text="Published for Linux on Windows: give Oriel.Subprocess and chrome-sandbox their exec bits (chmod +x) when packaging." />
   </Target>
 
+  <!-- macOS: CEF only starts inside an app bundle (the framework and helper apps sit at fixed places in it). After a
+       publish for an osx RID, and after a build on a Mac when OrielMacBundle is true, <AppName>.app is laid out beside
+       the output: Contents/MacOS holds the app's files, Contents/Frameworks CEF's framework and one helper .app per
+       Chromium process type. dotnet run and dotnet watch then start the bundle's executable, so hot reload reaches the
+       running app. OrielCefFramework and OrielMacHelper come from Oriel.Runtime.osx-*, or are set by hand. -->
+  <PropertyGroup>
+    <OrielMacBundleName Condition="'$(OrielMacBundleName)' == ''">$(AssemblyName)</OrielMacBundleName>
+    <OrielMacBundleId Condition="'$(OrielMacBundleId)' == ''">dev.oriel.$(AssemblyName.ToLowerInvariant())</OrielMacBundleId>
+    <OrielMacBundleVersion Condition="'$(OrielMacBundleVersion)' == ''">$(Version)</OrielMacBundleVersion>
+    <OrielMacBundleVersion Condition="'$(OrielMacBundleVersion)' == ''">1.0.0</OrielMacBundleVersion>
+    <_OrielMacDevBundle Condition="'$(OrielMacBundle)' == 'true' and $([MSBuild]::IsOSPlatform('OSX'))">true</_OrielMacDevBundle>
+  </PropertyGroup>
+
+  <PropertyGroup Condition="'$(_OrielMacDevBundle)' == 'true'">
+    <_OrielMacDevApp>$([MSBuild]::NormalizeDirectory('$(MSBuildProjectDirectory)', '$(OutDir)'))$(OrielMacBundleName).app</_OrielMacDevApp>
+    <RunCommand>$(_OrielMacDevApp)/Contents/MacOS/$(AssemblyName)</RunCommand>
+    <RunWorkingDirectory>$(_OrielMacDevApp)/Contents/MacOS</RunWorkingDirectory>
+  </PropertyGroup>
+
+  <Target Name="OrielMacDevBundle" AfterTargets="Build" Condition="'$(_OrielMacDevBundle)' == 'true' and '$(OutputType)' != 'Library'">
+    <MSBuild Projects="$(MSBuildProjectFullPath)" Targets="_OrielMacBundle"
+             Properties="_OrielMacFiles=$([MSBuild]::NormalizeDirectory('$(MSBuildProjectDirectory)', '$(OutDir)'));_OrielMacApp=$(_OrielMacDevApp);_OrielMacExclude=$(OrielMacBundleName).app;OrielCefFramework=$(OrielCefFramework);OrielMacHelper=$(OrielMacHelper)" />
+  </Target>
+
+  <Target Name="OrielMacLayout" AfterTargets="Publish"
+          Condition="'$(OrielLayout)' != 'false' and $(RuntimeIdentifier.StartsWith('osx-'))">
+    <PropertyGroup>
+      <_OrielPublish>$([MSBuild]::NormalizeDirectory('$(MSBuildProjectDirectory)', '$(PublishDir)'))</_OrielPublish>
+    </PropertyGroup>
+    <MSBuild Projects="$(MSBuildProjectFullPath)" Targets="_OrielMacBundle"
+             Properties="_OrielMacFiles=$(_OrielPublish);_OrielMacApp=$(_OrielPublish)$(OrielMacBundleName).app;_OrielMacExclude=$(OrielMacBundleName).app;OrielCefFramework=$(OrielCefFramework);OrielMacHelper=$(OrielMacHelper)" />
+  </Target>
+
+  <Target Name="_OrielMacBundle">
+    <Error Condition="'$(OrielCefFramework)' == '' or !Exists('$(OrielCefFramework)/Chromium Embedded Framework')"
+           Text="No CEF framework for the macOS bundle: add a PackageReference to Oriel.Runtime.osx-arm64 (or osx-x64), or set OrielCefFramework to a 'Chromium Embedded Framework.framework'." />
+    <Error Condition="'$(OrielMacHelper)' == '' or !Exists('$(OrielMacHelper)')"
+           Text="No helper executable for the macOS bundle: add a PackageReference to Oriel.Runtime.osx-*, or set OrielMacHelper to a published Oriel.Subprocess." />
+    <PropertyGroup>
+      <_OrielPlistHead>&lt;?xml version="1.0" encoding="UTF-8"?&gt;
+&lt;!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd"&gt;
+&lt;plist version="1.0"&gt;
+&lt;dict&gt;
+  &lt;key&gt;CFBundlePackageType&lt;/key&gt;&lt;string&gt;APPL&lt;/string&gt;
+  &lt;key&gt;CFBundleInfoDictionaryVersion&lt;/key&gt;&lt;string&gt;6.0&lt;/string&gt;
+  &lt;key&gt;CFBundleShortVersionString&lt;/key&gt;&lt;string&gt;$(OrielMacBundleVersion)&lt;/string&gt;
+  &lt;key&gt;CFBundleVersion&lt;/key&gt;&lt;string&gt;$(OrielMacBundleVersion)&lt;/string&gt;
+  &lt;key&gt;LSMinimumSystemVersion&lt;/key&gt;&lt;string&gt;12.0&lt;/string&gt;
+  &lt;key&gt;NSHighResolutionCapable&lt;/key&gt;&lt;true/&gt;
+  &lt;key&gt;NSSupportsAutomaticGraphicsSwitching&lt;/key&gt;&lt;true/&gt;</_OrielPlistHead>
+      <_OrielPlistTail>&lt;/dict&gt;
+&lt;/plist&gt;</_OrielPlistTail>
+    </PropertyGroup>
+    <ItemGroup>
+      <_OrielMacHelperSuffix Include="main" Suffix="" Id="" />
+      <_OrielMacHelperSuffix Include="alerts" Suffix=" (Alerts)" Id=".alerts" />
+      <_OrielMacHelperSuffix Include="gpu" Suffix=" (GPU)" Id=".gpu" />
+      <_OrielMacHelperSuffix Include="plugin" Suffix=" (Plugin)" Id=".plugin" />
+      <_OrielMacHelperSuffix Include="renderer" Suffix=" (Renderer)" Id=".renderer" />
+    </ItemGroup>
+
+    <!-- rsync, not Copy: a publish has thousands of files, and the framework is cloned (cp -c) instead of copied. -->
+    <MakeDir Directories="$(_OrielMacApp)/Contents/MacOS;$(_OrielMacApp)/Contents/Frameworks;$(_OrielMacApp)/Contents/Resources" />
+    <Exec Command="rsync -a --delete --exclude &quot;/$(_OrielMacExclude)&quot; &quot;$(_OrielMacFiles)&quot; &quot;$(_OrielMacApp)/Contents/MacOS/&quot;" />
+    <Exec Condition="!Exists('$(_OrielMacApp)/Contents/Frameworks/Chromium Embedded Framework.framework/Chromium Embedded Framework')"
+          Command="cp -c -R &quot;$(OrielCefFramework)&quot; &quot;$(_OrielMacApp)/Contents/Frameworks/&quot; || cp -R &quot;$(OrielCefFramework)&quot; &quot;$(_OrielMacApp)/Contents/Frameworks/&quot;" />
+    <WriteLinesToFile File="$(_OrielMacApp)/Contents/Info.plist" Overwrite="true" WriteOnlyWhenDifferent="true"
+                      Lines="$(_OrielPlistHead);  &lt;key&gt;CFBundleExecutable&lt;/key&gt;&lt;string&gt;$(AssemblyName)&lt;/string&gt;;  &lt;key&gt;CFBundleIdentifier&lt;/key&gt;&lt;string&gt;$(OrielMacBundleId)&lt;/string&gt;;  &lt;key&gt;CFBundleName&lt;/key&gt;&lt;string&gt;$(OrielMacBundleName)&lt;/string&gt;;$(_OrielPlistTail)" />
+    <!-- Chromium finds its helpers by name: "<CFBundleName> Helper (<type>).app" in Contents/Frameworks. -->
+    <MakeDir Directories="@(_OrielMacHelperSuffix->'$(_OrielMacApp)/Contents/Frameworks/$(OrielMacBundleName) Helper%(Suffix).app/Contents/MacOS')" />
+    <Copy SourceFiles="$(OrielMacHelper)" DestinationFiles="$(_OrielMacApp)/Contents/Frameworks/$(OrielMacBundleName) Helper%(_OrielMacHelperSuffix.Suffix).app/Contents/MacOS/$(OrielMacBundleName) Helper%(_OrielMacHelperSuffix.Suffix)" SkipUnchangedFiles="true" />
+    <Exec Command="chmod +x &quot;$(_OrielMacApp)/Contents/Frameworks/$(OrielMacBundleName) Helper&quot;*.app/Contents/MacOS/*" />
+    <WriteLinesToFile File="$(_OrielMacApp)/Contents/Frameworks/$(OrielMacBundleName) Helper%(_OrielMacHelperSuffix.Suffix).app/Contents/Info.plist" Overwrite="true" WriteOnlyWhenDifferent="true"
+                      Lines="$(_OrielPlistHead);  &lt;key&gt;CFBundleExecutable&lt;/key&gt;&lt;string&gt;$(OrielMacBundleName) Helper%(_OrielMacHelperSuffix.Suffix)&lt;/string&gt;;  &lt;key&gt;CFBundleIdentifier&lt;/key&gt;&lt;string&gt;$(OrielMacBundleId).helper%(_OrielMacHelperSuffix.Id)&lt;/string&gt;;  &lt;key&gt;CFBundleName&lt;/key&gt;&lt;string&gt;$(OrielMacBundleName) Helper%(_OrielMacHelperSuffix.Suffix)&lt;/string&gt;;  &lt;key&gt;LSUIElement&lt;/key&gt;&lt;string&gt;1&lt;/string&gt;;  &lt;key&gt;LSEnvironment&lt;/key&gt;&lt;dict&gt;&lt;key&gt;MallocNanoZone&lt;/key&gt;&lt;string&gt;0&lt;/string&gt;&lt;/dict&gt;;$(_OrielPlistTail)" />
+    <Message Importance="high" Text="$(MSBuildProjectName) -> $(_OrielMacApp)" />
+  </Target>
+
   <UsingTask TaskName="OrielCopyExeResources" TaskFactory="RoslynCodeTaskFactory" AssemblyFile="$(MSBuildToolsPath)\Microsoft.Build.Tasks.Core.dll">
     <ParameterGroup>
       <From ParameterType="System.String" Required="true" />

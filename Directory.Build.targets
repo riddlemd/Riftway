@@ -9,5 +9,30 @@
     <RemoveDir Directories="$(_DeepCleanOutput);$(_DeepCleanIntermediate)" />
   </Target>
 
+  <!-- In-repo apps reference Oriel by project, so its buildTransitive targets are imported here; with no
+       Oriel.Runtime package, the CEF framework comes from eng/fetch-cef.sh's cache and the helper from a publish
+       of Oriel.Subprocess. dotnet build|run|watch -p:OrielMacBundle=true runs an app as a bundle on a Mac. -->
+  <Import Project="src/Oriel/buildTransitive/Oriel.targets" Condition="'$(OrielMacBundle)' == 'true' and '$(OutputType)' == 'Exe'" />
+
+  <Target Name="_OrielRepoMacInputs" BeforeTargets="OrielMacDevBundle" Condition="'$(OrielMacBundle)' == 'true' and '$(OrielCefFramework)' == ''">
+    <PropertyGroup>
+      <_OrielRepoCefPlatform Condition="'$([System.Runtime.InteropServices.RuntimeInformation]::OSArchitecture)' == 'Arm64'">macosarm64</_OrielRepoCefPlatform>
+      <_OrielRepoCefPlatform Condition="'$(_OrielRepoCefPlatform)' == ''">macosx64</_OrielRepoCefPlatform>
+      <_OrielRepoRid Condition="'$(_OrielRepoCefPlatform)' == 'macosarm64'">osx-arm64</_OrielRepoRid>
+      <_OrielRepoRid Condition="'$(_OrielRepoRid)' == ''">osx-x64</_OrielRepoRid>
+      <_OrielRepoHelperDir>$(MSBuildThisFileDirectory)artifacts/subprocess-$(_OrielRepoRid)/</_OrielRepoHelperDir>
+    </PropertyGroup>
+    <Exec Command="&quot;$(MSBuildThisFileDirectory)eng/fetch-cef.sh&quot; $(_OrielRepoCefPlatform)" ConsoleToMSBuild="true" StandardOutputImportance="low">
+      <Output TaskParameter="ConsoleOutput" PropertyName="_OrielRepoCef" />
+    </Exec>
+    <!-- NativeAOT; published once and reused. -->
+    <Exec Condition="!Exists('$(_OrielRepoHelperDir)Oriel.Subprocess')"
+          Command="dotnet publish &quot;$(MSBuildThisFileDirectory)src/Oriel.Subprocess&quot; -r $(_OrielRepoRid) -c Release -o &quot;$(_OrielRepoHelperDir)&quot; -nologo -v q" />
+    <PropertyGroup>
+      <OrielCefFramework>$(_OrielRepoCef)/Release/Chromium Embedded Framework.framework</OrielCefFramework>
+      <OrielMacHelper>$(_OrielRepoHelperDir)Oriel.Subprocess</OrielMacHelper>
+    </PropertyGroup>
+  </Target>
+
   <Import Project="eng/windows-layout.targets" Condition="'$(OrielWindowsLayout)' == 'true'" />
 </Project>

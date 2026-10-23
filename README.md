@@ -29,6 +29,39 @@ eng/bundle-macos.sh artifacts/sample Oriel.Sample artifacts/subprocess/Oriel.Sub
 open artifacts/Oriel.Sample.app
 ```
 
+## Blazor Hybrid
+
+`Oriel.Blazor` runs Razor components in the app's process and renders them into a `BrowserWindow`: no server, no port,
+no WebAssembly. The page loads from `app://localhost/` (one origin for every window) and Blazor's messages travel over
+Oriel's IPC.
+
+```csharp
+var app = OrielApp.Create();
+var services = new ServiceCollection();
+services.AddOrielBlazor();               // before app.Run(): registers the app scheme
+services.AddSingleton<SongLibrary>();
+var provider = services.BuildServiceProvider();
+
+app.Ready += (_, _) =>
+{
+    var window = new BrowserWindow(new() { Width = 1440, Height = 900, Title = "KHost" });
+    window.LoadBlazor<App>(provider);    // wwwroot/index.html, component at #app
+};
+return app.Run();
+```
+
+The app project uses `Microsoft.NET.Sdk.Razor`; its `wwwroot/index.html` loads `_framework/blazor.webview.js`. Every
+window shares the app's services. `samples/Oriel.BlazorSample` has two windows on one counter and JS interop both ways;
+`--self-check` drives it and exits non-zero on a failure.
+
+On a Mac, `-p:OrielMacBundle=true` (or `OrielMacBundle=true` in the environment) makes `dotnet build` lay the output
+out as an `.app`, and `dotnet run` and `dotnet watch` start it. Hot reload of `.razor` and C# edits reaches the running
+window without a restart:
+
+```sh
+OrielMacBundle=true dotnet watch --project samples/Oriel.BlazorSample
+```
+
 ## Try it (Linux, in Docker)
 
 ```sh

@@ -2,10 +2,12 @@
   <Folder Name="/src/">
     <Project Path="src/Oriel/Oriel.csproj" />
     <Project Path="src/Oriel.AutoUpdater/Oriel.AutoUpdater.csproj" />
+    <Project Path="src/Oriel.Blazor/Oriel.Blazor.csproj" />
     <Project Path="src/Oriel.Cef/Oriel.Cef.csproj" />
     <Project Path="src/Oriel.Subprocess/Oriel.Subprocess.csproj" />
   </Folder>
   <Folder Name="/samples/">
+    <Project Path="samples/Oriel.BlazorSample/Oriel.BlazorSample.csproj" />
     <Project Path="samples/Oriel.CrashTest/Oriel.CrashTest.csproj" />
     <Project Path="samples/Oriel.IpcTest/Oriel.IpcTest.csproj" />
     <Project Path="samples/Oriel.NetTest/Oriel.NetTest.csproj" />

@@ -127,7 +127,12 @@ Cross-platform work. Platform-specific items: [linux-todo.md](linux-todo.md), [w
       on a desktop; signing; fuses and the
       packed app archive; the Linux sandbox story for AppImages (user namespaces or documented off); macOS (bundle,
       sign, notarise: Ise)
-- [ ] M3 Blazor Hybrid · M5 desktop integration · M6 session/network/processes · M7 own CEF builds
+- [ ] M3 Blazor Hybrid (branch `blazor-hybrid`): `Oriel.Blazor` (`AddOrielBlazor`, `LoadBlazor<T>`, `app://localhost/`,
+      `window.external` over IPC), `samples/Oriel.BlazorSample` (`--self-check`: render, events, JS interop both ways, a
+      second window on shared services, close disposes components, reload) 10/10 on macOS arm64 and linux-arm64 (Docker, test-linux.sh with `ORIEL_EXTRA_ARGS=--self-check`) (2026-10-22);
+      `OrielMacBundle=true dotnet watch`: `.razor` edits applied in ~0.3 s without a restart. Open: run on Windows; `dotnet watch` reports "Failed to read obj\Debug/.../staticwebassets.development.json" (a Windows path
+      in the SDK on macOS), so `wwwroot` edits need a reload; root components with parameters; `OrielApp.CreateBuilder`
+- [ ] M5 desktop integration · M6 session/network/processes · M7 own CEF builds
       (see [PLAN.md](PLAN.md#milestones))
 - [ ] M7: CEF patches in [eng/cef](../eng/cef/README.md): 0001 `CefWindowDelegate::IsTranslucent` (W24), 0002
       `CefWindow::SetEventListeningEnabled` (W5), 0003 GTK style colour cache, a Chromium patch (Y2), 0004

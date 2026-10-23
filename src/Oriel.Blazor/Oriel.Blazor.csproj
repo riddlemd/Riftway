@@ -1,0 +1,25 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <GenerateDocumentationFile>true</GenerateDocumentationFile>
+    <IsPackable>true</IsPackable>
+    <Description>Blazor Hybrid for Oriel: Razor components run in-process and render into a BrowserWindow.</Description>
+    <PackageTags>cef;chromium;electron;desktop;blazor</PackageTags>
+    <PackageLicenseExpression>MIT</PackageLicenseExpression>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\Oriel\Oriel.csproj" />
+    <!-- Its build props add _framework/blazor.webview.js to the app's static web assets; they must reach the app. -->
+    <PackageReference Include="Microsoft.AspNetCore.Components.WebView" PrivateAssets="none" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <EmbeddedResource Include="Scripts/*.js" LogicalName="Oriel.Blazor.%(Filename)%(Extension)" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <InternalsVisibleTo Include="Oriel.Tests" />
+  </ItemGroup>
+
+</Project>

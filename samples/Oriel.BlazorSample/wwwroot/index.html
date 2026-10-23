@@ -1,0 +1,16 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <title>Oriel Blazor Sample</title>
+  <base href="/" />
+  <style>body { font-family: system-ui, sans-serif; margin: 2rem; } button { margin-right: .5rem; }</style>
+</head>
+<body>
+  <div id="app">Loading…</div>
+  <script>
+    window.orielSample = { callBack: (dotnet) => dotnet.invokeMethodAsync('Echo', 'from js') };
+  </script>
+  <script src="_framework/blazor.webview.js" autostart="true"></script>
+</body>
+</html>

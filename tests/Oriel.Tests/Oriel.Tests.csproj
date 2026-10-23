@@ -24,6 +24,7 @@
   <ItemGroup>
     <ProjectReference Include="..\..\src\Oriel\Oriel.csproj" />
     <ProjectReference Include="..\..\src\Oriel.AutoUpdater\Oriel.AutoUpdater.csproj" />
+    <ProjectReference Include="..\..\src\Oriel.Blazor\Oriel.Blazor.csproj" />
   </ItemGroup>
 
 </Project>

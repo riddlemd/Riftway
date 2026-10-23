@@ -847,17 +847,41 @@ public sealed unsafe partial class WebContents
             + "  catch (error) {\n    console.error(`Unable to load preload script: ${preloadPath}`);\n    console.error(error);\n"
             + "    reportPreloadError(preloadPath, error);\n  }\n})();\n";
 
-    private void AddIsolatedScript() => _devTools.Send("Page.addScriptToEvaluateOnNewDocument", w =>
+    // UI thread. Two copies of the isolated script in one world break IPC: the first deletes the binding the second needs.
+    private bool _isolatedScriptAdded;
+    private int _isolatedScriptGeneration;
+
+    private void AddIsolatedScript()
     {
-        w.WriteString("source", IsolatedScript());
-        w.WriteString("worldName", IsolatedWorld);
-    }, onResult: (result, _) => _isolatedScriptId = result.TryGetProperty("identifier", out var id) ? id.GetString() : null);
+        _isolatedScriptAdded = true;
+        var generation = ++_isolatedScriptGeneration;
+        _devTools.Send("Page.addScriptToEvaluateOnNewDocument", w =>
+        {
+            w.WriteString("source", IsolatedScript());
+            w.WriteString("worldName", IsolatedWorld);
+        }, onResult: (result, _) =>
+        {
+            var id = result.TryGetProperty("identifier", out var identifier) ? identifier.GetString() : null;
+            // A newer copy was added before this one's identifier came back: this one is stale.
+            if (generation != _isolatedScriptGeneration)
+            {
+                if (id is not null) _devTools.Send("Page.removeScriptToEvaluateOnNewDocument", w => w.WriteString("identifier", id));
+                return;
+            }
+            _isolatedScriptId = id;
+        });
+    }
 
     /// <summary>UI thread: the session's preloads changed; the page's next load runs the new set.</summary>
     internal void OnSessionPreloadsChanged()
     {
-        if (_browser is null) return;
-        if (_isolatedScriptId is { } previous) _devTools.Send("Page.removeScriptToEvaluateOnNewDocument", w => w.WriteString("identifier", previous));
+        // Before the page's DevTools setup, the setup's own copy reads the current preloads.
+        if (_browser is null || !_isolatedScriptAdded) return;
+        if (_isolatedScriptId is { } previous)
+        {
+            _devTools.Send("Page.removeScriptToEvaluateOnNewDocument", w => w.WriteString("identifier", previous));
+            _isolatedScriptId = null;
+        }
         AddIsolatedScript();
     }
 
