@@ -290,6 +290,7 @@ public unsafe partial class BaseWindow
     private nint _occlusionNSWindow;
     private nint _touchBarNSWindow;
     private nint _eventsNSWindow;
+    private nint _hitTestNSWindow;
     private nint _resizeDelegate;
     // NativeWindow's aspect_ratio_ and aspect_ratio_extraSize_, and the delegate's resizingHorizontally_ (macOS).
     private double _macAspectRatio;
@@ -1596,6 +1597,11 @@ public unsafe partial class BaseWindow
         if (OperatingSystem.IsMacOS()) _occlusionNSWindow = MacWindow.ObserveOcclusion((nint)window->get_window_handle(window), OnOcclusionChanged);
         if (OperatingSystem.IsMacOS()) AttachMacTouchBar((nint)window->get_window_handle(window));
         if (OperatingSystem.IsMacOS()) _eventsNSWindow = MacWindow.ObserveEvents((nint)window->get_window_handle(window), OnMacWindowEvent);
+        if (OperatingSystem.IsMacOS())
+        {
+            _hitTestNSWindow = MacWindow.NSWindowOf((nint)window->get_window_handle(window));
+            MacContentHitTest.Register(_hitTestNSWindow, ContentViewLetsThrough);
+        }
         if (OperatingSystem.IsMacOS()) _resizeDelegate = MacWindow.RouteWillResize((nint)window->get_window_handle(window), OnMacWillResize);
         if (OperatingSystem.IsMacOS()) MacWindow.OnFailedFullScreen(_resizeDelegate, () =>
         {
@@ -1725,6 +1731,17 @@ public unsafe partial class BaseWindow
         if (ContentView.Parent != _contentsView) return;
         _contentsView.RemoveChild(ContentView);
         ContentView.StopFilling();
+    }
+
+    // UI thread, from AppKit's hit test: Electron's ContentViewTargeterDelegate. The content view takes a point only where
+    // one of its children does; elsewhere the point belongs to the page below it. x and y are in the content area.
+    private bool ContentViewLetsThrough(int x, int y)
+    {
+        if (_viewsDetached || ContentView.Parent != _contentsView) return false;
+        var contents = _contentsView.NativeView;
+        if (contents is null) return false;
+        var origin = contents->get_bounds(contents);
+        return !ContentView.ChildrenCover(x - origin.x, y - origin.y);
     }
 
     private void OnActivationChanged(bool active)
@@ -1875,6 +1892,7 @@ public unsafe partial class BaseWindow
         if (_occlusionNSWindow != 0 && OperatingSystem.IsMacOS()) MacWindow.StopObservingOcclusion(_occlusionNSWindow);
         if (_touchBarNSWindow != 0 && OperatingSystem.IsMacOS()) MacWindow.UnrouteMakeTouchBar(_touchBarNSWindow);
         if (_eventsNSWindow != 0 && OperatingSystem.IsMacOS()) MacWindow.StopObservingEvents(_eventsNSWindow);
+        if (_hitTestNSWindow != 0 && OperatingSystem.IsMacOS()) MacContentHitTest.Unregister(_hitTestNSWindow);
         if (_eventsNSWindow != 0 && OperatingSystem.IsMacOS()) MacWindow.ForgetPreviewItem(_eventsNSWindow);
         if (_eventsNSWindow != 0 && OperatingSystem.IsMacOS()) MacWindow.ForgetFocusable(_eventsNSWindow);
         if (_eventsNSWindow != 0 && OperatingSystem.IsMacOS()) MacWindow.ForgetVibrancy(_eventsNSWindow);

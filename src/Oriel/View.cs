@@ -200,6 +200,28 @@ public unsafe class View
     /// <summary>The background colour CEF has for the view, as ARGB. For tests.</summary>
     internal uint NativeBackgroundColor() => CefThread.InvokeOnUi(() => NativeView is null ? 0 : NativeView->get_background_color(NativeView));
 
+    /// <summary>UI thread: whether a shown child of this view, or its page, is at a point in its parent's coordinates. As
+    /// Electron's <c>ContentViewTargeterDelegate</c>, only children count: the view's own area and background do not.</summary>
+    internal bool ChildrenCover(int x, int y)
+    {
+        if (NativeView is null) return false;
+        var own = NativeView->get_bounds(NativeView);
+        if (NativeView->is_visible(NativeView) == 0 || !Contains(own, x, y)) return false;
+        x -= own.x;
+        y -= own.y;
+        if (_page is not null && _page->is_visible(_page) != 0 && Contains(_page->get_bounds(_page), x, y)) return true;
+        View[] children;
+        lock (_children) children = [.. _children];
+        foreach (var child in children)
+        {
+            var native = child.NativeView;
+            if (native is not null && native->is_visible(native) != 0 && Contains(native->get_bounds(native), x, y)) return true;
+        }
+        return false;
+    }
+
+    private static bool Contains(cef_rect_t rect, int x, int y) => x >= rect.x && y >= rect.y && x < rect.x + rect.width && y < rect.y + rect.height;
+
     /// <summary>Whether CEF's children are exactly <see cref="Children"/>, in order. For tests.</summary>
     internal bool NativeChildrenMatch() => CefThread.InvokeOnUi(() =>
     {

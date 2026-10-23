@@ -7185,6 +7185,9 @@ async Task ViewsAsync()
         host.RemoveMenu();
     }
 
+    // A real click on macOS: AppKit's hit test, which an empty content view above the page used to take.
+    if (OperatingSystem.IsMacOS()) await MacContentViewHitTest.RunAsync(Check, step);
+
     // Visibility.
     view.SetVisible(false);
     Check("Views: SetVisible(false) hides; the page keeps running", !view.GetVisible() && await ViewJs(view, "1 + 1") == "2");
