@@ -111,11 +111,24 @@ public sealed unsafe class ButtonDelegate
 /// <summary><c>cef_menu_button_delegate_t</c>: a Views button that opens a menu.</summary>
 public sealed unsafe class MenuButtonDelegate
 {
-    public MenuButtonDelegate(MenuButtonPressedCallback pressed)
+    public MenuButtonDelegate(MenuButtonPressedCallback pressed, Action? themeChanged = null)
     {
         Pressed = pressed;
+        ThemeChanged = themeChanged;
         Native = NativeObject.Create<cef_menu_button_delegate_t>(this);
         Native->on_menu_button_pressed = &OnMenuButtonPressed;
+        if (themeChanged is not null) Native->@base.@base.on_theme_changed = &OnThemeChanged;
+    }
+
+    /// <summary>The theme reset the button's colours, as it does when the button first joins a window.</summary>
+    public Action? ThemeChanged { get; }
+
+    [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])]
+    private static void OnThemeChanged(cef_view_delegate_t* self, cef_view_t* view)
+    {
+        var owner = NativeObject.Owner<MenuButtonDelegate>(self);
+        Guard.Run(() => owner.ThemeChanged!());
+        NativeObject.Release(view);
     }
 
     public cef_menu_button_delegate_t* Native { get; }

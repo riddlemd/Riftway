@@ -99,6 +99,10 @@ public unsafe partial class BaseWindow
     /// <summary>Whether a menu bar menu is open.</summary>
     internal bool IsMenuBarMenuOpen => Query(_ => _menuBar?.IsMenuOpen ?? false, false);
 
+    /// <summary>The menu bar's buttons (screen DIPs, border insets) and its theme background; for tests.</summary>
+    internal (List<cef_rect_t> Buttons, List<cef_insets_t> Insets, uint Background) MenuBarSnapshot()
+        => Query(_ => _menuBar?.Snapshot() ?? ([], [], 0u), ([], [], 0u));
+
     /// <summary>Closes an open menu bar menu.</summary>
     internal void CancelMenuBarMenu() => Command(_ => _menuBar?.CancelMenu());
 }

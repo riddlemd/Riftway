@@ -111,7 +111,7 @@ Counted from the Checklist at the end: `BaseWindow` and `BrowserWindow` are one 
   `shareMenu` only in natively built macOS menus, M4); the click callback gets no `KeyboardEvent`; `Command`/`Super` accelerators run on the Windows key
   (matched in the keyboard handler's `on_key_event`, as CEF accelerators have no such modifier) but their items show no
   shortcut text (M5); Alt shows an auto-hidden bar until pressed again, rather than
-  until the menu is used; the bar takes CEF Views' default look.
+  until the menu is used; on Windows the bar has Electron's look (background, pressed colour, Alt underlines; W16).
   `Menu.MenuWillShow`/`MenuWillClose` (Electron's `menu-will-show`/`menu-will-close`) come from CEF's
   `D.menu_will_show`/`D.menu_closed` per Views model on Windows and Linux (a popup or tray menu and each submenu on its own
   Menu; a bar dropdown on its submenu, never on the bar's Menu), from NSMenu delegates on the macOS application and Dock

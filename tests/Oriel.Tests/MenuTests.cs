@@ -308,6 +308,67 @@ public sealed class MenuTests
     public void MnemonicOf_FindsTheMarkedLetter(string label, char? letter) => Assert.Equal(letter, WindowMenuBar.MnemonicOf(label));
 }
 
+public sealed class MenuBarColorsTests
+{
+    // Worked through color_utils by hand: BlendTowardMaxContrast(bg, 0x81), then 0.175 of it over bg.
+    [Theory]
+    [InlineData(0xFFFFFFFFu, 0xFFEBEBECu)]
+    [InlineData(0xFF292A2Du, 0xFF3C3D40u)]
+    public void Given_ABarBackground_When_ThePressedButtonColourIsComputed_Then_ItIsElectronsActivatedFloodFillInkDrop(uint background, uint pressed)
+    {
+        // Given: the theme's menu background (the parameter)
+
+        // When
+        var colour = MenuBarColors.Pressed(background);
+
+        // Then
+        Assert.Equal(pressed, colour);
+    }
+
+    [Fact]
+    public void Given_ATranslucentLightColour_When_BlendedTowardMaxContrast_Then_ItKeepsItsAlphaAndBlendsTowardGrey900()
+    {
+        // Given
+        const uint light = 0x80FFFFFFu;
+
+        // When
+        var blended = MenuBarColors.BlendTowardMaxContrast(light, 0x81 / 255f);
+
+        // Then
+        Assert.Equal(0x808E8F90u, blended);
+    }
+
+    [Fact]
+    public void Given_ADarkColour_When_BlendedTowardMaxContrast_Then_ItBlendsTowardWhite()
+    {
+        // Given
+        const uint dark = 0xFF292A2Du;
+
+        // When
+        var blended = MenuBarColors.BlendTowardMaxContrast(dark, 0x81 / 255f);
+
+        // Then
+        Assert.Equal(0xFF959697u, blended);
+    }
+
+    // g_luminance_midpoint 0.2117 falls between grey 0x77 (0.184) and 0x80 (0.216).
+    [Theory]
+    [InlineData(0xFF777777u, true)]
+    [InlineData(0xFF808080u, false)]
+    [InlineData(0xFFFFFFFFu, false)]
+    [InlineData(0xFF000000u, true)]
+    public void Given_AColour_When_CheckedForDarkness_Then_ItSplitsAtChromiumsLuminanceMidpoint(uint color, bool dark)
+    {
+        // Given: the colour (the parameter)
+
+        // When
+        var isDark = MenuBarColors.IsDark(color);
+
+        // Then
+        Assert.Equal(dark, isDark);
+    }
+}
+
 public sealed class KeyboardEventTests
 {
     [Fact]

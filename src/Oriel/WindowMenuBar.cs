@@ -16,6 +16,8 @@ internal sealed unsafe class WindowMenuBar
     // Button positions by mnemonic letter, for Alt+letter.
     private readonly Dictionary<char, int> _mnemonics = [];
     private readonly List<MenuButtonDelegate> _buttonDelegates = [];
+    // The buttons' labels with their '&' markers, by position.
+    private readonly List<string> _labels = [];
     // CEF's set_accelerator has no Windows-key modifier, so those accelerators are matched here.
     private Dictionary<(int KeyCode, AcceleratorModifiers Modifiers), int> _commandAccelerators = [];
     private cef_window_t* _window;
@@ -30,6 +32,9 @@ internal sealed unsafe class WindowMenuBar
     }
 
     private cef_menu_button_pressed_lock_t* _pressedLock;
+    // The button whose menu is open, painted as Electron's activated ink drop; -1 for none.
+    private int _openButton = -1;
+    private bool _underlined;
 
     /// <summary>Whether the bar is shown when there is a menu.</summary>
     internal bool Shown { get; private set; } = true;
@@ -126,6 +131,8 @@ internal sealed unsafe class WindowMenuBar
         var isDown = key->type is cef_key_event_type_t.KEYEVENT_RAWKEYDOWN or cef_key_event_type_t.KEYEVENT_KEYDOWN;
         if (key->windows_key_code == AltKeyCode)
         {
+            // Electron's RootView underlines the mnemonics while Alt is down.
+            if (IsVisible) SetUnderlines(isDown);
             if (isDown && (key->modifiers & (uint)cef_event_flags_t.EVENTFLAG_IS_REPEAT) == 0) _altAlone = true;
             else if (key->type == cef_key_event_type_t.KEYEVENT_KEYUP && _altAlone && AutoHide)
             {
@@ -184,6 +191,9 @@ internal sealed unsafe class WindowMenuBar
         _mnemonics.Clear();
         _panel->remove_all_child_views(_panel);
         _buttonDelegates.Clear();
+        _labels.Clear();
+        _openButton = -1;
+        _underlined = false;
 
         if (_menu is { } menu)
         {
@@ -196,28 +206,39 @@ internal sealed unsafe class WindowMenuBar
             _commandAccelerators = MenuModels.CommandAccelerators(menu);
         }
         else _commandAccelerators = [];
+        ApplyColors();
         UpdateVisibility();
     }
 
     private void AddButton(MenuItem item)
     {
         var commandId = item.CommandId;
-        var buttonDelegate = new MenuButtonDelegate((button, point, pressedLock) => ShowMenu(commandId, button, pressedLock));
+        var index = (int)_panel->get_child_view_count(_panel);
+        var buttonDelegate = new MenuButtonDelegate((button, point, pressedLock) => ShowMenu(commandId, index, button, pressedLock),
+            // Views' theme pass resets every view's background, the bar's first; each button's repaints the bar's and theirs.
+            ApplyColors);
         _buttonDelegates.Add(buttonDelegate);
         cef_string_utf16_t text = default;
-        CefString.Set(&text, MenuLabels.WithoutMnemonics(item.Label));
+        // The label keeps its '&': CEF hides it, and underlines the letter only while the button is focusable.
+        CefString.Set(&text, item.Label);
+        _labels.Add(item.Label);
         NativeObject.AddRef(buttonDelegate.Native);
         var button = CefNative.cef_menu_button_create(buttonDelegate.Native, &text);
+        CefString.Set(&text, MenuLabels.WithoutMnemonics(item.Label));
+        var asButton = (cef_button_t*)button;
+        asButton->set_accessible_name(asButton, &text);
         CefString.Clear(&text);
         var view = (cef_view_t*)button;
         view->set_enabled(view, item.CommandEnabled ? 1 : 0);
-        if (MnemonicOf(item.Label) is { } letter) _mnemonics.TryAdd(letter, (int)_panel->get_child_view_count(_panel));
+        if (MnemonicOf(item.Label) is { } letter) _mnemonics.TryAdd(letter, index);
         // The panel takes the creation reference.
         _panel->add_child_view(_panel, view);
     }
 
-    private void ShowMenu(int commandId, cef_menu_button_t* button, cef_menu_button_pressed_lock_t* pressedLock)
+    private void ShowMenu(int commandId, int index, cef_menu_button_t* button, cef_menu_button_pressed_lock_t* pressedLock)
     {
+        // Electron's MenuBar hides the underlines once a button is pressed.
+        SetUnderlines(false);
         if (_menu?.FindByCommandId(commandId) is not { Submenu: { } submenu })
         {
             // A top-level item without a submenu acts as a button.
@@ -245,6 +266,8 @@ internal sealed unsafe class WindowMenuBar
         NativeObject.AddRef(pressedLock);
         _pressedLock = pressedLock;
         IsMenuOpen = true;
+        _openButton = index;
+        ApplyColors();
         button->show_menu(button, model, &origin, cef_menu_anchor_position_t.CEF_MENU_ANCHOR_TOPLEFT);
     }
 
@@ -263,6 +286,7 @@ internal sealed unsafe class WindowMenuBar
     /// <summary>The window lost focus: an auto-hidden bar that Alt brought up goes away, as in Electron.</summary>
     internal void OnWindowBlurred()
     {
+        SetUnderlines(false);
         if (AutoHide && _shownByAlt && !IsMenuOpen) SetShown(false);
     }
 
@@ -272,6 +296,7 @@ internal sealed unsafe class WindowMenuBar
     private void OnMenuClosed()
     {
         ReleasePressedLock();
+        SetUnderlines(false);
         if (!AutoHide || !_shownByAlt) return;
         _shownByAlt = false;
         SetShown(false);
@@ -280,9 +305,75 @@ internal sealed unsafe class WindowMenuBar
     private void ReleasePressedLock()
     {
         IsMenuOpen = false;
+        if (_openButton >= 0)
+        {
+            _openButton = -1;
+            ApplyColors();
+        }
         if (_pressedLock is null) return;
         NativeObject.Release(_pressedLock);
         _pressedLock = null;
+    }
+
+    // Electron's Windows bar paints ui::kColorMenuBackground (menu_bar.cc); a CEF panel shows the window's colour through.
+    private void ApplyColors()
+    {
+        if (_panel is null) return;
+        var panel = (cef_view_t*)_panel;
+        var background = panel->get_theme_color(panel, MenuBarColors.MenuBackgroundColorId);
+        panel->set_background_color(panel, background);
+        var count = (int)_panel->get_child_view_count(_panel);
+        for (var i = 0; i < count; i++)
+        {
+            var child = _panel->get_child_view_at(_panel, i);
+            child->set_background_color(child, i == _openButton ? MenuBarColors.Pressed(background) : background);
+            NativeObject.Release(child);
+        }
+    }
+
+    // CEF's menu button draws its mnemonic underline only while focusable (menu_button_impl.cc, SetFocusable).
+    private void SetUnderlines(bool visible)
+    {
+        if (_panel is null || visible == _underlined) return;
+        _underlined = visible;
+        var count = (int)_panel->get_child_view_count(_panel);
+        for (var i = 0; i < count; i++)
+        {
+            var child = _panel->get_child_view_at(_panel, i);
+            child->set_focusable(child, visible ? 1 : 0);
+            // CEF's label keeps its laid-out text until the text changes, so the new prefix flag shows only after a reset.
+            var button = child->as_button(child);
+            var label = button->as_label_button(button);
+            cef_string_utf16_t text = default;
+            label->set_text(label, &text);
+            CefString.Set(&text, _labels[i]);
+            label->set_text(label, &text);
+            // Setting the text also renames the button, '&' and all.
+            CefString.Set(&text, MenuLabels.WithoutMnemonics(_labels[i]));
+            button->set_accessible_name(button, &text);
+            CefString.Clear(&text);
+            NativeObject.Release(label);
+            NativeObject.Release(button);
+            NativeObject.Release(child);
+        }
+    }
+
+    /// <summary>The buttons' bounds in screen DIPs and border insets, and the theme's menu background; for tests.</summary>
+    internal (List<cef_rect_t> Buttons, List<cef_insets_t> Insets, uint Background) Snapshot()
+    {
+        var buttons = new List<cef_rect_t>();
+        var insets = new List<cef_insets_t>();
+        if (_panel is null) return (buttons, insets, 0);
+        var count = (int)_panel->get_child_view_count(_panel);
+        for (var i = 0; i < count; i++)
+        {
+            var child = _panel->get_child_view_at(_panel, i);
+            buttons.Add(child->get_bounds_in_screen(child));
+            insets.Add(child->get_insets(child));
+            NativeObject.Release(child);
+        }
+        var panel = (cef_view_t*)_panel;
+        return (buttons, insets, panel->get_theme_color(panel, MenuBarColors.MenuBackgroundColorId));
     }
 
     private void RegisterAccelerator(MenuItem item)
@@ -319,5 +410,39 @@ internal sealed unsafe class WindowMenuBar
             return char.IsAsciiLetter(label[i + 1]) ? char.ToUpperInvariant(label[i + 1]) : null;
         }
         return null;
+    }
+}
+
+/// <summary>The colours of Electron's Windows menu bar, computed as Chromium's <c>color_utils</c> does.</summary>
+internal static class MenuBarColors
+{
+    /// <summary><c>CEF_ColorMenuBackground</c> in CEF 154's <c>cef_color_ids.h</c>: <c>ui::kColorMenuBackground</c>.</summary>
+    internal const int MenuBackgroundColorId = 364;
+
+    /// <summary>A pressed <c>SubmenuButton</c> over <paramref name="background"/> (ARGB): its flood-fill ink drop, based on
+    /// <c>BlendTowardMaxContrast(background, 0x81)</c> (submenu_button.cc), at the ink drop's 0.175 visible opacity.</summary>
+    internal static uint Pressed(uint background)
+        => AlphaBlend(BlendTowardMaxContrast(background, 0x81 / 255f), background | 0xFF000000, 0.175f);
+
+    internal static uint BlendTowardMaxContrast(uint color, float alpha)
+        => (color & 0xFF000000) | (AlphaBlend(IsDark(color) ? 0xFFFFFFFF : 0xFF202124, color | 0xFF000000, alpha) & 0x00FFFFFF);
+
+    // g_luminance_midpoint, where white and kGoogleGrey900 (0x202124) contrast equally.
+    internal static bool IsDark(uint color) => Luminance(color) < 0.211692036f;
+
+    private static float Luminance(uint color)
+        => 0.2126f * Linearize((byte)(color >> 16)) + 0.7152f * Linearize((byte)(color >> 8)) + 0.0722f * Linearize((byte)color);
+
+    private static float Linearize(byte channel)
+    {
+        var c = channel / 255f;
+        return c <= 0.04045f ? c / 12.92f : MathF.Pow((c + 0.055f) / 1.055f, 2.4f);
+    }
+
+    // Opaque colours only.
+    private static uint AlphaBlend(uint foreground, uint background, float alpha)
+    {
+        uint Channel(int shift) => (uint)MathF.Round(((foreground >> shift) & 0xFF) * alpha + ((background >> shift) & 0xFF) * (1 - alpha)) << shift;
+        return 0xFF000000 | Channel(16) | Channel(8) | Channel(0);
     }
 }
