@@ -3663,6 +3663,26 @@ async Task BarMenusAsync(BrowserWindow win, Menu menu, MenuItem save, MenuItem g
     await Task.Delay(500);
     clicks.Clear();
 
+    // registerAccelerator: false keeps the key from the window (both kinds), as Electron's GenerateAcceleratorTable.
+    var unregistered = new MenuItem { Label = "Unregistered", Accelerator = "CmdOrCtrl+Shift+Y", RegisterAccelerator = false, Click = (_, _, _) => clicks.Add("ctrl-y") };
+    var unregisteredMeta = new MenuItem { Label = "Unregistered Meta", Accelerator = "Super+Shift+U", RegisterAccelerator = false, Click = (_, _, _) => clicks.Add("meta-u") };
+    menu.Items[0].Submenu!.Append(unregistered);
+    menu.Items[0].Submenu!.Append(unregisteredMeta);
+    await Task.Delay(300);
+    NativeKey('Y', Ctrl | Shift);
+    NativeKey('U', Win | Shift);
+    await Task.Delay(500);
+    var notRegistered = clicks.Count == 0;
+    unregistered.RegisterAccelerator = true;
+    unregisteredMeta.RegisterAccelerator = true;
+    await Task.Delay(300);
+    NativeKey('Y', Ctrl | Shift);
+    NativeKey('U', Win | Shift);
+    Check("RegisterAccelerator false keeps an item's accelerator from the window until set again, as Electron",
+        notRegistered && Eventually(() => clicks.Contains("ctrl-y") && clicks.Contains("meta-u"), step), $"before={notRegistered} {string.Join(",", clicks)}");
+    await Task.Delay(500);
+    clicks.Clear();
+
     win.AutoHideMenuBar = true;
     Check("AutoHideMenuBar hides the bar", Eventually(() => !win.IsMenuBarVisible && win.GetContentBounds() == content && PageHeight() == fullHeight, step), $"{win.GetContentBounds()} page={PageHeight()}/{fullHeight}");
     Check("AutoHideMenuBar reads back", win.AutoHideMenuBar);

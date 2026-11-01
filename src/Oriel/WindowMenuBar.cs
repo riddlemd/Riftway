@@ -287,7 +287,7 @@ internal sealed unsafe class WindowMenuBar
 
     private void RegisterAccelerator(MenuItem item)
     {
-        if (item.Type is MenuItemType.Separator or MenuItemType.Submenu or MenuItemType.Palette || MenuModels.CefAccelerator(item) is not { } a) return;
+        if (item.Type is MenuItemType.Separator or MenuItemType.Submenu or MenuItemType.Palette || !item.RegisterAccelerator || MenuModels.CefAccelerator(item) is not { } a) return;
         // Low priority: the page sees the key first, so editing keys keep working in text fields.
         _window->set_accelerator(_window, item.CommandId, a.KeyCode,
             MenuModels.Has(a, AcceleratorModifiers.Shift), MenuModels.Has(a, AcceleratorModifiers.Control), MenuModels.Has(a, AcceleratorModifiers.Alt), 0);

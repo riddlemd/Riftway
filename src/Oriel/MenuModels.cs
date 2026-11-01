@@ -63,15 +63,15 @@ internal static unsafe class MenuModels
 
     internal static int Has(Accelerator accelerator, AcceleratorModifiers modifier) => accelerator.Modifiers.ForMenus().HasFlag(modifier) ? 1 : 0;
 
-    /// <summary>The command ids of <paramref name="menu"/>'s items whose accelerator holds the Windows/Super key, by key and
-    /// modifiers (AltGr counted as Alt); a later item takes an accelerator from an earlier one, as in Electron's
+    /// <summary>The command ids of <paramref name="menu"/>'s registering items whose accelerator holds the Windows/Super key,
+    /// by key and modifiers (AltGr counted as Alt); a later item takes an accelerator from an earlier one, as in Electron's
     /// accelerator table.</summary>
     internal static Dictionary<(int KeyCode, AcceleratorModifiers Modifiers), int> CommandAccelerators(Menu menu)
     {
         var table = new Dictionary<(int, AcceleratorModifiers), int>();
         foreach (var item in menu.Descendants())
         {
-            if (item.Type is MenuItemType.Separator or MenuItemType.Submenu or MenuItemType.Palette || item.Accelerator is not { } text) continue;
+            if (item.Type is MenuItemType.Separator or MenuItemType.Submenu or MenuItemType.Palette || !item.RegisterAccelerator || item.Accelerator is not { } text) continue;
             var a = Accelerator.Parse(text, macOS: false);
             if (a.Modifiers.HasFlag(AcceleratorModifiers.Command)) table[(a.KeyCode, a.Modifiers.ForMenus())] = item.CommandId;
         }

@@ -109,6 +109,71 @@ public sealed class MenuTests
         Assert.Equal("CmdOrCtrl+D", item.Accelerator);
     }
 
+    // Electron's menu-item-roles.ts: only these four leave their keys to the page.
+    [Theory]
+    [InlineData(MenuItemRole.Copy, false)]
+    [InlineData(MenuItemRole.Cut, false)]
+    [InlineData(MenuItemRole.Paste, false)]
+    [InlineData(MenuItemRole.PasteAndMatchStyle, false)]
+    [InlineData(MenuItemRole.Undo, true)]
+    [InlineData(MenuItemRole.SelectAll, true)]
+    [InlineData(MenuItemRole.Delete, true)]
+    [InlineData(MenuItemRole.None, true)]
+    public void Given_AnItemWithARole_When_RegisterAcceleratorIsRead_Then_ItIsElectronsRoleDefault(MenuItemRole role, bool registers)
+    {
+        // Given
+        var item = new MenuItem { Role = role };
+
+        // When
+        var read = item.RegisterAccelerator;
+
+        // Then
+        Assert.Equal(registers, read);
+    }
+
+    [Fact]
+    public void Given_ACopyItem_When_RegisterAcceleratorIsSetTrue_Then_ItOverridesTheRolesDefault()
+    {
+        // Given
+        var copy = new MenuItem { Role = MenuItemRole.Copy };
+
+        // When
+        copy.RegisterAccelerator = true;
+
+        // Then
+        Assert.True(copy.RegisterAccelerator);
+    }
+
+    [Fact]
+    public void Given_AnItemInAMenu_When_RegisterAcceleratorChanges_Then_TheMenuRaisesChanged()
+    {
+        // Given
+        var item = new MenuItem { Accelerator = "CmdOrCtrl+K" };
+        var menu = new Menu { item };
+        var raised = 0;
+        menu.Changed += () => raised++;
+
+        // When
+        item.RegisterAccelerator = false;
+
+        // Then
+        Assert.Equal(1, raised);
+    }
+
+    [Fact]
+    public void Given_AWindowsKeyItemThatDoesNotRegister_When_TheCommandAcceleratorTableIsBuilt_Then_ItIsLeftOut()
+    {
+        // Given
+        var kept = new MenuItem { Accelerator = "Super+K" };
+        var menu = new Menu { kept, new MenuItem { Accelerator = "Super+L", RegisterAccelerator = false } };
+
+        // When
+        var table = MenuModels.CommandAccelerators(menu);
+
+        // Then
+        Assert.Equal([kept.CommandId], table.Values);
+    }
+
     [Fact]
     public void RoleMenus_SupplyTheirOwnSubmenuOnce()
     {
