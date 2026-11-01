@@ -5240,6 +5240,18 @@ async Task ShellApisAsync()
     await Task.Delay(500);
     Check("accentColor = true: the system accent colour, even inactive", Eventually(() => Near(CaptionPixel(on), system), step), $"{Px(CaptionPixel(on))} vs {system:X6}");
     Check("accentColor = false: GetAccentColor is false", off.GetAccentColor() == AccentColor.None, off.GetAccentColor());
+    // A system accent change reaches windows through Chromium's AccentColorObserver; its testing hook stands in for the
+    // DWM key's change, so the real setting is never touched.
+    var observedBefore = SystemPreferences.ObservedAccentColor;
+    try
+    {
+        SystemPreferences.SetAccentColorForTesting(0xFFFF0000);
+        Check("a system accent change recolours an accentColor = true window, and GetAccentColor follows, as Electron",
+            Eventually(() => Near(CaptionPixel(on), 0xFF0000) && Near(BorderPixel(on), 0xFF0000), step) && on.GetAccentColor().Color == "#FF0000",
+            $"{Px(CaptionPixel(on))} / {Px(BorderPixel(on))} {on.GetAccentColor().Color}");
+    }
+    finally { SystemPreferences.SetAccentColorForTesting(observedBefore); }
+    Check("the window follows the system colour back", Eventually(() => Near(CaptionPixel(on), system), step), $"{Px(CaptionPixel(on))} vs {system:X6}");
     on.Destroy();
     off.Destroy();
     // Created hidden, the window gets its colour from the activation that showing it brings, as in Electron.

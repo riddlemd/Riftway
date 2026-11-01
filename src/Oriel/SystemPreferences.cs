@@ -69,6 +69,8 @@ public static partial class SystemPreferences
     private static EventHandler<AccentColorChangedEventArgs>? s_accentChanged;
     private static EventHandler? s_colorChanged;
     private static bool s_started;
+    private static bool s_observing;
+    private static Action? s_accentObservers;
     private static uint? s_accent;
     private static string s_currentAccent = "";
 
@@ -156,21 +158,56 @@ public static partial class SystemPreferences
         remove { lock (s_gate) s_colorChanged -= value; }
     }
 
-    // Electron's SystemPreferences constructor: the accent baseline and watch at once, the window once the app is ready.
+    // Electron's SystemPreferences constructor: the accent baseline at once, the window once the app is ready.
     private static void EnsureStarted()
     {
         if (OperatingSystem.IsLinux()) StartLinux();
         if (!OperatingSystem.IsWindows()) return;
+        EnsureAccentObserver();
         lock (s_gate)
         {
             if (s_started) return;
             s_started = true;
-            s_accent = WindowsSystemPreferences.AccentColor();
             s_currentAccent = FormatAccent(s_accent);
+        }
+        StartWindow();
+    }
+
+    // Chromium's AccentColorObserver singleton: read once, then re-read whenever the DWM key changes.
+    private static void EnsureAccentObserver()
+    {
+        if (!OperatingSystem.IsWindows()) return;
+        lock (s_gate)
+        {
+            if (s_observing) return;
+            s_observing = true;
+            s_accent = WindowsSystemPreferences.AccentColor();
             // The pool wait keeps the watch alive.
             _ = WindowsSystemPreferences.WatchKey(WindowsSystemPreferences.DwmKey, OnDwmKeyUpdated);
         }
-        StartWindow();
+    }
+
+    /// <summary>Chromium's <c>AccentColorObserver::accent_color()</c> (Windows): the colour last read from the system, as
+    /// ARGB.</summary>
+    internal static uint? ObservedAccentColor
+    {
+        get
+        {
+            EnsureAccentObserver();
+            lock (s_gate) return s_accent;
+        }
+    }
+
+    /// <summary>Chromium's <c>AccentColorObserver::Subscribe</c> (Windows): raised on the UI thread after the colour is
+    /// re-read, before <see cref="AccentColorChanged"/>.</summary>
+    internal static event Action? AccentColorObserved
+    {
+        add
+        {
+            EnsureAccentObserver();
+            lock (s_gate) s_accentObservers += value;
+        }
+        remove { lock (s_gate) s_accentObservers -= value; }
     }
 
     private static void StartWindow()
@@ -213,11 +250,28 @@ public static partial class SystemPreferences
         NotifyAccent();
     }
 
-    // Electron compares and emits from a fresh UI task, not inside the observer's notification.
+    // The observer notifies its subscribers (windows) on the UI thread; Electron's SystemPreferences then compares and
+    // emits from a fresh UI task.
     private static void NotifyAccent()
     {
-        if (OrielApp.CurrentOrNull is { IsReady: true }) CefThread.PostUi(OnAccentColorChanged);
-        else OnAccentColorChanged();
+        if (OrielApp.CurrentOrNull is not { IsReady: true })
+        {
+            NotifyAccentObservers();
+            OnAccentColorChanged();
+            return;
+        }
+        CefThread.PostUi(() =>
+        {
+            NotifyAccentObservers();
+            CefThread.PostUi(OnAccentColorChanged);
+        });
+    }
+
+    private static void NotifyAccentObservers()
+    {
+        Action? observers;
+        lock (s_gate) observers = s_accentObservers;
+        observers?.Invoke();
     }
 
     private static void OnAccentColorChanged()

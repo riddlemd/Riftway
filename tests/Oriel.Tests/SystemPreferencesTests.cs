@@ -34,6 +34,75 @@ public sealed class SystemPreferencesTests
         Assert.StartsWith("Unknown color: nope", e.Message, StringComparison.Ordinal);
     }
 
+    [WindowsOnlyFact]
+    public void Given_AnAccentObserver_When_TheSystemAccentChanges_Then_ItSeesTheNewColour()
+    {
+        // Given
+        var original = SystemPreferences.ObservedAccentColor;
+        uint? seen = null;
+        Action observer = () => seen = SystemPreferences.ObservedAccentColor;
+        SystemPreferences.AccentColorObserved += observer;
+        try
+        {
+            // When
+            SystemPreferences.SetAccentColorForTesting(0xFF123456);
+
+            // Then
+            Assert.Equal(0xFF123456u, seen);
+        }
+        finally
+        {
+            SystemPreferences.AccentColorObserved -= observer;
+            SystemPreferences.SetAccentColorForTesting(original);
+        }
+    }
+
+    [WindowsOnlyFact]
+    public void Given_AnAccentObserverAndAnAccentColorChangedHandler_When_TheSystemAccentChanges_Then_TheObserverRunsFirst()
+    {
+        // Given
+        var original = SystemPreferences.ObservedAccentColor;
+        var order = new List<string>();
+        Action observer = () => order.Add("observer");
+        EventHandler<AccentColorChangedEventArgs> changed = (_, e) => order.Add("changed " + e.NewColor);
+        SystemPreferences.AccentColorObserved += observer;
+        SystemPreferences.AccentColorChanged += changed;
+        try
+        {
+            // When
+            SystemPreferences.SetAccentColorForTesting(0xFF123456);
+
+            // Then
+            Assert.Equal(["observer", "changed 123456FF"], order);
+        }
+        finally
+        {
+            SystemPreferences.AccentColorObserved -= observer;
+            SystemPreferences.AccentColorChanged -= changed;
+            SystemPreferences.SetAccentColorForTesting(original);
+        }
+    }
+
+    [WindowsOnlyFact]
+    public void Given_AnAccentObserverThatUnsubscribed_When_TheSystemAccentChanges_Then_ItIsNotCalled()
+    {
+        // Given
+        var original = SystemPreferences.ObservedAccentColor;
+        var calls = 0;
+        Action observer = () => calls++;
+        SystemPreferences.AccentColorObserved += observer;
+        SystemPreferences.AccentColorObserved -= observer;
+        try
+        {
+            // When
+            SystemPreferences.SetAccentColorForTesting(0xFF654321);
+
+            // Then
+            Assert.Equal(0, calls);
+        }
+        finally { SystemPreferences.SetAccentColorForTesting(original); }
+    }
+
     [Fact]
     public void ToRgbaHex_OrdersRgbaInUpperCase()
     {

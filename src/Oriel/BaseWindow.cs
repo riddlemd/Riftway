@@ -229,6 +229,7 @@ public unsafe partial class BaseWindow
     // Windows and Linux only; on macOS the application menu is the menu bar.
     private protected readonly WindowMenuBar? _menuBar;
     private readonly Action<Menu?> _applicationMenuChanged;
+    private readonly Action _accentObserved;
     private Menu? _ownMenu;
     private bool _hasOwnMenu;
 
@@ -379,6 +380,7 @@ public unsafe partial class BaseWindow
         {
             if (!_hasOwnMenu) _menuBar?.SetMenu(menu);
         });
+        _accentObserved = OnSystemAccentColorChanged;
         _windowDelegate = new WindowDelegate
         {
             Created = OnWindowCreated,
@@ -1079,6 +1081,7 @@ public unsafe partial class BaseWindow
         WindowsSubclass.RouteSizing(hwnd, (wmsz, r) => Cancelled(WillResize, new WillResizeEventArgs(PixelsToDips(r), WindowPolish.EdgeFromWmsz(wmsz))));
         WindowsSubclass.RouteMoving(hwnd, r => Cancelled(WillMove, new WillMoveEventArgs(PixelsToDips(r))));
         WindowsSubclass.RouteMessages(hwnd, OnWindowMessage);
+        SystemPreferences.AccentColorObserved += _accentObserved;
         WindowsSubclass.RouteThumbButtonClicks(hwnd, OnThumbarClick);
         WindowsSubclass.RouteTaskbarCreated(hwnd, () =>
         {
@@ -1100,20 +1103,23 @@ public unsafe partial class BaseWindow
         else if (!_options.ThickFrame) WindowsWindowStyle.FlipStyle(hwnd, false, WindowsFrame.WsThickFrame);
     }
 
-    // Electron's OnWindowMessage after PreHandleMSG's NotifyWindowMessage; the colour messages stand in for
-    // AccentColorObserver's registry watch.
+    // Electron's OnWindowMessage after PreHandleMSG's NotifyWindowMessage.
     private void OnWindowMessage(uint message, nint wParam, nint lParam)
     {
-        if (message is 0x0320 /* WM_DWMCOLORIZATIONCOLORCHANGED */ or 0x001A /* WM_SETTINGCHANGE */)
-            Command(w => UpdateAccentColor(w, w->is_active(w) != 0));
         if (_messageHooks.TryGetValue(message, out var callback)) callback(wParam, lParam);
+    }
+
+    // Electron's OnSystemAccentColorChanged, subscribed to the AccentColorObserver; called on the UI thread.
+    private void OnSystemAccentColorChanged()
+    {
+        if (_window is not null) UpdateAccentColor(_window, _window->is_active(_window) != 0);
     }
 
     // Electron's UpdateWindowAccentColor.
     private void UpdateAccentColor(cef_window_t* w, bool active)
     {
         if (!OperatingSystem.IsWindows() || !WindowsWindow.IsWindows11) return;
-        var system = _accent is { Argb: not null } ? null : WindowsWindow.SystemAccentColor();
+        var system = _accent is { Argb: not null } ? null : SystemPreferences.ObservedAccentColor;
         var color = WindowsFrame.BorderColor(_accent, active, _accent is null && WindowsWindow.AccentColorOnTitleBars(), system);
         if (!WindowsWindow.SetBorderAndCaptionColor(Hwnd(w), color, caption: !IsFrameless))
             Console.Error.WriteLine("[Oriel] DWM did not take the accent colour.");
@@ -1447,7 +1453,7 @@ public unsafe partial class BaseWindow
     public AccentColor GetAccentColor() => Query(_ =>
     {
         if (!OperatingSystem.IsWindows()) return AccentColor.None;
-        var hex = WindowsFrame.Report(_accent, _accent is { Argb: not null } ? null : WindowsWindow.SystemAccentColor());
+        var hex = WindowsFrame.Report(_accent, _accent is { Argb: not null } ? null : SystemPreferences.ObservedAccentColor);
         return hex is null ? AccentColor.None : AccentColor.FromColor(hex);
     }, AccentColor.None);
 
@@ -1932,6 +1938,7 @@ public unsafe partial class BaseWindow
         DisposeMacButtons();
         if (_resizeDelegate != 0 && OperatingSystem.IsMacOS()) MacWindow.UnrouteWillResize(_resizeDelegate);
         Menu.ApplicationMenuChanged -= _applicationMenuChanged;
+        SystemPreferences.AccentColorObserved -= _accentObserved;
         _menuBar?.Detach();
         _titleBarOverlay?.Detach();
         if (OperatingSystem.IsWindows())
