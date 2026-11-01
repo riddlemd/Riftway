@@ -20,8 +20,15 @@ static class StartDragTests
                 File = "/tmp/x",
                 Icon = NativeImage.CreateFromBitmap(new byte[16], new NativeImageBitmapOptions { Width = 2, Height = 2 }),
             }));
-            // macOS starts an NSDraggingSession, which ends at once with no mouse button down.
-            if (OperatingSystem.IsMacOS()) check("startDrag starts a drag session on macOS without throwing", thrown is null, thrown?.ToString());
+            if (OperatingSystem.IsMacOS())
+            {
+                check("startDrag starts a drag session on macOS without throwing", thrown is null, thrown?.ToString());
+                // The NSDraggingSession runs AppKit's drag loop until a mouse-up, holding the main thread (and the quit) meanwhile;
+                // WindowServer drops a posted mouse-up without its mouse-down, so the release goes onto NSApp's own queue.
+                await Task.Delay(500);
+                MacInterop.PostAppMouseUp();
+                await Task.Delay(500);
+            }
             else check("startDrag throws PlatformNotSupportedException on Linux (drift C40)", thrown is PlatformNotSupportedException, thrown?.GetType().Name);
             return;
         }

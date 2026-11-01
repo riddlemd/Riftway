@@ -462,7 +462,15 @@ async Task RunAsync(BrowserWindow win, BrowserWindow simple)
     Check("closing the parent closes its child", childClosed.Wait(step));
     failures = results.Count(r => r.StartsWith("FAIL", StringComparison.Ordinal));
     // Run returns only if Quit works off the UI thread; otherwise the run never prints its result.
+    app.WillQuit += (_, _) => Console.WriteLine("QUIT: will-quit");
     app.Quit();
+    // A run that never quits says what is left: a quit waits for every window and view page to close.
+    _ = Task.Delay(TimeSpan.FromSeconds(15)).ContinueWith(_ =>
+    {
+        Console.WriteLine($"QUIT STALLED: {BaseWindow.GetAllWindows().Count} window(s) and {WebContents.GetAllWebContents().Count} page(s) still open");
+        // Naming AppKit's state needs the main thread, which a nested AppKit loop (a drag, a modal session) can hold.
+        if (OperatingSystem.IsMacOS()) Console.WriteLine($"QUIT STALLED: AppKit: {Oriel.Cef.CefThread.InvokeOnUi(MacInterop.DescribeAppKit)}");
+    });
 }
 
 void PressF12(BrowserWindow w)
@@ -2011,9 +2019,12 @@ async Task MacWindowApisAsync()
     nint NativeIconItem() => Oriel.Cef.CefThread.InvokeOnUi(() =>
     {
         var main = MacInterop.Send(MacInterop.Send(MacInterop.objc_getClass("NSApplication"), MacInterop.sel_registerName("sharedApplication")), MacInterop.sel_registerName("mainMenu"));
+        // itemAtIndex: throws past the end, and the menu is rebuilt a task later.
+        if (main == 0 || (long)MacInterop.Send(main, MacInterop.sel_registerName("numberOfItems")) == 0) return 0;
         var top = MacInterop.SendNUInt(main, MacInterop.sel_registerName("itemAtIndex:"), 0);
         var sub = MacInterop.Send(top, MacInterop.sel_registerName("submenu"));
-        return sub == 0 ? 0 : MacInterop.SendNUInt(sub, MacInterop.sel_registerName("itemAtIndex:"), 0);
+        if (sub == 0 || (long)MacInterop.Send(sub, MacInterop.sel_registerName("numberOfItems")) == 0) return 0;
+        return MacInterop.SendNUInt(sub, MacInterop.sel_registerName("itemAtIndex:"), 0);
     });
     var nativeIcon = Eventually(() => NativeIconItem() != 0, step) ? NativeIconItem() : 0;
     Check("a menu item's Icon and ToolTip reach its NSMenuItem in the application menu (macOS)",
@@ -8692,6 +8703,34 @@ static unsafe class HangProbe
 static class MacInterop
 {
     [System.Runtime.InteropServices.DllImport("/usr/lib/libobjc.A.dylib", EntryPoint = "objc_msgSend")] internal static extern byte SendAction(nint receiver, nint selector, nint action, nint to, nint from);
+
+    /// <summary>Queues a left mouse-up (NSEventTypeLeftMouseUp) on NSApp, which a drag loop dequeues as the button's release.
+    /// Any thread.</summary>
+    internal static void PostAppMouseUp()
+    {
+        var mouseUp = SendMouseEvent(objc_getClass("NSEvent"), sel_registerName("mouseEventWithType:location:modifierFlags:timestamp:windowNumber:context:eventNumber:clickCount:pressure:"),
+            2, default, 0, 0, 0, 0, 0, 1, 0);
+        SendPostEvent(Send(objc_getClass("NSApplication"), sel_registerName("sharedApplication")), sel_registerName("postEvent:atStart:"), mouseUp, 0);
+    }
+    [System.Runtime.InteropServices.DllImport("/usr/lib/libobjc.A.dylib", EntryPoint = "objc_msgSend")] private static extern nint SendMouseEvent(nint cls, nint selector, nuint type, NSPoint location, nuint flags, double timestamp, nint windowNumber, nint context, nint eventNumber, nint clickCount, float pressure);
+    [System.Runtime.InteropServices.DllImport("/usr/lib/libobjc.A.dylib", EntryPoint = "objc_msgSend")] private static extern void SendPostEvent(nint app, nint selector, nint e, byte atStart);
+
+    /// <summary>NSApp's modal window and each window's class and visibility. Main thread.</summary>
+    internal static string DescribeAppKit()
+    {
+        var app = Send(objc_getClass("NSApplication"), sel_registerName("sharedApplication"));
+        var windows = Send(app, sel_registerName("windows"));
+        var count = (int)Send(windows, sel_registerName("count"));
+        var parts = new List<string> { $"modal={Send(app, sel_registerName("modalWindow"))} running={SendBool(app, sel_registerName("isRunning"))}" };
+        for (var i = 0; i < count; i++)
+        {
+            var window = Send(windows, sel_registerName("objectAtIndex:"), i);
+            parts.Add($"{System.Runtime.InteropServices.Marshal.PtrToStringUTF8(class_getName(object_getClass(window)))} vis={SendBool(window, sel_registerName("isVisible"))}");
+        }
+        return string.Join("; ", parts);
+    }
+    [System.Runtime.InteropServices.DllImport("/usr/lib/libobjc.A.dylib")] private static extern nint class_getName(nint cls);
+    [System.Runtime.InteropServices.DllImport("/usr/lib/libobjc.A.dylib")] private static extern nint object_getClass(nint obj);
 
     /// <summary>Whether one of the app's windows of <paramref name="className"/> is visible. Main thread.</summary>
     internal static bool VisibleWindowOf(string className)
