@@ -2270,6 +2270,11 @@ async Task WebContentsMethodsAsync()
         && IsBlue(Pixel(part, 0, 0)) && IsBlue(Pixel(part, part.GetSize().Width - 1, part.GetSize().Height - 1)), $"{part.GetSize()} {Pixel(part, 0, 0)} {Pixel(part, part.GetSize().Width - 1, part.GetSize().Height - 1)}");
     var empty = await wc.CapturePageAsync(new Rectangle(10, 10, 0, 30));
     Check("an empty rect captures the whole page, as Electron's", empty.GetSize() == whole.GetSize(), empty.GetSize());
+    var viaWindow = await w.CapturePageAsync(new Rectangle(10, 10, 40, 30));
+    var wholeViaWindow = await w.CapturePageAsync();
+    Check("BrowserWindow.CapturePageAsync is the page's capture, as Electron's win.capturePage()",
+        viaWindow.GetSize() == part.GetSize() && IsBlue(Pixel(viaWindow, 0, 0)) && wholeViaWindow.GetSize() == whole.GetSize() && IsRed(Pixel(wholeViaWindow, 2, 2)),
+        $"{viaWindow.GetSize()} {Pixel(viaWindow, 0, 0)} {wholeViaWindow.GetSize()}");
     wc.SetZoomFactor(2);
     await Task.Delay(500);
     var zoomed = await wc.CapturePageAsync(new Rectangle(20, 20, 80, 60));

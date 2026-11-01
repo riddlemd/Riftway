@@ -19,11 +19,11 @@ Counted from the Checklist at the end: `BaseWindow` and `BrowserWindow` are one 
 |---|---|---|---|---|---|---|---|
 | BaseWindow + BrowserWindow options | 54 | 34 | 19 | 1 | 0 | 63.0% | 80.6% |
 | webPreferences | 46 | 12 | 7 | 20 | 7 | 30.8% | 39.7% |
-| Instance methods | 143 | 107 | 29 | 1 | 6 | 78.1% | 88.7% |
+| Instance methods | 143 | 107 | 30 | 0 | 6 | 78.1% | 89.1% |
 | Instance properties | 24 | 17 | 7 | 0 | 0 | 70.8% | 85.4% |
 | Events | 35 | 20 | 15 | 0 | 0 | 57.1% | 78.6% |
 | Static methods | 7 | 6 | 0 | 0 | 1 | 100.0% | 100.0% |
-| **Total** | 309 | 196 | 77 | 22 | 14 | 66.4% | 79.5% |
+| **Total** | 309 | 196 | 78 | 21 | 14 | 66.4% | 79.7% |
 
 ## Done since the audit
 
@@ -397,7 +397,7 @@ Parameters in brackets are optional in Electron. `webContents` members are in [w
 | `isDocumentEdited()` | `IsDocumentEdited` | done |  |
 | `focusOnWebView()` | `FocusOnWebView` | done | CEF's `set_focus(1)` on the page, the window left as it is _(branch `mac-integration`)_. |
 | `blurWebView()` | `BlurWebView` | done | CEF's `set_focus(0)` does nothing for a Views page, so the focus moves to the window's contents panel, focusable only while it holds it; raises the page's `blur`. |
-| `capturePage(rect, opts)` | — | missing | `NativeImage` exists; the capture is missing. |
+| `capturePage(rect, opts)` | `CapturePageAsync` | partial | `WebContents.CapturePageAsync`, as Electron; `stayHidden`/`stayAwake` have no effect (C22). |
 | `loadURL(url, options)` | `LoadUrl` | partial | Returns Task; `baseURLForDataURL` throws, `UploadFile` offset/length throw, no client hints, reload drops options (C1, C2, C3, C5). |
 | `loadFile(filePath, options)` | `LoadFile` | done | `query`, `search` (raw, replaces `query`), `hash` |
 | `reload()` | `Reload` | done |  |
