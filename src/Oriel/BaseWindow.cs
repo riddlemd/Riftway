@@ -167,8 +167,9 @@ public partial record BaseWindowOptions
 
     /// <summary>Windows: whether a frameless window keeps <c>WS_THICKFRAME</c> and <c>WS_CAPTION</c>, which give it a
     /// shadow, the minimize and maximize animations and resizing from its edges; false also squares its corners. On a
-    /// framed window false removes only <c>WS_THICKFRAME</c>, and the window can no longer be resized. Ignored on macOS
-    /// and Linux. Electron's <c>thickFrame</c>.</summary>
+    /// framed window false removes only <c>WS_THICKFRAME</c>, and the window can no longer be resized. Without it
+    /// <see cref="BaseWindow.SetFullScreen"/> resizes the window to its display, and <see cref="BaseWindow.IsFullScreen"/>
+    /// stays false, as Electron. Ignored on macOS and Linux. Electron's <c>thickFrame</c>.</summary>
     public bool ThickFrame { get; init; } = true;
 
     /// <summary>Whether a frameless window has rounded corners: Windows 11 only, through DWM, and only with
@@ -798,12 +799,40 @@ public unsafe partial class BaseWindow
             announced = (w->is_fullscreen(w) != 0) != flag;
             (flag ? EnteredFullScreen : LeftFullScreen)?.Invoke(this, EventArgs.Empty);
             if (_window is null) return;
+            if (!_options.ThickFrame)
+            {
+                SetThinFrameFullScreenOn(w, flag);
+                return;
+            }
         }
         // Off macOS the transition ends inside set_fullscreen, so the flag covers exactly this call, even one a handler
         // made above, and cannot outlive a call that changed nothing.
         _fullScreenAnnounced = announced;
         w->set_fullscreen(w, flag ? 1 : 0);
         _fullScreenAnnounced = false;
+    }
+
+    // Electron's !thick_frame_ branch: without WS_THICKFRAME it never uses Chromium's full screen, so IsFullScreen stays
+    // false and no transition follows; the corners and the overlay change here instead.
+    [System.Runtime.Versioning.SupportedOSPlatform("windows")]
+    private void SetThinFrameFullScreenOn(cef_window_t* w, bool flag)
+    {
+        if (_roundedCorners && WindowsWindow.IsWindows11) WindowsWindow.SetRoundedCorners(Hwnd(w), !flag);
+        _titleBarOverlay?.SetVisible(!flag);
+        var current = OuterBoundsOn(w);
+        var (bounds, restore) = WindowSizeState.ThinFrameFullScreen(flag, current, DisplayBoundsNearest(new Point(current.X, current.Y)), _restoreBounds);
+        _restoreBounds = restore;
+        if (bounds is { } target) ApplyOuterBounds(w, target, animate: false);
+    }
+
+    private static Rectangle DisplayBoundsNearest(Point point)
+    {
+        var p = new cef_point_t { x = point.X, y = point.Y };
+        var display = CefNative.cef_display_get_nearest_point(&p, 0);
+        if (display is null) return default;
+        var bounds = ToRectangle(display->get_bounds(display));
+        NativeObject.Release(display);
+        return bounds;
     }
 
     /// <summary>Whether the window is in native full screen; false in simple full screen, as Electron (which reads the

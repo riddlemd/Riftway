@@ -5165,6 +5165,28 @@ async Task ShellApisAsync()
     Check("thickFrame = false stays off through SetResizable and maximize", (Style(noThick) & (caption | thick)) == 0, Hex(Style(noThick)));
     framedNoThick.SetResizable(true);
     Check("a framed window without a thick frame stays unresizable after SetResizable(true)", !framedNoThick.IsResizable && (Style(framedNoThick) & thick) == 0, Hex(Style(framedNoThick)));
+    // Electron's SetFullScreen without a thick frame: notify, then resize to the display; Chromium's full screen (and so
+    // isFullScreen) is never involved, and the style stays thin.
+    foreach (var (thin, name) in new[] { (noThick, "frameless"), (framedNoThick, "framed") })
+    {
+        var thinHwnd = thin.GetNativeWindowHandle();
+        var thinBefore = WindowsShell.OuterRect(thinHwnd);
+        var thinMonitor = WindowsShell.MonitorRectOf(thinHwnd);
+        (int, int, int, int)? thinAtEnter = null;
+        var thinEntered = 0;
+        EventHandler onThinEnter = (_, _) => { thinEntered++; thinAtEnter ??= WindowsShell.OuterRect(thinHwnd); };
+        thin.EnteredFullScreen += onThinEnter;
+        thin.SetFullScreen(true);
+        var thinCovered = Eventually(() => WindowsShell.OuterRect(thinHwnd) == thinMonitor, step);
+        await Task.Delay(500);
+        thin.EnteredFullScreen -= onThinEnter;
+        Check($"thickFrame = false ({name}): SetFullScreen(true) resizes to the display after EnteredFullScreen, keeps the thin style, IsFullScreen false, as Electron",
+            thinCovered && thinEntered == 1 && thinAtEnter == thinBefore && (Style(thin) & thick) == 0 && !thin.IsFullScreen,
+            $"count={thinEntered} atEvent={thinAtEnter} before={thinBefore} now={WindowsShell.OuterRect(thinHwnd)} monitor={thinMonitor} {Hex(Style(thin))} {thin.IsFullScreen}");
+        thin.SetFullScreen(false);
+        Check($"thickFrame = false ({name}): SetFullScreen(false) returns to the bounds it had",
+            Eventually(() => WindowsShell.OuterRect(thinHwnd) == thinBefore, step) && (Style(thin) & thick) == 0, $"{WindowsShell.OuterRect(thinHwnd)} vs {thinBefore}");
+    }
     foreach (var b in new[] { frameless, noThick, square, fixedSize, framedNoThick }) b.Destroy();
     await Task.Delay(300);
 

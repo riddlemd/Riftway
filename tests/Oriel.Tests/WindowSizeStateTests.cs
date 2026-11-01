@@ -74,4 +74,56 @@ public sealed class WindowSizeStateTests
         state.SetFullScreen(true);
         Assert.Empty(Run(state, Restored));
     }
+
+    [Fact]
+    public void Given_AThinFrameWindow_When_ItEntersFullScreen_Then_ItCoversItsDisplay()
+    {
+        // Given
+        Rectangle window = new(100, 120, 640, 480), display = new(-1920, 0, 1920, 1080);
+
+        // When
+        var (bounds, _) = WindowSizeState.ThinFrameFullScreen(enter: true, window, display, restore: null);
+
+        // Then
+        Assert.Equal(display, bounds);
+    }
+
+    [Fact]
+    public void Given_AThinFrameWindowWithEarlierRestoreBounds_When_ItEntersFullScreen_Then_ItsCurrentBoundsAreSaved()
+    {
+        // Given
+        Rectangle window = new(100, 120, 640, 480), display = new(-1920, 0, 1920, 1080), earlier = new(5, 6, 7, 8);
+
+        // When
+        var (_, restore) = WindowSizeState.ThinFrameFullScreen(enter: true, window, display, earlier);
+
+        // Then
+        Assert.Equal(window, restore);
+    }
+
+    [Fact]
+    public void Given_AThinFrameWindowInFullScreen_When_ItLeaves_Then_ItReturnsToTheSavedBounds()
+    {
+        // Given
+        Rectangle saved = new(100, 120, 640, 480), display = new(-1920, 0, 1920, 1080);
+
+        // When
+        var (bounds, _) = WindowSizeState.ThinFrameFullScreen(enter: false, display, display, saved);
+
+        // Then
+        Assert.Equal(saved, bounds);
+    }
+
+    [Fact]
+    public void Given_AThinFrameWindowThatNeverEnteredFullScreen_When_ItLeaves_Then_ItStaysWhereItIs()
+    {
+        // Given: no saved bounds
+        Rectangle window = new(1, 2, 3, 4), display = new(0, 0, 9, 9);
+
+        // When
+        var (bounds, _) = WindowSizeState.ThinFrameFullScreen(enter: false, window, display, restore: null);
+
+        // Then
+        Assert.Null(bounds);
+    }
 }
