@@ -16,6 +16,8 @@ internal sealed unsafe class WindowMenuBar
     // Button positions by mnemonic letter, for Alt+letter.
     private readonly Dictionary<char, int> _mnemonics = [];
     private readonly List<MenuButtonDelegate> _buttonDelegates = [];
+    // CEF's set_accelerator has no Windows-key modifier, so those accelerators are matched here.
+    private Dictionary<(int KeyCode, AcceleratorModifiers Modifiers), int> _commandAccelerators = [];
     private cef_window_t* _window;
     private cef_panel_t* _panel;
     private Menu? _menu;
@@ -108,6 +110,14 @@ internal sealed unsafe class WindowMenuBar
         return true;
     }
 
+    /// <summary>A key the page left unhandled: runs the item whose Windows-key accelerator it is, as Electron's focus
+    /// manager does for <c>EF_COMMAND_DOWN</c> accelerators.</summary>
+    internal bool OnUnhandledKey(cef_key_event_t* key)
+        => key->type == cef_key_event_type_t.KEYEVENT_RAWKEYDOWN && CommandAcceleratorFor(key->windows_key_code, key->modifiers) is { } id && OnAccelerator(id);
+
+    private int? CommandAcceleratorFor(int keyCode, uint cefModifiers)
+        => _commandAccelerators.TryGetValue((keyCode, MenuModels.AcceleratorModifiersOf(cefModifiers)), out var id) ? id : null;
+
     /// <summary>A key on its way to the page, or one the bar's own buttons got: Alt alone toggles an auto-hidden bar
     /// (the key still reaches the page), Alt+letter opens the menu with that mnemonic (consumed).</summary>
     internal bool OnKeyEvent(cef_key_event_t* key)
@@ -183,7 +193,9 @@ internal sealed unsafe class WindowMenuBar
                 AddButton(item);
             }
             foreach (var item in menu.Descendants()) RegisterAccelerator(item);
+            _commandAccelerators = MenuModels.CommandAccelerators(menu);
         }
+        else _commandAccelerators = [];
         UpdateVisibility();
     }
 

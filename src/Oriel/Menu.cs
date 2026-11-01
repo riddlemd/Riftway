@@ -334,7 +334,8 @@ public sealed class MenuItem
     }
 
     /// <summary>The keyboard shortcut, e.g. <c>CmdOrCtrl+Shift+S</c>; defaults to the role's. Electron's <c>accelerator</c>.</summary>
-    /// <remarks>On Windows and Linux, <c>Command</c>/<c>Super</c> shortcuts are not supported and are ignored.</remarks>
+    /// <remarks>On Windows and Linux, <c>Command</c>/<c>Super</c>/<c>Meta</c> is the Windows (Super) key: the shortcut works
+    /// once the page leaves the key unhandled, but its menu item shows no shortcut text.</remarks>
     /// <exception cref="ArgumentException">Not a valid accelerator.</exception>
     public string? Accelerator
     {

@@ -491,6 +491,13 @@ public sealed unsafe partial class WebContents
     internal void SetAccessibilityState(bool enabled)
         => WithHost(host => host->set_accessibility_state(host, enabled ? cef_state_t.STATE_ENABLED : cef_state_t.STATE_DISABLED));
 
+    /// <summary>Sends a key through CEF's <c>send_key_event</c>, the path an OS key takes, with no text; for tests.</summary>
+    internal void SendNativeKey(cef_key_event_type_t type, int windowsKeyCode, cef_event_flags_t modifiers) => WithHost(host =>
+    {
+        var key = new cef_key_event_t { size = (nuint)sizeof(cef_key_event_t), type = type, windows_key_code = windowsKeyCode, modifiers = (uint)modifiers };
+        host->send_key_event(host, &key);
+    });
+
     // Host calls are only valid on the UI thread and while the browser exists.
     private void WithHost(HostAction action) => CefThread.RunOnUi(() =>
     {

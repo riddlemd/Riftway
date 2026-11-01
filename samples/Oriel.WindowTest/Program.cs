@@ -3619,6 +3619,50 @@ async Task BarMenusAsync(BrowserWindow win, Menu menu, MenuItem save, MenuItem g
         ignoredShortcut && Eventually(() => clicks.Contains("save:True"), step), string.Join(",", clicks));
     clicks.Clear();
 
+    // Windows-key accelerators: CEF's set_accelerator has no such modifier, so Oriel matches the keys the page leaves.
+    // Sent through CEF's send_key_event, the path an OS key takes; the flag is Chromium's EF_COMMAND_DOWN.
+    KeyboardEvent? metaKeys = null;
+    menu.Items[0].Submenu!.Append(new MenuItem { Label = "Meta", Accelerator = "Super+Shift+F8", Click = (_, w, keys) => { metaKeys = keys; clicks.Add($"meta:{w == win}"); } });
+    await Task.Delay(300);
+    void NativeKey(int key, Oriel.Cef.Interop.cef_event_flags_t flags)
+    {
+        win.WebContents.SendNativeKey(Oriel.Cef.Interop.cef_key_event_type_t.KEYEVENT_RAWKEYDOWN, key, flags);
+        win.WebContents.SendNativeKey(Oriel.Cef.Interop.cef_key_event_type_t.KEYEVENT_KEYUP, key, flags);
+    }
+    // F8: Chrome binds Ctrl+Shift+J (DevTools), which a negative case would open.
+    const int F8 = 0x77;
+    const Oriel.Cef.Interop.cef_event_flags_t Win = Oriel.Cef.Interop.cef_event_flags_t.EVENTFLAG_COMMAND_DOWN;
+    const Oriel.Cef.Interop.cef_event_flags_t Shift = Oriel.Cef.Interop.cef_event_flags_t.EVENTFLAG_SHIFT_DOWN;
+    const Oriel.Cef.Interop.cef_event_flags_t Ctrl = Oriel.Cef.Interop.cef_event_flags_t.EVENTFLAG_CONTROL_DOWN;
+    NativeKey(F8, Win | Shift);
+    Check("a Super accelerator runs its item on the Windows key, as Electron's EF_COMMAND_DOWN accelerators",
+        Eventually(() => clicks.Contains("meta:True"), step) && metaKeys is { MetaKey: true, ShiftKey: true, CtrlKey: false, TriggeredByAccelerator: true },
+        $"{string.Join(",", clicks)} {metaKeys}");
+    // send_key_event is asynchronous: let the last key settle before counting again.
+    await Task.Delay(500);
+    clicks.Clear();
+    NativeKey(F8, Ctrl | Shift);
+    NativeKey(F8, Win);
+    NativeKey(F8, Win | Shift | Ctrl);
+    win.WebContents.SendNativeKey(Oriel.Cef.Interop.cef_key_event_type_t.KEYEVENT_KEYUP, F8, Win | Shift);
+    await Task.Delay(500);
+    Check("a Super accelerator needs exactly its modifiers, on a key press", clicks.Count == 0, string.Join(",", clicks));
+    await Js(win, "window.__eatMeta = e => { if (e.metaKey) e.preventDefault(); }; addEventListener('keydown', window.__eatMeta); 1");
+    NativeKey(F8, Win | Shift);
+    await Task.Delay(500);
+    var eaten = clicks.Count == 0;
+    await Js(win, "removeEventListener('keydown', window.__eatMeta); 1");
+    win.WebContents.SetIgnoreMenuShortcuts(true);
+    NativeKey(F8, Win | Shift);
+    await Task.Delay(500);
+    var ignoredMeta = clicks.Count == 0;
+    win.WebContents.SetIgnoreMenuShortcuts(false);
+    NativeKey(F8, Win | Shift);
+    Check("a Super accelerator leaves keys the page handles, and SetIgnoreMenuShortcuts gates it",
+        eaten && ignoredMeta && Eventually(() => clicks.Contains("meta:True"), step), $"eaten={eaten} ignored={ignoredMeta} {string.Join(",", clicks)}");
+    await Task.Delay(500);
+    clicks.Clear();
+
     win.AutoHideMenuBar = true;
     Check("AutoHideMenuBar hides the bar", Eventually(() => !win.IsMenuBarVisible && win.GetContentBounds() == content && PageHeight() == fullHeight, step), $"{win.GetContentBounds()} page={PageHeight()}/{fullHeight}");
     Check("AutoHideMenuBar reads back", win.AutoHideMenuBar);

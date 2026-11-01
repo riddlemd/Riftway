@@ -151,4 +151,84 @@ public sealed class AcceleratorTests
         Assert.Equal((M)modifiers, parsed.Modifiers);
         Assert.Equal((M)menuModifiers, parsed.MacMenuModifiers);
     }
+
+    [Fact]
+    public void Given_ItemsWithAndWithoutTheWindowsKey_When_TheCommandAcceleratorTableIsBuilt_Then_OnlyTheWindowsKeyItemsAreInIt()
+    {
+        // Given
+        var super = new MenuItem { Accelerator = "Super+Shift+J" };
+        var meta = new MenuItem { Accelerator = "Meta+K" };
+        var menu = new Menu { super, new MenuItem { Accelerator = "CmdOrCtrl+K" }, new MenuItem { Accelerator = "Alt+F4" }, meta };
+
+        // When
+        var table = MenuModels.CommandAccelerators(menu);
+
+        // Then
+        Assert.Equal(new Dictionary<(int, M), int> { [('J', M.Command | M.Shift)] = super.CommandId, [('K', M.Command)] = meta.CommandId }, table);
+    }
+
+    [Fact]
+    public void Given_TwoItemsWithTheSameWindowsKeyAccelerator_When_TheCommandAcceleratorTableIsBuilt_Then_TheLaterItemHasIt()
+    {
+        // Given
+        var later = new MenuItem { Accelerator = "Cmd+K" };
+        var menu = new Menu { new MenuItem { Accelerator = "Meta+K" }, new MenuItem { Label = "Sub", Submenu = [later] } };
+
+        // When
+        var table = MenuModels.CommandAccelerators(menu);
+
+        // Then
+        Assert.Equal(later.CommandId, Assert.Single(table).Value);
+    }
+
+    [Fact]
+    public void Given_ASubmenuAndASeparatorWithWindowsKeyAccelerators_When_TheCommandAcceleratorTableIsBuilt_Then_NeitherIsInIt()
+    {
+        // Given
+        var menu = new Menu
+        {
+            new MenuItem { Accelerator = "Super+P", Submenu = [] },
+            new MenuItem { Type = MenuItemType.Separator, Accelerator = "Super+S" },
+        };
+
+        // When
+        var table = MenuModels.CommandAccelerators(menu);
+
+        // Then
+        Assert.Empty(table);
+    }
+
+    [Fact]
+    public void Given_AWindowsKeyAcceleratorWithAltGr_When_TheCommandAcceleratorTableIsBuilt_Then_ItIsKeyedByAlt()
+    {
+        // Given: CEF's key flags have no AltGr of their own, only Alt.
+        var item = new MenuItem { Accelerator = "Super+AltGr+Q" };
+        var menu = new Menu { item };
+
+        // When
+        var table = MenuModels.CommandAccelerators(menu);
+
+        // Then
+        Assert.Equal(item.CommandId, table[('Q', M.Command | M.Alt)]);
+    }
+
+    [Theory]
+    [InlineData(0u, (int)M.None)]
+    [InlineData(1u << 1, (int)M.Shift)]
+    [InlineData(1u << 2, (int)M.Control)]
+    [InlineData(1u << 3, (int)M.Alt)]
+    [InlineData(1u << 7, (int)M.Command)]
+    // Caps Lock, mouse buttons and the left/right flags are not accelerator modifiers.
+    [InlineData((1u << 0) | (1u << 4) | (1u << 7) | (1u << 10), (int)M.Command)]
+    [InlineData((1u << 1) | (1u << 2) | (1u << 3) | (1u << 7), (int)(M.Shift | M.Control | M.Alt | M.Command))]
+    public void Given_CefKeyEventFlags_When_ReadAsAcceleratorModifiers_Then_CommandDownIsTheWindowsKey(uint flags, int expected)
+    {
+        // Given: the flags (the parameters)
+
+        // When
+        var modifiers = MenuModels.AcceleratorModifiersOf(flags);
+
+        // Then
+        Assert.Equal((M)expected, modifiers);
+    }
 }
