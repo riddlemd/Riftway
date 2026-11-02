@@ -3,7 +3,7 @@
        locales in a locales folder beside libcef, so they travel here instead. -->
   <PropertyGroup>
     <_RiftwayRuntimePackageId>$(MSBuildThisFileName)</_RiftwayRuntimePackageId>
-    <_RiftwayRuntimeRid>$(_RiftwayRuntimePackageId.Substring(14))</_RiftwayRuntimeRid>
+    <_RiftwayRuntimeRid>$(_RiftwayRuntimePackageId.Replace('Riftway.Runtime.', ''))</_RiftwayRuntimeRid>
     <!-- A RID-less build (dotnet build/run) on the machine this runtime is for: NuGet leaves native assets under
          runtimes/<rid>/native, where RiftwayApp never looks for libcef, so they go beside the app as a RID build's do.
          macOS is left out: its dev build is an app bundle (Riftway.targets). -->
