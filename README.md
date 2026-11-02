@@ -1,6 +1,6 @@
 <div align="center">
 
-![Riftway: desktop apps in C# on one Chromium, with an Electron-style API](docs/assets/social-preview.png)
+![Riftway: cross-platform desktop apps for .NET](docs/assets/social-preview.png)
 
 [![NuGet](https://img.shields.io/nuget/vpre/Riftway?logo=nuget&label=NuGet&color=004880)](https://www.nuget.org/packages/Riftway)
 [![Publish](https://github.com/riddlemd/Riftway/actions/workflows/publish.yml/badge.svg)](https://github.com/riddlemd/Riftway/actions/workflows/publish.yml)
