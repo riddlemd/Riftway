@@ -55,13 +55,12 @@ public sealed class SafeStorageOsCryptTests : IDisposable
     private const string DecryptError = "Error while decrypting the ciphertext provided to safeStorage.decryptString.";
     private const string AsyncEncryptError = "Error while encrypting the text provided to safeStorage.encryptStringAsync.";
     private const string AsyncDecryptError = "Error while decrypting the ciphertext provided to safeStorage.decryptStringAsync.";
-    // The ciphertexts below were made with openssl from this exact text, so it keeps the project's old name.
-    private const string Text = "Oriel ✓ safeStorage";
+    private const string Text = "Riftway ✓ safeStorage";
 
     // openssl: PBKDF2-SHA1("peanuts", "saltysalt", 1) then AES-128-CBC of Text.
-    private static readonly byte[] s_v10Text = [.. "v10"u8, .. Convert.FromHexString("46189fb2ec86b3f6b3e4f5c082f9431f804270f56dc9988d0d6b7c807fdce6ee")];
+    private static readonly byte[] s_v10Text = [.. "v10"u8, .. Convert.FromHexString("9aadd7a48434d0c8d598aa52ca07adb5ac5f843df9f4e8a19e12e410219c4595")];
     // openssl: PBKDF2-SHA1("mock_password", "saltysalt", 1003) then AES-128-CBC of Text.
-    private static readonly byte[] s_mockText = [.. "v10"u8, .. Convert.FromHexString("d42c5198e914b22f1088223243a09fd0acf193767d983d47eceffd62efdf0bca")];
+    private static readonly byte[] s_mockText = [.. "v10"u8, .. Convert.FromHexString("5e5fc9af31e200a1853160a9523faf70b3661f9102105c0cc683db6b62e3ad5d")];
     // openssl: PBKDF2-SHA1("Tm90QVJlYWxQYXNzd29yZA==", "saltysalt", 1003) then AES-128-CBC of "hello".
     private static readonly byte[] s_macHello = [.. "v10"u8, .. Convert.FromHexString("c3f56ea7073633cc79a10a5c2d4ccea4")];
     // openssl: PBKDF2-SHA1("", "saltysalt", 1) then AES-128-CBC of "legacy": the empty-key fallback.
