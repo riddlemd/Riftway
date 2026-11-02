@@ -605,12 +605,15 @@ public unsafe partial class BaseWindow
     /// <summary>The window lost focus. Electron's <c>blur</c>.</summary>
     public event EventHandler? Blurred;
 
-    /// <summary>The window became visible. Electron's <c>show</c>. On macOS raised when the window's occlusion state turns
-    /// visible: after <see cref="Show"/>, but also when it is uncovered, restored or its Space is shown.</summary>
+    /// <summary>The window became visible. Electron's <c>show</c>. On Windows and Linux raised by every <see cref="Show"/> and
+    /// <see cref="ShowInactive"/>, even of a visible window, and by <see cref="Maximize"/> of a hidden one, as Electron's
+    /// Views windows. On macOS raised when the window's occlusion state turns visible: after <see cref="Show"/>, but also
+    /// when it is uncovered, restored or its Space is shown.</summary>
     public event EventHandler? Shown;
 
-    /// <summary>The window was hidden. Electron's <c>hide</c>. On macOS raised when the window's occlusion state turns
-    /// hidden: after <see cref="Hide"/>, but also when it is fully covered, minimized or its Space is left.</summary>
+    /// <summary>The window was hidden. Electron's <c>hide</c>. On Windows and Linux raised by every <see cref="Hide"/>, even of
+    /// a hidden window, as Electron's Views windows. On macOS raised when the window's occlusion state turns hidden: after
+    /// <see cref="Hide"/>, but also when it is fully covered, minimized or its Space is left.</summary>
     public event EventHandler? Hidden;
 
     /// <summary>The window moved. Electron's <c>move</c>.</summary>
@@ -664,20 +667,20 @@ public unsafe partial class BaseWindow
         _macLink?.Show();
         ShowThroughCef(w, activate: _focusable ?? _options.Focusable);
         ApplySkipTaskbar(w);
-        // macOS raises it from the occlusion change instead, as Electron's NativeWindowMac.
-        if (!wasVisible && !OperatingSystem.IsMacOS()) Shown?.Invoke(this, EventArgs.Empty);
+        // Electron's Views windows notify on every call; macOS raises it from the occlusion change instead (W1).
+        if (!OperatingSystem.IsMacOS()) Shown?.Invoke(this, EventArgs.Empty);
     });
 
     /// <summary>Hides the window. Electron's <c>win.hide()</c>.</summary>
     public void Hide() => Command(w =>
     {
-        var wasVisible = w->@base.@base.is_visible(&w->@base.@base) != 0;
         _meantVisible = false;
         // Electron re-enables the parent on every hide of a modal, shown or not.
         if (_options.Modal) _options.Parent?.ChangeChildModals(increment: false);
         _macLink?.Hide();
         w->hide(w);
-        if (wasVisible && !OperatingSystem.IsMacOS()) Hidden?.Invoke(this, EventArgs.Empty);
+        // Electron's Views windows notify on every call; macOS raises it from the occlusion change instead (W1).
+        if (!OperatingSystem.IsMacOS()) Hidden?.Invoke(this, EventArgs.Empty);
     });
 
     /// <summary>Whether the window is shown. Electron's <c>win.isVisible()</c>.</summary>
@@ -709,7 +712,13 @@ public unsafe partial class BaseWindow
     {
         if (!_transparent)
         {
+            var wasVisible = w->@base.@base.is_visible(&w->@base.@base) != 0;
             w->maximize(w);
+            if (!WindowStateRules.MaximizeShows(wasVisible, OperatingSystem.IsMacOS())) return;
+            // Electron's Views Maximize shows a hidden window maximized, and says so; CEF's leaves it hidden.
+            _meantVisible = true;
+            if (w->@base.@base.is_visible(&w->@base.@base) == 0) ShowThroughCef(w, activate: _focusable ?? _options.Focusable);
+            Shown?.Invoke(this, EventArgs.Empty);
             return;
         }
         if (IsMaximizedOn(w)) return;
@@ -939,13 +948,12 @@ public unsafe partial class BaseWindow
     /// shows and focuses it. Electron's <c>win.showInactive()</c>.</summary>
     public void ShowInactive() => Command(w =>
     {
-        var wasVisible = w->@base.@base.is_visible(&w->@base.@base) != 0;
         _meantVisible = true;
         FlushPendingDisplayMode(w);
         ShowThroughCef(w, activate: false);
         ApplySkipTaskbar(w);
-        // macOS raises it from the occlusion change instead, as Electron's NativeWindowMac.
-        if (!wasVisible && !OperatingSystem.IsMacOS()) Shown?.Invoke(this, EventArgs.Empty);
+        // Electron's Views windows notify on every call; macOS raises it from the occlusion change instead (W1).
+        if (!OperatingSystem.IsMacOS()) Shown?.Invoke(this, EventArgs.Empty);
     });
 
     // Through CEF, so Views knows the window is shown; without activation the position changes it makes are kept from

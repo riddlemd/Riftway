@@ -498,8 +498,8 @@ Parameters in brackets are optional in Electron. `webContents` members are in [w
 | `responsive` | `Responsive` | partial | The page's `responsive`; a real hang is unverified (C14). |
 | `blur` | `Blurred` | done |  |
 | `focus` | `Focused` | done |  |
-| `show` | `Shown` | partial | Fires only from Show(), not when the OS shows the window (W1). |
-| `hide` | `Hidden` | partial | Fires only from Hide(), not when the OS hides the window (W1). |
+| `show` | `Shown` | partial | Windows and Linux: every `Show`/`ShowInactive` and a hidden window's `Maximize`, as Electron's Views windows (Linux unchecked); macOS from occlusion changes (W1). |
+| `hide` | `Hidden` | partial | Windows and Linux: every `Hide`, as Electron's Views windows (Linux unchecked); macOS from occlusion changes (W1). |
 | `ready-to-show` | `ReadyToShow` | done |  |
 | `maximize` | `Maximized` | done |  |
 | `unmaximize` | `Unmaximized` | done |  |

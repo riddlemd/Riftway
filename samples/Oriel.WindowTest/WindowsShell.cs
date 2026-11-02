@@ -620,6 +620,9 @@ static unsafe class WindowsShell
         return (rect[0], rect[1], rect[2], rect[3]);
     }
 
+    /// <summary><c>IsZoomed</c>.</summary>
+    internal static bool IsMaximized(nint hwnd) => IsZoomed(hwnd) != 0;
+
     /// <summary>The <c>rcMonitor</c> of the monitor nearest the window, in physical pixels.</summary>
     internal static (int Left, int Top, int Right, int Bottom) MonitorRectOf(nint hwnd)
     {
@@ -646,6 +649,7 @@ static unsafe class WindowsShell
     [DllImport("user32.dll")] private static extern int GetClientRect(nint hwnd, int* rect);
     [DllImport("user32.dll")] private static extern int GetWindowRect(nint hwnd, int* rect);
     [DllImport("user32.dll")] private static extern nint MonitorFromWindow(nint hwnd, uint flags);
+    [DllImport("user32.dll")] private static extern int IsZoomed(nint hwnd);
     [DllImport("user32.dll")] private static extern int GetMonitorInfoW(nint monitor, int* info);
     [DllImport("user32.dll")] private static extern int ClientToScreen(nint hwnd, long* point);
     [DllImport("gdi32.dll")] private static extern uint GetPixel(nint dc, int x, int y);

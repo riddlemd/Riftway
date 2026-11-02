@@ -233,6 +233,7 @@ async Task RunAsync(BrowserWindow win, BrowserWindow simple)
     Check("Restore raises Restored", Fires(h => win.Restored += h, h => win.Restored -= h, win.Restore, step));
     Check("not minimized", Eventually(() => !win.IsMinimized, step), win.IsMinimized);
     if (OperatingSystem.IsWindows()) await WindowStateEventsAsync(win);
+    if (OperatingSystem.IsWindows()) await ShowHideEventsAsync();
 
     Check("Hide raises Hidden", Fires(h => win.Hidden += h, h => win.Hidden -= h, win.Hide, step));
     Check("hidden", Eventually(() => !win.IsVisible, step), win.IsVisible);
@@ -1060,6 +1061,42 @@ void MacDisplayEvents(Display primary)
         Screen.DisplayMetricsChanged -= onChanged;
         Screen.DisplayAdded -= onAdded;
         Screen.DisplayRemoved -= onRemoved;
+    }
+}
+
+// show / hide on Windows: Electron's NativeWindowViews notifies on every Show, ShowInactive and Hide, and Maximize shows a
+// hidden window maximized and notifies. IsWindowVisible and IsZoomed are the read-back.
+async Task ShowHideEventsAsync()
+{
+    var w = new BrowserWindow(new BrowserWindowOptions { Title = "show events", X = 260, Y = 240, Width = 420, Height = 300 });
+    var log = new System.Collections.Concurrent.ConcurrentQueue<string>();
+    w.Shown += (_, _) => log.Enqueue("show");
+    w.Hidden += (_, _) => log.Enqueue("hide");
+    try
+    {
+        await Task.Delay(1000);
+        var hwnd = w.GetNativeWindowHandle();
+        // Each call on a window already in that state, waited for so the event cannot come from a real change.
+        var settled = Eventually(() => WindowsShell.Visible(hwnd), step);
+        w.Show();
+        settled &= Eventually(() => log.Count == 1, step) && WindowsShell.Visible(hwnd);
+        w.ShowInactive();
+        settled &= Eventually(() => log.Count == 2, step) && WindowsShell.Visible(hwnd);
+        w.Hide();
+        settled &= Eventually(() => log.Count == 3 && !WindowsShell.Visible(hwnd), step);
+        w.Hide();
+        Eventually(() => log.Count == 4, TimeSpan.FromSeconds(1));
+        Check("Show, ShowInactive and Hide raise their event on every call, as Electron's Views windows",
+            settled && string.Join(",", log) == "show,show,hide,hide" && !WindowsShell.Visible(hwnd), $"{string.Join(",", log)} settled={settled} visible={WindowsShell.Visible(hwnd)}");
+        w.Maximize();
+        var shown = Eventually(() => WindowsShell.Visible(hwnd) && WindowsShell.IsMaximized(hwnd), step);
+        Check("Maximize on a hidden window shows it maximized and raises Shown, as Electron",
+            shown && string.Join(",", log) == "show,show,hide,hide,show" && w.IsVisible && w.IsMaximized, $"{string.Join(",", log)} visible={WindowsShell.Visible(hwnd)} zoomed={WindowsShell.IsMaximized(hwnd)}");
+    }
+    finally
+    {
+        w.Destroy();
+        await Task.Delay(300);
     }
 }
 
