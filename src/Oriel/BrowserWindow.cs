@@ -547,6 +547,11 @@ public sealed unsafe partial class BrowserWindow : BaseWindow
     /// <summary>Reloads the window's page. Electron's <c>win.reload()</c>.</summary>
     public void Reload() => WebContents.Reload();
 
+    /// <summary>Captures the page, or <paramref name="rect"/> of it in DIPs. Electron's <c>win.capturePage()</c>, which is
+    /// <see cref="WebContents.CapturePageAsync"/>.</summary>
+    /// <inheritdoc cref="Oriel.WebContents.CapturePageAsync" path="/param|/exception"/>
+    public Task<NativeImage> CapturePageAsync(Rectangle? rect = null, CapturePageOptions? options = null) => WebContents.CapturePageAsync(rect, options);
+
     /// <summary>Gives the page keyboard focus, leaving the window as it is. Electron's <c>win.focusOnWebView()</c>.</summary>
     public void FocusOnWebView() => WebContents.SetWidgetFocus(true);
 

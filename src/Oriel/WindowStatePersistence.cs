@@ -29,6 +29,10 @@ internal static class WindowStateRules
     internal static bool IsNormal(bool minimized, bool maximized, bool fullScreen, bool simpleFullScreen)
         => !minimized && !maximized && !fullScreen && !simpleFullScreen;
 
+    /// <summary>Electron's Views <c>Maximize</c> (Windows and Linux): a hidden window is shown maximized and raises
+    /// <c>show</c>. macOS keeps CEF's maximize: there <c>show</c> comes from the occlusion change (W1).</summary>
+    internal static bool MaximizeShows(bool wasVisible, bool macOS) => !wasVisible && !macOS;
+
     // Electron's kMinVisibleWidth / kMinVisibleHeight.
     internal const int MinVisible = 100;
 

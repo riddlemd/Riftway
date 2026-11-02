@@ -35,6 +35,13 @@ internal sealed class WindowSizeState
     /// when the page entered full screen, which does not go through <c>SetFullScreen</c>.</summary>
     internal void SetFullScreen(bool fullScreen) => _state = fullScreen ? ShowState.FullScreen : ShowState.Normal;
 
+    /// <summary>Electron's <c>SetFullScreen</c> without a thick frame, where Chromium's full screen cannot be used:
+    /// entering saves <paramref name="current"/> as the restore bounds and covers <paramref name="display"/>; leaving
+    /// returns to the saved bounds. Null bounds leave the window where it is.</summary>
+    internal static (Rectangle? Bounds, Rectangle? Restore) ThinFrameFullScreen(bool enter, Rectangle current, Rectangle display, Rectangle? restore)
+        // Electron leaves to its saved rect even when it never entered, an empty one; nothing is the useful reading.
+        => enter ? (display, current) : (restore, restore);
+
     /// <summary>The events, in order, for a <c>WM_SIZE</c> of type <paramref name="sizeType"/>.</summary>
     internal List<WindowSizeEvent> OnSize(int sizeType, bool isFullScreen)
     {

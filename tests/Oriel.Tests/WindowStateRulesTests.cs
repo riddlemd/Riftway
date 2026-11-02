@@ -164,4 +164,43 @@ public sealed class WindowStateRulesTests
         Assert.Null(off);
         Assert.Equal(new WindowStatePersistence(), new BrowserWindowOptions { WindowStatePersistence = true }.WindowStatePersistence);
     }
+
+    [Fact]
+    public void Given_AHiddenWindowOnWindowsOrLinux_When_ItIsMaximized_Then_ItIsShown()
+    {
+        // Given
+        var wasVisible = false;
+
+        // When
+        var shows = WindowStateRules.MaximizeShows(wasVisible, macOS: false);
+
+        // Then
+        Assert.True(shows);
+    }
+
+    [Fact]
+    public void Given_AVisibleWindow_When_ItIsMaximized_Then_ItIsNotShownAgain()
+    {
+        // Given
+        var wasVisible = true;
+
+        // When
+        var shows = WindowStateRules.MaximizeShows(wasVisible, macOS: false);
+
+        // Then
+        Assert.False(shows);
+    }
+
+    [Fact]
+    public void Given_AHiddenWindowOnMacOS_When_ItIsMaximized_Then_CefsMaximizeIsLeftAlone()
+    {
+        // Given
+        var wasVisible = false;
+
+        // When
+        var shows = WindowStateRules.MaximizeShows(wasVisible, macOS: true);
+
+        // Then
+        Assert.False(shows);
+    }
 }

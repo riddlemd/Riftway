@@ -233,6 +233,7 @@ async Task RunAsync(BrowserWindow win, BrowserWindow simple)
     Check("Restore raises Restored", Fires(h => win.Restored += h, h => win.Restored -= h, win.Restore, step));
     Check("not minimized", Eventually(() => !win.IsMinimized, step), win.IsMinimized);
     if (OperatingSystem.IsWindows()) await WindowStateEventsAsync(win);
+    if (OperatingSystem.IsWindows()) await ShowHideEventsAsync();
 
     Check("Hide raises Hidden", Fires(h => win.Hidden += h, h => win.Hidden -= h, win.Hide, step));
     Check("hidden", Eventually(() => !win.IsVisible, step), win.IsVisible);
@@ -1060,6 +1061,42 @@ void MacDisplayEvents(Display primary)
         Screen.DisplayMetricsChanged -= onChanged;
         Screen.DisplayAdded -= onAdded;
         Screen.DisplayRemoved -= onRemoved;
+    }
+}
+
+// show / hide on Windows: Electron's NativeWindowViews notifies on every Show, ShowInactive and Hide, and Maximize shows a
+// hidden window maximized and notifies. IsWindowVisible and IsZoomed are the read-back.
+async Task ShowHideEventsAsync()
+{
+    var w = new BrowserWindow(new BrowserWindowOptions { Title = "show events", X = 260, Y = 240, Width = 420, Height = 300 });
+    var log = new System.Collections.Concurrent.ConcurrentQueue<string>();
+    w.Shown += (_, _) => log.Enqueue("show");
+    w.Hidden += (_, _) => log.Enqueue("hide");
+    try
+    {
+        await Task.Delay(1000);
+        var hwnd = w.GetNativeWindowHandle();
+        // Each call on a window already in that state, waited for so the event cannot come from a real change.
+        var settled = Eventually(() => WindowsShell.Visible(hwnd), step);
+        w.Show();
+        settled &= Eventually(() => log.Count == 1, step) && WindowsShell.Visible(hwnd);
+        w.ShowInactive();
+        settled &= Eventually(() => log.Count == 2, step) && WindowsShell.Visible(hwnd);
+        w.Hide();
+        settled &= Eventually(() => log.Count == 3 && !WindowsShell.Visible(hwnd), step);
+        w.Hide();
+        Eventually(() => log.Count == 4, TimeSpan.FromSeconds(1));
+        Check("Show, ShowInactive and Hide raise their event on every call, as Electron's Views windows",
+            settled && string.Join(",", log) == "show,show,hide,hide" && !WindowsShell.Visible(hwnd), $"{string.Join(",", log)} settled={settled} visible={WindowsShell.Visible(hwnd)}");
+        w.Maximize();
+        var shown = Eventually(() => WindowsShell.Visible(hwnd) && WindowsShell.IsMaximized(hwnd), step);
+        Check("Maximize on a hidden window shows it maximized and raises Shown, as Electron",
+            shown && string.Join(",", log) == "show,show,hide,hide,show" && w.IsVisible && w.IsMaximized, $"{string.Join(",", log)} visible={WindowsShell.Visible(hwnd)} zoomed={WindowsShell.IsMaximized(hwnd)}");
+    }
+    finally
+    {
+        w.Destroy();
+        await Task.Delay(300);
     }
 }
 
@@ -2270,6 +2307,11 @@ async Task WebContentsMethodsAsync()
         && IsBlue(Pixel(part, 0, 0)) && IsBlue(Pixel(part, part.GetSize().Width - 1, part.GetSize().Height - 1)), $"{part.GetSize()} {Pixel(part, 0, 0)} {Pixel(part, part.GetSize().Width - 1, part.GetSize().Height - 1)}");
     var empty = await wc.CapturePageAsync(new Rectangle(10, 10, 0, 30));
     Check("an empty rect captures the whole page, as Electron's", empty.GetSize() == whole.GetSize(), empty.GetSize());
+    var viaWindow = await w.CapturePageAsync(new Rectangle(10, 10, 40, 30));
+    var wholeViaWindow = await w.CapturePageAsync();
+    Check("BrowserWindow.CapturePageAsync is the page's capture, as Electron's win.capturePage()",
+        viaWindow.GetSize() == part.GetSize() && IsBlue(Pixel(viaWindow, 0, 0)) && wholeViaWindow.GetSize() == whole.GetSize() && IsRed(Pixel(wholeViaWindow, 2, 2)),
+        $"{viaWindow.GetSize()} {Pixel(viaWindow, 0, 0)} {wholeViaWindow.GetSize()}");
     wc.SetZoomFactor(2);
     await Task.Delay(500);
     var zoomed = await wc.CapturePageAsync(new Rectangle(20, 20, 80, 60));
@@ -5165,6 +5207,28 @@ async Task ShellApisAsync()
     Check("thickFrame = false stays off through SetResizable and maximize", (Style(noThick) & (caption | thick)) == 0, Hex(Style(noThick)));
     framedNoThick.SetResizable(true);
     Check("a framed window without a thick frame stays unresizable after SetResizable(true)", !framedNoThick.IsResizable && (Style(framedNoThick) & thick) == 0, Hex(Style(framedNoThick)));
+    // Electron's SetFullScreen without a thick frame: notify, then resize to the display; Chromium's full screen (and so
+    // isFullScreen) is never involved, and the style stays thin.
+    foreach (var (thin, name) in new[] { (noThick, "frameless"), (framedNoThick, "framed") })
+    {
+        var thinHwnd = thin.GetNativeWindowHandle();
+        var thinBefore = WindowsShell.OuterRect(thinHwnd);
+        var thinMonitor = WindowsShell.MonitorRectOf(thinHwnd);
+        (int, int, int, int)? thinAtEnter = null;
+        var thinEntered = 0;
+        EventHandler onThinEnter = (_, _) => { thinEntered++; thinAtEnter ??= WindowsShell.OuterRect(thinHwnd); };
+        thin.EnteredFullScreen += onThinEnter;
+        thin.SetFullScreen(true);
+        var thinCovered = Eventually(() => WindowsShell.OuterRect(thinHwnd) == thinMonitor, step);
+        await Task.Delay(500);
+        thin.EnteredFullScreen -= onThinEnter;
+        Check($"thickFrame = false ({name}): SetFullScreen(true) resizes to the display after EnteredFullScreen, keeps the thin style, IsFullScreen false, as Electron",
+            thinCovered && thinEntered == 1 && thinAtEnter == thinBefore && (Style(thin) & thick) == 0 && !thin.IsFullScreen,
+            $"count={thinEntered} atEvent={thinAtEnter} before={thinBefore} now={WindowsShell.OuterRect(thinHwnd)} monitor={thinMonitor} {Hex(Style(thin))} {thin.IsFullScreen}");
+        thin.SetFullScreen(false);
+        Check($"thickFrame = false ({name}): SetFullScreen(false) returns to the bounds it had",
+            Eventually(() => WindowsShell.OuterRect(thinHwnd) == thinBefore, step) && (Style(thin) & thick) == 0, $"{WindowsShell.OuterRect(thinHwnd)} vs {thinBefore}");
+    }
     foreach (var b in new[] { frameless, noThick, square, fixedSize, framedNoThick }) b.Destroy();
     await Task.Delay(300);
 
@@ -5218,6 +5282,18 @@ async Task ShellApisAsync()
     await Task.Delay(500);
     Check("accentColor = true: the system accent colour, even inactive", Eventually(() => Near(CaptionPixel(on), system), step), $"{Px(CaptionPixel(on))} vs {system:X6}");
     Check("accentColor = false: GetAccentColor is false", off.GetAccentColor() == AccentColor.None, off.GetAccentColor());
+    // A system accent change reaches windows through Chromium's AccentColorObserver; its testing hook stands in for the
+    // DWM key's change, so the real setting is never touched.
+    var observedBefore = SystemPreferences.ObservedAccentColor;
+    try
+    {
+        SystemPreferences.SetAccentColorForTesting(0xFFFF0000);
+        Check("a system accent change recolours an accentColor = true window, and GetAccentColor follows, as Electron",
+            Eventually(() => Near(CaptionPixel(on), 0xFF0000) && Near(BorderPixel(on), 0xFF0000), step) && on.GetAccentColor().Color == "#FF0000",
+            $"{Px(CaptionPixel(on))} / {Px(BorderPixel(on))} {on.GetAccentColor().Color}");
+    }
+    finally { SystemPreferences.SetAccentColorForTesting(observedBefore); }
+    Check("the window follows the system colour back", Eventually(() => Near(CaptionPixel(on), system), step), $"{Px(CaptionPixel(on))} vs {system:X6}");
     on.Destroy();
     off.Destroy();
     // Created hidden, the window gets its colour from the activation that showing it brings, as in Electron.
@@ -6199,6 +6275,29 @@ async Task SafeStorageAsync()
     }
     catch (InvalidOperationException e) { asyncOpened = e.Message; }
     Check("EncryptStringAsync and DecryptStringAsync use the same key and format", asyncOpened == "async ✓" && asyncResult == new SafeStorageDecryptResult(false, "sealed ✓"), $"{asyncOpened} | {asyncResult}");
+
+    // This profile's key may have been made by an older Oriel, so CEF makes a new one in a fresh profile in a child process;
+    // its Local State file is read after the child quits and CEF has written it.
+    var freshData = Directory.CreateTempSubdirectory("oriel-safestorage-").FullName;
+    var start = new System.Diagnostics.ProcessStartInfo(Environment.ProcessPath!) { RedirectStandardOutput = true, RedirectStandardError = true };
+    start.ArgumentList.Add(ProcessChild);
+    start.ArgumentList.Add("safestorage");
+    start.ArgumentList.Add(freshData);
+    var childOutput = "";
+    using (var child = System.Diagnostics.Process.Start(start)!)
+    {
+        _ = child.StandardError.ReadToEndAsync();
+        try { childOutput = await child.StandardOutput.ReadToEndAsync().WaitAsync(TimeSpan.FromSeconds(60)); }
+        catch (TimeoutException) { childOutput = "timed out"; }
+        if (!child.WaitForExit(30_000)) child.Kill(entireProcessTree: true);
+    }
+    var freshDescription = OperatingSystem.IsWindows() ? WindowsDpapiProbe.Description(Path.Combine(freshData, "Local State")) : "";
+    Check("a new Local State key's DPAPI description is Electron's version_info product name, \"Chromium\", the one Oriel writes",
+        childOutput.Contains("AVAILABLE=True") && freshDescription == "Chromium" && OperatingSystem.IsWindows() && Oriel.OsCryptBackend.KeyDescription == freshDescription,
+        $"{childOutput.Trim()} {freshDescription}");
+    try { Directory.Delete(freshData, recursive: true); }
+    catch (IOException) { }
+    catch (UnauthorizedAccessException) { }
 }
 
 #pragma warning disable CA1416 // Called only on Windows.
@@ -8331,6 +8430,17 @@ static int ProcessChildMain(string mode, string userData)
         return 0;
     }
     if (mode == "theme") return ThemeChildMain(userData);
+    if (mode == "safestorage")
+    {
+        var store = OrielApp.Create("Oriel.WindowTest");
+        store.SetPath("userData", userData);
+        store.Ready += (_, _) => Task.Run(() =>
+        {
+            Console.WriteLine("AVAILABLE=" + SafeStorage.IsEncryptionAvailable());
+            Oriel.Cef.CefThread.RunOnUi(store.Quit);
+        });
+        return store.Run();
+    }
     var child = OrielApp.Create("Oriel.WindowTest");
     // Its own data directory: Chromium's process singleton would hand this run to the main one.
     child.SetPath("userData", userData);

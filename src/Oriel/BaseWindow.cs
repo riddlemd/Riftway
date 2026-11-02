@@ -167,8 +167,9 @@ public partial record BaseWindowOptions
 
     /// <summary>Windows: whether a frameless window keeps <c>WS_THICKFRAME</c> and <c>WS_CAPTION</c>, which give it a
     /// shadow, the minimize and maximize animations and resizing from its edges; false also squares its corners. On a
-    /// framed window false removes only <c>WS_THICKFRAME</c>, and the window can no longer be resized. Ignored on macOS
-    /// and Linux. Electron's <c>thickFrame</c>.</summary>
+    /// framed window false removes only <c>WS_THICKFRAME</c>, and the window can no longer be resized. Without it
+    /// <see cref="BaseWindow.SetFullScreen"/> resizes the window to its display, and <see cref="BaseWindow.IsFullScreen"/>
+    /// stays false, as Electron. Ignored on macOS and Linux. Electron's <c>thickFrame</c>.</summary>
     public bool ThickFrame { get; init; } = true;
 
     /// <summary>Whether a frameless window has rounded corners: Windows 11 only, through DWM, and only with
@@ -228,6 +229,7 @@ public unsafe partial class BaseWindow
     // Windows and Linux only; on macOS the application menu is the menu bar.
     private protected readonly WindowMenuBar? _menuBar;
     private readonly Action<Menu?> _applicationMenuChanged;
+    private readonly Action _accentObserved;
     private Menu? _ownMenu;
     private bool _hasOwnMenu;
 
@@ -378,6 +380,7 @@ public unsafe partial class BaseWindow
         {
             if (!_hasOwnMenu) _menuBar?.SetMenu(menu);
         });
+        _accentObserved = OnSystemAccentColorChanged;
         _windowDelegate = new WindowDelegate
         {
             Created = OnWindowCreated,
@@ -602,12 +605,15 @@ public unsafe partial class BaseWindow
     /// <summary>The window lost focus. Electron's <c>blur</c>.</summary>
     public event EventHandler? Blurred;
 
-    /// <summary>The window became visible. Electron's <c>show</c>. On macOS raised when the window's occlusion state turns
-    /// visible: after <see cref="Show"/>, but also when it is uncovered, restored or its Space is shown.</summary>
+    /// <summary>The window became visible. Electron's <c>show</c>. On Windows and Linux raised by every <see cref="Show"/> and
+    /// <see cref="ShowInactive"/>, even of a visible window, and by <see cref="Maximize"/> of a hidden one, as Electron's
+    /// Views windows. On macOS raised when the window's occlusion state turns visible: after <see cref="Show"/>, but also
+    /// when it is uncovered, restored or its Space is shown.</summary>
     public event EventHandler? Shown;
 
-    /// <summary>The window was hidden. Electron's <c>hide</c>. On macOS raised when the window's occlusion state turns
-    /// hidden: after <see cref="Hide"/>, but also when it is fully covered, minimized or its Space is left.</summary>
+    /// <summary>The window was hidden. Electron's <c>hide</c>. On Windows and Linux raised by every <see cref="Hide"/>, even of
+    /// a hidden window, as Electron's Views windows. On macOS raised when the window's occlusion state turns hidden: after
+    /// <see cref="Hide"/>, but also when it is fully covered, minimized or its Space is left.</summary>
     public event EventHandler? Hidden;
 
     /// <summary>The window moved. Electron's <c>move</c>.</summary>
@@ -661,20 +667,20 @@ public unsafe partial class BaseWindow
         _macLink?.Show();
         ShowThroughCef(w, activate: _focusable ?? _options.Focusable);
         ApplySkipTaskbar(w);
-        // macOS raises it from the occlusion change instead, as Electron's NativeWindowMac.
-        if (!wasVisible && !OperatingSystem.IsMacOS()) Shown?.Invoke(this, EventArgs.Empty);
+        // Electron's Views windows notify on every call; macOS raises it from the occlusion change instead (W1).
+        if (!OperatingSystem.IsMacOS()) Shown?.Invoke(this, EventArgs.Empty);
     });
 
     /// <summary>Hides the window. Electron's <c>win.hide()</c>.</summary>
     public void Hide() => Command(w =>
     {
-        var wasVisible = w->@base.@base.is_visible(&w->@base.@base) != 0;
         _meantVisible = false;
         // Electron re-enables the parent on every hide of a modal, shown or not.
         if (_options.Modal) _options.Parent?.ChangeChildModals(increment: false);
         _macLink?.Hide();
         w->hide(w);
-        if (wasVisible && !OperatingSystem.IsMacOS()) Hidden?.Invoke(this, EventArgs.Empty);
+        // Electron's Views windows notify on every call; macOS raises it from the occlusion change instead (W1).
+        if (!OperatingSystem.IsMacOS()) Hidden?.Invoke(this, EventArgs.Empty);
     });
 
     /// <summary>Whether the window is shown. Electron's <c>win.isVisible()</c>.</summary>
@@ -706,7 +712,13 @@ public unsafe partial class BaseWindow
     {
         if (!_transparent)
         {
+            var wasVisible = w->@base.@base.is_visible(&w->@base.@base) != 0;
             w->maximize(w);
+            if (!WindowStateRules.MaximizeShows(wasVisible, OperatingSystem.IsMacOS())) return;
+            // Electron's Views Maximize shows a hidden window maximized, and says so; CEF's leaves it hidden.
+            _meantVisible = true;
+            if (w->@base.@base.is_visible(&w->@base.@base) == 0) ShowThroughCef(w, activate: _focusable ?? _options.Focusable);
+            Shown?.Invoke(this, EventArgs.Empty);
             return;
         }
         if (IsMaximizedOn(w)) return;
@@ -798,12 +810,40 @@ public unsafe partial class BaseWindow
             announced = (w->is_fullscreen(w) != 0) != flag;
             (flag ? EnteredFullScreen : LeftFullScreen)?.Invoke(this, EventArgs.Empty);
             if (_window is null) return;
+            if (!_options.ThickFrame)
+            {
+                SetThinFrameFullScreenOn(w, flag);
+                return;
+            }
         }
         // Off macOS the transition ends inside set_fullscreen, so the flag covers exactly this call, even one a handler
         // made above, and cannot outlive a call that changed nothing.
         _fullScreenAnnounced = announced;
         w->set_fullscreen(w, flag ? 1 : 0);
         _fullScreenAnnounced = false;
+    }
+
+    // Electron's !thick_frame_ branch: without WS_THICKFRAME it never uses Chromium's full screen, so IsFullScreen stays
+    // false and no transition follows; the corners and the overlay change here instead.
+    [System.Runtime.Versioning.SupportedOSPlatform("windows")]
+    private void SetThinFrameFullScreenOn(cef_window_t* w, bool flag)
+    {
+        if (_roundedCorners && WindowsWindow.IsWindows11) WindowsWindow.SetRoundedCorners(Hwnd(w), !flag);
+        _titleBarOverlay?.SetVisible(!flag);
+        var current = OuterBoundsOn(w);
+        var (bounds, restore) = WindowSizeState.ThinFrameFullScreen(flag, current, DisplayBoundsNearest(new Point(current.X, current.Y)), _restoreBounds);
+        _restoreBounds = restore;
+        if (bounds is { } target) ApplyOuterBounds(w, target, animate: false);
+    }
+
+    private static Rectangle DisplayBoundsNearest(Point point)
+    {
+        var p = new cef_point_t { x = point.X, y = point.Y };
+        var display = CefNative.cef_display_get_nearest_point(&p, 0);
+        if (display is null) return default;
+        var bounds = ToRectangle(display->get_bounds(display));
+        NativeObject.Release(display);
+        return bounds;
     }
 
     /// <summary>Whether the window is in native full screen; false in simple full screen, as Electron (which reads the
@@ -908,13 +948,12 @@ public unsafe partial class BaseWindow
     /// shows and focuses it. Electron's <c>win.showInactive()</c>.</summary>
     public void ShowInactive() => Command(w =>
     {
-        var wasVisible = w->@base.@base.is_visible(&w->@base.@base) != 0;
         _meantVisible = true;
         FlushPendingDisplayMode(w);
         ShowThroughCef(w, activate: false);
         ApplySkipTaskbar(w);
-        // macOS raises it from the occlusion change instead, as Electron's NativeWindowMac.
-        if (!wasVisible && !OperatingSystem.IsMacOS()) Shown?.Invoke(this, EventArgs.Empty);
+        // Electron's Views windows notify on every call; macOS raises it from the occlusion change instead (W1).
+        if (!OperatingSystem.IsMacOS()) Shown?.Invoke(this, EventArgs.Empty);
     });
 
     // Through CEF, so Views knows the window is shown; without activation the position changes it makes are kept from
@@ -1050,6 +1089,7 @@ public unsafe partial class BaseWindow
         WindowsSubclass.RouteSizing(hwnd, (wmsz, r) => Cancelled(WillResize, new WillResizeEventArgs(PixelsToDips(r), WindowPolish.EdgeFromWmsz(wmsz))));
         WindowsSubclass.RouteMoving(hwnd, r => Cancelled(WillMove, new WillMoveEventArgs(PixelsToDips(r))));
         WindowsSubclass.RouteMessages(hwnd, OnWindowMessage);
+        SystemPreferences.AccentColorObserved += _accentObserved;
         WindowsSubclass.RouteThumbButtonClicks(hwnd, OnThumbarClick);
         WindowsSubclass.RouteTaskbarCreated(hwnd, () =>
         {
@@ -1071,20 +1111,23 @@ public unsafe partial class BaseWindow
         else if (!_options.ThickFrame) WindowsWindowStyle.FlipStyle(hwnd, false, WindowsFrame.WsThickFrame);
     }
 
-    // Electron's OnWindowMessage after PreHandleMSG's NotifyWindowMessage; the colour messages stand in for
-    // AccentColorObserver's registry watch.
+    // Electron's OnWindowMessage after PreHandleMSG's NotifyWindowMessage.
     private void OnWindowMessage(uint message, nint wParam, nint lParam)
     {
-        if (message is 0x0320 /* WM_DWMCOLORIZATIONCOLORCHANGED */ or 0x001A /* WM_SETTINGCHANGE */)
-            Command(w => UpdateAccentColor(w, w->is_active(w) != 0));
         if (_messageHooks.TryGetValue(message, out var callback)) callback(wParam, lParam);
+    }
+
+    // Electron's OnSystemAccentColorChanged, subscribed to the AccentColorObserver; called on the UI thread.
+    private void OnSystemAccentColorChanged()
+    {
+        if (_window is not null) UpdateAccentColor(_window, _window->is_active(_window) != 0);
     }
 
     // Electron's UpdateWindowAccentColor.
     private void UpdateAccentColor(cef_window_t* w, bool active)
     {
         if (!OperatingSystem.IsWindows() || !WindowsWindow.IsWindows11) return;
-        var system = _accent is { Argb: not null } ? null : WindowsWindow.SystemAccentColor();
+        var system = _accent is { Argb: not null } ? null : SystemPreferences.ObservedAccentColor;
         var color = WindowsFrame.BorderColor(_accent, active, _accent is null && WindowsWindow.AccentColorOnTitleBars(), system);
         if (!WindowsWindow.SetBorderAndCaptionColor(Hwnd(w), color, caption: !IsFrameless))
             Console.Error.WriteLine("[Oriel] DWM did not take the accent colour.");
@@ -1418,7 +1461,7 @@ public unsafe partial class BaseWindow
     public AccentColor GetAccentColor() => Query(_ =>
     {
         if (!OperatingSystem.IsWindows()) return AccentColor.None;
-        var hex = WindowsFrame.Report(_accent, _accent is { Argb: not null } ? null : WindowsWindow.SystemAccentColor());
+        var hex = WindowsFrame.Report(_accent, _accent is { Argb: not null } ? null : SystemPreferences.ObservedAccentColor);
         return hex is null ? AccentColor.None : AccentColor.FromColor(hex);
     }, AccentColor.None);
 
@@ -1903,6 +1946,7 @@ public unsafe partial class BaseWindow
         DisposeMacButtons();
         if (_resizeDelegate != 0 && OperatingSystem.IsMacOS()) MacWindow.UnrouteWillResize(_resizeDelegate);
         Menu.ApplicationMenuChanged -= _applicationMenuChanged;
+        SystemPreferences.AccentColorObserved -= _accentObserved;
         _menuBar?.Detach();
         _titleBarOverlay?.Detach();
         if (OperatingSystem.IsWindows())

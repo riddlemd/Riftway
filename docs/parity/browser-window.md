@@ -19,11 +19,11 @@ Counted from the Checklist at the end: `BaseWindow` and `BrowserWindow` are one 
 |---|---|---|---|---|---|---|---|
 | BaseWindow + BrowserWindow options | 54 | 34 | 19 | 1 | 0 | 63.0% | 80.6% |
 | webPreferences | 46 | 12 | 7 | 20 | 7 | 30.8% | 39.7% |
-| Instance methods | 143 | 107 | 29 | 1 | 6 | 78.1% | 88.7% |
+| Instance methods | 143 | 107 | 30 | 0 | 6 | 78.1% | 89.1% |
 | Instance properties | 24 | 17 | 7 | 0 | 0 | 70.8% | 85.4% |
 | Events | 35 | 20 | 15 | 0 | 0 | 57.1% | 78.6% |
 | Static methods | 7 | 6 | 0 | 0 | 1 | 100.0% | 100.0% |
-| **Total** | 309 | 196 | 77 | 22 | 14 | 66.4% | 79.5% |
+| **Total** | 309 | 196 | 78 | 21 | 14 | 66.4% | 79.7% |
 
 ## Done since the audit
 
@@ -246,10 +246,10 @@ Parameters in brackets are optional in Electron. `webContents` members are in [w
 | `visualEffectState` | `VisualEffectState` | partial | macOS _(branch `mac-integration`)_ (W54). |
 | `titleBarStyle` | `TitleBarStyle` | partial | Anything but `Default` is frameless, as Electron. macOS: a transparent title bar with the traffic lights moved by Electron's `WindowButtonsProxy` (`hiddenInset` 12 × 11 in, `customButtonsOnHover` shown under the pointer, the overlay height as the container's), redrawn on resize, focus, minimise and full screen; not yet run on screen (W37). |
 | `titleBarOverlay` | `TitleBarOverlay` | partial | Windows: Views buttons docked top right, CSS colours as Chromium parses them; no page API (W34); snap layouts through `HTMAXBUTTON`, buttons follow the window's flags. |
-| `accentColor` | `AccentColor` | done | Windows 11, as in Electron: `bool` or CSS string (`AccentColor`); system changes re-applied on DWM's broadcasts (W39). |
+| `accentColor` | `AccentColor` | done | Windows 11, as in Electron: `bool` or CSS string (`AccentColor`); system changes followed through the `AccentColorObserver`'s watch on the DWM key (W39). |
 | `trafficLightPosition` | `TrafficLightPosition` | partial | macOS, the proxy's margin; passes on screen (macOS 26, arm64 and x64) (W37). |
 | `roundedCorners` | `RoundedCorners` | partial | Windows 11 (`DWMWA_WINDOW_CORNER_PREFERENCE`, frameless, off without `thickFrame`, squared in full screen); macOS a frameless window without them is borderless, titled again in full screen, as Electron _(branch `mac-integration`)_, not yet run on screen; Linux not done (W40). |
-| `thickFrame` | `ThickFrame` | partial | Windows: Electron's frameless `GWL_STYLE`, framed loses `WS_THICKFRAME`; full screen and resize insets follow CEF, not Electron (W40). |
+| `thickFrame` | `ThickFrame` | partial | Windows: Electron's frameless `GWL_STYLE`, framed loses `WS_THICKFRAME`, full screen by resizing to the display; resize insets follow CEF, not Electron (W40). |
 | `vibrancy` | `Vibrancy` | partial | macOS: Electron's material table, the window translucent and the page transparent without a `backgroundColor` _(branch `mac-integration`)_; the effect view sits under Chromium's content view (W54), corners masked as Electron's; not yet run on screen. |
 | `backgroundMaterial` | `BackgroundMaterial` | done | Windows 11 22H2+ only. |
 | `zoomToPageWidth` | `ZoomToPageWidth` | partial | macOS: the window delegate's `windowWillUseStandardFrame:defaultFrame:` widens to the page's preferred width (0 without `EnablePreferredSizeMode`, as Electron's `GetPreferredSize`), never narrower, moved left only to stay on screen; Shift fills the screen _(branch `mac-integration`)_; not yet run on screen. |
@@ -397,7 +397,7 @@ Parameters in brackets are optional in Electron. `webContents` members are in [w
 | `isDocumentEdited()` | `IsDocumentEdited` | done |  |
 | `focusOnWebView()` | `FocusOnWebView` | done | CEF's `set_focus(1)` on the page, the window left as it is _(branch `mac-integration`)_. |
 | `blurWebView()` | `BlurWebView` | done | CEF's `set_focus(0)` does nothing for a Views page, so the focus moves to the window's contents panel, focusable only while it holds it; raises the page's `blur`. |
-| `capturePage(rect, opts)` | — | missing | `NativeImage` exists; the capture is missing. |
+| `capturePage(rect, opts)` | `CapturePageAsync` | partial | `WebContents.CapturePageAsync`, as Electron; `stayHidden`/`stayAwake` have no effect (C22). |
 | `loadURL(url, options)` | `LoadUrl` | partial | Returns Task; `baseURLForDataURL` throws, `UploadFile` offset/length throw, no client hints, reload drops options (C1, C2, C3, C5). |
 | `loadFile(filePath, options)` | `LoadFile` | done | `query`, `search` (raw, replaces `query`), `hash` |
 | `reload()` | `Reload` | done |  |
@@ -498,8 +498,8 @@ Parameters in brackets are optional in Electron. `webContents` members are in [w
 | `responsive` | `Responsive` | partial | The page's `responsive`; a real hang is unverified (C14). |
 | `blur` | `Blurred` | done |  |
 | `focus` | `Focused` | done |  |
-| `show` | `Shown` | partial | Fires only from Show(), not when the OS shows the window (W1). |
-| `hide` | `Hidden` | partial | Fires only from Hide(), not when the OS hides the window (W1). |
+| `show` | `Shown` | partial | Windows and Linux: every `Show`/`ShowInactive` and a hidden window's `Maximize`, as Electron's Views windows (Linux unchecked); macOS from occlusion changes (W1). |
+| `hide` | `Hidden` | partial | Windows and Linux: every `Hide`, as Electron's Views windows (Linux unchecked); macOS from occlusion changes (W1). |
 | `ready-to-show` | `ReadyToShow` | done |  |
 | `maximize` | `Maximized` | done |  |
 | `unmaximize` | `Unmaximized` | done |  |

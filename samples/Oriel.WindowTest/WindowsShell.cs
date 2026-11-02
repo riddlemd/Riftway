@@ -612,6 +612,26 @@ static unsafe class WindowsShell
         return result;
     }
 
+    /// <summary>The window's <c>GetWindowRect</c>, in physical pixels: left, top, right, bottom.</summary>
+    internal static (int Left, int Top, int Right, int Bottom) OuterRect(nint hwnd)
+    {
+        var rect = new int[4];
+        fixed (int* r = rect) _ = GetWindowRect(hwnd, r);
+        return (rect[0], rect[1], rect[2], rect[3]);
+    }
+
+    /// <summary><c>IsZoomed</c>.</summary>
+    internal static bool IsMaximized(nint hwnd) => IsZoomed(hwnd) != 0;
+
+    /// <summary>The <c>rcMonitor</c> of the monitor nearest the window, in physical pixels.</summary>
+    internal static (int Left, int Top, int Right, int Bottom) MonitorRectOf(nint hwnd)
+    {
+        var info = new int[10];
+        info[0] = 40; // MONITORINFO.cbSize
+        fixed (int* i = info) _ = GetMonitorInfoW(MonitorFromWindow(hwnd, 2 /* MONITOR_DEFAULTTONEAREST */), i);
+        return (info[1], info[2], info[3], info[4]);
+    }
+
     /// <summary>Sets the window's <c>GWL_STYLE</c> as another party (Chromium) would.</summary>
     internal static void SetStyle(nint hwnd, uint style) => SetWindowLongPtrW(hwnd, -16, (nint)style);
 
@@ -628,6 +648,9 @@ static unsafe class WindowsShell
     [DllImport("user32.dll")] private static extern int SetWindowPos(nint hwnd, nint after, int x, int y, int cx, int cy, uint flags);
     [DllImport("user32.dll")] private static extern int GetClientRect(nint hwnd, int* rect);
     [DllImport("user32.dll")] private static extern int GetWindowRect(nint hwnd, int* rect);
+    [DllImport("user32.dll")] private static extern nint MonitorFromWindow(nint hwnd, uint flags);
+    [DllImport("user32.dll")] private static extern int IsZoomed(nint hwnd);
+    [DllImport("user32.dll")] private static extern int GetMonitorInfoW(nint monitor, int* info);
     [DllImport("user32.dll")] private static extern int ClientToScreen(nint hwnd, long* point);
     [DllImport("gdi32.dll")] private static extern uint GetPixel(nint dc, int x, int y);
     [DllImport("user32.dll")] private static extern nint SetWindowLongPtrW(nint hwnd, int index, nint value);
