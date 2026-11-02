@@ -109,6 +109,71 @@ public sealed class MenuTests
         Assert.Equal("CmdOrCtrl+D", item.Accelerator);
     }
 
+    // Electron's menu-item-roles.ts: only these four leave their keys to the page.
+    [Theory]
+    [InlineData(MenuItemRole.Copy, false)]
+    [InlineData(MenuItemRole.Cut, false)]
+    [InlineData(MenuItemRole.Paste, false)]
+    [InlineData(MenuItemRole.PasteAndMatchStyle, false)]
+    [InlineData(MenuItemRole.Undo, true)]
+    [InlineData(MenuItemRole.SelectAll, true)]
+    [InlineData(MenuItemRole.Delete, true)]
+    [InlineData(MenuItemRole.None, true)]
+    public void Given_AnItemWithARole_When_RegisterAcceleratorIsRead_Then_ItIsElectronsRoleDefault(MenuItemRole role, bool registers)
+    {
+        // Given
+        var item = new MenuItem { Role = role };
+
+        // When
+        var read = item.RegisterAccelerator;
+
+        // Then
+        Assert.Equal(registers, read);
+    }
+
+    [Fact]
+    public void Given_ACopyItem_When_RegisterAcceleratorIsSetTrue_Then_ItOverridesTheRolesDefault()
+    {
+        // Given
+        var copy = new MenuItem { Role = MenuItemRole.Copy };
+
+        // When
+        copy.RegisterAccelerator = true;
+
+        // Then
+        Assert.True(copy.RegisterAccelerator);
+    }
+
+    [Fact]
+    public void Given_AnItemInAMenu_When_RegisterAcceleratorChanges_Then_TheMenuRaisesChanged()
+    {
+        // Given
+        var item = new MenuItem { Accelerator = "CmdOrCtrl+K" };
+        var menu = new Menu { item };
+        var raised = 0;
+        menu.Changed += () => raised++;
+
+        // When
+        item.RegisterAccelerator = false;
+
+        // Then
+        Assert.Equal(1, raised);
+    }
+
+    [Fact]
+    public void Given_AWindowsKeyItemThatDoesNotRegister_When_TheCommandAcceleratorTableIsBuilt_Then_ItIsLeftOut()
+    {
+        // Given
+        var kept = new MenuItem { Accelerator = "Super+K" };
+        var menu = new Menu { kept, new MenuItem { Accelerator = "Super+L", RegisterAccelerator = false } };
+
+        // When
+        var table = MenuModels.CommandAccelerators(menu);
+
+        // Then
+        Assert.Equal([kept.CommandId], table.Values);
+    }
+
     [Fact]
     public void RoleMenus_SupplyTheirOwnSubmenuOnce()
     {
@@ -241,6 +306,67 @@ public sealed class MenuTests
     [InlineData("&1st", null)]
     [InlineData("None", null)]
     public void MnemonicOf_FindsTheMarkedLetter(string label, char? letter) => Assert.Equal(letter, WindowMenuBar.MnemonicOf(label));
+}
+
+public sealed class MenuBarColorsTests
+{
+    // Worked through color_utils by hand: BlendTowardMaxContrast(bg, 0x81), then 0.175 of it over bg.
+    [Theory]
+    [InlineData(0xFFFFFFFFu, 0xFFEBEBECu)]
+    [InlineData(0xFF292A2Du, 0xFF3C3D40u)]
+    public void Given_ABarBackground_When_ThePressedButtonColourIsComputed_Then_ItIsElectronsActivatedFloodFillInkDrop(uint background, uint pressed)
+    {
+        // Given: the theme's menu background (the parameter)
+
+        // When
+        var colour = MenuBarColors.Pressed(background);
+
+        // Then
+        Assert.Equal(pressed, colour);
+    }
+
+    [Fact]
+    public void Given_ATranslucentLightColour_When_BlendedTowardMaxContrast_Then_ItKeepsItsAlphaAndBlendsTowardGrey900()
+    {
+        // Given
+        const uint light = 0x80FFFFFFu;
+
+        // When
+        var blended = MenuBarColors.BlendTowardMaxContrast(light, 0x81 / 255f);
+
+        // Then
+        Assert.Equal(0x808E8F90u, blended);
+    }
+
+    [Fact]
+    public void Given_ADarkColour_When_BlendedTowardMaxContrast_Then_ItBlendsTowardWhite()
+    {
+        // Given
+        const uint dark = 0xFF292A2Du;
+
+        // When
+        var blended = MenuBarColors.BlendTowardMaxContrast(dark, 0x81 / 255f);
+
+        // Then
+        Assert.Equal(0xFF959697u, blended);
+    }
+
+    // g_luminance_midpoint 0.2117 falls between grey 0x77 (0.184) and 0x80 (0.216).
+    [Theory]
+    [InlineData(0xFF777777u, true)]
+    [InlineData(0xFF808080u, false)]
+    [InlineData(0xFFFFFFFFu, false)]
+    [InlineData(0xFF000000u, true)]
+    public void Given_AColour_When_CheckedForDarkness_Then_ItSplitsAtChromiumsLuminanceMidpoint(uint color, bool dark)
+    {
+        // Given: the colour (the parameter)
+
+        // When
+        var isDark = MenuBarColors.IsDark(color);
+
+        // Then
+        Assert.Equal(dark, isDark);
+    }
 }
 
 public sealed class KeyboardEventTests

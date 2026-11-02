@@ -79,6 +79,11 @@ internal static class MenuRoles
         _ => null,
     };
 
+    /// <summary>Electron's role table (<c>menu-item-roles.ts</c>) leaves these keys to the page, whose own editing commands
+    /// handle them: <c>registerAccelerator: false</c>.</summary>
+    internal static bool RegistersAccelerator(MenuItemRole role)
+        => role is not (MenuItemRole.Copy or MenuItemRole.Cut or MenuItemRole.Paste or MenuItemRole.PasteAndMatchStyle);
+
     /// <summary>Electron's <c>shouldOverrideCheckStatus</c>: a role whose check is its own state, which makes it a
     /// checkbox that a click does not flip.</summary>
     internal static bool HasOwnCheck(MenuItemRole role) => role == MenuItemRole.ToggleSpellChecker;

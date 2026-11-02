@@ -107,10 +107,11 @@ Counted from the Checklist at the end: `BaseWindow` and `BrowserWindow` are one 
   through a runtime-built target class. `getContentBounds` excludes the bar. macOS gets Electron's default
   application menu (app, File, Edit, View, Window) unless the app sets one during `Ready`; unlike Electron,
   Windows and Linux get no default bar. Webcontents gains `undo`, `redo`, `cut`, `copy`, `paste`,
-  `pasteAndMatchStyle`, `delete`, `selectAll`, `reloadIgnoringCache`. Gaps: menu item icons, sublabels, tooltips and `registerAccelerator`; most macOS-only roles (tabs, speech; `recentDocuments` through AppKit's private menu name, M4;
-  `shareMenu` only in natively built macOS menus, M4); the click callback gets no `KeyboardEvent`; `Command`/`Super` accelerators are ignored on Windows
-  and Linux (CEF accelerators have no such modifier); Alt shows an auto-hidden bar until pressed again, rather than
-  until the menu is used; the bar takes CEF Views' default look.
+  `pasteAndMatchStyle`, `delete`, `selectAll`, `reloadIgnoringCache`. Gaps: menu item icons, sublabels and tooltips off macOS (M3; `registerAccelerator` is Electron's, and Electron shows `toolTip` on macOS only); most macOS-only roles (tabs, speech; `recentDocuments` through AppKit's private menu name, M4;
+  `shareMenu` only in natively built macOS menus, M4); the click callback gets no `KeyboardEvent`; `Command`/`Super` accelerators run on the Windows key
+  (matched in the keyboard handler's `on_key_event`, as CEF accelerators have no such modifier) but their items show no
+  shortcut text (M5); Alt shows an auto-hidden bar until pressed again, rather than
+  until the menu is used; on Windows the bar has Electron's look (background, pressed colour, Alt underlines; W16).
   `Menu.MenuWillShow`/`MenuWillClose` (Electron's `menu-will-show`/`menu-will-close`) come from CEF's
   `D.menu_will_show`/`D.menu_closed` per Views model on Windows and Linux (a popup or tray menu and each submenu on its own
   Menu; a bar dropdown on its submenu, never on the bar's Menu), from NSMenu delegates on the macOS application and Dock

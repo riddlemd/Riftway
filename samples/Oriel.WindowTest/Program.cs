@@ -3661,6 +3661,71 @@ async Task BarMenusAsync(BrowserWindow win, Menu menu, MenuItem save, MenuItem g
         ignoredShortcut && Eventually(() => clicks.Contains("save:True"), step), string.Join(",", clicks));
     clicks.Clear();
 
+    // Windows-key accelerators: CEF's set_accelerator has no such modifier, so Oriel matches the keys the page leaves.
+    // Sent through CEF's send_key_event, the path an OS key takes; the flag is Chromium's EF_COMMAND_DOWN.
+    KeyboardEvent? metaKeys = null;
+    menu.Items[0].Submenu!.Append(new MenuItem { Label = "Meta", Accelerator = "Super+Shift+F8", Click = (_, w, keys) => { metaKeys = keys; clicks.Add($"meta:{w == win}"); } });
+    await Task.Delay(300);
+    void NativeKey(int key, Oriel.Cef.Interop.cef_event_flags_t flags)
+    {
+        win.WebContents.SendNativeKey(Oriel.Cef.Interop.cef_key_event_type_t.KEYEVENT_RAWKEYDOWN, key, flags);
+        win.WebContents.SendNativeKey(Oriel.Cef.Interop.cef_key_event_type_t.KEYEVENT_KEYUP, key, flags);
+    }
+    // F8: Chrome binds Ctrl+Shift+J (DevTools), which a negative case would open.
+    const int F8 = 0x77;
+    const Oriel.Cef.Interop.cef_event_flags_t Win = Oriel.Cef.Interop.cef_event_flags_t.EVENTFLAG_COMMAND_DOWN;
+    const Oriel.Cef.Interop.cef_event_flags_t Shift = Oriel.Cef.Interop.cef_event_flags_t.EVENTFLAG_SHIFT_DOWN;
+    const Oriel.Cef.Interop.cef_event_flags_t Ctrl = Oriel.Cef.Interop.cef_event_flags_t.EVENTFLAG_CONTROL_DOWN;
+    NativeKey(F8, Win | Shift);
+    Check("a Super accelerator runs its item on the Windows key, as Electron's EF_COMMAND_DOWN accelerators",
+        Eventually(() => clicks.Contains("meta:True"), step) && metaKeys is { MetaKey: true, ShiftKey: true, CtrlKey: false, TriggeredByAccelerator: true },
+        $"{string.Join(",", clicks)} {metaKeys}");
+    // send_key_event is asynchronous: let the last key settle before counting again.
+    await Task.Delay(500);
+    clicks.Clear();
+    NativeKey(F8, Ctrl | Shift);
+    NativeKey(F8, Win);
+    NativeKey(F8, Win | Shift | Ctrl);
+    win.WebContents.SendNativeKey(Oriel.Cef.Interop.cef_key_event_type_t.KEYEVENT_KEYUP, F8, Win | Shift);
+    await Task.Delay(500);
+    Check("a Super accelerator needs exactly its modifiers, on a key press", clicks.Count == 0, string.Join(",", clicks));
+    await Js(win, "window.__eatMeta = e => { if (e.metaKey) e.preventDefault(); }; addEventListener('keydown', window.__eatMeta); 1");
+    NativeKey(F8, Win | Shift);
+    await Task.Delay(500);
+    var eaten = clicks.Count == 0;
+    await Js(win, "removeEventListener('keydown', window.__eatMeta); 1");
+    win.WebContents.SetIgnoreMenuShortcuts(true);
+    NativeKey(F8, Win | Shift);
+    await Task.Delay(500);
+    var ignoredMeta = clicks.Count == 0;
+    win.WebContents.SetIgnoreMenuShortcuts(false);
+    NativeKey(F8, Win | Shift);
+    Check("a Super accelerator leaves keys the page handles, and SetIgnoreMenuShortcuts gates it",
+        eaten && ignoredMeta && Eventually(() => clicks.Contains("meta:True"), step), $"eaten={eaten} ignored={ignoredMeta} {string.Join(",", clicks)}");
+    await Task.Delay(500);
+    clicks.Clear();
+
+    // registerAccelerator: false keeps the key from the window (both kinds), as Electron's GenerateAcceleratorTable.
+    var unregistered = new MenuItem { Label = "Unregistered", Accelerator = "CmdOrCtrl+Shift+Y", RegisterAccelerator = false, Click = (_, _, _) => clicks.Add("ctrl-y") };
+    var unregisteredMeta = new MenuItem { Label = "Unregistered Meta", Accelerator = "Super+Shift+U", RegisterAccelerator = false, Click = (_, _, _) => clicks.Add("meta-u") };
+    menu.Items[0].Submenu!.Append(unregistered);
+    menu.Items[0].Submenu!.Append(unregisteredMeta);
+    await Task.Delay(300);
+    NativeKey('Y', Ctrl | Shift);
+    NativeKey('U', Win | Shift);
+    await Task.Delay(500);
+    var notRegistered = clicks.Count == 0;
+    unregistered.RegisterAccelerator = true;
+    unregisteredMeta.RegisterAccelerator = true;
+    await Task.Delay(300);
+    NativeKey('Y', Ctrl | Shift);
+    NativeKey('U', Win | Shift);
+    Check("RegisterAccelerator false keeps an item's accelerator from the window until set again, as Electron",
+        notRegistered && Eventually(() => clicks.Contains("ctrl-y") && clicks.Contains("meta-u"), step), $"before={notRegistered} {string.Join(",", clicks)}");
+    await Task.Delay(500);
+    clicks.Clear();
+    await MenuBarLookAsync(win);
+
     win.AutoHideMenuBar = true;
     Check("AutoHideMenuBar hides the bar", Eventually(() => !win.IsMenuBarVisible && win.GetContentBounds() == content && PageHeight() == fullHeight, step), $"{win.GetContentBounds()} page={PageHeight()}/{fullHeight}");
     Check("AutoHideMenuBar reads back", win.AutoHideMenuBar);
@@ -3751,6 +3816,87 @@ async Task BarMenusAsync(BrowserWindow win, Menu menu, MenuItem save, MenuItem g
     await Task.Delay(300);
 }
 
+
+// Electron's Windows bar look (menu_bar.cc, submenu_button.cc), read back from the screen. The display is colour-managed,
+// so pixels are compared with each other and with Electron's colour deltas, never with exact values.
+async Task MenuBarLookAsync(BrowserWindow win)
+{
+    if (!OperatingSystem.IsWindows()) return;
+    win.Focus();
+    await Task.Delay(500);
+    var bar = win.MenuBarSnapshot();
+    var buttons = bar.Buttons.Select(r => Screen.DipToScreenRect(win, new Rectangle(r.x, r.y, r.width, r.height))).ToList();
+    var scale = buttons.Count > 0 && bar.Buttons[0].height > 0 ? (double)buttons[0].Height / bar.Buttons[0].height : 1;
+    static string Rgb((byte R, byte G, byte B) c) => $"{c.R},{c.G},{c.B}";
+    static int Diff((byte R, byte G, byte B) a, (byte R, byte G, byte B) b) => Math.Max(Math.Abs(a.R - b.R), Math.Max(Math.Abs(a.G - b.G), Math.Abs(a.B - b.B)));
+    (byte R, byte G, byte B)[] Shot(Rectangle r) => WindowsShell.ScreenPixels((r.X, r.Y, r.Width, r.Height));
+    List<(int X, int Y)> Changed((byte R, byte G, byte B)[] a, (byte R, byte G, byte B)[] b, int width)
+        => [.. Enumerable.Range(0, Math.Min(a.Length, b.Length)).Where(i => Diff(a[i], b[i]) > 40).Select(i => (i % width, i / width))];
+    Check("the bar's buttons have Electron's LabelButton insets (INSETS_LABEL_BUTTON: 5, 6)",
+        bar.Insets.Count == 3 && bar.Insets.All(i => i is { top: 5, left: 6, bottom: 5, right: 6 }), string.Join(" ", bar.Insets.Select(i => $"{i.top},{i.left},{i.bottom},{i.right}")));
+    if (buttons.Count != 3) return;
+
+    var (file, edit, go) = (buttons[0], buttons[1], buttons[2]);
+    var barPixel = WindowsShell.ScreenPixel(go.X + go.Width + 30, go.Y + go.Height / 2);
+    var resting = WindowsShell.ScreenPixel(file.X + 2, file.Y + 2);
+    win.TriggerMenuBarItem(0);
+    var opened = Eventually(() => win.IsMenuBarMenuOpen, step);
+    await Task.Delay(500);
+    var pressed = WindowsShell.ScreenPixel(file.X + 2, file.Y + 2);
+    var strip = WindowsShell.ScreenPixels((file.X + 10, file.Y + file.Height + 4, 60, 1));
+    var menuBackground = strip.GroupBy(p => p).OrderByDescending(g => g.Count()).First().Key;
+    win.CancelMenuBarMenu();
+    var closed = Eventually(() => !win.IsMenuBarMenuOpen, step);
+    await Task.Delay(300);
+    var unpressed = WindowsShell.ScreenPixel(file.X + 2, file.Y + 2);
+    Check("the bar paints the theme's menu background, the open dropdown's colour, under unpainted buttons (pixels)",
+        opened && Diff(barPixel, menuBackground) <= 3 && Diff(resting, barPixel) <= 2, $"bar {Rgb(barPixel)} menu {Rgb(menuBackground)} button {Rgb(resting)}");
+    // Electron's pressed SubmenuButton: the activated flood-fill ink drop, so the button darkens (or lightens) by its delta.
+    var want = MenuBarColors.Pressed(bar.Background);
+    int Delta(uint c, int shift) => (int)((bar.Background >> shift) & 0xFF) - (int)((c >> shift) & 0xFF);
+    var (wantR, wantG, wantB) = (Delta(want, 16), Delta(want, 8), Delta(want, 0));
+    var (gotR, gotG, gotB) = (barPixel.R - pressed.R, barPixel.G - pressed.G, barPixel.B - pressed.B);
+    Check("the open menu's button takes Electron's activated ink drop colour, then rests again (pixels)",
+        closed && Math.Abs(gotR - wantR) <= 6 && Math.Abs(gotG - wantG) <= 6 && Math.Abs(gotB - wantB) <= 6 && Math.Sign(gotG) == Math.Sign(wantG) && Diff(unpressed, barPixel) <= 2,
+        $"delta {gotR},{gotG},{gotB} want {wantR},{wantG},{wantB}; pressed {Rgb(pressed)} after {Rgb(unpressed)} theme {bar.Background:X8}");
+
+    const Oriel.Cef.Interop.cef_key_event_type_t Down = Oriel.Cef.Interop.cef_key_event_type_t.KEYEVENT_RAWKEYDOWN;
+    const Oriel.Cef.Interop.cef_key_event_type_t Up = Oriel.Cef.Interop.cef_key_event_type_t.KEYEVENT_KEYUP;
+    const Oriel.Cef.Interop.cef_event_flags_t AltFlag = Oriel.Cef.Interop.cef_event_flags_t.EVENTFLAG_ALT_DOWN;
+    var before = buttons.Select(Shot).ToList();
+    win.WebContents.SendNativeKey(Down, 0x12, AltFlag);
+    await Task.Delay(400);
+    var held = buttons.Select(Shot).ToList();
+    win.WebContents.SendNativeKey(Up, 0x12, 0);
+    await Task.Delay(400);
+    var released = buttons.Select(Shot).ToList();
+    var fileLine = Changed(before[0], held[0], file.Width);
+    var goLine = Changed(before[2], held[2], go.Width);
+    var editLine = Changed(before[1], held[1], edit.Width);
+    string Describe(List<(int X, int Y)> line) => line.Count == 0 ? "none" : $"{line.Count}px x{line.Min(p => p.X)}-{line.Max(p => p.X)} y{line.Min(p => p.Y)}-{line.Max(p => p.Y)}";
+    Check("holding Alt underlines the mnemonics, &File and &Go but not Edit, as Electron's SubmenuButton (pixels)",
+        fileLine.Count >= 3 && goLine.Count >= 3 && editLine.Count == 0 && fileLine.Select(p => p.Y).Distinct().Count() <= 2,
+        $"File {Describe(fileLine)}, Go {Describe(goLine)}, Edit {Describe(editLine)}");
+    // SubmenuButton::PaintButtonContents: under the mnemonic letter, at (height + text height) / 2 - 2, the text being
+    // the button less its 5 + 5 insets.
+    var row = (int)Math.Round((bar.Buttons[0].height - 7) * scale);
+    Check("the underline sits under the letter, at Electron's height (pixels)",
+        fileLine.Count > 0 && fileLine.Min(p => p.X) >= (int)(5 * scale) && fileLine.Max(p => p.X) <= (int)(20 * scale) && fileLine.All(p => Math.Abs(p.Y - row) <= (int)Math.Ceiling(scale)),
+        $"{Describe(fileLine)}; Electron's row {row}");
+    Check("releasing Alt removes the underlines", released.Select((shot, i) => Changed(before[i], shot, buttons[i].Width).Count).All(n => n == 0),
+        string.Join(",", released.Select((shot, i) => Changed(before[i], shot, buttons[i].Width).Count)));
+    win.WebContents.SendNativeKey(Down, 0x12, AltFlag);
+    win.WebContents.SendNativeKey(Down, 'F', AltFlag);
+    var altOpened = Eventually(() => win.IsMenuBarMenuOpen, step);
+    await Task.Delay(500);
+    var goWhileOpen = Changed(before[2], Shot(go), go.Width);
+    win.CancelMenuBarMenu();
+    Eventually(() => !win.IsMenuBarMenuOpen, step);
+    win.WebContents.SendNativeKey(Up, 'F', AltFlag);
+    win.WebContents.SendNativeKey(Up, 0x12, 0);
+    await Task.Delay(300);
+    Check("a menu opening hides the underlines, though Alt is still down, as Electron's MenuBar::ButtonPressed", altOpened && goWhileOpen.Count == 0, $"{altOpened} Go {Describe(goWhileOpen)}");
+}
 
 async Task WindowOpenAsync(BrowserWindow win)
 {

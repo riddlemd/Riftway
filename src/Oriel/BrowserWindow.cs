@@ -209,8 +209,11 @@ public sealed unsafe partial class BrowserWindow : BaseWindow
         _client = new ClientHandler(WebContents.Display, WebContents.Load, WebContents.JsDialog, WebContents.Request, WebContents.Command,
             WebContents.ContextMenuRequests, new KeyboardHandler(keyEvent => BlocksInput || WebContents.OnPreKeyEvent(keyEvent) || (!WebContents.IgnoresMenuShortcuts && (_menuBar?.OnKeyEvent(keyEvent) ?? false)),
                 // Electron's macOS PlatformHandleKeyboardEvent returns before the app menu's performKeyEquivalent: for a page
-                // that ignores menu shortcuts; char events never reach the menu.
-                keyEvent => OperatingSystem.IsMacOS() && WebContents.IgnoresMenuShortcuts && keyEvent->type != cef_key_event_type_t.KEYEVENT_CHAR),
+                // that ignores menu shortcuts; char events never reach the menu. Elsewhere the bar runs its Windows-key
+                // accelerators here, which CEF's set_accelerator cannot take.
+                keyEvent => OperatingSystem.IsMacOS()
+                    ? WebContents.IgnoresMenuShortcuts && keyEvent->type != cef_key_event_type_t.KEYEVENT_CHAR
+                    : !WebContents.IgnoresMenuShortcuts && (_menuBar?.OnUnhandledKey(keyEvent) ?? false)),
             new LifeSpanHandler { BeforePopup = (request, features, settings) => OpenPopup(WebContents, request, features, settings), PopupAborted = OnPopupAborted },
             new DragHandler(regions => Command(w => SetDraggableRegionsOn(w, regions))))
         {

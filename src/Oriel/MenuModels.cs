@@ -62,6 +62,32 @@ internal static unsafe class MenuModels
         => item.Accelerator is { } text && Accelerator.Parse(text, macOS: false) is var a && !a.Modifiers.HasFlag(AcceleratorModifiers.Command) ? a : null;
 
     internal static int Has(Accelerator accelerator, AcceleratorModifiers modifier) => accelerator.Modifiers.ForMenus().HasFlag(modifier) ? 1 : 0;
+
+    /// <summary>The command ids of <paramref name="menu"/>'s registering items whose accelerator holds the Windows/Super key,
+    /// by key and modifiers (AltGr counted as Alt); a later item takes an accelerator from an earlier one, as in Electron's
+    /// accelerator table.</summary>
+    internal static Dictionary<(int KeyCode, AcceleratorModifiers Modifiers), int> CommandAccelerators(Menu menu)
+    {
+        var table = new Dictionary<(int, AcceleratorModifiers), int>();
+        foreach (var item in menu.Descendants())
+        {
+            if (item.Type is MenuItemType.Separator or MenuItemType.Submenu or MenuItemType.Palette || !item.RegisterAccelerator || item.Accelerator is not { } text) continue;
+            var a = Accelerator.Parse(text, macOS: false);
+            if (a.Modifiers.HasFlag(AcceleratorModifiers.Command)) table[(a.KeyCode, a.Modifiers.ForMenus())] = item.CommandId;
+        }
+        return table;
+    }
+
+    /// <summary>The accelerator modifiers held in a CEF key event's flags; <c>EVENTFLAG_COMMAND_DOWN</c> (Electron's
+    /// <c>meta</c>) is the Windows/Super key off macOS, as Chromium's <c>EF_COMMAND_DOWN</c>.</summary>
+    internal static AcceleratorModifiers AcceleratorModifiersOf(uint cefFlags)
+    {
+        var held = KeyInputMapper.ModifiersOf(cefFlags);
+        return (held.HasFlag(InputModifiers.Shift) ? AcceleratorModifiers.Shift : 0)
+            | (held.HasFlag(InputModifiers.Control) ? AcceleratorModifiers.Control : 0)
+            | (held.HasFlag(InputModifiers.Alt) ? AcceleratorModifiers.Alt : 0)
+            | (held.HasFlag(InputModifiers.Meta) ? AcceleratorModifiers.Command : 0);
+    }
 }
 
 /// <summary>Electron's <c>menu-will-show</c> and <c>menu-will-close</c> for one run of a CEF Views menu built by

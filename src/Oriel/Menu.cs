@@ -244,13 +244,14 @@ public enum MenuItemRole
 
 /// <summary>An entry in a <see cref="Menu"/>; Electron's <c>MenuItem</c>.</summary>
 /// <remarks>Changes to <see cref="Label"/>, <see cref="Enabled"/>, <see cref="Visible"/>, <see cref="Checked"/>
-/// and <see cref="Accelerator"/> show in menus already in use.</remarks>
+/// <see cref="Accelerator"/> and <see cref="RegisterAccelerator"/> show in menus already in use.</remarks>
 public sealed class MenuItem
 {
     private static int s_nextCommandId;
 
     private string? _label;
     private string? _accelerator;
+    private bool? _registerAccelerator;
     private bool _enabled = true;
     private bool _visible = true;
     private bool _checked;
@@ -333,8 +334,20 @@ public sealed class MenuItem
         set => Set(ref _toolTip, value);
     }
 
+    /// <summary>Whether <see cref="Accelerator"/> is registered with the window on Windows and Linux; when false the menu
+    /// still shows it but the key goes to the page. False by default for the <see cref="MenuItemRole.Copy"/>,
+    /// <see cref="MenuItemRole.Cut"/>, <see cref="MenuItemRole.Paste"/> and <see cref="MenuItemRole.PasteAndMatchStyle"/>
+    /// roles, true otherwise. macOS menus keep their key equivalents either way, as Electron's. Electron's
+    /// <c>registerAccelerator</c>.</summary>
+    public bool RegisterAccelerator
+    {
+        get => _registerAccelerator ?? MenuRoles.RegistersAccelerator(Role);
+        set => Set(ref _registerAccelerator, value);
+    }
+
     /// <summary>The keyboard shortcut, e.g. <c>CmdOrCtrl+Shift+S</c>; defaults to the role's. Electron's <c>accelerator</c>.</summary>
-    /// <remarks>On Windows and Linux, <c>Command</c>/<c>Super</c> shortcuts are not supported and are ignored.</remarks>
+    /// <remarks>On Windows and Linux, <c>Command</c>/<c>Super</c>/<c>Meta</c> is the Windows (Super) key: the shortcut works
+    /// once the page leaves the key unhandled, but its menu item shows no shortcut text.</remarks>
     /// <exception cref="ArgumentException">Not a valid accelerator.</exception>
     public string? Accelerator
     {
