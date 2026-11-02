@@ -1,0 +1,161 @@
+# Builds Riftway's NuGet packages and pushes them to nuget.org through Trusted Publishing (no stored API key).
+# nuget.org's policy names this file, so keep its name: publish.yml.
+#   Release: push a tag v<version>, e.g. v0.1.0-preview.1.
+#   Dry run: Actions > Publish > Run workflow with a version and "push" off; the packages are kept as run artifacts.
+# Needs the repository secret NUGET_USER: the nuget.org profile name that owns the policy (not an email address).
+name: Publish
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+    inputs:
+      version:
+        description: Package version, e.g. 0.1.0-preview.1
+        required: true
+      push:
+        description: Push to nuget.org (off builds and tests only)
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+env:
+  DOTNET_NOLOGO: 1
+  DOTNET_CLI_TELEMETRY_OPTOUT: 1
+
+jobs:
+  version:
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+    steps:
+      - id: version
+        env:
+          INPUT: ${{ inputs.version }}
+        run: |
+          if [ "$GITHUB_REF_TYPE" = tag ]; then version="${GITHUB_REF_NAME#v}"; else version="$INPUT"; fi
+          if ! [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$ ]]; then
+            echo "::error::'$version' is not a package version (expected e.g. 0.1.0-preview.1)"; exit 1
+          fi
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+
+  libraries:
+    needs: version
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-dotnet@v6
+        with:
+          dotnet-version: 10.0.x
+      - name: Test
+        run: dotnet test tests/Riftway.Tests -c Release
+      - name: Pack
+        env:
+          VERSION: ${{ needs.version.outputs.version }}
+        run: |
+          for project in src/Riftway.Cef src/Riftway src/Riftway.AutoUpdater src/Riftway.Blazor; do
+            dotnet pack "$project" -c Release -o out -p:Version="$VERSION" -p:ContinuousIntegrationBuild=true
+          done
+      - uses: actions/upload-artifact@v7
+        with:
+          name: packages-libraries
+          path: out/*.nupkg
+          if-no-files-found: error
+
+  runtime:
+    needs: version
+    strategy:
+      matrix:
+        include:
+          - { rid: osx-arm64, cef: macosarm64, os: macos-15 }
+          - { rid: osx-x64, cef: macosx64, os: macos-15 }
+          - { rid: linux-x64, cef: linux64, os: ubuntu-24.04 }
+          - { rid: win-x64, cef: windows64, os: windows-2025 }
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-dotnet@v6
+        with:
+          dotnet-version: 10.0.x
+      # Native paths on every OS: stage-windows.ps1 reads the cache as a Windows path, fetch-cef.sh converts it.
+      - name: Locate the CEF cache
+        shell: pwsh
+        run: |
+          "RIFTWAY_CEF_CACHE=$(Join-Path $env:RUNNER_TEMP cef)" >> $env:GITHUB_ENV
+          "RIFTWAY_STAGE=$(Join-Path $env:RUNNER_TEMP stage)" >> $env:GITHUB_ENV
+      - uses: actions/cache@v6
+        with:
+          path: ${{ runner.temp }}/cef
+          key: cef-${{ matrix.cef }}-${{ hashFiles('eng/cef.json') }}
+      # fetch-cef.sh calls python3; Windows runners only have python on PATH.
+      - name: python3 for Git Bash
+        if: runner.os == 'Windows'
+        shell: bash
+        run: |
+          mkdir -p "$HOME/bin"
+          printf '#!/bin/sh\nexec python "$@"\n' > "$HOME/bin/python3"
+          chmod +x "$HOME/bin/python3"
+          echo "$HOME/bin" >> "$GITHUB_PATH"
+      - name: Fetch CEF
+        shell: bash
+        run: eng/fetch-cef.sh ${{ matrix.cef }}
+      - name: Stage (macOS)
+        if: runner.os == 'macOS'
+        run: eng/runtime/stage-macos.sh "$RIFTWAY_STAGE" ${{ matrix.rid }}
+      - name: Stage (Linux)
+        if: runner.os == 'Linux'
+        run: eng/runtime/stage-linux.sh "$RIFTWAY_STAGE" ${{ matrix.cef }}
+      - name: Stage (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: eng/runtime/stage-windows.ps1 $env:RIFTWAY_STAGE -Platform ${{ matrix.cef }}
+      - name: Pack
+        shell: bash
+        env:
+          VERSION: ${{ needs.version.outputs.version }}
+        run: |
+          dotnet pack eng/runtime/Riftway.Runtime.csproj -c Release -o out -p:Version="$VERSION" \
+            -p:RiftwayRuntimeRid=${{ matrix.rid }} -p:RiftwayRuntimeStage="$RIFTWAY_STAGE"
+      # nuget.org refuses packages over 250 MB; failing here beats failing halfway through the push.
+      - name: Check the size
+        shell: pwsh
+        run: |
+          $package = Get-Item out/*.nupkg
+          '{0}: {1:N0} MB' -f $package.Name, ($package.Length / 1MB)
+          if ($package.Length -gt 250MB) { throw "$($package.Name) is over nuget.org's 250 MB limit" }
+      - uses: actions/upload-artifact@v7
+        with:
+          name: packages-${{ matrix.rid }}
+          path: out/*.nupkg
+          if-no-files-found: error
+
+  push:
+    needs: [libraries, runtime]
+    if: github.ref_type == 'tag' || inputs.push
+    runs-on: ubuntu-latest
+    permissions:
+      id-token: write
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+          pattern: packages-*
+          merge-multiple: true
+          path: packages
+      - uses: actions/setup-dotnet@v6
+        with:
+          dotnet-version: 10.0.x
+      # Last before the push: the key it returns lasts an hour.
+      - name: NuGet login
+        id: login
+        uses: NuGet/login@v1
+        with:
+          user: ${{ secrets.NUGET_USER }}
+      # --skip-duplicate lets a rerun finish a push that stopped partway.
+      - name: Push
+        run: |
+          for package in packages/*.nupkg; do
+            dotnet nuget push "$package" --api-key "${{ steps.login.outputs.NUGET_API_KEY }}" \
+              --source https://api.nuget.org/v3/index.json --skip-duplicate
+          done
