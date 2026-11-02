@@ -1,6 +1,6 @@
 # Riftway plan
 
-Riftway is Electron for .NET: desktop apps written in C#, rendered by one Chromium everywhere, with
+Riftway is a .NET desktop framework modelled on Electron: desktop apps written in C#, rendered by one Chromium everywhere, with
 Blazor Hybrid as the default UI model. Windows, macOS and Linux; x64 and arm64.
 
 ## Principles

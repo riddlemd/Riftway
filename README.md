@@ -1,14 +1,14 @@
 <div align="center">
 
-![Riftway: Electron for .NET, desktop apps in C# on one Chromium](docs/assets/social-preview.png)
+![Riftway: desktop apps in C# on one Chromium, with an Electron-style API](docs/assets/social-preview.png)
 
 [![NuGet](https://img.shields.io/nuget/vpre/Riftway?logo=nuget&label=NuGet&color=004880)](https://www.nuget.org/packages/Riftway)
 [![Publish](https://github.com/riddlemd/Riftway/actions/workflows/publish.yml/badge.svg)](https://github.com/riddlemd/Riftway/actions/workflows/publish.yml)
 [![.NET 10](https://img.shields.io/badge/.NET-10.0-512BD4?logo=dotnet&logoColor=white)](https://dotnet.microsoft.com/)
-[![Chromium 154](https://img.shields.io/badge/Chromium-154%20%28CEF%29-4285F4?logo=googlechrome&logoColor=white)](eng/cef.json)
+[![Chromium 154](https://img.shields.io/badge/Chromium-154%20%28CEF%29-4285F4)](eng/cef.json)
 [![Platforms](https://img.shields.io/badge/platform-Windows%20%7C%20macOS%20%7C%20Linux-lightgrey)](#platforms)
 [![Blazor Hybrid](https://img.shields.io/badge/Blazor-Hybrid-512BD4?logo=blazor&logoColor=white)](#blazor-hybrid)
-[![Electron API](https://img.shields.io/badge/API-Electron--style-47848F?logo=electron&logoColor=white)](docs/ELECTRON-PARITY.md)
+[![Electron-style API](https://img.shields.io/badge/API-Electron--style-2F6F8F)](docs/ELECTRON-PARITY.md)
 [![Status](https://img.shields.io/badge/status-pre--alpha-orange)](docs/PLAN.md#milestones)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue)](LICENSE)
 
@@ -24,7 +24,7 @@
 
 ---
 
-Riftway is **Electron for .NET**: desktop apps in C#, rendered by one Chromium (CEF) on every platform, with Blazor Hybrid
+Riftway is a .NET desktop framework modelled on Electron®: desktop apps in C#, rendered by one Chromium (CEF) on every platform, with Blazor Hybrid
 as the default UI model and Electron's concepts (`app`, `BrowserWindow`, `webContents`, IPC, `protocol`) in idiomatic C#.
 The main process is your .NET app; there is no Node.js.
 
@@ -304,3 +304,7 @@ The workaround goes once Chromium fixes libyuv upstream: it should require SVE f
 ## License
 
 [MIT](LICENSE) © 2026 Michael Riddle
+
+Riftway is an independent project, not affiliated with or endorsed by the OpenJS Foundation or the Electron project.
+Electron® is a registered trademark of the OpenJS Foundation. Chromium is a trademark of Google LLC. .NET and Blazor are
+trademarks of Microsoft Corporation.
