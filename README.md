@@ -1,33 +1,98 @@
-# Riftway
+<div align="center">
 
-Electron for .NET: desktop apps in C#, rendered by one Chromium (CEF) on every platform, with Blazor Hybrid as the default UI model and Electron's concepts (`app`, `BrowserWindow`, `webContents`, IPC, `protocol`) in idiomatic C#.
+![Riftway: Electron for .NET, desktop apps in C# on one Chromium](docs/assets/social-preview.png)
 
-**Status: pre-alpha (M2 in progress).** On macOS, Linux (X11) and Windows x64: `RiftwayApp` and `BrowserWindow` with much of Electron's window API, IPC (`ipcMain`, `ipcRenderer`, `contextBridge`) and custom schemes (`Protocol`). See [the todo list](docs/todo.md) for what remains.
+[![NuGet](https://img.shields.io/nuget/vpre/Riftway?logo=nuget&label=NuGet&color=004880)](https://www.nuget.org/packages/Riftway)
+[![Publish](https://github.com/riddlemd/Riftway/actions/workflows/publish.yml/badge.svg)](https://github.com/riddlemd/Riftway/actions/workflows/publish.yml)
+[![.NET 10](https://img.shields.io/badge/.NET-10.0-512BD4?logo=dotnet&logoColor=white)](https://dotnet.microsoft.com/)
+[![Chromium 154](https://img.shields.io/badge/Chromium-154%20%28CEF%29-4285F4?logo=googlechrome&logoColor=white)](eng/cef.json)
+[![Platforms](https://img.shields.io/badge/platform-Windows%20%7C%20macOS%20%7C%20Linux-lightgrey)](#platforms)
+[![Blazor Hybrid](https://img.shields.io/badge/Blazor-Hybrid-512BD4?logo=blazor&logoColor=white)](#blazor-hybrid)
+[![Electron API](https://img.shields.io/badge/API-Electron--style-47848F?logo=electron&logoColor=white)](docs/ELECTRON-PARITY.md)
+[![Status](https://img.shields.io/badge/status-pre--alpha-orange)](docs/PLAN.md#milestones)
+[![License: MIT](https://img.shields.io/badge/license-MIT-blue)](LICENSE)
+
+[Features](#features) ·
+[Install](#install) ·
+[Quick start](#quick-start) ·
+[Blazor Hybrid](#blazor-hybrid) ·
+[Packaging](#packaging-and-publishing-apps) ·
+[Build from source](#build-from-source) ·
+[Docs](#documentation)
+
+</div>
+
+---
+
+Riftway is **Electron for .NET**: desktop apps in C#, rendered by one Chromium (CEF) on every platform, with Blazor Hybrid
+as the default UI model and Electron's concepts (`app`, `BrowserWindow`, `webContents`, IPC, `protocol`) in idiomatic C#.
+The main process is your .NET app; there is no Node.js.
+
+> [!WARNING]
+> **Pre-alpha (M2 in progress).** On macOS, Linux (X11) and Windows x64: `RiftwayApp` and `BrowserWindow` with much of
+> Electron's window API, IPC (`ipcMain`, `ipcRenderer`, `contextBridge`) and custom schemes (`Protocol`). APIs will change
+> between previews. See [the todo list](docs/todo.md) for what remains and [ELECTRON-PARITY.md](docs/ELECTRON-PARITY.md)
+> for module-by-module coverage.
+
+## Features
+
+- **One engine everywhere.** The same Chromium on Windows, macOS and Linux, so a page renders and plays media the same
+  on each, unlike system webviews (WebView2, WKWebView, WebKitGTK).
+- **Electron's model in C#.** `RiftwayApp`, `BrowserWindow`, `WebContents`, `Session`, `Protocol`, `ipcMain`/`ipcRenderer`,
+  `contextBridge`, `Menu`, `Tray`, `Dialog`, `Clipboard`, `safeStorage` and more, with options records, events and `async`.
+- **Blazor Hybrid built in.** Razor components run in your process and render into a window: no server, no port, no
+  WebAssembly. Hot reload works with `dotnet watch`.
+- **Any web UI.** The core is UI-agnostic: plain HTML/JS, React, Vite or anything else that runs in Chromium.
+- **Chromium's sandbox.** Renderers run sandboxed, as in Electron.
+- **Packaging included.** `dotnet publish` lays out a Windows app, a Linux app or a signed, notarised macOS `.app`;
+  [Velopack](https://velopack.io) installers and auto-updates through `Riftway.AutoUpdater`.
 
 ## Platforms
 
-Windows, Linux and macOS.
+| OS | x64 | arm64 |
+| --- | --- | --- |
+| Windows | ✅ | Builds; not yet run on Arm hardware |
+| macOS | ✅ (tested under Rosetta) | ✅ |
+| Linux (X11) | ✅ | ✅ |
 
-## Why CEF
+## Install
 
-System webviews (WebView2, WKWebView, WebKitGTK) mean three engines with different rendering and codecs. Riftway ships one Chromium everywhere, like Electron, but with .NET as the main process instead of Node. The cost is size, about the same as Electron.
+Riftway is on NuGet as a preview. An app references `Riftway` and one `Riftway.Runtime.<rid>` for each platform it ships:
 
-## Codecs
-
-Riftway runs on stock CEF: open codecs (AV1, VP9, Opus, …), no H.264 or AAC. A drop-in runtime variant built with Chrome's proprietary codecs is planned; switching is a package change, not a code change. See [the plan](docs/PLAN.md).
-
-## Plan
-
-[docs/PLAN.md](docs/PLAN.md): architecture, Blazor Hybrid hosting, codecs, milestones.
-
-## Try it (macOS)
-
-```sh
-src/Riftway.Subprocess.Native/build.sh artifacts/subprocess/Riftway.Subprocess macosarm64   # sandbox-capable helper
-dotnet publish samples/Riftway.Sample -r osx-arm64 -c Release --self-contained -o artifacts/sample
-eng/bundle-macos.sh artifacts/sample Riftway.Sample artifacts/subprocess/Riftway.Subprocess artifacts
-open artifacts/Riftway.Sample.app
+```xml
+<PackageReference Include="Riftway" Version="0.1.0-preview.1" />
+<PackageReference Include="Riftway.Blazor" Version="0.1.0-preview.1" />          <!-- optional: Blazor Hybrid -->
+<PackageReference Include="Riftway.Runtime.osx-arm64" Version="0.1.0-preview.1" /> <!-- one per RID you ship -->
 ```
+
+| Package | What it is |
+| --- | --- |
+| [`Riftway`](https://www.nuget.org/packages/Riftway) | The API: `RiftwayApp`, `BrowserWindow`, IPC, `Protocol` and the rest, plus the build targets that lay out your app |
+| [`Riftway.Blazor`](https://www.nuget.org/packages/Riftway.Blazor) | Blazor Hybrid: Razor components rendered into a `BrowserWindow` |
+| [`Riftway.AutoUpdater`](https://www.nuget.org/packages/Riftway.AutoUpdater) | Electron's `autoUpdater`, over Velopack |
+| [`Riftway.Cef`](https://www.nuget.org/packages/Riftway.Cef) | C# bindings to CEF's C API (a dependency of `Riftway`) |
+| `Riftway.Runtime.<rid>` | Chromium (CEF) and Riftway's native host for one platform: [`win-x64`](https://www.nuget.org/packages/Riftway.Runtime.win-x64), [`linux-x64`](https://www.nuget.org/packages/Riftway.Runtime.linux-x64), [`osx-arm64`](https://www.nuget.org/packages/Riftway.Runtime.osx-arm64), [`osx-x64`](https://www.nuget.org/packages/Riftway.Runtime.osx-x64) |
+
+Requires the [.NET 10 SDK](https://dotnet.microsoft.com/download/dotnet/10.0).
+
+## Quick start
+
+```csharp
+using Riftway;
+
+var app = RiftwayApp.Create();
+
+app.Ready += (_, _) =>
+{
+    var window = new BrowserWindow(new BrowserWindowOptions { Width = 1200, Height = 800, Title = "Hello Riftway" });
+    window.LoadUrl("https://example.com");
+};
+
+return app.Run();
+```
+
+`dotnet run` opens the window (on a Mac, as `bin/<config>/<tfm>/<App>.app`). See [Packaging and publishing apps](#packaging-and-publishing-apps)
+to ship it.
 
 ## Blazor Hybrid
 
@@ -66,63 +131,30 @@ window without a restart:
 RiftwayMacBundle=true dotnet watch --project samples/Riftway.BlazorSample
 ```
 
-## Try it (Linux, in Docker)
+## Why one Chromium
 
-```sh
-docker build -t riftway-linux-dev -f eng/docker/linux-dev.Dockerfile eng/docker
-eng/fetch-cef.sh linuxarm64   # or linux64 on x64 hosts
-docker run --rm -v "$PWD":/src -v "$HOME/.cache/riftway/cef":/cef-cache --shm-size=1g riftway-linux-dev /src/eng/docker/run-linux.sh
-# artifacts/linux/screen.png, app.log, exit.txt
-# Sandboxed, as a non-root user (sandbox.txt shows each process's seccomp mode and namespaces):
-docker run --rm --cap-add SYS_ADMIN --cap-add SYS_PTRACE --security-opt seccomp=unconfined -v "$PWD":/src -v "$HOME/.cache/riftway/cef":/cef-cache --shm-size=1g riftway-linux-dev /src/eng/docker/run-linux.sh --sandbox
-# A test app under another window manager (mutter, kwin or xfwm4; openbox by default), from an image that adds them:
-docker build -t riftway-linux-dev-wm -f eng/docker/linux-dev-wm.Dockerfile eng/docker
-docker run --rm -e RIFTWAY_WM=mutter -v "$PWD":/src -v "$HOME/.cache/riftway/cef":/cef-cache --shm-size=1g riftway-linux-dev-wm /src/eng/docker/test-linux.sh samples/Riftway.WindowTest Riftway.WindowTest
-```
+System webviews (WebView2, WKWebView, WebKitGTK) mean three engines with different rendering and codecs. Riftway ships one Chromium everywhere, like Electron, but with .NET as the main process instead of Node. The cost is size, about the same as Electron.
 
-## Try it (Windows)
+### Codecs
 
-Needs Git Bash (for `fetch-cef.sh`) and Visual Studio or Build Tools with the "Desktop development with C++" workload (MSVC and a Windows SDK); `build.ps1` finds it through vswhere.
+Riftway runs on stock CEF: open codecs (AV1, VP9, Opus, …), no H.264 or AAC. A drop-in runtime variant built with Chrome's proprietary codecs is planned; switching is a package change, not a code change. See [the plan](docs/PLAN.md).
 
-```powershell
-bash eng/fetch-cef.sh windows64
-src/Riftway.Host.Native/build.ps1 artifacts/host/Riftway.Host.dll
-dotnet publish samples/Riftway.Sample -r win-x64 -c Release --self-contained -o artifacts/sample
-eng/layout-windows.ps1 artifacts/sample artifacts/host/Riftway.Host.dll RiftwaySample
-artifacts/sample/RiftwaySample.exe
-```
-
-Or in one step: `dotnet publish samples/Riftway.Sample -r win-x64 -c Release --self-contained -o artifacts/sample -p:RiftwayWindowsLayout=true -p:RiftwayExeName=RiftwaySample` builds the host DLL (once per RID, into `src/Riftway.Host.Native/obj/<rid>/`) and runs the same layout after publishing. `RiftwayExeName` defaults to the assembly name plus `Run`.
-
-Renderers run in Chromium's sandbox, as in Electron. Only CEF's `bootstrap.exe` can host the Windows sandbox broker, so the layout makes it the app: `bootstrap.exe` is renamed to the exe name you give (`RiftwaySample.exe`), `Riftway.Host.dll` sits beside it under the same name (`RiftwaySample.dll`), and the .NET apphost is removed, its version resources and icon copied onto the new exe. Every process starts as that exe. The host DLL runs CEF directly in renderer, GPU and utility processes, and starts .NET (hostfxr from the self-contained publish) and the app's `Main` in the browser process only. So:
-
-- the exe name must differ from the app's assembly name, whose `.dll` stays beside it;
-- publish self-contained (no framework-dependent or single-file publish);
-- sign the exe, `<Exe>.dll` and `chrome_elf.dll` with the same trusted certificate, or none of them (a certificate Windows does not trust stops the launch, docs/DRIFT.md P13); `eng/verify-windows-signing.ps1 <Exe>.exe`, run after signing, names any file that would stop it;
-- lay out before the exe ever runs at its final path: on first launch the shell caches the exe's FileDescription per path (MuiCache), and later launches of the stamped exe keep "CEF Bootstrap Application" on the taskbar. Installers copy the laid-out folder, never a half-done one. The stale name goes only if that path's `<path>.FriendlyAppName` value is removed from `HKCU\Software\Classes\Local Settings\Software\Microsoft\Windows\Shell\MuiCache`; replacing or touching the exe doesn't clear it;
-- a crash on start writes its reason to stderr, or shows it in a message box when there is none;
-- `--no-sandbox` turns the sandbox off; `sandbox: false` is per session, not per window (`SessionOptions.Sandbox`, with Riftway's CEF patch 0010; docs/DRIFT.md W13).
-
-`dotnet run`, and `eng/layout-windows.ps1 <publish-dir> -Subprocess <Riftway.Subprocess.exe>` (built by `src/Riftway.Subprocess.Native/build.ps1`), keep the unsandboxed apphost layout: the app's own `.exe`, with `Riftway.Subprocess.exe` for the children.
-
-For Windows on Arm, pass `windowsarm64` to the build and layout scripts and publish with `-r win-arm64`; it cross-builds from x64 too, with the "MSVC ARM64 build tools" component installed. Not yet run on Arm hardware.
-
-## Build an app from packages
+## Packaging and publishing apps
 
 Outside this repo an app references `Riftway` and one `Riftway.Runtime.<rid>` per RID it ships. The runtime package carries CEF and Riftway's native host, and `Riftway`'s build targets lay out the publish folder, with no Git Bash, MSVC or scripts:
 
 ```xml
-<PackageReference Include="Riftway" Version="1.0.0" />
-<PackageReference Include="Riftway.Runtime.win-x64" Version="1.0.0" />
+<PackageReference Include="Riftway" Version="0.1.0-preview.1" />
+<PackageReference Include="Riftway.Runtime.win-x64" Version="0.1.0-preview.1" />
 ```
 
 ```powershell
 dotnet publish -c Release -r win-x64 --self-contained   # bin/Release/net10.0/win-x64/publish/<App>Run.exe
 ```
 
-On Windows the result is the sandboxed layout above (`RiftwayExeName` names the exe; the same rules apply). On Linux the native executables get their exec bits when publishing on Linux; `chrome-sandbox` still needs `chown root:root` and `chmod 4755` from the installer before `EnableSandbox()`. `-p:RiftwayLayout=false` leaves the publish untouched.
+On Windows the result is the sandboxed layout described under [Build from source on Windows](#on-windows) (`RiftwayExeName` names the exe; the same rules apply). On Linux the native executables get their exec bits when publishing on Linux; `chrome-sandbox` still needs `chown root:root` and `chmod 4755` from the installer before `EnableSandbox()`. `-p:RiftwayLayout=false` leaves the publish untouched.
 
-The packages are not published to a feed yet. Build them into a local folder feed (`artifacts/pkg`):
+To build the packages yourself into a local folder feed (`artifacts/pkg`), for example to try an unreleased change:
 
 ```powershell
 eng/pack.ps1                                            # Riftway, Riftway.Cef
@@ -183,6 +215,62 @@ vpk pack --packId MyApp --packVersion 1.0.0 --packDir <publish-dir>/MyApp.app --
 
 `--skipVeloAppCheck`: on Windows the main exe is CEF's native bootstrap, which vpk cannot inspect for a `VelopackApp` call. The installer runs that exe with hook arguments (`--veloapp-install` and others), which reach `Main` like any others; call `AutoUpdater.HandleInstallerHooks()` first in `Main`, before `RiftwayApp.Create()`, so those runs exit before a window opens. `AutoUpdater.Default` then checks a feed and installs an update, as Electron's `autoUpdater`. An AppImage mounts `nosuid`, so `chrome-sandbox` cannot be setuid in one: leave the sandbox off (Riftway's Linux default) or rely on unprivileged user namespaces.
 
+## Build from source
+
+The repo builds its samples without the packages, with CEF from `eng/fetch-cef.sh`.
+
+### On macOS
+
+```sh
+src/Riftway.Subprocess.Native/build.sh artifacts/subprocess/Riftway.Subprocess macosarm64   # sandbox-capable helper
+dotnet publish samples/Riftway.Sample -r osx-arm64 -c Release --self-contained -o artifacts/sample
+eng/bundle-macos.sh artifacts/sample Riftway.Sample artifacts/subprocess/Riftway.Subprocess artifacts
+open artifacts/Riftway.Sample.app
+```
+
+More on Mac builds, bundles and signing is under [Packaging and publishing apps](#macos).
+
+### On Linux (Docker)
+
+```sh
+docker build -t riftway-linux-dev -f eng/docker/linux-dev.Dockerfile eng/docker
+eng/fetch-cef.sh linuxarm64   # or linux64 on x64 hosts
+docker run --rm -v "$PWD":/src -v "$HOME/.cache/riftway/cef":/cef-cache --shm-size=1g riftway-linux-dev /src/eng/docker/run-linux.sh
+# artifacts/linux/screen.png, app.log, exit.txt
+# Sandboxed, as a non-root user (sandbox.txt shows each process's seccomp mode and namespaces):
+docker run --rm --cap-add SYS_ADMIN --cap-add SYS_PTRACE --security-opt seccomp=unconfined -v "$PWD":/src -v "$HOME/.cache/riftway/cef":/cef-cache --shm-size=1g riftway-linux-dev /src/eng/docker/run-linux.sh --sandbox
+# A test app under another window manager (mutter, kwin or xfwm4; openbox by default), from an image that adds them:
+docker build -t riftway-linux-dev-wm -f eng/docker/linux-dev-wm.Dockerfile eng/docker
+docker run --rm -e RIFTWAY_WM=mutter -v "$PWD":/src -v "$HOME/.cache/riftway/cef":/cef-cache --shm-size=1g riftway-linux-dev-wm /src/eng/docker/test-linux.sh samples/Riftway.WindowTest Riftway.WindowTest
+```
+
+### On Windows
+
+Needs Git Bash (for `fetch-cef.sh`) and Visual Studio or Build Tools with the "Desktop development with C++" workload (MSVC and a Windows SDK); `build.ps1` finds it through vswhere.
+
+```powershell
+bash eng/fetch-cef.sh windows64
+src/Riftway.Host.Native/build.ps1 artifacts/host/Riftway.Host.dll
+dotnet publish samples/Riftway.Sample -r win-x64 -c Release --self-contained -o artifacts/sample
+eng/layout-windows.ps1 artifacts/sample artifacts/host/Riftway.Host.dll RiftwaySample
+artifacts/sample/RiftwaySample.exe
+```
+
+Or in one step: `dotnet publish samples/Riftway.Sample -r win-x64 -c Release --self-contained -o artifacts/sample -p:RiftwayWindowsLayout=true -p:RiftwayExeName=RiftwaySample` builds the host DLL (once per RID, into `src/Riftway.Host.Native/obj/<rid>/`) and runs the same layout after publishing. `RiftwayExeName` defaults to the assembly name plus `Run`.
+
+Renderers run in Chromium's sandbox, as in Electron. Only CEF's `bootstrap.exe` can host the Windows sandbox broker, so the layout makes it the app: `bootstrap.exe` is renamed to the exe name you give (`RiftwaySample.exe`), `Riftway.Host.dll` sits beside it under the same name (`RiftwaySample.dll`), and the .NET apphost is removed, its version resources and icon copied onto the new exe. Every process starts as that exe. The host DLL runs CEF directly in renderer, GPU and utility processes, and starts .NET (hostfxr from the self-contained publish) and the app's `Main` in the browser process only. So:
+
+- the exe name must differ from the app's assembly name, whose `.dll` stays beside it;
+- publish self-contained (no framework-dependent or single-file publish);
+- sign the exe, `<Exe>.dll` and `chrome_elf.dll` with the same trusted certificate, or none of them (a certificate Windows does not trust stops the launch, docs/DRIFT.md P13); `eng/verify-windows-signing.ps1 <Exe>.exe`, run after signing, names any file that would stop it;
+- lay out before the exe ever runs at its final path: on first launch the shell caches the exe's FileDescription per path (MuiCache), and later launches of the stamped exe keep "CEF Bootstrap Application" on the taskbar. Installers copy the laid-out folder, never a half-done one. The stale name goes only if that path's `<path>.FriendlyAppName` value is removed from `HKCU\Software\Classes\Local Settings\Software\Microsoft\Windows\Shell\MuiCache`; replacing or touching the exe doesn't clear it;
+- a crash on start writes its reason to stderr, or shows it in a message box when there is none;
+- `--no-sandbox` turns the sandbox off; `sandbox: false` is per session, not per window (`SessionOptions.Sandbox`, with Riftway's CEF patch 0010; docs/DRIFT.md W13).
+
+`dotnet run`, and `eng/layout-windows.ps1 <publish-dir> -Subprocess <Riftway.Subprocess.exe>` (built by `src/Riftway.Subprocess.Native/build.ps1`), keep the unsandboxed apphost layout: the app's own `.exe`, with `Riftway.Subprocess.exe` for the children.
+
+For Windows on Arm, pass `windowsarm64` to the build and layout scripts and publish with `-r win-arm64`; it cross-builds from x64 too, with the "MSVC ARM64 build tools" component installed. Not yet run on Arm hardware.
+
 ## Known issues
 
 ### Video crashes the renderer on Linux arm64 VMs on Apple M4+ (worked around)
@@ -193,7 +281,15 @@ Chromium's libyuv, which converts video frames, uses its SME code whenever the C
 
 The workaround goes once Chromium fixes libyuv upstream: it should require SVE for those paths, or build them without SVE.
 
-## Layout
+## Documentation
+
+- [docs/PLAN.md](docs/PLAN.md): architecture, Blazor Hybrid hosting, codecs, milestones
+- [docs/ELECTRON-PARITY.md](docs/ELECTRON-PARITY.md): Electron's modules and how far each is implemented
+- [docs/DRIFT.md](docs/DRIFT.md): deliberate differences from Electron, and why
+- [docs/todo.md](docs/todo.md) and the per-OS lists ([Windows](docs/windows-todo.md), [macOS](docs/mac-todo.md), [Linux](docs/linux-todo.md)): open work
+- [samples/](samples): `Riftway.Sample` (one window), `Riftway.BlazorSample` (Blazor Hybrid, two windows, `--self-check`) and test apps per area
+
+## Repository layout
 
 - `src/Riftway` - public API: Electron's modules in C# (`RiftwayApp`, `BrowserWindow`, ...)
 - `src/Riftway.Cef` - CEF C API bindings (`Interop/` is generated) and the native plumbing under them
@@ -207,4 +303,4 @@ The workaround goes once Chromium fixes libyuv upstream: it should require SVE f
 
 ## License
 
-[MIT](LICENSE)
+[MIT](LICENSE) © 2026 Michael Riddle

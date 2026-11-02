@@ -11,7 +11,7 @@
     <GenerateDocumentationFile>true</GenerateDocumentationFile>
     <IsPackable>true</IsPackable>
     <Description>Electron for .NET: desktop apps in C# on Chromium (CEF), with Blazor Hybrid.</Description>
-    <PackageTags>cef;chromium;electron;desktop;blazor</PackageTags>
+    <PackageTags>riftway;electron;cef;chromium;desktop;gui;cross-platform;blazor;blazor-hybrid;webview;ipc</PackageTags>
     <PackageLicenseExpression>MIT</PackageLicenseExpression>
   </PropertyGroup>
 

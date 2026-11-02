@@ -11,6 +11,7 @@
     <Authors>Michael Riddle</Authors>
     <Copyright>Copyright (c) 2026 Michael Riddle</Copyright>
     <RepositoryUrl>https://github.com/riddlemd/Riftway</RepositoryUrl>
+    <PackageProjectUrl>https://github.com/riddlemd/Riftway</PackageProjectUrl>
     <RepositoryType>git</RepositoryType>
     <PublishRepositoryUrl>true</PublishRepositoryUrl>
     <IsPackable>false</IsPackable>

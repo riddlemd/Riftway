@@ -9,7 +9,7 @@
     <GenerateDocumentationFile>true</GenerateDocumentationFile>
     <IsPackable>true</IsPackable>
     <Description>Electron's autoUpdater for Riftway apps, over Velopack installers and update feeds.</Description>
-    <PackageTags>riftway;autoupdater;velopack</PackageTags>
+    <PackageTags>riftway;autoupdater;auto-update;velopack;electron;desktop;installer</PackageTags>
     <PackageLicenseExpression>MIT</PackageLicenseExpression>
   </PropertyGroup>
 

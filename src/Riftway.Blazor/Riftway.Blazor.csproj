@@ -4,7 +4,7 @@
     <GenerateDocumentationFile>true</GenerateDocumentationFile>
     <IsPackable>true</IsPackable>
     <Description>Blazor Hybrid for Riftway: Razor components run in-process and render into a BrowserWindow.</Description>
-    <PackageTags>cef;chromium;electron;desktop;blazor</PackageTags>
+    <PackageTags>riftway;blazor;blazor-hybrid;razor;electron;cef;chromium;desktop;cross-platform</PackageTags>
     <PackageLicenseExpression>MIT</PackageLicenseExpression>
   </PropertyGroup>
 

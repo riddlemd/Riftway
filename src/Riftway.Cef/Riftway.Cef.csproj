@@ -9,7 +9,7 @@
     <!-- Riftway's package depends on this one. -->
     <IsPackable>true</IsPackable>
     <Description>CEF C API bindings and platform interop for Riftway.</Description>
-    <PackageTags>cef;chromium</PackageTags>
+    <PackageTags>riftway;cef;chromium;interop;bindings</PackageTags>
     <PackageLicenseExpression>MIT</PackageLicenseExpression>
   </PropertyGroup>
 
