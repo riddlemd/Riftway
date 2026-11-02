@@ -1,6 +1,6 @@
 # Builds Riftway's NuGet packages and pushes them to nuget.org through Trusted Publishing (no stored API key).
 # nuget.org's policy names this file, so keep its name: publish.yml.
-#   Release: push a tag v<version>, e.g. v0.1.0-preview.1.
+#   Release: push a tag v<version>, e.g. v0.1.0-preview.1. The tag run also creates the GitHub release with the packages.
 #   Dry run: Actions > Publish > Run workflow with a version and "push" off; the packages are kept as run artifacts.
 # Needs the repository secret NUGET_USER: the nuget.org profile name that owns the policy (not an email address).
 name: Publish
@@ -159,3 +159,27 @@ jobs:
             dotnet nuget push "$package" --api-key "${{ steps.login.outputs.NUGET_API_KEY }}" \
               --source https://api.nuget.org/v3/index.json --skip-duplicate
           done
+
+  # Tag runs only: a manual run publishes packages but leaves no tag to hang a release on.
+  release:
+    needs: [version, push]
+    if: github.ref_type == 'tag'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+          pattern: packages-*
+          merge-multiple: true
+          path: packages
+      - name: GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ needs.version.outputs.version }}
+        run: |
+          prerelease=()
+          if [[ "$VERSION" == *-* ]]; then prerelease=(--prerelease); fi
+          gh release create "$GITHUB_REF_NAME" packages/*.nupkg --repo "$GITHUB_REPOSITORY" \
+            --title "Riftway $VERSION" --generate-notes "${prerelease[@]}" \
+            --notes "Packages on nuget.org: https://www.nuget.org/packages/Riftway/$VERSION"
