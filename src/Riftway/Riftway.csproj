@@ -10,7 +10,7 @@
     <IsAotCompatible>true</IsAotCompatible>
     <GenerateDocumentationFile>true</GenerateDocumentationFile>
     <IsPackable>true</IsPackable>
-    <Description>Desktop apps in C# on Chromium (CEF), with an Electron-style API and Blazor Hybrid. Not affiliated with the Electron project.</Description>
+    <Description>Cross-platform desktop apps for .NET, on one Chromium (CEF), with Blazor Hybrid and an Electron-style API. Not affiliated with the Electron project.</Description>
     <PackageTags>riftway;electron;cef;chromium;desktop;gui;cross-platform;blazor;blazor-hybrid;webview;ipc</PackageTags>
     <PackageLicenseExpression>MIT</PackageLicenseExpression>
   </PropertyGroup>
