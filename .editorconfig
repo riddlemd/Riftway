@@ -54,7 +54,7 @@ dotnet_diagnostic.CA2016.severity = error
 dotnet_diagnostic.CA2215.severity = error
 
 # --- API shape ----------------------------------------------------------------------------------
-# CA1725 matters more here than in most repos: Oriel is a library, so a parameter name is part of
+# CA1725 matters more here than in most repos: Riftway is a library, so a parameter name is part of
 # what a consumer writes against.
 dotnet_diagnostic.CA1725.severity = error
 dotnet_diagnostic.CA1050.severity = error

@@ -1,4 +1,4 @@
-Oriel CEF patch 0008: CefRequestContext::ResolveProxy and ResolveSystemProxy.
+Riftway CEF patch 0008: CefRequestContext::ResolveProxy and ResolveSystemProxy.
 
 Adds what Electron's session.resolveProxy and app.resolveProxy do through
 ResolveProxyHelper (shell/browser/net/resolve_proxy_helper.cc):
@@ -12,7 +12,7 @@ of the global preference manager. The client callback is
 CefResolveProxyCallback. API at CEF_NEXT (999998): API version 15400 and its
 hash are unchanged.
 
-Resolves: Oriel docs/DRIFT.md A35 (resolveProxy) and E8's resolveProxy.
+Resolves: Riftway docs/DRIFT.md A35 (resolveProxy) and E8's resolveProxy.
 Base: CEF a03e714 (branch 8037, CEF 154) with 0001-0007. Applies in chromium/src/cef.
 
 diff --git a/include/cef_request_context.h b/include/cef_request_context.h

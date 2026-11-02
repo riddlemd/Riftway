@@ -1,15 +1,15 @@
-# Lays out a self-contained, published Oriel app for Windows beside CEF's libraries and resources.
+# Lays out a self-contained, published Riftway app for Windows beside CEF's libraries and resources.
 #
-# Default, sandboxed: CEF's bootstrap.exe becomes <ExeName>.exe and Oriel.Host.Native's DLL <ExeName>.dll. bootstrap
+# Default, sandboxed: CEF's bootstrap.exe becomes <ExeName>.exe and Riftway.Host.Native's DLL <ExeName>.dll. bootstrap
 # holds Chromium's sandbox broker and runs every process; the DLL starts .NET (the app's managed Main) in the browser
 # process and runs CEF natively in the others. The .NET apphost is removed, so <ExeName> must differ from the app's
 # assembly name, whose .dll stays beside it.
-#   eng/layout-windows.ps1 <app-publish-dir> <Oriel.Host.dll> <ExeName> [-App <AssemblyName>] [-Platform windows64]
+#   eng/layout-windows.ps1 <app-publish-dir> <Riftway.Host.dll> <ExeName> [-App <AssemblyName>] [-Platform windows64]
 # -App names the app's assembly when other .NET apps (a utility process's child) are published beside it; they keep
 # their apphosts, and the host DLL starts the one assembly whose apphost was removed.
 #
-# Unsandboxed fallback: the .NET apphost stays the exe and Oriel.Subprocess.exe runs the children.
-#   eng/layout-windows.ps1 <app-publish-dir> -Subprocess <Oriel.Subprocess.exe> [-Platform windows64]
+# Unsandboxed fallback: the .NET apphost stays the exe and Riftway.Subprocess.exe runs the children.
+#   eng/layout-windows.ps1 <app-publish-dir> -Subprocess <Riftway.Subprocess.exe> [-Platform windows64]
 [CmdletBinding(DefaultParameterSetName = 'Bootstrap')]
 param(
     [Parameter(Mandatory, Position = 0)] [string] $Publish,
@@ -33,7 +33,7 @@ function Assert-Machine([string] $Path) {
 }
 
 $pin = Get-Content (Join-Path $PSScriptRoot 'cef.json') -Raw | ConvertFrom-Json
-$cache = $env:ORIEL_CEF_CACHE ? $env:ORIEL_CEF_CACHE : (Join-Path $HOME '.cache\oriel\cef')
+$cache = $env:RIFTWAY_CEF_CACHE ? $env:RIFTWAY_CEF_CACHE : (Join-Path $HOME '.cache\riftway\cef')
 $cef = Join-Path $cache "cef_binary_$($pin.version)_${Platform}_minimal"
 if (-not (Test-Path (Join-Path $cef '.complete'))) {
     throw "CEF $Platform is not in $cache; run eng/fetch-cef.sh $Platform from Git Bash first."
@@ -47,7 +47,7 @@ if ($PSCmdlet.ParameterSetName -eq 'Apphost') {
     Copy-Item -Recurse -Force (Join-Path $cef 'Release\*') $Publish
     Copy-Item -Recurse -Force (Join-Path $cef 'Resources\*') $Publish
     Remove-Item -Force (Join-Path $Publish 'bootstrap.exe'), (Join-Path $Publish 'bootstrapc.exe') -ErrorAction SilentlyContinue
-    Copy-Item -Force $Subprocess (Join-Path $Publish 'Oriel.Subprocess.exe')
+    Copy-Item -Force $Subprocess (Join-Path $Publish 'Riftway.Subprocess.exe')
     return $Publish
 }
 
@@ -69,8 +69,8 @@ $exe = Join-Path $Publish "$ExeName.exe"
 Move-Item -Force (Join-Path $Publish 'bootstrap.exe') $exe
 $apphost = Join-Path $Publish "$managed.exe"
 if (Test-Path $apphost) { & (Join-Path $PSScriptRoot 'copy-windows-resources.ps1') $apphost $exe }
-# The apphost would start the app unsandboxed, and Oriel.Subprocess.exe would take the sandbox away from children.
-Remove-Item -Force (Join-Path $Publish 'bootstrapc.exe'), (Join-Path $Publish "$managed.exe"), (Join-Path $Publish 'Oriel.Subprocess.exe') -ErrorAction SilentlyContinue
+# The apphost would start the app unsandboxed, and Riftway.Subprocess.exe would take the sandbox away from children.
+Remove-Item -Force (Join-Path $Publish 'bootstrapc.exe'), (Join-Path $Publish "$managed.exe"), (Join-Path $Publish 'Riftway.Subprocess.exe') -ErrorAction SilentlyContinue
 Copy-Item -Force $HostDll (Join-Path $Publish "$ExeName.dll")
 & (Join-Path $PSScriptRoot 'check-windows-manifest.ps1') $exe | Out-Host
 $exe

@@ -8,9 +8,9 @@ Design for Electron's `BaseWindow`, `View` and `WebContentsView` (v44) on CEF 15
   style BrowserView but potentially multiple Alloy style BrowserViews". A `WebContentsView` returns
   `CEF_RUNTIME_STYLE_ALLOY` from `get_browser_runtime_style`; the window's own page stays Chrome style.
 - **A view's browser closes its window by default.** A delayed `close_browser` runs the top-level window's `can_close`
-  unless the Alloy-only `do_close` returns 1, after which Oriel must tear the view down itself.
+  unless the Alloy-only `do_close` returns 1, after which Riftway must tear the view down itself.
 - **Panels have a layout but no "keep my bounds" mode.** There is no way to clear a panel's layout, and the default
-  (FillLayout, as Oriel's own windows show) resizes every child. Absolute child bounds come from re-applying each
+  (FillLayout, as Riftway's own windows show) resizes every child. Absolute child bounds come from re-applying each
   child's requested bounds in the panel delegate's `on_layout_changed` (plan A). Fallbacks: a box layout per child
   (plan B, no overlap) or window overlays with `CEF_DOCKING_MODE_CUSTOM` (plan C, window-level only).
 - **No corner radius** on `cef_view_t`.
@@ -75,7 +75,7 @@ under a `WebContentsView`; no `new WebContentsView({ webContents })`; views don'
   `on_layout_changed` keeps them through resizes; Linux applies the page's new size asynchronously (DRIFT V12).
 - An Alloy browser view renders beside the window's Chrome-style page, and the Chrome-style page works nested in a
   panel (the full WindowTest passes with it inside `ContentView`).
-- `remove_child_view` keeps the browser while Oriel holds a reference; adding the view back shows the same page.
+- `remove_child_view` keeps the browser while Riftway holds a reference; adding the view back shows the same page.
 - A plain panel added over a browser view does not show on macOS (DRIFT V7).
 - Every view passed into CEF consumes a reference: `add_child_view`, `remove_child_view`, `reorder_child_view` and
   `is_same` included. Missing one freed the view (PartitionAlloc's 0xCD pattern in the crash).
@@ -91,7 +91,7 @@ under a `WebContentsView`; no `new WebContentsView({ webContents })`; views don'
   without asking `can_close` again), `ContentView` leaves the window with its children, so their pages live on until
   closed or quit.
 - An Alloy page's unhandled keys reach the window delegate, so Alt and mnemonics work from view pages with no handler.
-- Chromium lays a resized panel out later; Linux may never, so Oriel lays out a view's own panel when it resizes it.
+- Chromium lays a resized panel out later; Linux may never, so Riftway lays out a view's own panel when it resizes it.
 - `addChildView` clamps an index past the end, as Electron (`std::min`).
 
 ## Electron's layout (2026-10-12)

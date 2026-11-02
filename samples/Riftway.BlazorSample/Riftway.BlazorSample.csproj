@@ -1,0 +1,15 @@
+<Project Sdk="Microsoft.NET.Sdk.Razor">
+
+  <!-- What the Riftway package's buildTransitive brings; a ProjectReference doesn't import it. -->
+  <Import Project="..\..\src\Riftway\buildTransitive\Riftway.props" />
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\..\src\Riftway\Riftway.csproj" />
+    <ProjectReference Include="..\..\src\Riftway.Blazor\Riftway.Blazor.csproj" />
+  </ItemGroup>
+
+</Project>

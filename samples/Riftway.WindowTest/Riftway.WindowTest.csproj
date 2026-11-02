@@ -1,0 +1,28 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!-- What the Riftway package's buildTransitive brings; a ProjectReference doesn't import it. -->
+  <Import Project="..\..\src\Riftway\buildTransitive\Riftway.props" />
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!-- The independent X client LinuxClipboardTest runs with python3. -->
+    <EmbeddedResource Include="x11clip.py" LogicalName="x11clip.py" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\..\src\Riftway\Riftway.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <Compile Include="..\Shared\LauncherEntryMonitor.cs" Link="LauncherEntryMonitor.cs" />
+    <Compile Include="..\Shared\FakePortal.cs" Link="FakePortal.cs" />
+    <Compile Include="..\Shared\FakeDBusService.cs" Link="FakeDBusService.cs" />
+    <Compile Include="..\Shared\FakeStatusNotifierWatcher.cs" Link="FakeStatusNotifierWatcher.cs" />
+    <Compile Include="..\Shared\FakeNotificationServer.cs" Link="FakeNotificationServer.cs" />
+  </ItemGroup>
+
+</Project>

@@ -2,13 +2,13 @@ using System.Collections.Concurrent;
 using System.Runtime.InteropServices;
 using System.Text;
 
-namespace Oriel.Samples;
+namespace Riftway.Samples;
 
 /// <summary>A stand-in <c>xdg-desktop-portal</c> on the session bus for the appearance checks: owns
 /// <c>org.freedesktop.portal.Desktop</c>, answers the FileChooser version, <c>Settings.Read</c>/<c>ReadOne</c> for
-/// <c>org.freedesktop.appearance</c>, and emits <c>SettingChanged</c>. Chromium and Oriel in this process both see it.
+/// <c>org.freedesktop.appearance</c>, and emits <c>SettingChanged</c>. Chromium and Riftway in this process both see it.
 /// <c>OpenURI.OpenDirectory</c> is recorded and answered with a <c>Response</c> signal on its request object.</summary>
-/// <remarks>Its own libdbus connection and thread, separate from Oriel's portal client.</remarks>
+/// <remarks>Its own libdbus connection and thread, separate from Riftway's portal client.</remarks>
 internal sealed unsafe partial class FakePortal : IDisposable
 {
     private const string LibDBus = "libdbus-1.so.3";

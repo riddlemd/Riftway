@@ -1,0 +1,20 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>Riftway loadURL check</title>
+<!-- Served at /nav: the main process checks what the request carried, this reports what the page sees. -->
+<script>
+  if (location.search === '?step=again' && !sessionStorage.getItem('again')) {
+    sessionStorage.setItem('again', '1');
+    location.assign(location.href);
+  } else {
+    harness.navigated(location.search, navigator.userAgent);
+  }
+
+  // A subresource request for the URL whose options are pending must not take them.
+  if (location.search === '?step=fragment') {
+    addEventListener('hashchange', async () => {
+      await fetch(location.pathname + location.search);
+      harness.navigated('#fetched', navigator.userAgent);
+    });
+  }
+</script>

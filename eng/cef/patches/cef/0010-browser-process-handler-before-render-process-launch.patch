@@ -1,4 +1,4 @@
-Oriel CEF patch 0010: CefBrowserProcessHandler::OnBeforeRenderProcessLaunch.
+Riftway CEF patch 0010: CefBrowserProcessHandler::OnBeforeRenderProcessLaunch.
 
 Called before a render process launches, after OnBeforeChildProcessLaunch,
 with the command line and an existing request context of the browser context
@@ -11,12 +11,12 @@ config_.other and there is no cache path), so the context passed is an
 existing one rather than a new one. Chromium never shares a render process between browser contexts
 (RenderProcessHostImpl::IsSuitableHost, the spare renderer's
 kMismatchedBrowserContext), so a switch added here reaches only that context's
-renderers through every process-reuse path: Oriel adds --no-sandbox for a
+renderers through every process-reuse path: Riftway adds --no-sandbox for a
 Session created with Sandbox = false, Electron's sandbox: false per Session
 rather than per window. API at CEF_NEXT (999998): API version 15400 and its
 hash are unchanged.
 
-Resolves: Oriel docs/DRIFT.md W13 (per Session).
+Resolves: Riftway docs/DRIFT.md W13 (per Session).
 Base: CEF a03e714 (branch 8037, CEF 154) with 0001-0009. Applies in chromium/src/cef.
 diff --git a/include/cef_browser_process_handler.h b/include/cef_browser_process_handler.h
 index e975ce0..03aa79c 100644

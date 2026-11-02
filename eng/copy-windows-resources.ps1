@@ -8,8 +8,8 @@ param(
 )
 $ErrorActionPreference = 'Stop'
 
-if (-not ('Oriel.ExeResources' -as [type])) {
-    Add-Type -Namespace Oriel -Name ExeResources -MemberDefinition @'
+if (-not ('Riftway.ExeResources' -as [type])) {
+    Add-Type -Namespace Riftway -Name ExeResources -MemberDefinition @'
 const uint DataFile = 0x2, ImageResource = 0x20;
 public const int Icon = 3, GroupIcon = 14, Version = 16;
 
@@ -73,15 +73,15 @@ public static void Replace(string path, System.Collections.Generic.List<Entry> r
 
 $From = (Resolve-Path $From).Path
 $To = (Resolve-Path $To).Path
-$types = @([Oriel.ExeResources]::Version)
+$types = @([Riftway.ExeResources]::Version)
 # Icons only when the source has some: an apphost without ApplicationIcon has none, and CEF's beats a blank one.
-if ([Oriel.ExeResources]::Read($From, [Oriel.ExeResources]::GroupIcon).Count -gt 0) {
-    $types += [Oriel.ExeResources]::GroupIcon, [Oriel.ExeResources]::Icon
+if ([Riftway.ExeResources]::Read($From, [Riftway.ExeResources]::GroupIcon).Count -gt 0) {
+    $types += [Riftway.ExeResources]::GroupIcon, [Riftway.ExeResources]::Icon
 }
-$remove = [Collections.Generic.List[Oriel.ExeResources+Entry]]::new()
-$add = [Collections.Generic.List[Oriel.ExeResources+Entry]]::new()
+$remove = [Collections.Generic.List[Riftway.ExeResources+Entry]]::new()
+$add = [Collections.Generic.List[Riftway.ExeResources+Entry]]::new()
 foreach ($type in $types) {
-    foreach ($entry in [Oriel.ExeResources]::Read($To, $type)) { $remove.Add($entry) }
-    foreach ($entry in [Oriel.ExeResources]::Read($From, $type)) { $add.Add($entry) }
+    foreach ($entry in [Riftway.ExeResources]::Read($To, $type)) { $remove.Add($entry) }
+    foreach ($entry in [Riftway.ExeResources]::Read($From, $type)) { $add.Add($entry) }
 }
-[Oriel.ExeResources]::Replace($To, $remove, $add)
+[Riftway.ExeResources]::Replace($To, $remove, $add)

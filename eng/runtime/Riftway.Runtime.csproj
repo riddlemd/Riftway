@@ -1,0 +1,36 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <!-- Riftway.Runtime.<rid>: CEF and Riftway's native executables for one RID, from a folder an eng/runtime/stage-*
+       script filled. Its runtimes/<rid>/native files land beside the app on a RID-specific publish.
+       dotnet pack eng/runtime/Riftway.Runtime.csproj -p:RiftwayRuntimeRid=linux-x64 -p:RiftwayRuntimeStage=<dir> -o <feed> -->
+
+  <PropertyGroup>
+    <IsPackable>true</IsPackable>
+    <PackageId>Riftway.Runtime.$(RiftwayRuntimeRid)</PackageId>
+    <Description>Chromium (CEF) and Riftway's native host for $(RiftwayRuntimeRid), for apps built with Riftway.</Description>
+    <PackageTags>cef;chromium;riftway</PackageTags>
+    <!-- CEF's own licence; Chromium's third-party notices ship in the distribution's credits. -->
+    <PackageLicenseFile>LICENSE.txt</PackageLicenseFile>
+    <IncludeBuildOutput>false</IncludeBuildOutput>
+    <SuppressDependenciesWhenPacking>true</SuppressDependenciesWhenPacking>
+    <EnableDefaultItems>false</EnableDefaultItems>
+    <!-- Native files only: no lib/ folder is intended. -->
+    <NoWarn>$(NoWarn);NU5128</NoWarn>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <None Include="$(RiftwayRuntimeStage)/native/*" Pack="true" PackagePath="runtimes/$(RiftwayRuntimeRid)/native/" />
+    <!-- NuGet flattens native subfolders; the targets file copies these into locales/. -->
+    <None Include="$(RiftwayRuntimeStage)/native/locales/*.pak" Pack="true" PackagePath="locales/" />
+    <None Include="Riftway.Runtime.targets" Pack="true" PackagePath="buildTransitive/$(PackageId).targets" />
+    <!-- macOS: the framework and the helper go into the app bundle, not beside the app, so they stay out of runtimes/. -->
+    <None Include="$(RiftwayRuntimeStage)/framework/**" Pack="true" PackagePath="framework/" />
+    <None Include="$(RiftwayRuntimeStage)/helper/*" Pack="true" PackagePath="helper/" />
+    <None Include="Riftway.Runtime.props" Pack="true" PackagePath="buildTransitive/$(PackageId).props" Condition="Exists('$(RiftwayRuntimeStage)/framework')" />
+    <None Include="$(RiftwayRuntimeStage)/LICENSE.txt" Pack="true" PackagePath="" />
+  </ItemGroup>
+
+  <Target Name="_RiftwayCheckRuntimeStage" BeforeTargets="GenerateNuspec">
+    <Error Condition="'$(RiftwayRuntimeRid)' == ''" Text="Set RiftwayRuntimeRid (for example linux-x64)." />
+    <Error Condition="!Exists('$(RiftwayRuntimeStage)/native') and !Exists('$(RiftwayRuntimeStage)/framework')" Text="RiftwayRuntimeStage '$(RiftwayRuntimeStage)' has no native or framework folder: run an eng/runtime/stage-* script first." />
+  </Target>
+</Project>

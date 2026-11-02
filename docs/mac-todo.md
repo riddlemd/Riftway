@@ -9,18 +9,18 @@ General items: [todo.md](todo.md).
 - [ ] **Teardown watchdog**: CEF 154 apps often exit with code 2 after "Teardown watchdog expired" (~10 s);
       stock cefclient does the same. Cause unknown (the network-helper hypothesis was refuted).
       Not reproduced 2026-10-22 (4469106 + branch `blazor-hybrid`, macOS 26 arm64): 5 `app.Quit()` runs (BlazorSample
-      `--self-check`) and 7 Cmd+Q or close-the-last-window runs (Oriel.Sample, example.com and a data URL) all exit 0
+      `--self-check`) and 7 Cmd+Q or close-the-last-window runs (Riftway.Sample, example.com and a data URL) all exit 0
       within 1 s. Keep open until a WindowTest run shows it again or a longer soak passes.
 - [ ] osx-x64: the `objc_msgSend_stret` path in `MacWindow` is untested
-- [x] Sandbox (branch `blazor-hybrid`): `Oriel.Subprocess.Native` builds for macOS (`build.sh <out> macosarm64`); it calls
+- [x] Sandbox (branch `blazor-hybrid`): `Riftway.Subprocess.Native` builds for macOS (`build.sh <out> macosarm64`); it calls
       `cef_sandbox_initialize` from the framework's `libcef_sandbox.dylib`, then opens the framework and resolves its CEF
       calls. `EnableSandbox()` works on macOS with it: BlazorSample `--self-check --enable-sandbox` sees every renderer
       sandboxed (`GetAppMetrics`), from a dev bundle and an ad-hoc-signed publish (2026-10-22). The runtime package and
       the repo's dev bundles use it; README's `bundle-macos.sh` route and the other samples' bundles still take NativeAOT
-      `Oriel.Subprocess`, which cannot sandbox
-- [ ] Signing and notarisation (M4, branch `blazor-hybrid`): `OrielMacSignIdentity` signs the bundle inside out with the
+      `Riftway.Subprocess`, which cannot sandbox
+- [ ] Signing and notarisation (M4, branch `blazor-hybrid`): `RiftwayMacSignIdentity` signs the bundle inside out with the
       hardened runtime and entitlements; ad hoc (`-`) passes `codesign --verify --strict --deep` and BlazorSample's
-      self-check (2026-10-22). `OrielMacNotaryProfile` notarises and staples: written, not run (no Developer ID on Ise).
+      self-check (2026-10-22). `RiftwayMacNotaryProfile` notarises and staples: written, not run (no Developer ID on Ise).
       Team-signed apps drop `--use-mock-keychain` (ad hoc keeps it: checked on the renderer's command line); check a
       Developer ID build against the real Keychain (DRIFT P3)
 - [x] Run the shell and globalShortcut checks (WindowTest `MacShellTest`, `MacGlobalShortcutTest`; DRIFT H1, J1): pass on

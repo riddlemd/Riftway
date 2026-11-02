@@ -1,4 +1,4 @@
-Oriel CEF patch 0005: CefDownloadItem gesture, validators, initiator and frame.
+Riftway CEF patch 0005: CefDownloadItem gesture, validators, initiator and frame.
 
 Adds what Electron's DownloadItem and will-download read from
 download::DownloadItem and CEF's item does not expose: HasUserGesture,
@@ -9,7 +9,7 @@ content::DownloadItemUtils::GetRenderFrameHost (will-download's `frame`).
 The methods are API at CEF_NEXT (999998): API version 15400 and its hash are
 unchanged.
 
-Resolves: Oriel docs/DRIFT.md E13, E40.
+Resolves: Riftway docs/DRIFT.md E13, E40.
 Base: CEF a03e714 (branch 8037, CEF 154) with 0001-0004. Applies in chromium/src/cef.
 
 diff --git a/include/cef_download_item.h b/include/cef_download_item.h

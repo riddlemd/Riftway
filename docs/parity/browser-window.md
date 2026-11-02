@@ -3,9 +3,9 @@
 Against Electron **v44.5.1** (`docs/api/browser-window.md`, `base-window.md`, `structures/*-window-options.md`,
 `structures/web-preferences.md`). Audited 2026-10-03; update this file as items land.
 
-Status: **done**, **partial**, **missing**, or **n/a** (Node/`<webview>` features with no meaning in Oriel).
+Status: **done**, **partial**, **missing**, or **n/a** (Node/`<webview>` features with no meaning in Riftway).
 Route: `W` = `cef_window_t`, `V` = `cef_view_t`, `D` = `cef_window_delegate_t`, `H` = `cef_browser_host_t`,
-**OS** = needs native code (Objective-C runtime, Win32, X11/Wayland), **Oriel** = bookkeeping in C#.
+**OS** = needs native code (Objective-C runtime, Win32, X11/Wayland), **Riftway** = bookkeeping in C#.
 
 Event naming: Electron `'x'` → past-tense .NET event (`focus`→`Focused`, `close`→`Closing` with
 `CancelEventArgs`, `closed`→`Closed`, `enter-full-screen`→`EnteredFullScreen`, ...).
@@ -73,13 +73,13 @@ Counted from the Checklist at the end: `BaseWindow` and `BrowserWindow` are one 
   Routes: `cef_browser_settings_t`; the two font sizes go through DevTools `Page.setFontSizes`, because Chrome-style
   browsers overwrite them from the profile; `zoomFactor` is `H.set_zoom_level` on each origin not yet zoomed;
   `disableDialogs` is a `cef_jsdialog_handler_t` that suppresses. Zoom is per origin and lasts for the session, as in
-  Electron: Chrome-style profiles save it across launches, so Oriel clears `partition.per_host_zoom_levels` at startup.
+  Electron: Chrome-style profiles save it across launches, so Riftway clears `partition.per_host_zoom_levels` at startup.
 - webContents: `openDevTools` (own window only; no docked modes), `closeDevTools`, `isDevToolsOpened`, `toggleDevTools`,
   `setZoomFactor`/`getZoomFactor`, `setZoomLevel`/`getZoomLevel`, `executeJavaScript` (`ExecuteJavaScriptAsync`,
   DevTools `Runtime.evaluate` in the main world; rejects with `JavaScriptException`).
 - `parent`, `modal`, `getParentWindow`, `getChildWindows`, `isModal` (`D.get_parent_window`, `D.is_window_modal_dialog`);
   children close with their parent. The constructor now runs from any thread. A modal window keeps focus from its
-  parent on macOS; on Linux it does not, as in Electron: the modal hint reaches no window manager. Oriel now
+  parent on macOS; on Linux it does not, as in Electron: the modal hint reaches no window manager. Riftway now
   disables the parent's input itself there, as Electron does (`SetEnabled`, drift W5).
 - webContents `sendInputEvent` for keyboard events (`keyDown`, `keyUp`, `char`; Electron key names and
   modifiers), through DevTools `Input.dispatchKeyEvent`, so the browser's own shortcuts see them; and for mouse
@@ -201,7 +201,7 @@ Parameters in brackets are optional in Electron. `webContents` members are in [w
 
 ### Constructor options (`BaseWindowConstructorOptions` + `BrowserWindowConstructorOptions`)
 
-| Electron | Oriel | Status | Note |
+| Electron | Riftway | Status | Note |
 |---|---|---|---|
 | `width` | `BrowserWindowOptions.Width` | done |  |
 | `height` | `BrowserWindowOptions.Height` | done |  |
@@ -218,7 +218,7 @@ Parameters in brackets are optional in Electron. `webContents` members are in [w
 | `minimizable` | `Minimizable` | done |  |
 | `maximizable` | `Maximizable` | done |  |
 | `closable` | `Closable` | done | Honoured on Linux too (W10, superset). |
-| `focusable` | `Focusable` | partial | Windows `WS_EX_NOACTIVATE`, shown without activation; macOS `canBecomeKeyWindow`/`canBecomeMainWindow` on Oriel's window subclass, as ElectronNSWindow's `disableKeyOrMainWindow` (Chromium's window has no such flag) _(branch `mac-integration`)_; stored only on Linux (W43). |
+| `focusable` | `Focusable` | partial | Windows `WS_EX_NOACTIVATE`, shown without activation; macOS `canBecomeKeyWindow`/`canBecomeMainWindow` on Riftway's window subclass, as ElectronNSWindow's `disableKeyOrMainWindow` (Chromium's window has no such flag) _(branch `mac-integration`)_; stored only on Linux (W43). |
 | `alwaysOnTop` | `AlwaysOnTop` | done |  |
 | `fullscreen` | `FullScreen` | done |  |
 | `fullscreenable` | `FullScreenable` | partial | Refuses `setFullScreen`, the initial and restored full screen; macOS through the collection behaviour and the zoom button (W53); refusing `setFullScreen` and `setFullScreenable(true)` pass on screen (macOS 26), the initial and restored full screen are unchecked. |
@@ -233,16 +233,16 @@ Parameters in brackets are optional in Electron. `webContents` members are in [w
 | `show` | `Show` | done |  |
 | `frame` | `Frame` | done |  |
 | `parent` | `Parent` | done |  |
-| `modal` | `Modal` | partial | Linux: Oriel disables the parent itself, as Electron; the pointer crossing into or out of it still reaches its page (W5). |
+| `modal` | `Modal` | partial | Linux: Riftway disables the parent itself, as Electron; the pointer crossing into or out of it still reaches its page (W5). |
 | `acceptFirstMouse` | `AcceptFirstMouse` | partial | macOS, CEF's `accepts_first_mouse` (enabled or disabled, never CEF's `--accept-first-mouse` default) _(branch `mac-integration`)_; not yet run on screen. |
 | `disableAutoHideCursor` | `DisableAutoHideCursor` | done | Accepted with no effect, as Electron v44: its window stores the flag and neither Electron nor Chromium reads it _(branch `mac-integration`)_. |
 | `autoHideMenuBar` | `AutoHideMenuBar` | done |  |
-| `enableLargerThanScreen` | `EnableLargerThanScreen` | done | macOS `constrainFrameRect:toScreen:` on Oriel's window subclass, as `ElectronNSWindow` _(branch `mac-integration`)_; passes on screen (macOS 26, arm64 and x64). |
+| `enableLargerThanScreen` | `EnableLargerThanScreen` | done | macOS `constrainFrameRect:toScreen:` on Riftway's window subclass, as `ElectronNSWindow` _(branch `mac-integration`)_; passes on screen (macOS 26, arm64 and x64). |
 | `backgroundColor` | `BackgroundColor` | done |  |
 | `hasShadow` | `HasShadow` | partial | macOS `NSWindow.hasShadow`; stored only on Windows, as Electron; Linux not yet (W31). |
 | `opacity` | `Opacity` | partial | Windows and macOS (`alphaValue`); Linux not yet (W30). |
 | `darkTheme` | `DarkTheme` | done | Linux: `_GTK_THEME_VARIANT=dark` at creation, as Electron; Chromium 154 already writes dark when its GTK UI is loaded. |
-| `transparent` | `Transparent` | partial | Windows and macOS; Linux only with Oriel's CEF patch, not yet built (W24). |
+| `transparent` | `Transparent` | partial | Windows and macOS; Linux only with Riftway's CEF patch, not yet built (W24). |
 | `type` | `Type` | partial | Windows `toolbar` (`WS_EX_TOOLWINDOW`); macOS `desktop`, `panel` (floating level; not an `NSPanel`) and `textured`, not yet run on screen; Linux types not yet (W43). |
 | `visualEffectState` | `VisualEffectState` | partial | macOS _(branch `mac-integration`)_ (W54). |
 | `titleBarStyle` | `TitleBarStyle` | partial | Anything but `Default` is frameless, as Electron. macOS: a transparent title bar with the traffic lights moved by Electron's `WindowButtonsProxy` (`hiddenInset` 12 × 11 in, `customButtonsOnHover` shown under the pointer, the overlay height as the container's), redrawn on resize, focus, minimise and full screen; not yet run on screen (W37). |
@@ -260,7 +260,7 @@ Parameters in brackets are optional in Electron. `webContents` members are in [w
 
 ### webPreferences
 
-| Electron | Oriel | Status | Note |
+| Electron | Riftway | Status | Note |
 |---|---|---|---|
 | `devTools` | `DevTools` | done |  |
 | `nodeIntegration` | — | n/a | Node.js |
@@ -281,7 +281,7 @@ Parameters in brackets are optional in Electron. `webContents` members are in [w
 | `webgl` | `WebGL` | done |  |
 | `plugins` | — | missing |  |
 | `experimentalFeatures` | — | missing | Process-wide in CEF (W13). |
-| `scrollBounce` | `ScrollBounce` | partial | Per session (`SessionOptions.ScrollBounce`), with Oriel's patches 0010 and 0014, Electron's `scroll_bounce_flag.patch`; with stock CEF every page rubber-bands (W55). |
+| `scrollBounce` | `ScrollBounce` | partial | Per session (`SessionOptions.ScrollBounce`), with Riftway's patches 0010 and 0014, Electron's `scroll_bounce_flag.patch`; with stock CEF every page rubber-bands (W55). |
 | `enableBlinkFeatures` | — | missing | Process-wide in CEF (W13). |
 | `disableBlinkFeatures` | — | missing | Process-wide in CEF (W13). |
 | `defaultFontFamily` | `DefaultFontFamily` | partial | All families but `math`, which throws (W11). |
@@ -311,7 +311,7 @@ Parameters in brackets are optional in Electron. `webContents` members are in [w
 
 ### Instance methods (`BaseWindow` and `BrowserWindow`, union)
 
-| Electron | Oriel | Status | Note |
+| Electron | Riftway | Status | Note |
 |---|---|---|---|
 | `setContentView(view)` | `SetContentView` | done | A `BrowserWindow`'s page stays below the new view; another window's content view moves, as Electron's |
 | `getContentView()` | `ContentView` | done | A property, as Electron's `contentView` |
@@ -431,7 +431,7 @@ Parameters in brackets are optional in Electron. `webContents` members are in [w
 | `setIgnoreMouseEvents(ignore, options)` | `SetIgnoreMouseEvents` | partial | Windows and macOS (`ignoresMouseEvents`, `acceptsMouseMovedEvents` for `forward`), `forward` included; Linux not yet (W30). |
 | `setContentProtection(enable)` | `SetContentProtection` | partial | Windows and macOS (`sharingType`); Linux not yet (W30). |
 | `isContentProtected()` | `IsContentProtected` | partial | Windows and macOS; false on Linux (W30). |
-| `setFocusable(focusable)` | `SetFocusable` | partial | Windows: style, taskbar button, blur, as Electron; macOS `canBecomeKeyWindow`/`canBecomeMainWindow` on Oriel's window subclass, as ElectronNSWindow's `disableKeyOrMainWindow` (Chromium's window has no such flag) _(branch `mac-integration`)_; stored only on Linux (W43). |
+| `setFocusable(focusable)` | `SetFocusable` | partial | Windows: style, taskbar button, blur, as Electron; macOS `canBecomeKeyWindow`/`canBecomeMainWindow` on Riftway's window subclass, as ElectronNSWindow's `disableKeyOrMainWindow` (Chromium's window has no such flag) _(branch `mac-integration`)_; stored only on Linux (W43). |
 | `isFocusable()` | `IsFocusable` | partial | Windows reads `WS_EX_NOACTIVATE` too; macOS reads the subclass's flag (W43). |
 | `setParentWindow(parent)` | `SetParentWindow` | done | As Electron on each OS: Windows `GWLP_HWNDPARENT` with re-show, Linux `WM_TRANSIENT_FOR`, macOS `addChildWindow:`; modal throws. macOS checks pass (W8). |
 | `getParentWindow()` | `GetParentWindow` | done |  |
@@ -459,7 +459,7 @@ Parameters in brackets are optional in Electron. `webContents` members are in [w
 
 ### Instance properties
 
-| Electron | Oriel | Status | Note |
+| Electron | Riftway | Status | Note |
 |---|---|---|---|
 | `webContents` | `WebContents` | done |  |
 | `id` | `Id` | done |  |
@@ -488,7 +488,7 @@ Parameters in brackets are optional in Electron. `webContents` members are in [w
 
 ### Instance events
 
-| Electron | Oriel | Status | Note |
+| Electron | Riftway | Status | Note |
 |---|---|---|---|
 | `page-title-updated` | `PageTitleUpdated` | done |  |
 | `close` | `Closing` | done | CancelEventArgs. |
@@ -519,7 +519,7 @@ Parameters in brackets are optional in Electron. `webContents` members are in [w
 | `always-on-top-changed` | `AlwaysOnTopChanged` | done | `AlwaysOnTopChangedEventArgs.IsAlwaysOnTop`. Raised by `SetAlwaysOnTop` only when the state changes, not for z-order changes made by other programs, as Electron. |
 | `app-command` | `AppCommand` | partial | Windows `WM_APPCOMMAND` with Electron's names; Linux mouse buttons not yet (W43). |
 | `swipe` | `Swiped` | partial | macOS: `swipeWithEvent:` on the frame view's class, as Electron swizzles it, other windows keeping AppKit's _(branch `mac-integration`)_; not yet run on screen. |
-| `rotate-gesture` | `RotateGesture` | partial | macOS: `rotateWithEvent:` on Oriel's window subclass _(branch `mac-integration`)_; not yet run on screen. |
+| `rotate-gesture` | `RotateGesture` | partial | macOS: `rotateWithEvent:` on Riftway's window subclass _(branch `mac-integration`)_; not yet run on screen. |
 | `sheet-begin` | `SheetBegan` | done | macOS: `NSWindowWillBeginSheetNotification` _(branch `mac-integration`)_; passes on screen (macOS 26, arm64 and x64). |
 | `sheet-end` | `SheetEnded` | done | macOS: `NSWindowDidEndSheetNotification` _(branch `mac-integration`)_; passes on screen (macOS 26, arm64 and x64). |
 | `new-window-for-tab` | `NewWindowForTab` | partial | macOS, the tab bar's + button through the window delegate, then the app's event, as Electron; the window's event passes on screen (macOS 26), the app's after it unchecked. |
@@ -528,7 +528,7 @@ Parameters in brackets are optional in Electron. `webContents` members are in [w
 
 ### Static methods
 
-| Electron | Oriel | Status | Note |
+| Electron | Riftway | Status | Note |
 |---|---|---|---|
 | `new BaseWindow([options])` | `new BaseWindow(BaseWindowOptions?)` | done | A top-level window with an empty `ContentView` and no page |
 | `getAllWindows()` | `GetAllWindows` | done | `BaseWindow`'s lists every window; `BrowserWindow`'s only `BrowserWindow`s, as Electron's |

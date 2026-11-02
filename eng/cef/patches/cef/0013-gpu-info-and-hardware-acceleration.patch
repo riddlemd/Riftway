@@ -1,4 +1,4 @@
-Oriel CEF patch 0013: GPU information, feature status and hardware acceleration.
+Riftway CEF patch 0013: GPU information, feature status and hardware acceleration.
 
 Adds the static CefBrowserHost::GetGpuInfo, GetGpuFeatureStatus and
 IsHardwareAccelerationEnabled (cef_browser_host_get_gpu_info,
@@ -21,7 +21,7 @@ content::GpuDataManagerObserver that CefContext owns from context
 initialisation to shutdown reports the updates. BUILD.gn gains //gpu/config.
 API at CEF_NEXT (999998): API version 15400 and its hash are unchanged.
 
-Resolves: Oriel docs/DRIFT.md A24, A27.
+Resolves: Riftway docs/DRIFT.md A24, A27.
 Base: CEF a03e714 (branch 8037, CEF 154) with 0001-0012. Applies in chromium/src/cef.
 
 diff --git a/BUILD.gn b/BUILD.gn

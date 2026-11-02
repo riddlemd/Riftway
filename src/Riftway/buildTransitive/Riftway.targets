@@ -1,0 +1,283 @@
+<Project>
+  <!-- dotnet publish -r <rid> of an app that also references Riftway.Runtime.<rid>, whose native files the publish has
+       already copied beside the app. Windows: CEF's bootstrap.exe becomes <RiftwayExeName>.exe and Riftway.Host.dll
+       <RiftwayExeName>.dll, so every process runs sandboxed (README, Windows). Linux: the native executables get their
+       exec bits. RiftwayLayout=false leaves the publish as it is. -->
+  <PropertyGroup>
+    <!-- <Exe>.dll is the native host, so the exe cannot take the managed assembly's name. -->
+    <RiftwayExeName Condition="'$(RiftwayExeName)' == ''">$(AssemblyName)Run</RiftwayExeName>
+  </PropertyGroup>
+
+  <Target Name="RiftwayWindowsLayout" AfterTargets="Publish"
+          Condition="'$(RiftwayLayout)' != 'false' and $(RuntimeIdentifier.StartsWith('win-'))">
+    <PropertyGroup>
+      <_RiftwayPublish>$([MSBuild]::NormalizeDirectory('$(MSBuildProjectDirectory)', '$(PublishDir)'))</_RiftwayPublish>
+    </PropertyGroup>
+    <!-- From where the publish took them, not from the folder: a second Riftway app published into the same folder
+         finds them already renamed and deleted by the first one's layout. -->
+    <ItemGroup>
+      <_RiftwayBootstrap Include="@(ResolvedFileToPublish)" Condition="'%(ResolvedFileToPublish.RelativePath)' == 'bootstrap.exe'" />
+      <_RiftwayHost Include="@(ResolvedFileToPublish)" Condition="'%(ResolvedFileToPublish.RelativePath)' == 'Riftway.Host.dll'" />
+    </ItemGroup>
+    <PropertyGroup>
+      <_RiftwayBootstrapSource>@(_RiftwayBootstrap->'%(FullPath)')</_RiftwayBootstrapSource>
+      <_RiftwayBootstrapSource Condition="'$(_RiftwayBootstrapSource)' == ''">$(_RiftwayPublish)bootstrap.exe</_RiftwayBootstrapSource>
+      <_RiftwayHostSource>@(_RiftwayHost->'%(FullPath)')</_RiftwayHostSource>
+      <_RiftwayHostSource Condition="'$(_RiftwayHostSource)' == ''">$(_RiftwayPublish)Riftway.Host.dll</_RiftwayHostSource>
+    </PropertyGroup>
+    <Error Condition="'$(SelfContained)' != 'true'" Text="Riftway's Windows layout needs a self-contained publish (--self-contained): bootstrap.exe starts .NET through hostfxr beside it. RiftwayLayout=false skips the layout." />
+    <Error Condition="'$(PublishSingleFile)' == 'true'" Text="Riftway's Windows layout cannot lay out a single-file publish." />
+    <Error Condition="'$(RiftwayExeName)' == '$(AssemblyName)'" Text="RiftwayExeName '$(RiftwayExeName)' is the managed assembly's name; $(RiftwayExeName).dll must be the native host." />
+    <Error Condition="!Exists('$(_RiftwayBootstrapSource)') or !Exists('$(_RiftwayHostSource)')"
+           Text="No CEF beside the published app: add a PackageReference to Riftway.Runtime.$(RuntimeIdentifier)." />
+
+    <Copy SourceFiles="$(_RiftwayBootstrapSource)" DestinationFiles="$(_RiftwayPublish)$(RiftwayExeName).exe" />
+    <!-- The shell names taskbar buttons after FileDescription, which bootstrap.exe gives as "CEF Bootstrap Application". -->
+    <RiftwayCopyExeResources Condition="Exists('$(_RiftwayPublish)$(AssemblyName).exe')"
+                           From="$(_RiftwayPublish)$(AssemblyName).exe" To="$(_RiftwayPublish)$(RiftwayExeName).exe" />
+    <Copy SourceFiles="$(_RiftwayHostSource)" DestinationFiles="$(_RiftwayPublish)$(RiftwayExeName).dll" />
+    <!-- Names the exe's managed assembly for the native host, which otherwise has to find the one runtimeconfig left
+         without an apphost: with two Riftway apps in a folder there are two. -->
+    <WriteLinesToFile File="$(_RiftwayPublish)$(RiftwayExeName).riftway-app" Lines="$(AssemblyName).dll" Overwrite="true" WriteOnlyWhenDifferent="true" />
+    <!-- The apphost would start the app unsandboxed, and Riftway.Subprocess.exe would take the sandbox from children. -->
+    <Delete Files="$(_RiftwayPublish)bootstrap.exe;$(_RiftwayPublish)bootstrapc.exe;$(_RiftwayPublish)Riftway.Host.dll;$(_RiftwayPublish)Riftway.Subprocess.exe;$(_RiftwayPublish)$(AssemblyName).exe" />
+    <Message Importance="high" Text="$(MSBuildProjectName) -> $(_RiftwayPublish)$(RiftwayExeName).exe (Riftway layout)" />
+  </Target>
+
+  <Target Name="RiftwayLinuxLayout" AfterTargets="Publish"
+          Condition="'$(RiftwayLayout)' != 'false' and $(RuntimeIdentifier.StartsWith('linux-'))">
+    <PropertyGroup>
+      <_RiftwayPublish>$([MSBuild]::NormalizeDirectory('$(MSBuildProjectDirectory)', '$(PublishDir)'))</_RiftwayPublish>
+    </PropertyGroup>
+    <Error Condition="!Exists('$(_RiftwayPublish)libcef.so') or !Exists('$(_RiftwayPublish)Riftway.Subprocess')"
+           Text="No CEF beside the published app: add a PackageReference to Riftway.Runtime.$(RuntimeIdentifier)." />
+    <!-- NuGet keeps no file modes. chrome-sandbox also needs root:root and 4755, which only an installer can give. -->
+    <Exec Condition="'$(OS)' != 'Windows_NT'" Command="chmod +x &quot;$(_RiftwayPublish)Riftway.Subprocess&quot; &quot;$(_RiftwayPublish)chrome-sandbox&quot;" />
+    <Warning Condition="'$(OS)' == 'Windows_NT'" Text="Published for Linux on Windows: give Riftway.Subprocess and chrome-sandbox their exec bits (chmod +x) when packaging." />
+  </Target>
+
+  <!-- macOS: CEF only starts inside an app bundle (the framework and helper apps sit at fixed places in it). After a
+       publish for an osx RID, and after a build on a Mac when RiftwayMacBundle is true, <AppName>.app is laid out beside
+       the output: Contents/MacOS holds the app's files, Contents/Frameworks CEF's framework and one helper .app per
+       Chromium process type. dotnet run and dotnet watch then start the bundle's executable, so hot reload reaches the
+       running app. RiftwayCefFramework and RiftwayMacHelper come from Riftway.Runtime.osx-*, or are set by hand. -->
+  <PropertyGroup>
+    <RiftwayMacBundleName Condition="'$(RiftwayMacBundleName)' == ''">$(AssemblyName)</RiftwayMacBundleName>
+    <RiftwayMacBundleId Condition="'$(RiftwayMacBundleId)' == ''">dev.riftway.$(AssemblyName.ToLowerInvariant())</RiftwayMacBundleId>
+    <RiftwayMacBundleVersion Condition="'$(RiftwayMacBundleVersion)' == ''">$(Version)</RiftwayMacBundleVersion>
+    <RiftwayMacBundleVersion Condition="'$(RiftwayMacBundleVersion)' == ''">1.0.0</RiftwayMacBundleVersion>
+    <!-- On by default with Riftway.Runtime.osx-*, whose props set RiftwayCefFramework: on a Mac nothing else runs. -->
+    <_RiftwayMacDevBundle Condition="$([MSBuild]::IsOSPlatform('OSX')) and ('$(RiftwayMacBundle)' == 'true' or ('$(RiftwayMacBundle)' != 'false' and '$(RiftwayCefFramework)' != ''))">true</_RiftwayMacDevBundle>
+  </PropertyGroup>
+
+  <PropertyGroup Condition="'$(_RiftwayMacDevBundle)' == 'true'">
+    <_RiftwayMacDevApp>$([MSBuild]::NormalizeDirectory('$(MSBuildProjectDirectory)', '$(OutDir)'))$(RiftwayMacBundleName).app</_RiftwayMacDevApp>
+    <RunCommand>$(_RiftwayMacDevApp)/Contents/MacOS/$(RiftwayMacBundleName)</RunCommand>
+    <RunWorkingDirectory>$(_RiftwayMacDevApp)/Contents/MacOS</RunWorkingDirectory>
+  </PropertyGroup>
+
+  <!-- Not on a publish: RiftwayMacLayout lays the publish out instead. -->
+  <Target Name="RiftwayMacDevBundle" AfterTargets="Build" Condition="'$(_RiftwayMacDevBundle)' == 'true' and '$(OutputType)' != 'Library' and '$(_IsPublishing)' != 'true'">
+    <MSBuild Projects="$(MSBuildProjectFullPath)" Targets="_RiftwayMacBundle"
+             Properties="_RiftwayMacFiles=$([MSBuild]::NormalizeDirectory('$(MSBuildProjectDirectory)', '$(OutDir)'));_RiftwayMacApp=$(_RiftwayMacDevApp);_RiftwayMacExclude=$(RiftwayMacBundleName).app;RiftwayCefFramework=$(RiftwayCefFramework);RiftwayMacHelper=$(RiftwayMacHelper);RiftwayMacSignIdentity=$(RiftwayMacSignIdentity);RiftwayMacNotaryProfile=$(RiftwayMacNotaryProfile);_IsPublishing=$(_IsPublishing)" />
+  </Target>
+
+  <Target Name="RiftwayMacLayout" AfterTargets="Publish"
+          Condition="'$(RiftwayLayout)' != 'false' and $(RuntimeIdentifier.StartsWith('osx-'))">
+    <PropertyGroup>
+      <_RiftwayPublish>$([MSBuild]::NormalizeDirectory('$(MSBuildProjectDirectory)', '$(PublishDir)'))</_RiftwayPublish>
+    </PropertyGroup>
+    <MSBuild Projects="$(MSBuildProjectFullPath)" Targets="_RiftwayMacBundle"
+             Properties="_RiftwayMacFiles=$(_RiftwayPublish);_RiftwayMacApp=$(_RiftwayPublish)$(RiftwayMacBundleName).app;_RiftwayMacExclude=$(RiftwayMacBundleName).app;RiftwayCefFramework=$(RiftwayCefFramework);RiftwayMacHelper=$(RiftwayMacHelper);RiftwayMacSignIdentity=$(RiftwayMacSignIdentity);RiftwayMacNotaryProfile=$(RiftwayMacNotaryProfile);_IsPublishing=$(_IsPublishing)" />
+  </Target>
+
+  <!-- One helper app per Chromium process type; static, so _RiftwayMacSign (a CallTarget) sees them too. -->
+  <ItemGroup>
+    <_RiftwayMacHelperSuffix Include="main" Suffix="" Id="" />
+    <_RiftwayMacHelperSuffix Include="alerts" Suffix=" (Alerts)" Id=".alerts" />
+    <_RiftwayMacHelperSuffix Include="gpu" Suffix=" (GPU)" Id=".gpu" />
+    <_RiftwayMacHelperSuffix Include="plugin" Suffix=" (Plugin)" Id=".plugin" />
+    <_RiftwayMacHelperSuffix Include="renderer" Suffix=" (Renderer)" Id=".renderer" />
+  </ItemGroup>
+
+  <Target Name="_RiftwayMacBundle">
+    <Error Condition="'$(RiftwayCefFramework)' == '' or !Exists('$(RiftwayCefFramework)/Chromium Embedded Framework')"
+           Text="No CEF framework for the macOS bundle: add a PackageReference to Riftway.Runtime.osx-arm64 (or osx-x64), or set RiftwayCefFramework to a 'Chromium Embedded Framework.framework'." />
+    <Error Condition="'$(RiftwayMacHelper)' == '' or !Exists('$(RiftwayMacHelper)')"
+           Text="No helper executable for the macOS bundle: add a PackageReference to Riftway.Runtime.osx-*, or set RiftwayMacHelper to a published Riftway.Subprocess." />
+    <PropertyGroup>
+      <_RiftwayPlistHead>&lt;?xml version="1.0" encoding="UTF-8"?&gt;
+&lt;!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd"&gt;
+&lt;plist version="1.0"&gt;
+&lt;dict&gt;
+  &lt;key&gt;CFBundlePackageType&lt;/key&gt;&lt;string&gt;APPL&lt;/string&gt;
+  &lt;key&gt;CFBundleInfoDictionaryVersion&lt;/key&gt;&lt;string&gt;6.0&lt;/string&gt;
+  &lt;key&gt;CFBundleShortVersionString&lt;/key&gt;&lt;string&gt;$(RiftwayMacBundleVersion)&lt;/string&gt;
+  &lt;key&gt;CFBundleVersion&lt;/key&gt;&lt;string&gt;$(RiftwayMacBundleVersion)&lt;/string&gt;
+  &lt;key&gt;LSMinimumSystemVersion&lt;/key&gt;&lt;string&gt;12.0&lt;/string&gt;
+  &lt;key&gt;NSHighResolutionCapable&lt;/key&gt;&lt;true/&gt;
+  &lt;key&gt;NSSupportsAutomaticGraphicsSwitching&lt;/key&gt;&lt;true/&gt;</_RiftwayPlistHead>
+      <_RiftwayPlistTail>&lt;/dict&gt;
+&lt;/plist&gt;</_RiftwayPlistTail>
+    </PropertyGroup>
+
+    <!-- rsync, not Copy: a publish has thousands of files, and the framework is cloned (cp -c) instead of copied. -->
+    <MakeDir Directories="$(_RiftwayMacApp)/Contents/MacOS;$(_RiftwayMacApp)/Contents/Frameworks;$(_RiftwayMacApp)/Contents/Resources" />
+    <Exec Command="rsync -a --delete --exclude &quot;/$(_RiftwayMacExclude)&quot; &quot;$(_RiftwayMacFiles)&quot; &quot;$(_RiftwayMacApp)/Contents/MacOS/&quot;" />
+    <!-- Chromium finds its helpers by the executable's name ("<exe> Helper (<type>).app"), so the executable is named
+         for the bundle, as Electron's is for the product. The .NET host finds its app by the name built into it. -->
+    <Exec Condition="'$(RiftwayMacBundleName)' != '$(AssemblyName)'"
+          Command="mv -f &quot;$(_RiftwayMacApp)/Contents/MacOS/$(AssemblyName)&quot; &quot;$(_RiftwayMacApp)/Contents/MacOS/$(RiftwayMacBundleName)&quot;" />
+    <Exec Condition="!Exists('$(_RiftwayMacApp)/Contents/Frameworks/Chromium Embedded Framework.framework/Chromium Embedded Framework')"
+          Command="cp -c -R &quot;$(RiftwayCefFramework)&quot; &quot;$(_RiftwayMacApp)/Contents/Frameworks/&quot; || cp -R &quot;$(RiftwayCefFramework)&quot; &quot;$(_RiftwayMacApp)/Contents/Frameworks/&quot;" />
+    <WriteLinesToFile File="$(_RiftwayMacApp)/Contents/Info.plist" Overwrite="true" WriteOnlyWhenDifferent="true"
+                      Lines="$(_RiftwayPlistHead);  &lt;key&gt;CFBundleExecutable&lt;/key&gt;&lt;string&gt;$(RiftwayMacBundleName)&lt;/string&gt;;  &lt;key&gt;CFBundleIdentifier&lt;/key&gt;&lt;string&gt;$(RiftwayMacBundleId)&lt;/string&gt;;  &lt;key&gt;CFBundleName&lt;/key&gt;&lt;string&gt;$(RiftwayMacBundleName)&lt;/string&gt;;$(_RiftwayPlistTail)" />
+    <!-- The helpers, "<exe> Helper (<type>).app" in Contents/Frameworks. -->
+    <MakeDir Directories="@(_RiftwayMacHelperSuffix->'$(_RiftwayMacApp)/Contents/Frameworks/$(RiftwayMacBundleName) Helper%(Suffix).app/Contents/MacOS')" />
+    <Copy SourceFiles="$(RiftwayMacHelper)" DestinationFiles="$(_RiftwayMacApp)/Contents/Frameworks/$(RiftwayMacBundleName) Helper%(_RiftwayMacHelperSuffix.Suffix).app/Contents/MacOS/$(RiftwayMacBundleName) Helper%(_RiftwayMacHelperSuffix.Suffix)" SkipUnchangedFiles="true" />
+    <Exec Command="chmod +x &quot;$(_RiftwayMacApp)/Contents/Frameworks/$(RiftwayMacBundleName) Helper&quot;*.app/Contents/MacOS/*" />
+    <WriteLinesToFile File="$(_RiftwayMacApp)/Contents/Frameworks/$(RiftwayMacBundleName) Helper%(_RiftwayMacHelperSuffix.Suffix).app/Contents/Info.plist" Overwrite="true" WriteOnlyWhenDifferent="true"
+                      Lines="$(_RiftwayPlistHead);  &lt;key&gt;CFBundleExecutable&lt;/key&gt;&lt;string&gt;$(RiftwayMacBundleName) Helper%(_RiftwayMacHelperSuffix.Suffix)&lt;/string&gt;;  &lt;key&gt;CFBundleIdentifier&lt;/key&gt;&lt;string&gt;$(RiftwayMacBundleId).helper%(_RiftwayMacHelperSuffix.Id)&lt;/string&gt;;  &lt;key&gt;CFBundleName&lt;/key&gt;&lt;string&gt;$(RiftwayMacBundleName) Helper%(_RiftwayMacHelperSuffix.Suffix)&lt;/string&gt;;  &lt;key&gt;LSUIElement&lt;/key&gt;&lt;string&gt;1&lt;/string&gt;;  &lt;key&gt;LSEnvironment&lt;/key&gt;&lt;dict&gt;&lt;key&gt;MallocNanoZone&lt;/key&gt;&lt;string&gt;0&lt;/string&gt;&lt;/dict&gt;;$(_RiftwayPlistTail)" />
+    <Message Importance="high" Text="$(MSBuildProjectName) -> $(_RiftwayMacApp)" />
+    <CallTarget Targets="_RiftwayMacSign" Condition="'$(RiftwayMacSignIdentity)' != ''" />
+  </Target>
+
+  <!-- RiftwayMacSignIdentity: a "Developer ID Application: ..." identity, or "-" to sign ad hoc (runs on this Mac only).
+       Signs inside out with the hardened runtime, as notarisation needs: every Mach-O in Contents/MacOS (the .NET
+       host and runtime), the framework's libraries and the framework, each helper app, then the app.
+       RiftwayMacEntitlements and RiftwayMacHelperEntitlements replace the default entitlements. -->
+  <Target Name="_RiftwayMacSign">
+    <PropertyGroup>
+      <RiftwayMacEntitlements Condition="'$(RiftwayMacEntitlements)' == ''">$(MSBuildThisFileDirectory)Riftway.mac.entitlements</RiftwayMacEntitlements>
+      <RiftwayMacHelperEntitlements Condition="'$(RiftwayMacHelperEntitlements)' == ''">$(MSBuildThisFileDirectory)Riftway.mac.helper.entitlements</RiftwayMacHelperEntitlements>
+      <_RiftwaySign>codesign --force --timestamp --options runtime --sign &quot;$(RiftwayMacSignIdentity)&quot;</_RiftwaySign>
+      <_RiftwaySign Condition="'$(RiftwayMacSignIdentity)' == '-'">codesign --force --options runtime --sign -</_RiftwaySign>
+      <_RiftwayFw>$(_RiftwayMacApp)/Contents/Frameworks/Chromium Embedded Framework.framework</_RiftwayFw>
+    </PropertyGroup>
+    <!-- codesign seals everything in Contents/MacOS as code, managed assemblies and JSON too (their signatures go in
+         extended attributes, which a DMG or ditto keeps). The app's own executable is signed with the bundle. -->
+    <Exec Command="cd &quot;$(_RiftwayMacApp)/Contents/MacOS&quot; &amp;&amp; find . -type f ! -path &quot;./$(RiftwayMacBundleName)&quot; -print0 | xargs -0 -n 200 $(_RiftwaySign)" />
+    <Exec Command="for f in &quot;$(_RiftwayFw)/Libraries/&quot;*.dylib; do $(_RiftwaySign) &quot;$f&quot; || exit 1; done" />
+    <Exec Command="$(_RiftwaySign) &quot;$(_RiftwayFw)&quot;" />
+    <Exec Command="$(_RiftwaySign) --entitlements &quot;$(RiftwayMacHelperEntitlements)&quot; &quot;$(_RiftwayMacApp)/Contents/Frameworks/$(RiftwayMacBundleName) Helper%(_RiftwayMacHelperSuffix.Suffix).app&quot;" />
+    <Exec Command="$(_RiftwaySign) --entitlements &quot;$(RiftwayMacEntitlements)&quot; &quot;$(_RiftwayMacApp)&quot;" />
+    <Exec Command="codesign --verify --strict --deep &quot;$(_RiftwayMacApp)&quot;" />
+    <Message Importance="high" Text="$(MSBuildProjectName) -> $(_RiftwayMacApp) (signed: $(RiftwayMacSignIdentity))" />
+    <CallTarget Targets="_RiftwayMacNotarize" Condition="'$(RiftwayMacNotaryProfile)' != '' and '$(_IsPublishing)' == 'true'" />
+  </Target>
+
+  <!-- RiftwayMacNotaryProfile: a notarytool keychain profile (xcrun notarytool store-credentials <profile> ...). After a
+       Developer ID signature, a publish sends the app to Apple's notary service, waits, and staples the ticket. -->
+  <Target Name="_RiftwayMacNotarize">
+    <Error Condition="'$(RiftwayMacSignIdentity)' == '-'" Text="Notarisation needs a Developer ID signature, not an ad-hoc one." />
+    <PropertyGroup>
+      <_RiftwayNotaryZip>$(IntermediateOutputPath)$(RiftwayMacBundleName)-notarize.zip</_RiftwayNotaryZip>
+    </PropertyGroup>
+    <Exec Command="ditto -c -k --keepParent &quot;$(_RiftwayMacApp)&quot; &quot;$(_RiftwayNotaryZip)&quot;" />
+    <Exec Command="xcrun notarytool submit &quot;$(_RiftwayNotaryZip)&quot; --keychain-profile &quot;$(RiftwayMacNotaryProfile)&quot; --wait" />
+    <Exec Command="xcrun stapler staple &quot;$(_RiftwayMacApp)&quot;" />
+    <Delete Files="$(_RiftwayNotaryZip)" />
+  </Target>
+
+  <UsingTask TaskName="RiftwayCopyExeResources" TaskFactory="RoslynCodeTaskFactory" AssemblyFile="$(MSBuildToolsPath)\Microsoft.Build.Tasks.Core.dll">
+    <ParameterGroup>
+      <From ParameterType="System.String" Required="true" />
+      <To ParameterType="System.String" Required="true" />
+    </ParameterGroup>
+    <Task>
+      <Code Type="Class" Language="cs"><![CDATA[
+using System;
+using System.Collections.Generic;
+using System.Runtime.InteropServices;
+
+// Gives one exe another's version information and icons: eng/copy-windows-resources.ps1 as a task.
+public sealed class RiftwayCopyExeResources : Microsoft.Build.Utilities.Task
+{
+    public string From { get; set; }
+    public string To { get; set; }
+
+    const uint DataFile = 0x2, ImageResource = 0x20;
+    const int Icon = 3, GroupIcon = 14, Version = 16;
+
+    delegate bool EnumNames(IntPtr module, IntPtr type, IntPtr name, IntPtr param);
+    delegate bool EnumLanguages(IntPtr module, IntPtr type, IntPtr name, ushort language, IntPtr param);
+    [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)] static extern IntPtr LoadLibraryExW(string path, IntPtr file, uint flags);
+    [DllImport("kernel32.dll")] static extern bool FreeLibrary(IntPtr module);
+    [DllImport("kernel32.dll")] static extern bool EnumResourceNamesW(IntPtr module, IntPtr type, EnumNames callback, IntPtr param);
+    [DllImport("kernel32.dll")] static extern bool EnumResourceLanguagesW(IntPtr module, IntPtr type, IntPtr name, EnumLanguages callback, IntPtr param);
+    [DllImport("kernel32.dll")] static extern IntPtr FindResourceExW(IntPtr module, IntPtr type, IntPtr name, ushort language);
+    [DllImport("kernel32.dll")] static extern IntPtr LoadResource(IntPtr module, IntPtr resource);
+    [DllImport("kernel32.dll")] static extern IntPtr LockResource(IntPtr data);
+    [DllImport("kernel32.dll")] static extern uint SizeofResource(IntPtr module, IntPtr resource);
+    [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)] static extern IntPtr BeginUpdateResourceW(string path, bool deleteExisting);
+    [DllImport("kernel32.dll", SetLastError = true)] static extern bool UpdateResourceW(IntPtr update, IntPtr type, IntPtr name, ushort language, byte[] data, uint size);
+    [DllImport("kernel32.dll", SetLastError = true)] static extern bool EndUpdateResourceW(IntPtr update, bool discard);
+
+    sealed class Entry { public int Type; public object Name; public ushort Language; public byte[] Data; }
+
+    // Names are integer ids or strings (IS_INTRESOURCE).
+    static object NameOf(IntPtr name) => ((long)name >> 16) == 0 ? (object)(int)name : Marshal.PtrToStringUni(name);
+
+    static List<Entry> Read(string path, int type)
+    {
+        var entries = new List<Entry>();
+        IntPtr module = LoadLibraryExW(path, IntPtr.Zero, DataFile | ImageResource);
+        if (module == IntPtr.Zero) throw new System.ComponentModel.Win32Exception();
+        try
+        {
+            EnumResourceNamesW(module, (IntPtr)type, (m, t, name, p) =>
+            {
+                EnumResourceLanguagesW(m, t, name, (m2, t2, n2, language, p2) =>
+                {
+                    IntPtr resource = FindResourceExW(m2, t2, n2, language);
+                    var data = new byte[SizeofResource(m2, resource)];
+                    Marshal.Copy(LockResource(LoadResource(m2, resource)), data, 0, data.Length);
+                    entries.Add(new Entry { Type = type, Name = NameOf(n2), Language = language, Data = data });
+                    return true;
+                }, IntPtr.Zero);
+                return true;
+            }, IntPtr.Zero);
+        }
+        finally { FreeLibrary(module); }
+        return entries;
+    }
+
+    static void Update(IntPtr update, Entry entry, byte[] data)
+    {
+        IntPtr name = entry.Name is int id ? (IntPtr)id : Marshal.StringToHGlobalUni((string)entry.Name);
+        try
+        {
+            if (!UpdateResourceW(update, (IntPtr)entry.Type, name, entry.Language, data, data == null ? 0u : (uint)data.Length))
+                throw new System.ComponentModel.Win32Exception();
+        }
+        finally { if (!(entry.Name is int)) Marshal.FreeHGlobal(name); }
+    }
+
+    public override bool Execute()
+    {
+        var types = new List<int> { Version };
+        // Icons only when the source has some: an apphost without ApplicationIcon has none, and CEF's beats a blank one.
+        if (Read(From, GroupIcon).Count > 0) { types.Add(GroupIcon); types.Add(Icon); }
+        var remove = new List<Entry>();
+        var add = new List<Entry>();
+        foreach (var type in types)
+        {
+            remove.AddRange(Read(To, type));
+            add.AddRange(Read(From, type));
+        }
+        IntPtr update = BeginUpdateResourceW(To, false);
+        if (update == IntPtr.Zero) throw new System.ComponentModel.Win32Exception();
+        try
+        {
+            foreach (var entry in remove) Update(update, entry, null);
+            foreach (var entry in add) Update(update, entry, entry.Data);
+        }
+        catch { EndUpdateResourceW(update, true); throw; }
+        if (!EndUpdateResourceW(update, false)) throw new System.ComponentModel.Win32Exception();
+        return true;
+    }
+}
+]]></Code>
+    </Task>
+  </UsingTask>
+</Project>

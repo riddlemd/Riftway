@@ -1,4 +1,4 @@
-Oriel CEF patch 0002: CefWindow::SetEventListeningEnabled.
+Riftway CEF patch 0002: CefWindow::SetEventListeningEnabled.
 
 Lets a client stop a Window from receiving input on Linux the way Electron's
 NativeWindowViews::SetEnabledInternal does for setEnabled(false) and for the
@@ -8,7 +8,7 @@ event reaches the window's Views or contents, while activation is untouched.
 The method is API at CEF_NEXT (999998): API version 15400 and its hash are
 unchanged.
 
-Resolves: Oriel docs/DRIFT.md W5 (and MB4's window side).
+Resolves: Riftway docs/DRIFT.md W5 (and MB4's window side).
 Base: CEF a03e714 (branch 8037, CEF 154) with 0001. Applies in chromium/src/cef.
 
 diff --git a/include/views/cef_window.h b/include/views/cef_window.h

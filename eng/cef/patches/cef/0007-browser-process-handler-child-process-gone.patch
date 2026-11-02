@@ -1,4 +1,4 @@
-Oriel CEF patch 0007: CefBrowserProcessHandler::OnChildProcessGone.
+Riftway CEF patch 0007: CefBrowserProcessHandler::OnChildProcessGone.
 
 Reports the browser child processes that are not renderers (GPU, utility,
 zygote and the rest) when they crash, are killed or fail to launch, as
@@ -11,7 +11,7 @@ Windows, the system error code. CefContext owns the observer from context
 initialisation to shutdown. API at CEF_NEXT (999998): API version 15400 and
 its hash are unchanged.
 
-Resolves: Oriel docs/DRIFT.md A31.
+Resolves: Riftway docs/DRIFT.md A31.
 Base: CEF a03e714 (branch 8037, CEF 154) with 0001-0006. Applies in chromium/src/cef.
 
 diff --git a/include/cef_browser_process_handler.h b/include/cef_browser_process_handler.h

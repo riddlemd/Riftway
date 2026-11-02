@@ -1,0 +1,16 @@
+<Project>
+  <!-- Packed as buildTransitive/Riftway.Runtime.<rid>.props, when the stage is macOS's. A props file, so Riftway's targets
+       see the framework when they decide whether a Mac build lays out an app bundle. NuGet keeps no file modes; the
+       targets give the helper its exec bit in the bundle. An app may reference both osx runtimes: each applies to a
+       publish for its RID (-r, a global property, so props see it), or, with no RID, to a build on a Mac of its
+       architecture. -->
+  <PropertyGroup>
+    <_RiftwayThisRuntimeRid>$([System.IO.Path]::GetFileNameWithoutExtension('$(MSBuildThisFile)').Replace('Riftway.Runtime.', ''))</_RiftwayThisRuntimeRid>
+    <_RiftwayHostMacRid Condition="'$([System.Runtime.InteropServices.RuntimeInformation]::OSArchitecture)' == 'Arm64'">osx-arm64</_RiftwayHostMacRid>
+    <_RiftwayHostMacRid Condition="'$(_RiftwayHostMacRid)' == ''">osx-x64</_RiftwayHostMacRid>
+  </PropertyGroup>
+  <PropertyGroup Condition="'$(RuntimeIdentifier)' == '$(_RiftwayThisRuntimeRid)' or ('$(RuntimeIdentifier)' == '' and '$(_RiftwayHostMacRid)' == '$(_RiftwayThisRuntimeRid)')">
+    <RiftwayCefFramework Condition="'$(RiftwayCefFramework)' == ''">$(MSBuildThisFileDirectory)..\framework\Chromium Embedded Framework.framework</RiftwayCefFramework>
+    <RiftwayMacHelper Condition="'$(RiftwayMacHelper)' == ''">$(MSBuildThisFileDirectory)..\helper\Riftway.Subprocess</RiftwayMacHelper>
+  </PropertyGroup>
+</Project>

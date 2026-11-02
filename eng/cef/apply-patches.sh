@@ -1,5 +1,5 @@
 #!/bin/bash
-# Applies Oriel's CEF patches to a CEF checkout made by automate-git.py; running it again changes nothing.
+# Applies Riftway's CEF patches to a CEF checkout made by automate-git.py; running it again changes nothing.
 # Usage: eng/cef/apply-patches.sh <download-dir> [--check | --revert]
 #   <download-dir>  automate-git's --download-dir. patches/cef/*.patch go into <download-dir>/chromium/src/cef,
 #                   patches/chromium/*.patch into <download-dir>/chromium/src, in name order.
@@ -86,5 +86,5 @@ done
 
 if [ "$mode" = apply ]; then
   echo "Next: translate the headers and build, e.g. automate-git.py ... --no-update --force-build (runs cef/tools/gclient_hook.py),"
-  echo "then compare cef/cef_api_untracked.json's 999998 hashes with src/Oriel.Cef/CefPatchedApi.cs (eng/cef/README.md)."
+  echo "then compare cef/cef_api_untracked.json's 999998 hashes with src/Riftway.Cef/CefPatchedApi.cs (eng/cef/README.md)."
 fi

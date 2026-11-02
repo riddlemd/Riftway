@@ -23,7 +23,7 @@ Percentages are over the non-n/a items; the second counts a partial item as half
 
 ### Module methods and properties
 
-| Electron | Oriel | Status | Note |
+| Electron | Riftway | Status | Note |
 |---|---|---|---|
 | `session.fromPartition(partition[, options])` | `Session.FromPartition` | partial | Same name, same session; `persist:` on disk, others in memory, `""` the default. Kept in `<data>/Partition <name>` (E1); no `cache` option (E3). |
 | `session.fromPath(path[, options])` | `Session.FromPath` | partial | Absolute paths only, as Electron; only directly inside the data directory (E2); no `cache` option (E3). |
@@ -31,7 +31,7 @@ Percentages are over the non-n/a items; the second counts a partial item as half
 
 ### Instance events
 
-| Electron | Oriel | Status | Note |
+| Electron | Riftway | Status | Note |
 |---|---|---|---|
 | `will-download` | `WillDownload` | n/a | [download-item.md](download-item.md): partial (E40). |
 | `extension-loaded` | — | n/a | Extensions, a separate module (E10). |
@@ -59,7 +59,7 @@ Percentages are over the non-n/a items; the second counts a partial item as half
 
 ### Instance methods
 
-| Electron | Oriel | Status | Note |
+| Electron | Riftway | Status | Note |
 |---|---|---|---|
 | `ses.getCacheSize()` | `GetCacheSizeAsync` | partial | Counts the cache files on disk; throws for an in-memory session (E34). |
 | `ses.clearCache()` | `ClearCacheAsync` | done | CEF `clear_http_cache`. |
@@ -67,7 +67,7 @@ Percentages are over the non-n/a items; the second counts a partial item as half
 | `ses.flushStorageData()` | `FlushStorageDataAsync` | partial | Flushes cookies only (E6). |
 | `ses.setProxy(config)` | `SetProxyAsync` | done | Through the profile's `proxy` preference, with Electron's mode rules (A35). |
 | `ses.resolveHost(host[, options])` | `ResolveHostAsync` | partial | No options; `HostResolutionException` carries the net error (E38). |
-| `ses.resolveProxy(url)` | `ResolveProxyAsync` | partial | Oriel's CEF patch 0008 only; stock CEF throws `PlatformNotSupportedException` (A35, E8). |
+| `ses.resolveProxy(url)` | `ResolveProxyAsync` | partial | Riftway's CEF patch 0008 only; stock CEF throws `PlatformNotSupportedException` (A35, E8). |
 | `ses.forceReloadProxyConfig()` | — | missing | E8. |
 | `ses.setDownloadPath(path)` | `SetDownloadPath` | done | `download.default_directory`, as Electron. |
 | `ses.enableNetworkEmulation(options)` | `EnableNetworkEmulation` | partial | Per page through DevTools, open and later pages; page-less requests are not throttled (E43). |
@@ -120,7 +120,7 @@ Percentages are over the non-n/a items; the second counts a partial item as half
 
 ### Instance properties
 
-| Electron | Oriel | Status | Note |
+| Electron | Riftway | Status | Note |
 |---|---|---|---|
 | `ses.availableSpellCheckerLanguages` | `Session.AvailableSpellCheckerLanguages` | done | Static: Chromium's list is the same for every session. |
 | `ses.spellCheckerEnabled` | `SpellCheckerEnabled` | done |  |

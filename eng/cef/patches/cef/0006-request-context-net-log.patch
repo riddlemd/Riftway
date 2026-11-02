@@ -1,4 +1,4 @@
-Oriel CEF patch 0006: CefRequestContext net log.
+Riftway CEF patch 0006: CefRequestContext net log.
 
 Adds StartNetLog, StopNetLog and IsNetLogging to CefRequestContext, with the
 client callback CefNetLogCallback, as Electron's session.netLog
@@ -11,7 +11,7 @@ already a net log running", "No net log in progress", "Failed to start net
 log exporter"). API at CEF_NEXT (999998): API version 15400 and its hash are
 unchanged.
 
-Resolves: Oriel docs/DRIFT.md E42 (netLog).
+Resolves: Riftway docs/DRIFT.md E42 (netLog).
 Base: CEF a03e714 (branch 8037, CEF 154) with 0001-0005. Applies in chromium/src/cef.
 
 diff --git a/include/cef_request_context.h b/include/cef_request_context.h

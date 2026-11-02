@@ -1,4 +1,4 @@
-Oriel Chromium patch 0011: a renderer launched with --no-zygote skips the zygote.
+Riftway Chromium patch 0011: a renderer launched with --no-zygote skips the zygote.
 
 On Linux every renderer is forked from the generic zygote, which has the
 sandbox engaged, whatever the renderer's own command line says
@@ -10,7 +10,7 @@ now tells the delegate to skip the zygote when the renderer's command line has
 support_mixed_sandbox_with_zygote.patch does. Renderers without the switch
 are untouched. Does nothing off USE_ZYGOTE builds. No CEF API change.
 
-Resolves: Oriel docs/DRIFT.md W13 on Linux (with 0010).
+Resolves: Riftway docs/DRIFT.md W13 on Linux (with 0010).
 Base: Chromium 154.0.8037.94 with CEF a03e714's patches. Applies in chromium/src.
 diff --git a/content/browser/renderer_host/render_process_host_impl.cc b/content/browser/renderer_host/render_process_host_impl.cc
 index 0d96ded..48963a7 100644

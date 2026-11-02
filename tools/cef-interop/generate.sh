@@ -1,11 +1,11 @@
 #!/bin/bash
-# Regenerates src/Oriel.Cef/Interop from the pinned CEF's C API headers (eng/cef.json).
+# Regenerates src/Riftway.Cef/Interop from the pinned CEF's C API headers (eng/cef.json).
 # Platform-specific types (cef_main_args_t, cef_window_info_t, handles) differ per OS, so they are
-# excluded here and written by hand in src/Oriel.Cef/Platform.
+# excluded here and written by hand in src/Riftway.Cef/Platform.
 set -euo pipefail
 repo="$(cd "$(dirname "$0")/../.." && pwd)"
 cef="$("$repo/eng/fetch-cef.sh" macosarm64)"
-out="$repo/src/Oriel.Cef/Interop"
+out="$repo/src/Riftway.Cef/Interop"
 
 rm -rf "$out"
 mkdir -p "$out"
@@ -33,7 +33,7 @@ dotnet tool run ClangSharpPInvokeGenerator -- \
   "${traverse[@]}" \
   --define-macro CEF_API_VERSION=15400 \
   --additional "--target=arm64-apple-macos" "-isysroot" "$(xcrun --show-sdk-path)" \
-  --namespace Oriel.Cef.Interop \
+  --namespace Riftway.Cef.Interop \
   --method-class-name CefNative \
   --library-path libcef \
   --output "$out" \
@@ -57,7 +57,7 @@ hash() { awk -v os="$1" '
   /#define CEF_API_VERSION_15400 / { found = 1 }
   found && $0 ~ "defined\\(OS_" os "\\)" { getline; gsub(/"/, "", $3); print $3; exit }' "$cef/include/cef_api_versions.h"; }
 cat > "$out/CefApiVersion.cs" <<CS
-namespace Oriel.Cef.Interop;
+namespace Riftway.Cef.Interop;
 
 /// <summary>The CEF API version these bindings were generated for, and its per-OS hashes.</summary>
 public static class CefApiVersion

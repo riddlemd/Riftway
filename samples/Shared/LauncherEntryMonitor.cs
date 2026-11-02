@@ -1,13 +1,13 @@
 using System.Diagnostics;
 using System.Text.RegularExpressions;
 
-namespace Oriel.Samples;
+namespace Riftway.Samples;
 
 /// <summary>Reads <c>com.canonical.Unity.LauncherEntry</c> <c>Update</c> signals off the session bus with dbus-monitor, a
-/// decoder independent of Oriel's own D-Bus code. Each signal is its body as dbus-monitor prints it, whitespace collapsed.</summary>
+/// decoder independent of Riftway's own D-Bus code. Each signal is its body as dbus-monitor prints it, whitespace collapsed.</summary>
 internal sealed partial class LauncherEntryMonitor : IDisposable
 {
-    private const string ProbeInterface = "org.oriel.LauncherEntryProbe";
+    private const string ProbeInterface = "org.riftway.LauncherEntryProbe";
     private readonly Process _process;
     // Guarded by itself; the last entry grows while dbus-monitor prints it.
     private readonly List<(string Header, string Body)> _messages = [];
@@ -54,7 +54,7 @@ internal sealed partial class LauncherEntryMonitor : IDisposable
         var deadline = DateTime.UtcNow + TimeSpan.FromSeconds(10);
         while (DateTime.UtcNow < deadline)
         {
-            var start = new ProcessStartInfo("/usr/bin/dbus-send", ["--session", "--type=signal", "/org/oriel/Probe", ProbeInterface + ".Ping", "string:" + id])
+            var start = new ProcessStartInfo("/usr/bin/dbus-send", ["--session", "--type=signal", "/org/riftway/Probe", ProbeInterface + ".Ping", "string:" + id])
             { RedirectStandardOutput = true };
             // To EOF, not WaitForExit, which can hang inside the CEF process on Linux.
             using (var send = Process.Start(start)!) send.StandardOutput.ReadToEnd();

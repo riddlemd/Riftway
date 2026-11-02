@@ -10,7 +10,7 @@
     <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
     <Authors>Michael Riddle</Authors>
     <Copyright>Copyright (c) 2026 Michael Riddle</Copyright>
-    <RepositoryUrl>https://github.com/riddlemd/Oriel</RepositoryUrl>
+    <RepositoryUrl>https://github.com/riddlemd/Riftway</RepositoryUrl>
     <RepositoryType>git</RepositoryType>
     <PublishRepositoryUrl>true</PublishRepositoryUrl>
     <IsPackable>false</IsPackable>

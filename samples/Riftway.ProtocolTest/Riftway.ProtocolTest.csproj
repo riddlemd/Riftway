@@ -1,0 +1,15 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!-- What the Riftway package's buildTransitive brings; a ProjectReference doesn't import it. -->
+  <Import Project="..\..\src\Riftway\buildTransitive\Riftway.props" />
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\..\src\Riftway\Riftway.csproj" />
+    <Content Include="web/**" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
+  </ItemGroup>
+
+</Project>

@@ -3,9 +3,9 @@
     <ManagePackageVersionsCentrally>true</ManagePackageVersionsCentrally>
   </PropertyGroup>
   <ItemGroup>
-    <!-- Oriel.AutoUpdater; vpk must be the same version. -->
+    <!-- Riftway.AutoUpdater; vpk must be the same version. -->
     <PackageVersion Include="Velopack" Version="1.2.161" />
-    <!-- Oriel.Blazor -->
+    <!-- Riftway.Blazor -->
     <PackageVersion Include="Microsoft.AspNetCore.Components.WebView" Version="10.0.0" />
     <!-- Testing -->
     <PackageVersion Include="coverlet.collector" Version="10.0.0" />

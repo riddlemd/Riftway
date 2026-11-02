@@ -39,7 +39,7 @@ Cross-platform work. Platform-specific items: [linux-todo.md](linux-todo.md), [w
 - [x] `NavigationHistory` (`WebContents.NavigationHistory`)
 - [x] `WebFrameMain` (`WebContents.MainFrame`, IPC `SenderFrame`)
 - [x] Core `Session` (`Session`, `Cookies`, partitions; gaps DRIFT E1-E11) and `NativeImage` (gaps DRIFT B1, B3-B5; `createThumbnailFromPath` and template images on branch `image-screen`)
-- [x] `Debugger` (`WebContents.Debugger`; shares Oriel's protocol session, DRIFT C43)
+- [x] `Debugger` (`WebContents.Debugger`; shares Riftway's protocol session, DRIFT C43)
 - [x] `View` and `WebContentsView` ([design](design/web-contents-view.md)): `ContentView`, child views, bounds, visibility,
       `bounds-changed`, popups and `close()` from view pages, `BaseWindow` and `SetContentView` (gaps DRIFT V1, V2, V4, V7, V12-V15)
 - [ ] `BaseWindow`: check Electron's layout on macOS and Windows (a click on an empty part of `ContentView` reaches the page
@@ -48,11 +48,11 @@ Cross-platform work. Platform-specific items: [linux-todo.md](linux-todo.md), [w
 - [ ] macOS: check whether a hidden window or a `LoadUrl` takes focus (it did on Windows; fixed on branch `window-polish`)
 - [ ] Remaining M2 modules: the remaining Electron command-line switches and `ELECTRON_*` variables,
       checked one by one
-- [x] `app.commandLine` (`OrielApp.CommandLine`; DRIFT A19)
+- [x] `app.commandLine` (`RiftwayApp.CommandLine`; DRIFT A19)
 - [x] `window.open` handling: `SetWindowOpenHandler`, `DidCreateWindow` (branch `window-open`)
 - [x] Menus: Alt+letter mnemonics and the Alt toggle (was DRIFT W19): handled in a `cef_keyboard_handler_t`; WindowTest covers both
 - [x] macOS: `Width`/`Height` gave a window a title bar taller than asked (was DRIFT W18)
-- [x] `OrielApp.Quit()` from any thread (was DRIFT A4)
+- [x] `RiftwayApp.Quit()` from any thread (was DRIFT A4)
 - [ ] `Protocol`: `AllowServiceWorkers` and `CodeCache` privileges throw `NotSupportedException`
 
 - [ ] `desktopCapturer` (branch `desktop-capturer`, DRIFT DC1-DC5): run WindowTest `DesktopCapturerChecks` (the probe window
@@ -115,35 +115,35 @@ Cross-platform work. Platform-specific items: [linux-todo.md](linux-todo.md), [w
       it passes on linux-x64 too (2026-10-20, 82655fa, patched 0001-0013 in Docker, 0 failures, with the GPU
       child's report carrying the app's global keys and not the launch's: CR11 with patch 0012). Open: CR16 (.NET
       breakpoint hook on macOS threads other than the UI thread)
-- [ ] M4 ship it, windows-x64 and linux-x64 (branch `m4-packaging`): `eng/pack.ps1` packs Oriel, Oriel.Cef and
-      Oriel.AutoUpdater; `eng/runtime/` stages and packs `Oriel.Runtime.<rid>` (win-x64 184 MB); `Oriel.targets` lays out
+- [ ] M4 ship it, windows-x64 and linux-x64 (branch `m4-packaging`): `eng/pack.ps1` packs Riftway, Riftway.Cef and
+      Riftway.AutoUpdater; `eng/runtime/` stages and packs `Riftway.Runtime.<rid>` (win-x64 184 MB); `Riftway.targets` lays out
       `dotnet publish -r <rid>` (Windows: the same files as `layout-windows.ps1`, the exe stamped with the app's version
       resources); `vpk pack` makes a Setup.exe of that layout; Velopack's hook arguments reach `Main` through
       bootstrap.exe and exit there. linux-x64 (154 MB, libcef.so stripped): an app published from the packages lays out
       with `locales/` and exec bits, opens a window and runs a page under Xvfb unsandboxed and with a setuid
       chrome-sandbox, and `vpk pack` makes an AppImage that runs the same way; an AppImage at 1.0.0 updates itself to
       2.0.0 from a local feed through `AutoUpdater` (checking, available, downloaded 2.0.0, before-quit, Velopack applies
-      after the exit and restarts 2.0.0) (Docker, 2026-10-20, Wojtek). macOS (branch `blazor-hybrid`, 2026-10-22): `eng/runtime/stage-macos.sh` + `Oriel.Runtime.osx-arm64` (143 MB: the
-      framework and the helper); `Oriel.targets` lays out `<App>.app` on build (dev, `dotnet run`/`watch`) and on an osx
-      publish, and signs it (`OrielMacSignIdentity`); an app outside the repo built from the local feed runs and
-      publishes with no flags, BlazorSample self-check 10/10 both ways; renderers sandboxed with `EnableSandbox()` (native helper, [mac-todo.md](mac-todo.md)); `Oriel.Runtime.osx-x64` (149 MB) too: one app
+      after the exit and restarts 2.0.0) (Docker, 2026-10-20, Wojtek). macOS (branch `blazor-hybrid`, 2026-10-22): `eng/runtime/stage-macos.sh` + `Riftway.Runtime.osx-arm64` (143 MB: the
+      framework and the helper); `Riftway.targets` lays out `<App>.app` on build (dev, `dotnet run`/`watch`) and on an osx
+      publish, and signs it (`RiftwayMacSignIdentity`); an app outside the repo built from the local feed runs and
+      publishes with no flags, BlazorSample self-check 10/10 both ways; renderers sandboxed with `EnableSandbox()` (native helper, [mac-todo.md](mac-todo.md)); `Riftway.Runtime.osx-x64` (149 MB) too: one app
       referencing both builds for the host and publishes `-r osx-x64`, which passes sandboxed under Rosetta; `vpk pack` of the bundle, installed from its
       portable zip at 1.0.0, updates itself to 2.0.0 through `AutoUpdater` and restarts as 2.0.0, and vpk's ad-hoc
-      `--deep` re-sign after Oriel's verifies and runs. Open: a real Windows install, update and launch
-      on a desktop; Windows signing; notarisation with a Developer ID (Oriel's target and vpk's); fuses and the
+      `--deep` re-sign after Riftway's verifies and runs. Open: a real Windows install, update and launch
+      on a desktop; Windows signing; notarisation with a Developer ID (Riftway's target and vpk's); fuses and the
       packed app archive; the Linux sandbox story for AppImages (user namespaces or documented off)
-- [ ] M3 Blazor Hybrid (branch `blazor-hybrid`): `Oriel.Blazor` (`AddOrielBlazor`, `LoadBlazor<T>`, `app://localhost/`,
-      `window.external` over IPC), `samples/Oriel.BlazorSample` (`--self-check`: render, events, JS interop both ways, a
-      second window on shared services, close disposes components, reload) 10/10 on macOS arm64 and linux-arm64 (Docker, test-linux.sh with `ORIEL_EXTRA_ARGS=--self-check`) (2026-10-22);
-      `OrielMacBundle=true dotnet watch`: `.razor` edits applied in ~0.3 s without a restart. Open: run on Windows; `dotnet watch` reports "Failed to read obj\Debug/.../staticwebassets.development.json" (a Windows path
-      in the SDK on macOS), so `wwwroot` edits need a reload; root components with parameters; `OrielApp.CreateBuilder`
+- [ ] M3 Blazor Hybrid (branch `blazor-hybrid`): `Riftway.Blazor` (`AddRiftwayBlazor`, `LoadBlazor<T>`, `app://localhost/`,
+      `window.external` over IPC), `samples/Riftway.BlazorSample` (`--self-check`: render, events, JS interop both ways, a
+      second window on shared services, close disposes components, reload) 10/10 on macOS arm64 and linux-arm64 (Docker, test-linux.sh with `RIFTWAY_EXTRA_ARGS=--self-check`) (2026-10-22);
+      `RiftwayMacBundle=true dotnet watch`: `.razor` edits applied in ~0.3 s without a restart. Open: run on Windows; `dotnet watch` reports "Failed to read obj\Debug/.../staticwebassets.development.json" (a Windows path
+      in the SDK on macOS), so `wwwroot` edits need a reload; root components with parameters; `RiftwayApp.CreateBuilder`
 - [ ] M5 desktop integration · M6 session/network/processes · M7 own CEF builds
       (see [PLAN.md](PLAN.md#milestones))
 - [ ] M7: CEF patches in [eng/cef](../eng/cef/README.md): 0001 `CefWindowDelegate::IsTranslucent` (W24), 0002
       `CefWindow::SetEventListeningEnabled` (W5), 0003 GTK style colour cache, a Chromium patch (Y2), 0004
       `CefWindow::SetXdgActivationToken` (linux-tray's T5), 0005 `CefDownloadItem` gesture, validators, initiator
       and frame (E13, E40), 0006 `CefRequestContext::StartNetLog`/`StopNetLog`/`IsNetLogging` for `netLog` (E42).
-      Oriel detects a patched libcef by its next-version API hash (`CefRuntime.IsPatched`) and runs unchanged on stock
+      Riftway detects a patched libcef by its next-version API hash (`CefRuntime.IsPatched`) and runs unchanged on stock
       CEF. Built for linux-x64 and windows-x64 (CEF a03e714, 2026-10-13; the next-version hashes match
       `CefPatchedApi`): WindowTest's 0001-0004 checks pass on linux-x64 (2026-10-14, 63ac6f1) and SessionTest's
       `patched (0005)` and `(0006)` on linux-x64 and windows-x64 (2026-10-13, f01f7e8). macOS: not built

@@ -1,0 +1,17 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!-- What the Riftway package's buildTransitive brings; a ProjectReference doesn't import it. -->
+  <Import Project="..\..\src\Riftway\buildTransitive\Riftway.props" />
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <!-- Reports carry it as _version (Electron's app.getVersion()). -->
+    <Version>1.2.3</Version>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\..\src\Riftway\Riftway.csproj" />
+  </ItemGroup>
+
+</Project>

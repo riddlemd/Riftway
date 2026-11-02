@@ -1,4 +1,4 @@
-// Every CEF C API header; ClangSharp generates Oriel.Cef.Interop from this.
+// Every CEF C API header; ClangSharp generates Riftway.Cef.Interop from this.
 #include "include/cef_api_hash.h"
 #include "include/cef_version_info.h"
 #include "include/capi/cef_accessibility_handler_capi.h"

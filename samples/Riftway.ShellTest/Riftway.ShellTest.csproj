@@ -1,0 +1,19 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!-- What the Riftway package's buildTransitive brings; a ProjectReference doesn't import it. -->
+  <Import Project="..\..\src\Riftway\buildTransitive\Riftway.props" />
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\..\src\Riftway\Riftway.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <Compile Include="..\Shared\FakePortal.cs" Link="FakePortal.cs" />
+  </ItemGroup>
+
+</Project>

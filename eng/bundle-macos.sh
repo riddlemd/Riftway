@@ -1,9 +1,9 @@
 #!/bin/bash
-# Assembles a macOS .app around a published Oriel app: the CEF framework, and one helper .app per
-# Chromium process type, each a renamed copy of the NativeAOT Oriel.Subprocess.
+# Assembles a macOS .app around a published Riftway app: the CEF framework, and one helper .app per
+# Chromium process type, each a renamed copy of the NativeAOT Riftway.Subprocess.
 # Usage: eng/bundle-macos.sh <app-publish-dir> <exe-name> <subprocess-exe> <output-dir> [bundle-id]
 set -euo pipefail
-publish="$1"; name="$2"; subprocess="$3"; out="$4"; id="${5:-dev.oriel.$(echo "$name" | tr '[:upper:]' '[:lower:]' | tr -cd 'a-z0-9.')}"
+publish="$1"; name="$2"; subprocess="$3"; out="$4"; id="${5:-dev.riftway.$(echo "$name" | tr '[:upper:]' '[:lower:]' | tr -cd 'a-z0-9.')}"
 repo="$(cd "$(dirname "$0")/.." && pwd)"
 cef="$("$repo/eng/fetch-cef.sh")"
 

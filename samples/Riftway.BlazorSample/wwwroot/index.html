@@ -1,0 +1,18 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <title>Riftway Blazor Sample</title>
+  <base href="/" />
+  <style>body { font-family: system-ui, sans-serif; margin: 2rem; } button { margin-right: .5rem; }</style>
+  <link rel="stylesheet" href="app.css?v=1">
+</head>
+<body>
+  <div id="app">Loading…</div>
+  <div id="footer"></div>
+  <script>
+    window.riftwaySample = { callBack: (dotnet) => dotnet.invokeMethodAsync('Echo', 'from js') };
+  </script>
+  <script src="_framework/blazor.webview.js" autostart="true"></script>
+</body>
+</html>

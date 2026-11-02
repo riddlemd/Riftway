@@ -1,0 +1,25 @@
+<Project>
+  <!-- Packed as buildTransitive/Riftway.Runtime.<rid>.targets. NuGet flattens native assets, and CEF looks for its
+       locales in a locales folder beside libcef, so they travel here instead. -->
+  <PropertyGroup>
+    <_RiftwayRuntimePackageId>$(MSBuildThisFileName)</_RiftwayRuntimePackageId>
+    <_RiftwayRuntimeRid>$(_RiftwayRuntimePackageId.Substring(14))</_RiftwayRuntimeRid>
+    <!-- A RID-less build (dotnet build/run) on the machine this runtime is for: NuGet leaves native assets under
+         runtimes/<rid>/native, where RiftwayApp never looks for libcef, so they go beside the app as a RID build's do.
+         macOS is left out: its dev build is an app bundle (Riftway.targets). -->
+    <_RiftwayRuntimeFlatten Condition="'$(RuntimeIdentifier)' == '' and '$(NETCoreSdkRuntimeIdentifier)' == '$(_RiftwayRuntimeRid)' and !$(_RiftwayRuntimeRid.StartsWith('osx-'))">true</_RiftwayRuntimeFlatten>
+  </PropertyGroup>
+
+  <ItemGroup Condition="'$(RuntimeIdentifier)' != '' or '$(_RiftwayRuntimeFlatten)' == 'true'">
+    <None Include="$(MSBuildThisFileDirectory)..\locales\*.pak" Link="locales\%(Filename)%(Extension)" Visible="false"
+          CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
+  </ItemGroup>
+
+  <Target Name="_RiftwayRuntimeFlattenNative" AfterTargets="ResolvePackageAssets" Condition="'$(_RiftwayRuntimeFlatten)' == 'true'">
+    <ItemGroup>
+      <RuntimeTargetsCopyLocalItems Update="@(RuntimeTargetsCopyLocalItems)"
+                                    Condition="'%(RuntimeTargetsCopyLocalItems.NuGetPackageId)' == '$(_RiftwayRuntimePackageId)' and '%(RuntimeTargetsCopyLocalItems.RuntimeIdentifier)' == '$(_RiftwayRuntimeRid)'"
+                                    DestinationSubDirectory="" DestinationSubPath="%(Filename)%(Extension)" />
+    </ItemGroup>
+  </Target>
+</Project>

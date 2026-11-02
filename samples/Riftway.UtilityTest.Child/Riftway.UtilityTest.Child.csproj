@@ -1,0 +1,13 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!-- A plain console app: the utility process Riftway.UtilityTest forks. It references Riftway only for
+       ParentPort and MessageChannelMain, and never loads CEF. -->
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\..\src\Riftway\Riftway.csproj" />
+  </ItemGroup>
+
+</Project>

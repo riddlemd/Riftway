@@ -1,0 +1,29 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <ItemGroup>
+    <ProjectReference Include="..\Riftway.Cef\Riftway.Cef.csproj" />
+  </ItemGroup>
+
+  <PropertyGroup>
+    <!-- CEF is a C API; the interop layer needs function pointers and raw structs. -->
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+    <IsAotCompatible>true</IsAotCompatible>
+    <GenerateDocumentationFile>true</GenerateDocumentationFile>
+    <IsPackable>true</IsPackable>
+    <Description>Electron for .NET: desktop apps in C# on Chromium (CEF), with Blazor Hybrid.</Description>
+    <PackageTags>cef;chromium;electron;desktop;blazor</PackageTags>
+    <PackageLicenseExpression>MIT</PackageLicenseExpression>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <None Include="buildTransitive\**" Pack="true" PackagePath="buildTransitive\" />
+    <!-- Injected into every page over DevTools; named by path so WebContents can find them. -->
+    <EmbeddedResource Include="Ipc/*.js" LogicalName="Riftway.Ipc.%(Filename)%(Extension)" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <InternalsVisibleTo Include="Riftway.Tests" />
+    <InternalsVisibleTo Include="Riftway.WindowTest" />
+  </ItemGroup>
+
+</Project>

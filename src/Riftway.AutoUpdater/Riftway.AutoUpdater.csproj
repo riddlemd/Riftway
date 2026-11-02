@@ -1,0 +1,20 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <ItemGroup>
+    <ProjectReference Include="..\Riftway\Riftway.csproj" />
+    <PackageReference Include="Velopack" />
+  </ItemGroup>
+
+  <PropertyGroup>
+    <GenerateDocumentationFile>true</GenerateDocumentationFile>
+    <IsPackable>true</IsPackable>
+    <Description>Electron's autoUpdater for Riftway apps, over Velopack installers and update feeds.</Description>
+    <PackageTags>riftway;autoupdater;velopack</PackageTags>
+    <PackageLicenseExpression>MIT</PackageLicenseExpression>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <InternalsVisibleTo Include="Riftway.Tests" />
+  </ItemGroup>
+
+</Project>

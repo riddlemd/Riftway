@@ -1,7 +1,7 @@
-# Oriel's CEF patches
+# Riftway's CEF patches
 
-Oriel runs on stock CEF. Where stock CEF cannot give Electron's behaviour, a patch here adds the missing piece to CEF
-itself, and Oriel uses it only when the loaded libcef has it. With stock CEF the matching DRIFT row stays true.
+Riftway runs on stock CEF. Where stock CEF cannot give Electron's behaviour, a patch here adds the missing piece to CEF
+itself, and Riftway uses it only when the loaded libcef has it. With stock CEF the matching DRIFT row stays true.
 
 Base: CEF `a03e714` (branch 8037, CEF 154, Chromium 154.0.8037.94), the version in [`eng/cef.json`](../cef.json).
 
@@ -20,9 +20,9 @@ Base: CEF `a03e714` (branch 8037, CEF 154, Chromium 154.0.8037.94), the version 
 | [`cef/0009-process-accessibility-mode.patch`](patches/cef/0009-process-accessibility-mode.patch) | `chromium/src/cef` | Adds the static `CefBrowserHost::GetProcessAccessibilityMode` and `SetProcessAccessibilityMode` (`ui::AXMode` flags) and `CefBrowserProcessHandler::OnAccessibilityModeChanged`: the getter reads `BrowserAccessibilityState::GetAccessibilityMode`, the setter keeps one `ScopedAccessibilityMode` for the process (Electron's `scoped_accessibility_mode_`), and a `ui::AXModeObserver` reports the flags Chromium adds by itself, not the setter's. `BUILD.gn` gains `//ui/accessibility:ax_base` and `//ui/accessibility/platform`. | A28 |
 | [`cef/0010-browser-process-handler-before-render-process-launch.patch`](patches/cef/0010-browser-process-handler-before-render-process-launch.patch) | `chromium/src/cef` | Adds `CefBrowserProcessHandler::OnBeforeRenderProcessLaunch(command_line, request_context)`, called from `ChromeContentBrowserClientCef::AppendExtraCommandLineSwitches` after `OnBeforeChildProcessLaunch`, for renderers only, with an existing request context (`CefBrowserContext::GetAnyRequestContext`, preferring one without a handler) of the profile `RenderProcessHost::FromID(child_process_id)` serves: a client with one context per profile gets its own back. Chromium never shares a renderer between profiles, so a switch added there holds through every process reuse. | W13 (per session) |
 | [`chromium/0011-renderer-no-zygote-per-process.patch`](patches/chromium/0011-renderer-no-zygote-per-process.patch) | `chromium/src` | On Linux, `RenderProcessHostImpl::Init` gives `RendererSandboxedProcessLauncherDelegate` `use_zygote = false` when the renderer's own command line has `--no-zygote`, and `GetZygote` then returns null, so the renderer is launched directly instead of forked from the sandboxed generic zygote: Electron's `support_mixed_sandbox_with_zygote.patch`. Without it, 0010's `--no-sandbox` on Linux changes nothing. Off `USE_ZYGOTE` builds it compiles to nothing. | W13 (Linux) |
-| [`cef/0012-child-crash-keys-from-command-line.patch`](patches/cef/0012-child-crash-keys-from-command-line.patch) | `chromium/src/cef` | On macOS and Linux a child cannot set crash keys itself (libcef drops the call before `cef_execute_process`, and only renderers get a callback once crash reporting starts), so libcef sets the keys of the `--oriel-crash-keys` switch Oriel's browser gives every child (hex of UTF-8 `key\0value\0...`) right after crash reporting starts in GPU, utility and zygote-forked children, and leaves the switch out of the `switch-N` keys. On Windows chrome_elf has set them already. No API change. | CR11 |
+| [`cef/0012-child-crash-keys-from-command-line.patch`](patches/cef/0012-child-crash-keys-from-command-line.patch) | `chromium/src/cef` | On macOS and Linux a child cannot set crash keys itself (libcef drops the call before `cef_execute_process`, and only renderers get a callback once crash reporting starts), so libcef sets the keys of the `--riftway-crash-keys` switch Riftway's browser gives every child (hex of UTF-8 `key\0value\0...`) right after crash reporting starts in GPU, utility and zygote-forked children, and leaves the switch out of the `switch-N` keys. On Windows chrome_elf has set them already. No API change. | CR11 |
 | [`cef/0013-gpu-info-and-hardware-acceleration.patch`](patches/cef/0013-gpu-info-and-hardware-acceleration.patch) | `chromium/src/cef` | Adds the static `CefBrowserHost::GetGpuInfo` (with the client callback `CefGpuInfoCallback`), `GetGpuFeatureStatus` and `IsHardwareAccelerationEnabled` (`cef_browser_host_get_gpu_info`, `_get_gpu_feature_status`, `_is_hardware_acceleration_enabled`) and `CefBrowserProcessHandler::OnGpuInfoUpdate`, as Electron's `getGPUInfo`, `getGPUFeatureStatus`, `isHardwareAccelerationEnabled` and `gpu-info-update`: `gpu::GPUInfo` enumerated as Electron's `GPUInfoEnumerator`, basic info from `gpu::CollectBasicGraphicsInfo` off the UI thread, complete info (Windows, macOS) from `GpuDataManagerImpl::RequestGpuInfoIfNeeded` (DirectX and video), answered on the next update, at once when that info is already in, or after 10 s; `content::GetFeatureStatus`; `GpuDataManager::HardwareAccelerationEnabled`. A `content::GpuDataManagerObserver` that `CefContext` owns from context initialisation to shutdown reports the updates. `BUILD.gn` gains `//gpu/config`. | A24, A27 |
-| [`chromium/0014-renderer-scroll-bounce-switch.patch`](patches/chromium/0014-renderer-scroll-bounce-switch.patch) | `chromium/src` | `RenderThreadImpl::IsElasticOverscrollSupported` and `IsElasticOverscrollEnabledOnRoot` answer whether the renderer's command line has `--scroll-bounce`, so pages rubber-band only when asked: Electron's `scroll_bounce_flag.patch`. Oriel adds the switch through 0010's `OnBeforeRenderProcessLaunch` for a session created with `SessionOptions.ScrollBounce`, on macOS only. No API change. _(branch `mac-integration`; not yet built)_ | W55 |
+| [`chromium/0014-renderer-scroll-bounce-switch.patch`](patches/chromium/0014-renderer-scroll-bounce-switch.patch) | `chromium/src` | `RenderThreadImpl::IsElasticOverscrollSupported` and `IsElasticOverscrollEnabledOnRoot` answer whether the renderer's command line has `--scroll-bounce`, so pages rubber-band only when asked: Electron's `scroll_bounce_flag.patch`. Riftway adds the switch through 0010's `OnBeforeRenderProcessLaunch` for a session created with `SessionOptions.ScrollBounce`, on macOS only. No API change. _(branch `mac-integration`; not yet built)_ | W55 |
 
 CEF patches apply first, then Chromium patches (`patches/chromium/`, in `chromium/src`), each set in name order; the
 numbers are shared, so their order is the order they were written in. Later patches change the context of earlier ones
@@ -33,12 +33,12 @@ in `cef_browser_process_handler.h`, and 0013 follows 0009 in `cef_browser.h` and
 first, then puts them back in order.
 
 No patch needed: A23. CEF calls `on_context_initialized` from `cef_initialize`, before `[NSApp run]` finishes launching, but
-Oriel decides when its own `Ready` fires: on macOS it waits for its app delegate's `applicationDidFinishLaunching:`, which
+Riftway decides when its own `Ready` fires: on macOS it waits for its app delegate's `applicationDidFinishLaunching:`, which
 also carries Electron's `launchInfo` _(branch `mac-integration`)_.
 
 Not patched: T6 (export the tray through Chromium's `dbus::Bus`). `dbus::Bus` has no public accessor for its
 `DBusConnection`, and it runs on Chromium's D-Bus thread with its own dispatch, so exposing it means either a Chromium
-patch that hands libdbus's connection out (Oriel's tray handlers would then run on Chromium's D-Bus thread and be torn
+patch that hands libdbus's connection out (Riftway's tray handlers would then run on Chromium's D-Bus thread and be torn
 down by its shutdown) or a CEF API for exported objects, methods, properties and signals. Either is far more than the
 other patches, for a difference only in the item's unique bus name: the process, and so the PID a host reads, is the same.
 
@@ -58,12 +58,12 @@ The method is new API, so it follows CEF's API versioning: it is declared at `CE
 uses for API not yet released. Version 15400 and its hash do not change; libcef calls the method only when the client
 configured the next version (`CEF_API_IS_ADDED(CEF_NEXT)`), because an older client's struct has no slot for it.
 
-### How Oriel finds out
+### How Riftway finds out
 
 `CefRuntime.Load` asks libcef for the hash of version 999998 (`cef_api_hash`), which fixes the process's API version:
 
-- stock libcef: next is the same API as 15400, so its hash equals 15400's; Oriel runs as before;
-- patched libcef: the hash equals `CefPatchedApi.Hash*` ([`src/Oriel.Cef/CefPatchedApi.cs`](../../src/Oriel.Cef/CefPatchedApi.cs));
+- stock libcef: next is the same API as 15400, so its hash equals 15400's; Riftway runs as before;
+- patched libcef: the hash equals `CefPatchedApi.Hash*` ([`src/Riftway.Cef/CefPatchedApi.cs`](../../src/Riftway.Cef/CefPatchedApi.cs));
   `CefRuntime.IsPatched` is true, and `WindowDelegate` allocates `cef_window_delegate_next_t` (the stock struct plus
   `is_translucent`), since CEF refuses a `base.size` that is not the configured version's. The `cef_window_t` libcef
   hands out is then its next-version struct, `cef_window_next_t` (plus `set_event_listening_enabled`), and
@@ -80,7 +80,7 @@ configured the next version (`CEF_API_IS_ADDED(CEF_NEXT)`), because an older cli
   `cef_request_context_resolve_system_proxy` (0008), `cef_browser_host_get_process_accessibility_mode` / `_set_`
   (0009) and `cef_browser_host_get_gpu_info`, `_get_gpu_feature_status` and `_is_hardware_acceleration_enabled` (0013)
   are called only when patched;
-- any other hash: Oriel refuses to start, as for any API mismatch.
+- any other hash: Riftway refuses to start, as for any API mismatch.
 
 The generated bindings (`tools/cef-interop/generate.sh`) stay at 15400 and need no regenerating: the new member is
 outside that version, so it is hand-written. The native subprocess keeps configuring 15400, which a patched libcef
@@ -108,14 +108,14 @@ packages such as `libpipewire-0.3`.
 Every non-official build also needs `disable_fieldtrial_testing_config=true` in `GN_DEFINES` (`gn_args.py` sets it
 for official builds only). Without it Chromium applies `testing/variations/fieldtrial_testing_config.json`, which the
 stock download and Electron don't: on Windows its `BrowserDynamicCodeDisabled` stops the .NET JIT in the browser
-process, and `cef_initialize` fails with a CLR "Out of memory" (0xE0434352) or a stack overflow (0xC00000FD). Oriel
+process, and `cef_initialize` fails with a CLR "Out of memory" (0xE0434352) or a stack overflow (0xC00000FD). Riftway
 passes `--disable-field-trial-config` itself, which has the same effect on a libcef built without it.
 
 Before updating the checkout (a new CEF commit or Chromium), run `eng/cef/apply-patches.sh <download-dir> --revert`:
 automate-git runs `version_manager.py -a` after a Chromium change on a release branch, and that refuses `CEF_NEXT` in
 the headers. A changed CEF checkout re-copies `chromium/src/cef` and drops the patches; apply them again.
 
-Then check that the build's hashes are the ones Oriel expects:
+Then check that the build's hashes are the ones Riftway expects:
 
 ```sh
 python3 -c "import json; print(json.load(open('<download>/chromium/src/cef/cef_api_untracked.json'))['hashes']['999998'])"
@@ -134,17 +134,17 @@ For `apply-patches.sh` to apply the Chromium patches there too, copy the files t
 (`ui/gtk/os_settings_provider_gtk.cc`) from the checkout into the scratch `src`; they do not change the hashes.
 Update `CefPatchedApi.cs` and add any new struct members to it.
 
-## Running Oriel on the patched build
+## Running Riftway on the patched build
 
 Unpack the minimal distribution (`<download>/chromium/src/cef/binary_distrib/cef_binary_*_minimal.tar.bz2`) and point
-`ORIEL_CEF_DIR` at it: `eng/fetch-cef.sh`, and with it `eng/layout-linux.sh` and the native subprocess build, then
+`RIFTWAY_CEF_DIR` at it: `eng/fetch-cef.sh`, and with it `eng/layout-linux.sh` and the native subprocess build, then
 use it instead of the pinned stock download. In Docker:
 
 ```sh
-docker build -t oriel-linux-dev -f eng/docker/linux-dev.Dockerfile eng/docker   # has xcompmgr
-docker run --rm -v "$PWD":/src -v "$HOME/.cache/oriel/cef":/cef-cache -v <unpacked-distribution>:/cef-patched \
-  -e ORIEL_CEF_DIR=/cef-patched --shm-size=1g oriel-linux-dev \
-  /src/eng/docker/test-linux.sh samples/Oriel.WindowTest Oriel.WindowTest
+docker build -t riftway-linux-dev -f eng/docker/linux-dev.Dockerfile eng/docker   # has xcompmgr
+docker run --rm -v "$PWD":/src -v "$HOME/.cache/riftway/cef":/cef-cache -v <unpacked-distribution>:/cef-patched \
+  -e RIFTWAY_CEF_DIR=/cef-patched --shm-size=1g riftway-linux-dev \
+  /src/eng/docker/test-linux.sh samples/Riftway.WindowTest Riftway.WindowTest
 ```
 
 WindowTest's `LinuxTransparencyAsync` runs its transparency checks only when `CefRuntime.IsPatched`; with stock CEF it
@@ -164,7 +164,7 @@ profile puts every process in the container under a filter, so the check counts 
 ### Wiring
 
 - `BrowserWindow.ApplyLinuxEnabled` calls `LinuxCefPatches.SetWindowInputEnabled(_window, _enabled.Enabled)` first
-  and returns when it is true: a patched libcef blocks input in Views (crossing events and keys included) and Oriel
+  and returns when it is true: a patched libcef blocks input in Views (crossing events and keys included) and Riftway
   adds neither the X11 input cover nor its key filter, as Electron relies on `DisableEventListening` alone. With stock
   CEF the cover and the dropped keys stay.
 - `DownloadSnapshot.Read` adds 0005's fields as `Extras`; `DownloadItem` answers `HasUserGesture`, `GetLastModifiedTime`,
@@ -174,22 +174,22 @@ profile puts every process in the container under a filter, so the check counts 
   `PlatformNotSupportedException` (Electron's own errors are kept for the patched path). Stock CEF's only net log is
   Chromium's `--log-net-log=<path>` switch, read when the network service starts: every profile, the whole run, with
   `--net-log-capture-mode` and `--net-log-max-size-mb`; CEF passes it through.
-- `OrielApp.ChildProcessGone` is raised from 0007's callback with Electron's details (`ChildProcessGoneFrom`, the same
+- `RiftwayApp.ChildProcessGone` is raised from 0007's callback with Electron's details (`ChildProcessGoneFrom`, the same
   reason strings as `render-process-gone`); never with stock CEF.
-- `Session.SetProxyAsync` and `OrielApp.SetProxyAsync` write Electron's `ProxyConfigDictionary` choice to the profile's
+- `Session.SetProxyAsync` and `RiftwayApp.SetProxyAsync` write Electron's `ProxyConfigDictionary` choice to the profile's
   or the global `proxy` preference on stock CEF too, and reset it when a session or the app starts, as Electron keeps it
-  in memory. `Session.ResolveProxyAsync` and `OrielApp.ResolveProxyAsync` call 0008, and throw
+  in memory. `Session.ResolveProxyAsync` and `RiftwayApp.ResolveProxyAsync` call 0008, and throw
   `PlatformNotSupportedException` with stock CEF.
-- `OrielApp`'s accessibility members use 0009's process-wide mode when patched (`AccessibilityModes` maps Electron's
+- `RiftwayApp`'s accessibility members use 0009's process-wide mode when patched (`AccessibilityModes` maps Electron's
   feature names); with stock CEF they keep the per-page `set_accessibility_state` path, and
   `SetAccessibilitySupportFeatures` throws `PlatformNotSupportedException`.
 - `Session.OnBeforeRenderProcessLaunch` answers 0010's callback: a renderer whose profile an unsandboxed session
   (`SessionOptions.Sandbox = false`) shares, by `is_sharing_with`, gets `--no-sandbox`, and on Linux `--no-zygote`, as
   Electron's `AppendExtraCommandLineSwitches`. With stock CEF, creating such a session in a sandboxed app throws
   `PlatformNotSupportedException` rather than unsandboxing every renderer.
-- 0012 changes no Oriel code: `CrashReporterNative.OnChildProcessLaunch` already gives every child
-  `--oriel-crash-keys`, and a patched libcef sets those keys in GPU, utility and zygote children itself.
-- `OrielApp.GetGpuInfoAsync` calls 0013's `GetGpuInfo` and turns the dictionary into JSON (`cef_write_json` without
+- 0012 changes no Riftway code: `CrashReporterNative.OnChildProcessLaunch` already gives every child
+  `--riftway-crash-keys`, and a patched libcef sets those keys in GPU, utility and zygote children itself.
+- `RiftwayApp.GetGpuInfoAsync` calls 0013's `GetGpuInfo` and turns the dictionary into JSON (`cef_write_json` without
   binary values); `GetGpuFeatureStatus` (synchronous) and `GetGpuFeatureStatusAsync` read `GetGpuFeatureStatus`;
   `IsHardwareAccelerationEnabled` asks Chromium once ready; `GpuInfoUpdate` is raised from `on_gpu_info_update`. With
   stock CEF the hidden `chrome://gpu` page answers the first two, `GetGpuFeatureStatus` throws

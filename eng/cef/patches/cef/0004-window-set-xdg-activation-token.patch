@@ -1,4 +1,4 @@
-Oriel CEF patch 0004: CefWindow::SetXdgActivationToken.
+Riftway CEF patch 0004: CefWindow::SetXdgActivationToken.
 
 Lets a client hand Chromium an XDG activation token, as Chromium's own
 StatusIconLinuxDbus::OnProvideXdgActivationToken does with the token a status
@@ -8,7 +8,7 @@ X11, xdg-activation on Wayland), so a window that a tray click opens gets
 focus. A static method (cef_window_set_xdg_activation_token) at CEF_NEXT
 (999998): API version 15400 and its hash are unchanged.
 
-Resolves: Oriel docs/DRIFT.md T5 (branch linux-tray).
+Resolves: Riftway docs/DRIFT.md T5 (branch linux-tray).
 Base: CEF a03e714 (branch 8037, CEF 154) with 0001-0002. Applies in chromium/src/cef.
 
 diff --git a/include/views/cef_window.h b/include/views/cef_window.h

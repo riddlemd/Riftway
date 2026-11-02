@@ -9,34 +9,34 @@
     <RemoveDir Directories="$(_DeepCleanOutput);$(_DeepCleanIntermediate)" />
   </Target>
 
-  <!-- In-repo apps reference Oriel by project, so its buildTransitive targets are imported here; with no
-       Oriel.Runtime package, the CEF framework comes from eng/fetch-cef.sh's cache and the helper from
-       src/Oriel.Subprocess.Native/build.sh. dotnet build|run|watch -p:OrielMacBundle=true runs an app as a bundle on a Mac; dotnet publish -r osx-*
-       -p:OrielMacBundle=true lays the publish out as one. -->
-  <Import Project="src/Oriel/buildTransitive/Oriel.targets" Condition="'$(OrielMacBundle)' == 'true' and '$(OutputType)' == 'Exe'" />
+  <!-- In-repo apps reference Riftway by project, so its buildTransitive targets are imported here; with no
+       Riftway.Runtime package, the CEF framework comes from eng/fetch-cef.sh's cache and the helper from
+       src/Riftway.Subprocess.Native/build.sh. dotnet build|run|watch -p:RiftwayMacBundle=true runs an app as a bundle on a Mac; dotnet publish -r osx-*
+       -p:RiftwayMacBundle=true lays the publish out as one. -->
+  <Import Project="src/Riftway/buildTransitive/Riftway.targets" Condition="'$(RiftwayMacBundle)' == 'true' and '$(OutputType)' == 'Exe'" />
 
-  <Target Name="_OrielRepoMacInputs" BeforeTargets="OrielMacDevBundle;OrielMacLayout" Condition="'$(OrielMacBundle)' == 'true' and '$(OrielCefFramework)' == ''">
+  <Target Name="_RiftwayRepoMacInputs" BeforeTargets="RiftwayMacDevBundle;RiftwayMacLayout" Condition="'$(RiftwayMacBundle)' == 'true' and '$(RiftwayCefFramework)' == ''">
     <PropertyGroup>
       <!-- A publish's RID picks the CEF build; a dev build runs on this Mac. -->
-      <_OrielRepoCefPlatform Condition="'$(RuntimeIdentifier)' == 'osx-arm64'">macosarm64</_OrielRepoCefPlatform>
-      <_OrielRepoCefPlatform Condition="'$(RuntimeIdentifier)' == 'osx-x64'">macosx64</_OrielRepoCefPlatform>
-      <_OrielRepoCefPlatform Condition="'$(_OrielRepoCefPlatform)' == '' and '$([System.Runtime.InteropServices.RuntimeInformation]::OSArchitecture)' == 'Arm64'">macosarm64</_OrielRepoCefPlatform>
-      <_OrielRepoCefPlatform Condition="'$(_OrielRepoCefPlatform)' == ''">macosx64</_OrielRepoCefPlatform>
-      <_OrielRepoRid Condition="'$(_OrielRepoCefPlatform)' == 'macosarm64'">osx-arm64</_OrielRepoRid>
-      <_OrielRepoRid Condition="'$(_OrielRepoRid)' == ''">osx-x64</_OrielRepoRid>
-      <_OrielRepoHelperDir>$(MSBuildThisFileDirectory)artifacts/subprocess-$(_OrielRepoRid)/</_OrielRepoHelperDir>
+      <_RiftwayRepoCefPlatform Condition="'$(RuntimeIdentifier)' == 'osx-arm64'">macosarm64</_RiftwayRepoCefPlatform>
+      <_RiftwayRepoCefPlatform Condition="'$(RuntimeIdentifier)' == 'osx-x64'">macosx64</_RiftwayRepoCefPlatform>
+      <_RiftwayRepoCefPlatform Condition="'$(_RiftwayRepoCefPlatform)' == '' and '$([System.Runtime.InteropServices.RuntimeInformation]::OSArchitecture)' == 'Arm64'">macosarm64</_RiftwayRepoCefPlatform>
+      <_RiftwayRepoCefPlatform Condition="'$(_RiftwayRepoCefPlatform)' == ''">macosx64</_RiftwayRepoCefPlatform>
+      <_RiftwayRepoRid Condition="'$(_RiftwayRepoCefPlatform)' == 'macosarm64'">osx-arm64</_RiftwayRepoRid>
+      <_RiftwayRepoRid Condition="'$(_RiftwayRepoRid)' == ''">osx-x64</_RiftwayRepoRid>
+      <_RiftwayRepoHelperDir>$(MSBuildThisFileDirectory)artifacts/subprocess-$(_RiftwayRepoRid)/</_RiftwayRepoHelperDir>
     </PropertyGroup>
-    <Exec Command="&quot;$(MSBuildThisFileDirectory)eng/fetch-cef.sh&quot; $(_OrielRepoCefPlatform)" ConsoleToMSBuild="true" StandardOutputImportance="low">
-      <Output TaskParameter="ConsoleOutput" PropertyName="_OrielRepoCef" />
+    <Exec Command="&quot;$(MSBuildThisFileDirectory)eng/fetch-cef.sh&quot; $(_RiftwayRepoCefPlatform)" ConsoleToMSBuild="true" StandardOutputImportance="low">
+      <Output TaskParameter="ConsoleOutput" PropertyName="_RiftwayRepoCef" />
     </Exec>
     <!-- The native helper (sandbox-capable); rebuilt when its source changes. -->
-    <Exec Condition="!Exists('$(_OrielRepoHelperDir)Oriel.Subprocess') or $([System.IO.File]::GetLastWriteTime('$(MSBuildThisFileDirectory)src/Oriel.Subprocess.Native/subprocess.c').Ticks) &gt; $([System.IO.File]::GetLastWriteTime('$(_OrielRepoHelperDir)Oriel.Subprocess').Ticks)"
-          Command="&quot;$(MSBuildThisFileDirectory)src/Oriel.Subprocess.Native/build.sh&quot; &quot;$(_OrielRepoHelperDir)Oriel.Subprocess&quot; $(_OrielRepoCefPlatform)" StandardOutputImportance="low" />
+    <Exec Condition="!Exists('$(_RiftwayRepoHelperDir)Riftway.Subprocess') or $([System.IO.File]::GetLastWriteTime('$(MSBuildThisFileDirectory)src/Riftway.Subprocess.Native/subprocess.c').Ticks) &gt; $([System.IO.File]::GetLastWriteTime('$(_RiftwayRepoHelperDir)Riftway.Subprocess').Ticks)"
+          Command="&quot;$(MSBuildThisFileDirectory)src/Riftway.Subprocess.Native/build.sh&quot; &quot;$(_RiftwayRepoHelperDir)Riftway.Subprocess&quot; $(_RiftwayRepoCefPlatform)" StandardOutputImportance="low" />
     <PropertyGroup>
-      <OrielCefFramework>$(_OrielRepoCef)/Release/Chromium Embedded Framework.framework</OrielCefFramework>
-      <OrielMacHelper>$(_OrielRepoHelperDir)Oriel.Subprocess</OrielMacHelper>
+      <RiftwayCefFramework>$(_RiftwayRepoCef)/Release/Chromium Embedded Framework.framework</RiftwayCefFramework>
+      <RiftwayMacHelper>$(_RiftwayRepoHelperDir)Riftway.Subprocess</RiftwayMacHelper>
     </PropertyGroup>
   </Target>
 
-  <Import Project="eng/windows-layout.targets" Condition="'$(OrielWindowsLayout)' == 'true'" />
+  <Import Project="eng/windows-layout.targets" Condition="'$(RiftwayWindowsLayout)' == 'true'" />
 </Project>

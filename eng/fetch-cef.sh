@@ -2,11 +2,11 @@
 # Downloads the pinned stock CEF minimal distribution for one platform and prints its directory.
 # Cached outside the repo so every worktree shares one copy.
 # Usage: eng/fetch-cef.sh [platform]   (default: this machine; e.g. macosarm64, linux64, windows64)
-#   ORIEL_CEF_DIR: an unpacked minimal distribution to use instead, such as a build with eng/cef's patches.
+#   RIFTWAY_CEF_DIR: an unpacked minimal distribution to use instead, such as a build with eng/cef's patches.
 set -euo pipefail
-if [ -n "${ORIEL_CEF_DIR:-}" ]; then
-  [ -f "$ORIEL_CEF_DIR/include/cef_api_hash.h" ] || { echo "ORIEL_CEF_DIR is not a CEF distribution: $ORIEL_CEF_DIR" >&2; exit 1; }
-  echo "$ORIEL_CEF_DIR"
+if [ -n "${RIFTWAY_CEF_DIR:-}" ]; then
+  [ -f "$RIFTWAY_CEF_DIR/include/cef_api_hash.h" ] || { echo "RIFTWAY_CEF_DIR is not a CEF distribution: $RIFTWAY_CEF_DIR" >&2; exit 1; }
+  echo "$RIFTWAY_CEF_DIR"
   exit 0
 fi
 root="$(cd "$(dirname "$0")" && pwd)"
@@ -34,7 +34,7 @@ c=json.load(open('$config'))
 print(c['version'], c['cdn'], c['minimal']['$platform'])" | tr -d '\r')
 
 name="cef_binary_${version}_${platform}_minimal"
-cache="${ORIEL_CEF_CACHE:-$HOME/.cache/oriel/cef}"
+cache="${RIFTWAY_CEF_CACHE:-$HOME/.cache/riftway/cef}"
 # A C:\ cache path reads as a remote host to tar and gets its hash "\"-escaped by sha1sum.
 if command -v cygpath >/dev/null; then cache="$(cygpath -u "$cache")"; fi
 dir="$cache/$name"

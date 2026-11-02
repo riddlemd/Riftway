@@ -1,4 +1,4 @@
-Oriel CEF patch 0001: CefWindowDelegate::IsTranslucent.
+Riftway CEF patch 0001: CefWindowDelegate::IsTranslucent.
 
 Lets a client create a top-level Views window translucent
 (views::Widget::InitParams::opacity = kTranslucent), as Electron's
@@ -6,7 +6,7 @@ NativeWindowViews does for `transparent: true`. On Linux X11 Chromium then
 picks a 32-bit ARGB visual whenever a compositing manager runs. The method is
 API at CEF_NEXT (999998): API version 15400 and its hash are unchanged.
 
-Resolves: Oriel docs/DRIFT.md W24 (Linux; and macOS's InitParams::opacity).
+Resolves: Riftway docs/DRIFT.md W24 (Linux; and macOS's InitParams::opacity).
 Base: CEF a03e714 (branch 8037, CEF 154). Applies in chromium/src/cef.
 
 diff --git a/include/views/cef_window_delegate.h b/include/views/cef_window_delegate.h

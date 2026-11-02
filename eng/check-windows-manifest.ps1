@@ -10,8 +10,8 @@ $Win8OrLater = @{
     '8e0f7a12-bfb3-4fe8-b9a5-48fd50a15a9a' = 'Windows 10/11'
 }
 
-if (-not ('Oriel.ExeManifest' -as [type])) {
-    Add-Type -Namespace Oriel -Name ExeManifest -MemberDefinition @'
+if (-not ('Riftway.ExeManifest' -as [type])) {
+    Add-Type -Namespace Riftway -Name ExeManifest -MemberDefinition @'
 [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
 static extern IntPtr LoadLibraryExW(string path, IntPtr file, uint flags);
 [DllImport("kernel32.dll")] static extern bool FreeLibrary(IntPtr module);
@@ -37,7 +37,7 @@ public static string Read(string path) {
 }
 
 $path = (Resolve-Path $Exe).Path
-$xml = [Oriel.ExeManifest]::Read($path)
+$xml = [Riftway.ExeManifest]::Read($path)
 if (-not $xml) { throw "$path has no embedded manifest; it must declare Windows 8 or later in supportedOS." }
 
 $ns = @{ c = 'urn:schemas-microsoft-com:compatibility.v1' }

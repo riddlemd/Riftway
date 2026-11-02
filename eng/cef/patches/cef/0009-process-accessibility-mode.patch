@@ -1,4 +1,4 @@
-Oriel CEF patch 0009: the browser process's accessibility mode.
+Riftway CEF patch 0009: the browser process's accessibility mode.
 
 Adds the static CefBrowserHost::GetProcessAccessibilityMode and
 SetProcessAccessibilityMode (cef_browser_host_get_process_accessibility_mode,
@@ -15,7 +15,7 @@ the setter adds. Chromium has no observer for removed flags. CefContext owns
 the state from context initialisation to shutdown. API at CEF_NEXT (999998):
 API version 15400 and its hash are unchanged.
 
-Resolves: Oriel docs/DRIFT.md A28.
+Resolves: Riftway docs/DRIFT.md A28.
 Base: CEF a03e714 (branch 8037, CEF 154) with 0001-0008. Applies in chromium/src/cef.
 
 diff --git a/BUILD.gn b/BUILD.gn

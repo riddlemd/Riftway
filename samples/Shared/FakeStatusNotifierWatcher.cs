@@ -2,7 +2,7 @@ using System.Collections.Concurrent;
 using System.Runtime.InteropServices;
 using System.Text;
 
-namespace Oriel.Samples;
+namespace Riftway.Samples;
 
 /// <summary>A D-Bus variant as the fake reads it.</summary>
 internal sealed record FakeVariant(string Signature, object? Value);
@@ -14,7 +14,7 @@ internal sealed record FakeSignal(string Sender, string Path, string Interface, 
 /// answers <c>IsStatusNotifierHostRegistered</c> and records <c>RegisterStatusNotifierItem</c>; calls the item and its
 /// menu as a panel would and records every broadcast signal.</summary>
 /// <remarks>Its own libdbus connection and thread, and its own reader, driven by the wire's type codes rather than by
-/// the signatures Oriel writes with, so the two do not share a mistake.</remarks>
+/// the signatures Riftway writes with, so the two do not share a mistake.</remarks>
 internal sealed unsafe partial class FakeStatusNotifierWatcher : IDisposable
 {
     private const string LibDBus = "libdbus-1.so.3";

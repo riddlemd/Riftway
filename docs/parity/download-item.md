@@ -22,14 +22,14 @@ Percentages are over the non-n/a items; the second counts a partial item as half
 
 ### Instance events
 
-| Electron | Oriel | Status | Note |
+| Electron | Riftway | Status | Note |
 |---|---|---|---|
 | `updated` | `Updated` | done | `progressing`, or `interrupted` when Chromium's resume-mode table says it can resume (`IsDownloadDone`, ported over the interrupt reason and URL). |
 | `done` | `Done` | done | Once: `completed`, `cancelled`, or an `interrupted` it cannot resume from. |
 
 ### Instance methods
 
-| Electron | Oriel | Status | Note |
+| Electron | Riftway | Status | Note |
 |---|---|---|---|
 | `setSavePath(path)` | `SetSavePath` | done | Stored whenever called, honoured only during `WillDownload`, as Electron; missing directories are made. |
 | `getSavePath()` | `GetSavePath` | done | Empty until set or chosen in the dialog. |
@@ -42,8 +42,8 @@ Percentages are over the non-n/a items; the second counts a partial item as half
 | `cancel()` | `Cancel` | partial | An interrupted download cannot be cancelled (E39). |
 | `getURL()` | `GetUrl` | done |  |
 | `getMimeType()` | `GetMimeType` | done |  |
-| `hasUserGesture()` | `HasUserGesture` | partial | Chromium's with Oriel's CEF patch 0005; always false with stock CEF (E13). |
-| `getInitiatorOrigin()` | `GetInitiatorOrigin` | partial | `url::Origin::Serialize` with Oriel's CEF patch 0005; always empty with stock CEF (E40). |
+| `hasUserGesture()` | `HasUserGesture` | partial | Chromium's with Riftway's CEF patch 0005; always false with stock CEF (E13). |
+| `getInitiatorOrigin()` | `GetInitiatorOrigin` | partial | `url::Origin::Serialize` with Riftway's CEF patch 0005; always empty with stock CEF (E40). |
 | `getFilename()` | `GetFilename` | partial | The generated name, which the dialog's choice does not change, as Electron; charset fallback differs (E41). |
 | `getCurrentBytesPerSecond()` | `GetCurrentBytesPerSecond` | done |  |
 | `getTotalBytes()` | `GetTotalBytes` | done | 0 when unknown. |
@@ -52,21 +52,21 @@ Percentages are over the non-n/a items; the second counts a partial item as half
 | `getContentDisposition()` | `GetContentDisposition` | done |  |
 | `getState()` | `GetState` | done | `DownloadState`. |
 | `getURLChain()` | `GetUrlChain` | partial | Original and final URLs only (E15). |
-| `getLastModifiedTime()` | `GetLastModifiedTime` | partial | The response's with Oriel's CEF patch 0005; always empty with stock CEF (E13). |
-| `getETag()` | `GetETag` | partial | The response's with Oriel's CEF patch 0005; always empty with stock CEF (E13). |
+| `getLastModifiedTime()` | `GetLastModifiedTime` | partial | The response's with Riftway's CEF patch 0005; always empty with stock CEF (E13). |
+| `getETag()` | `GetETag` | partial | The response's with Riftway's CEF patch 0005; always empty with stock CEF (E13). |
 | `getStartTime()` | `GetStartTime` | done | Unix seconds. |
 | `getEndTime()` | `GetEndTime` | done | 0 until the download ends. |
 
 ### Instance properties
 
-| Electron | Oriel | Status | Note |
+| Electron | Riftway | Status | Note |
 |---|---|---|---|
 | `savePath` | `SavePath` | done |  |
 
 ### Session download API
 
-| Electron | Oriel | Status | Note |
+| Electron | Riftway | Status | Note |
 |---|---|---|---|
-| `will-download` | `Session.WillDownload` | partial | `Cancel` is `preventDefault()` and the item reports `cancelled`; `WebContents` is null for `Session.DownloadUrl`; `Frame` with Oriel's CEF patch 0005, null with stock CEF (E40). |
+| `will-download` | `Session.WillDownload` | partial | `Cancel` is `preventDefault()` and the item reports `cancelled`; `WebContents` is null for `Session.DownloadUrl`; `Frame` with Riftway's CEF patch 0005, null with stock CEF (E40). |
 | `ses.downloadURL(url[, options])` | `Session.DownloadUrl` | partial | `headers` honoured; started from a hidden page (E37). |
 | `ses.createInterruptedDownload(options)` | — | missing | E16. |

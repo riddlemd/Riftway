@@ -1,6 +1,6 @@
-# Oriel plan
+# Riftway plan
 
-Oriel is Electron for .NET: desktop apps written in C#, rendered by one Chromium everywhere, with
+Riftway is Electron for .NET: desktop apps written in C#, rendered by one Chromium everywhere, with
 Blazor Hybrid as the default UI model. Windows, macOS and Linux; x64 and arm64.
 
 ## Principles
@@ -23,17 +23,17 @@ Blazor Hybrid as the default UI model. Windows, macOS and Linux; x64 and arm64.
 
 ```
 App (.NET exe, main process — Electron's "main")
-├─ Oriel.Blazor     WebViewManager per window, Blazor dispatcher, static assets, DI
-├─ Oriel            OrielApp, BrowserWindow, WebContents, Session, Protocol, Ipc, Dialog, Screen, …
-├─ Oriel.Cef        C# bindings over CEF's C API
-└─ libcef (Oriel.Runtime.<rid>)
-     └─ Oriel.Subprocess (native, C) — Chromium's zygote / renderer / GPU / utility processes
+├─ Riftway.Blazor     WebViewManager per window, Blazor dispatcher, static assets, DI
+├─ Riftway            RiftwayApp, BrowserWindow, WebContents, Session, Protocol, Ipc, Dialog, Screen, …
+├─ Riftway.Cef        C# bindings over CEF's C API
+└─ libcef (Riftway.Runtime.<rid>)
+     └─ Riftway.Subprocess (native, C) — Chromium's zygote / renderer / GPU / utility processes
 ```
 
-- **Main process is .NET.** `OrielApp.Run()` owns the main thread and runs CEF's message loop on it
-  (required on macOS; the same everywhere for one model). Windows are CEF Views windows, so Oriel
+- **Main process is .NET.** `RiftwayApp.Run()` owns the main thread and runs CEF's message loop on it
+  (required on macOS; the same everywhere for one model). Windows are CEF Views windows, so Riftway
   writes no per-OS windowing code.
-- **Subprocess is trivial and native.** `Oriel.Subprocess` only checks the API hash and calls
+- **Subprocess is trivial and native.** `Riftway.Subprocess` only checks the API hash and calls
   `cef_execute_process`. No .NET runs in Chromium's child processes — the Linux zygote requires a
   single-threaded process, which no .NET process is (see Risks). Electron's preload/`contextBridge`
   role is covered by a preload script injected from the main process (below), not by code in the
@@ -43,18 +43,18 @@ App (.NET exe, main process — Electron's "main")
 
 ## API shape
 
-Every Electron module maps to an Oriel type of the same name in PascalCase — `app` → `OrielApp`,
+Every Electron module maps to a Riftway type of the same name in PascalCase — `app` → `RiftwayApp`,
 `BrowserWindow`, `WebContents`, `Session`, `Protocol`, `IpcMain`, `Dialog`, `Menu`, `Tray`, … — with
 Electron's methods, events and option names. The full mapping, with where each implementation comes
 from, is [ELECTRON-PARITY.md](ELECTRON-PARITY.md).
 
-.NET additions on top: `OrielApp.CreateBuilder` hosting with `IServiceCollection`; every module also
+.NET additions on top: `RiftwayApp.CreateBuilder` hosting with `IServiceCollection`; every module also
 injectable (`IDialog`, `IScreen`, …) for Blazor components and tests; optional source-generated typed
 IPC contracts.
 
 ```csharp
-var builder = OrielApp.CreateBuilder(args);
-builder.Services.AddOrielBlazor();
+var builder = RiftwayApp.CreateBuilder(args);
+builder.Services.AddRiftwayBlazor();
 builder.Services.AddSingleton<SongLibrary>();
 
 var app = builder.Build();
@@ -78,31 +78,31 @@ Everything without renderer-side code, so the helper stays trivial:
   `POST` to the app's custom scheme.
 - **Main → page:** `CefFrame.ExecuteJavaScript` into a dispatcher the preload installs.
 - The preload runs in an isolated world (DevTools `Page.addScriptToEvaluateOnNewDocument` with a
-  world name) and builds `window.oriel` — `ipcRenderer` (`invoke` with promise replies, `send`,
+  world name) and builds `window.riftway` — `ipcRenderer` (`invoke` with promise replies, `send`,
   `on`), `contextBridge`, `webFrame`, `webUtils` — plus the channel Blazor's `blazor.webview.js`
   expects.
 
 ### Blazor Hybrid
 
-`Oriel.Blazor` subclasses `Microsoft.AspNetCore.Components.WebView.WebViewManager`, which needs:
+`Riftway.Blazor` subclasses `Microsoft.AspNetCore.Components.WebView.WebViewManager`, which needs:
 navigation to a base URI (`app://localhost/`), static files over a privileged custom scheme
 (`wwwroot`, Razor class library `_content/`, `blazor.webview.js`), the message channel above, and a
 `Dispatcher`. One manager per window; all windows share the app's `IServiceProvider`.
 
 ## Runtime and codecs
 
-Oriel starts on **stock CEF** — the Spotify CDN builds, repackaged as `Oriel.Runtime.<rid>`. That means
+Riftway starts on **stock CEF** — the Spotify CDN builds, repackaged as `Riftway.Runtime.<rid>`. That means
 open codecs only (AV1, VP9, VP8, Opus, Vorbis, FLAC, MP3) and no build farm until one is needed.
 
 Proprietary codecs (H.264, AAC; HEVC through the OS) come later as a **drop-in runtime variant**:
-`Oriel.Runtime.Codecs.<rid>`, CEF built from the same commit with
+`Riftway.Runtime.Codecs.<rid>`, CEF built from the same commit with
 `proprietary_codecs=true ffmpeg_branding=Chrome`. Swapping variants is a package or MSBuild property
-change (`<OrielRuntime>Codecs</OrielRuntime>`); app code and Oriel's assemblies do not change.
+change (`<RiftwayRuntime>Codecs</RiftwayRuntime>`); app code and Riftway's assemblies do not change.
 
 What keeps it drop-in:
 
 - **Same CEF commit, same C API.** Each variant is built from the exact commit of the stock release it
-  pairs with, so `cef_api_hash` matches. Oriel checks the hash at startup and fails clearly on a
+  pairs with, so `cef_api_hash` matches. Riftway checks the hash at startup and fails clearly on a
   mismatch.
 - **Same file layout.** Both variants ship the same files and bundle structure; packaging targets do
   not branch on the variant.
@@ -118,19 +118,19 @@ feed or built by the app is open.
 | | Goal | Done when |
 |---|---|---|
 | **M0** | Codec proof (done early, not blocking) | A CEF 154 macOS arm64 build from the stock release's commit plays all six probe streams, and swapping it in for stock libcef needs no other change |
-| **M1** | Hello window | `Oriel.Cef` bindings on CEF 154 (CefGlue core fork or own generator — decide in M1); NativeAOT helper; a Views window loads a URL on macOS, then Windows, then Linux (X11) |
-| **M2** | Core | Windows and views (`BaseWindow`, `BrowserWindow`, `View`, `WebContentsView`), `WebContents`, `WebFrameMain`, `NavigationHistory`, `Debugger`, IPC + `contextBridge`, `Protocol`, core `Session`, file `Dialog`, `Screen`, `OrielApp` lifecycle, command line, `window.open` handling |
-| **M3** | Blazor Hybrid | `Oriel.Blazor` with a sample app; multi-window; JS interop; `dotnet watch` story measured (macOS done: [todo.md](todo.md)) |
-| **M4** | Ship it | `Oriel.Runtime.<rid>` packages; MSBuild targets that assemble the macOS bundle + helpers, sign and notarise; Windows and Linux layouts; Velopack installers and `AutoUpdater`; fuses and a packed app archive; `CrashReporter`; Linux sandbox (AppArmor profile or documented `--no-sandbox`) — all on stock CEF |
+| **M1** | Hello window | `Riftway.Cef` bindings on CEF 154 (CefGlue core fork or own generator — decide in M1); NativeAOT helper; a Views window loads a URL on macOS, then Windows, then Linux (X11) |
+| **M2** | Core | Windows and views (`BaseWindow`, `BrowserWindow`, `View`, `WebContentsView`), `WebContents`, `WebFrameMain`, `NavigationHistory`, `Debugger`, IPC + `contextBridge`, `Protocol`, core `Session`, file `Dialog`, `Screen`, `RiftwayApp` lifecycle, command line, `window.open` handling |
+| **M3** | Blazor Hybrid | `Riftway.Blazor` with a sample app; multi-window; JS interop; `dotnet watch` story measured (macOS done: [todo.md](todo.md)) |
+| **M4** | Ship it | `Riftway.Runtime.<rid>` packages; MSBuild targets that assemble the macOS bundle + helpers, sign and notarise; Windows and Linux layouts; Velopack installers and `AutoUpdater`; fuses and a packed app archive; `CrashReporter`; Linux sandbox (AppArmor profile or documented `--no-sandbox`) — all on stock CEF |
 | **M5** | Desktop integration | `Menu`/`MenuItem`, `Tray`, `Notification`, `GlobalShortcut`, `Dock`, `Clipboard`, `Shell`, `NativeImage`, `NativeTheme`, `PowerMonitor`, `PowerSaveBlocker`, `SafeStorage`, `SystemPreferences`, message-box `Dialog`, `DesktopCapturer`, `ImageView` — on all three OSes |
 | **M6** | Session, network, processes | `Session` in full, `Cookies`, `WebRequest`, `DownloadItem`, `Net`, `ClientRequest`/`IncomingMessage`, `WebSocket`, `NetLog`, service workers, `Extensions`, `ContentTracing`, `UtilityProcess`/`ParentPort`/message ports, page-side `webFrame`/`webUtils` |
-| **M7** | Own CEF builds | CI builds of CEF for all six targets; `Oriel.Runtime.Codecs.<rid>` variant; Chromium/CEF patches: `<webview>`, corner-smoothing CSS, `SharedTexture`, built-in AI hooks; macOS `TouchBar`, `ShareMenu`, `InAppPurchase`, `PushNotifications` |
+| **M7** | Own CEF builds | CI builds of CEF for all six targets; `Riftway.Runtime.Codecs.<rid>` variant; Chromium/CEF patches: `<webview>`, corner-smoothing CSS, `SharedTexture`, built-in AI hooks; macOS `TouchBar`, `ShareMenu`, `InAppPurchase`, `PushNotifications` |
 
-M7 is where Oriel first needs its own CEF builds; the codec variant and the patches share that
+M7 is where Riftway first needs its own CEF builds; the codec variant and the patches share that
 pipeline. M2–M7 together cover every module in [ELECTRON-PARITY.md](ELECTRON-PARITY.md). M5 and M6 are
 independent of each other and can run in parallel.
 
-**Dogfooding:** KHost moves to Oriel once M4 lands, and keeps moving with each wave. Until the codec
+**Dogfooding:** KHost moves to Riftway once M4 lands, and keeps moving with each wave. Until the codec
 variant exists, its LocalScreen uses AV1 or VP9 + Opus streams (measured working in stock CEF 154).
 
 **Size of the job:** Electron's full surface on three OSes is roughly 12–18 months for one developer
@@ -145,16 +145,16 @@ with AI help, plus the ongoing Chromium cadence. Estimate, not measured.
 - **Wayland:** CEF Views on Wayland is still being fixed upstream; start on X11/XWayland.
 - **Native subprocess (decided, proven on Linux):** Chromium's Linux zygote CHECKs that its process
   is single-threaded, and every .NET process — NativeAOT included — has runtime threads. So the
-  subprocess is ~25 lines of C over CEF's own C API (`src/Oriel.Subprocess.Native`), prebuilt per
+  subprocess is ~25 lines of C over CEF's own C API (`src/Riftway.Subprocess.Native`), prebuilt per
   RID in the runtime package; app code stays C#. On Linux it runs the zygote and the sandbox
   (measured: renderers under seccomp-BPF in their own PID/net namespaces). macOS still uses the
-  NativeAOT `Oriel.Subprocess`; moving it to the native one comes with the macOS sandbox, which links
+  NativeAOT `Riftway.Subprocess`; moving it to the native one comes with the macOS sandbox, which links
   CEF's sandbox library into the helper.
 - **Linux sandbox:** Ubuntu 24.04+ blocks Chromium's sandbox unless an AppArmor profile is installed.
 - **Chromium/libyuv SIGILL on SME-without-SVE arm64 (Linux VMs on Apple M4+ hosts):** libyuv picks its
   `*_SME` YUV→RGB rows on HWCAP2_SME alone, but builds them with `-march=armv9-a+sme`, whose prologue
   runs an SVE `cntd`; the renderer dies ("Aw, Snap! SIGILL") on the first software-converted video
-  frame. Linux/Android arm64 only. Worked around in `Oriel.Subprocess.Native`: its own `getauxval`
+  frame. Linux/Android arm64 only. Worked around in `Riftway.Subprocess.Native`: its own `getauxval`
   interposes libcef.so's and clears HWCAP2 SME when SVE is absent (see README, Known issues). Remove it
   once fixed upstream; to file with libyuv/Chromium.
 - **macOS full screen blacks out other displays:** native full screen (`SetFullScreen`, the green

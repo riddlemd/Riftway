@@ -1,4 +1,4 @@
-Oriel Chromium patch 0012: elastic overscroll only for a renderer with --scroll-bounce.
+Riftway Chromium patch 0012: elastic overscroll only for a renderer with --scroll-bounce.
 
 macOS pages rubber-band when scrolled past their ends because the renderer
 reports elastic overscroll as supported (RenderThreadImpl::
@@ -6,11 +6,11 @@ IsElasticOverscrollSupported, IsElasticOverscrollEnabledOnRoot). Electron
 turns it off unless webPreferences.scrollBounce is set, which adds
 --scroll-bounce to the renderer's command line: both now answer whether the
 renderer's own command line has the switch, as Electron's
-scroll_bounce_flag.patch does. Oriel adds the switch through CEF patch 0010
+scroll_bounce_flag.patch does. Riftway adds the switch through CEF patch 0010
 for the renderers of a session created with SessionOptions.ScrollBounce.
 No CEF API change.
 
-Resolves: Oriel docs/DRIFT.md W55 (with 0010).
+Resolves: Riftway docs/DRIFT.md W55 (with 0010).
 Base: Chromium 154.0.8037.94 with CEF a03e714's patches. Applies in chromium/src.
 diff --git a/content/renderer/render_thread_impl.cc b/content/renderer/render_thread_impl.cc
 index a884b89..206da24 100644

@@ -1,4 +1,4 @@
-# Linux build-and-run environment for Oriel: .NET SDK, the NativeAOT toolchain, CEF's runtime
+# Linux build-and-run environment for Riftway: .NET SDK, the NativeAOT toolchain, CEF's runtime
 # libraries, and a headless X server with a window manager so Views windows get real decorations.
 # xcompmgr is the compositing manager WindowTest starts for transparent windows; x11-utils has xwininfo;
 # x11-xserver-utils has xrandr, which WindowTest's display-change checks drive. squashfs-tools and zstd are what
@@ -15,8 +15,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
       xcompmgr x11-utils x11-xserver-utils squashfs-tools zstd \
   && rm -rf /var/lib/apt/lists/*
 
-ENV ORIEL_CEF_CACHE=/cef-cache DOTNET_CLI_TELEMETRY_OPTOUT=1 DOTNET_NOLOGO=1
+ENV RIFTWAY_CEF_CACHE=/cef-cache DOTNET_CLI_TELEMETRY_OPTOUT=1 DOTNET_NOLOGO=1
 WORKDIR /work
 
 # Chromium refuses to sandbox as root, so sandboxed runs use this user.
-RUN useradd --create-home oriel
+RUN useradd --create-home riftway

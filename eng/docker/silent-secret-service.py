@@ -20,7 +20,7 @@ XML = """
   </interface>
 </node>
 """
-CALL_LOG = os.environ.get("ORIEL_SS_CALL_LOG")
+CALL_LOG = os.environ.get("RIFTWAY_SS_CALL_LOG")
 held = []  # Unanswered calls stay referenced, so the caller times out rather than getting an error.
 
 

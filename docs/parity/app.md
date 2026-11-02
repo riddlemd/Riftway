@@ -21,7 +21,7 @@ Percentages are over the non-n/a items; the second counts a partial item as half
 
 ### Events
 
-| Electron | Oriel | Status | Note |
+| Electron | Riftway | Status | Note |
 |---|---|---|---|
 | `will-finish-launching` | `WillFinishLaunching` | done | Windows, Linux: just before `Ready`, as Electron. macOS: the app delegate's `applicationWillFinishLaunching:`, before `Ready`, which waits for AppKit's launch _(branch `mac-integration`)_. |
 | `ready` | `Ready` | done | macOS: from `applicationDidFinishLaunching:`, with `LaunchInfo` (the launch notification's, as Electron's) _(branch `mac-integration`)_; `IsReady` turns true when CEF is, a moment before (A23). |
@@ -49,14 +49,14 @@ Percentages are over the non-n/a items; the second counts a partial item as half
 | `login` | `Login` | done | After the page's own. |
 | `gpu-info-update` | — | missing | CEF exposes no GpuDataManager observer (A27). |
 | `render-process-gone` | `RenderProcessGone` | done | With the page and its details, before the page's own event, as Electron's forwarding listener runs first. |
-| `child-process-gone` | `ChildProcessGone` | partial | Electron's details, from a `BrowserChildProcessObserver` with Oriel's CEF patch 0007; never raised with stock CEF (A31). |
-| `accessibility-support-changed` | `AccessibilitySupportChanged` | partial | Raised by the setters; with Oriel's CEF patch 0009 also when Chromium turns accessibility on for an assistive technology; with stock CEF a screen reader is not seen (A28). |
+| `child-process-gone` | `ChildProcessGone` | partial | Electron's details, from a `BrowserChildProcessObserver` with Riftway's CEF patch 0007; never raised with stock CEF (A31). |
+| `accessibility-support-changed` | `AccessibilitySupportChanged` | partial | Raised by the setters; with Riftway's CEF patch 0009 also when Chromium turns accessibility on for an assistive technology; with stock CEF a screen reader is not seen (A28). |
 | `session-created` | `SessionCreated` | done |  |
 | `second-instance` | `SecondInstance` | partial | The command line is one string, not `argv` (A29); on Windows the working directory is the app's folder (A38). |
 
 ### Methods
 
-| Electron | Oriel | Status | Note |
+| Electron | Riftway | Status | Note |
 |---|---|---|---|
 | `quit()` | `Quit` | done |  |
 | `exit([exitCode])` | `Exit` | done |  |
@@ -69,7 +69,7 @@ Percentages are over the non-n/a items; the second counts a partial item as half
 | `isHidden()` | `IsHidden` | done | macOS. |
 | `show()` | `Show` | done | macOS. |
 | `setAppLogsPath([path])` | `SetAppLogsPath` | done | Made and resolved as `PathService::Override`; macOS default from `CFBundleName`, printed `(null)` when there is none, as Electron's `%@`. |
-| `getAppPath()` | `GetAppPath` | done | The entry assembly's directory, Oriel's counterpart of the package directory. |
+| `getAppPath()` | `GetAppPath` | done | The entry assembly's directory, Riftway's counterpart of the package directory. |
 | `getPath(name)` | `GetPath` | done | Every Electron name, `cache`, `userCache` and `userDesktop` included; `assets` fails on macOS and `recent` off Windows, as Electron; `userData`, `userCache`, `logs`, `crashDumps` and `recent` are made on first use; answers cached until the next `SetPath`, as PathService. A14: `assets` checked on Windows only. |
 | `getFileIcon(path[, options])` | `GetFileIcon` | partial | Windows and macOS; not Linux (A12). macOS by content type, as `icon_loader_mac.mm`, at 1x and 2x; `large` faults instead of crashing (A40). |
 | `setPath(name, path)` | `SetPath` | done | A missing directory is accepted and not made, as Electron's code and spec (its docs say otherwise). |
@@ -116,27 +116,27 @@ Percentages are over the non-n/a items; the second counts a partial item as half
 | `getBadgeCount()` | `GetBadgeCount` | done |  |
 | `getLoginItemSettings([options])` | `GetLoginItemSettings` | done | Windows registry; macOS SMAppService with `Status` and `WasOpenedAtLogin`; all off on Linux, as Electron. |
 | `setLoginItemSettings(settings)` | `SetLoginItemSettings` | done | Windows; macOS SMAppService (register / unregister); no-op on Linux. |
-| `isAccessibilitySupportEnabled()` | `IsAccessibilitySupportEnabled` | partial | Chromium's process-wide mode with Oriel's CEF patch 0009; with stock CEF only what `SetAccessibilitySupportEnabled` set (A28). |
-| `setAccessibilitySupportEnabled(enabled)` | `SetAccessibilitySupportEnabled` | partial | One process-wide scoped mode with Oriel's CEF patch 0009; with stock CEF per page, and off also clears a screen reader's mode (A28). |
-| `getAccessibilitySupportFeatures()` | `GetAccessibilitySupportFeatures` | partial | Chromium's mode flags with Oriel's CEF patch 0009; with stock CEF the complete mode's names while Oriel's is on (A28). |
-| `setAccessibilitySupportFeatures(features)` | `SetAccessibilitySupportFeatures` | partial | With Oriel's CEF patch 0009; `PlatformNotSupportedException` with stock CEF (A28). |
+| `isAccessibilitySupportEnabled()` | `IsAccessibilitySupportEnabled` | partial | Chromium's process-wide mode with Riftway's CEF patch 0009; with stock CEF only what `SetAccessibilitySupportEnabled` set (A28). |
+| `setAccessibilitySupportEnabled(enabled)` | `SetAccessibilitySupportEnabled` | partial | One process-wide scoped mode with Riftway's CEF patch 0009; with stock CEF per page, and off also clears a screen reader's mode (A28). |
+| `getAccessibilitySupportFeatures()` | `GetAccessibilitySupportFeatures` | partial | Chromium's mode flags with Riftway's CEF patch 0009; with stock CEF the complete mode's names while Riftway's is on (A28). |
+| `setAccessibilitySupportFeatures(features)` | `SetAccessibilitySupportFeatures` | partial | With Riftway's CEF patch 0009; `PlatformNotSupportedException` with stock CEF (A28). |
 | `showAboutPanel()` | `ShowAboutPanel` | done | macOS standard panel; Linux GtkAboutDialog and Windows information box (not run yet). |
 | `setAboutPanelOptions(options)` | `SetAboutPanelOptions` | done |  |
 | `isEmojiPanelSupported()` | `IsEmojiPanelSupported` | done | macOS, Windows 10 1803+. |
 | `showEmojiPanel()` | `ShowEmojiPanel` | partial | macOS character palette; Windows sends Win+. as Electron, unverified (A25). |
-| `startAccessingSecurityScopedResource(bookmarkData)` | — | n/a | Mac App Store builds only; Oriel has none. |
+| `startAccessingSecurityScopedResource(bookmarkData)` | — | n/a | Mac App Store builds only; Riftway has none. |
 | `enableSandbox()` | `EnableSandbox` | partial | A1. |
 | `isInApplicationsFolder()` | `IsInApplicationsFolder` | done | macOS. |
 | `moveToApplicationsFolder([options])` | `MoveToApplicationsFolder` | partial | Ported with `ConflictHandler`; the privileged copy, relaunch and disk-image detach not yet run (A33). |
 | `isSecureKeyboardEntryEnabled()` | `IsSecureKeyboardEntryEnabled` | done | macOS. |
-| `setSecureKeyboardEntryEnabled(enabled)` | `SetSecureKeyboardEntryEnabled` | partial | Oriel's switch is separate from Chromium's password-field counter (A37). |
+| `setSecureKeyboardEntryEnabled(enabled)` | `SetSecureKeyboardEntryEnabled` | partial | Riftway's switch is separate from Chromium's password-field counter (A37). |
 | `setProxy(config)` | `SetProxyAsync` | partial | The global `proxy` preference, which the system network context follows, with Electron's choices; completes before the context applies it (A35). |
-| `resolveProxy(url)` | `ResolveProxyAsync` | partial | The system network context's lookup with Oriel's CEF patch 0008; `PlatformNotSupportedException` with stock CEF (A35). |
+| `resolveProxy(url)` | `ResolveProxyAsync` | partial | The system network context's lookup with Riftway's CEF patch 0008; `PlatformNotSupportedException` with stock CEF (A35). |
 | `setClientCertRequestPasswordHandler(handler)` | — | missing | Linux NSS (A34). |
 
 ### Properties
 
-| Electron | Oriel | Status | Note |
+| Electron | Riftway | Status | Note |
 |---|---|---|---|
 | `accessibilitySupportEnabled` | `AccessibilitySupportEnabled` | partial | A28. |
 | `applicationMenu` | `ApplicationMenu` | done | `Menu.GetApplicationMenu` / `SetApplicationMenu`. |

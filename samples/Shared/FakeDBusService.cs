@@ -2,7 +2,7 @@ using System.Collections.Concurrent;
 using System.Runtime.InteropServices;
 using System.Text;
 
-namespace Oriel.Samples;
+namespace Riftway.Samples;
 
 /// <summary>A method call a <see cref="FakeDBusService"/> received: interface, member and its string, uint32, int32 and
 /// boolean arguments.</summary>

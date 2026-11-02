@@ -1,7 +1,7 @@
 #!/bin/bash
-# Stages Oriel.Runtime.<rid> for Linux: CEF's Release and Resources with their libraries stripped, and the native
-# subprocess, under <out>/native; CEF's licence as <out>/LICENSE.txt. eng/runtime/Oriel.Runtime.csproj packs it.
-# Usage: eng/runtime/stage-linux.sh <out-dir> [cef-platform]   (in the oriel-linux-dev image; default linux64)
+# Stages Riftway.Runtime.<rid> for Linux: CEF's Release and Resources with their libraries stripped, and the native
+# subprocess, under <out>/native; CEF's licence as <out>/LICENSE.txt. eng/runtime/Riftway.Runtime.csproj packs it.
+# Usage: eng/runtime/stage-linux.sh <out-dir> [cef-platform]   (in the riftway-linux-dev image; default linux64)
 set -euo pipefail
 out="$1"; platform="${2:-linux64}"
 repo="$(cd "$(dirname "$0")/../.." && pwd)"
@@ -16,5 +16,5 @@ cp "$cef/LICENSE.txt" "$out/LICENSE.txt"
 for so in "$out"/native/*.so "$out"/native/*.so.*; do
   [ -f "$so" ] && strip --strip-unneeded "$so"
 done
-"$repo/src/Oriel.Subprocess.Native/build.sh" "$out/native/Oriel.Subprocess" "$platform" > /dev/null
+"$repo/src/Riftway.Subprocess.Native/build.sh" "$out/native/Riftway.Subprocess" "$platform" > /dev/null
 du -sh "$out/native" "$out/native/libcef.so"

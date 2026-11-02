@@ -2,7 +2,7 @@ using System.Collections.Concurrent;
 using System.Runtime.InteropServices;
 using System.Text;
 
-namespace Oriel.Samples;
+namespace Riftway.Samples;
 
 /// <summary>A Notify call the fake server received, as read off the wire.</summary>
 internal sealed record FakeNotify(uint Id, string AppName, uint ReplacesId, string AppIcon, string Summary, string Body,
@@ -12,7 +12,7 @@ internal sealed record FakeNotify(uint Id, string AppName, uint ReplacesId, stri
 /// <c>GetServerInformation</c>, <c>GetCapabilities</c>, <c>Notify</c> and <c>CloseNotification</c> as the spec says,
 /// records each call, and emits the server's signals on demand.</summary>
 /// <remarks>Its own libdbus connection, thread and reader, driven by the wire's type codes rather than by the signature
-/// Oriel writes with, so the two do not share a mistake.</remarks>
+/// Riftway writes with, so the two do not share a mistake.</remarks>
 internal sealed unsafe partial class FakeNotificationServer : IDisposable
 {
     private const string LibDBus = "libdbus-1.so.3";
@@ -146,7 +146,7 @@ internal sealed unsafe partial class FakeNotificationServer : IDisposable
         switch (member, args)
         {
             case ("GetServerInformation", []):
-                foreach (var s in new[] { "Fake", "Oriel", "1", SpecVersion }) AppendString(iter, s);
+                foreach (var s in new[] { "Fake", "Riftway", "1", SpecVersion }) AppendString(iter, s);
                 break;
             case ("GetCapabilities", []):
             {

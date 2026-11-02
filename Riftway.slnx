@@ -1,0 +1,26 @@
+<Solution>
+  <Folder Name="/src/">
+    <Project Path="src/Riftway/Riftway.csproj" />
+    <Project Path="src/Riftway.AutoUpdater/Riftway.AutoUpdater.csproj" />
+    <Project Path="src/Riftway.Blazor/Riftway.Blazor.csproj" />
+    <Project Path="src/Riftway.Cef/Riftway.Cef.csproj" />
+    <Project Path="src/Riftway.Subprocess/Riftway.Subprocess.csproj" />
+  </Folder>
+  <Folder Name="/samples/">
+    <Project Path="samples/Riftway.BlazorSample/Riftway.BlazorSample.csproj" />
+    <Project Path="samples/Riftway.CrashTest/Riftway.CrashTest.csproj" />
+    <Project Path="samples/Riftway.IpcTest/Riftway.IpcTest.csproj" />
+    <Project Path="samples/Riftway.NetTest/Riftway.NetTest.csproj" />
+    <Project Path="samples/Riftway.ProtocolTest/Riftway.ProtocolTest.csproj" />
+    <Project Path="samples/Riftway.SessionTest/Riftway.SessionTest.csproj" />
+    <Project Path="samples/Riftway.UtilityTest/Riftway.UtilityTest.csproj" />
+    <Project Path="samples/Riftway.UtilityTest.Child/Riftway.UtilityTest.Child.csproj" />
+    <Project Path="samples/Riftway.SafeStorageTest/Riftway.SafeStorageTest.csproj" />
+    <Project Path="samples/Riftway.Sample/Riftway.Sample.csproj" />
+    <Project Path="samples/Riftway.ShellTest/Riftway.ShellTest.csproj" />
+    <Project Path="samples/Riftway.WindowTest/Riftway.WindowTest.csproj" />
+  </Folder>
+  <Folder Name="/tests/">
+    <Project Path="tests/Riftway.Tests/Riftway.Tests.csproj" />
+  </Folder>
+</Solution>

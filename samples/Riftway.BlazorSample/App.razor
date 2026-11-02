@@ -1,0 +1,50 @@
+@implements IDisposable
+@inject SharedCounter Counter
+@inject WindowOpener Opener
+@inject IJSRuntime JS
+
+<h1>Riftway + Blazor Hybrid</h1>
+
+<p>Shared count: <span id="count">@Counter.Value</span></p>
+<button id="increment" @onclick="Counter.Increment">Increment</button>
+<button id="open" @onclick="() => Opener.Open()">Open another window</button>
+<button id="interop" @onclick="Interop">JS interop</button>
+<p>Echo: <span id="echo">@_echo</span></p>
+<button id="block" @onclick="Block">Block for 3s</button> <span id="blocked">@_blocked</span>
+
+@code {
+    private string _echo = "";
+    private string _blocked = "";
+
+    // A handler that waits synchronously, as some libraries do (a process exit, a file lock).
+    private void Block()
+    {
+        Thread.Sleep(3000);
+        _blocked = "done";
+    }
+    private DotNetObjectReference<App>? _self;
+
+    protected override void OnInitialized() => Counter.Changed += OnChanged;
+
+    private void OnChanged() => InvokeAsync(StateHasChanged);
+
+    private async Task Interop()
+    {
+        await JS.InvokeVoidAsync("eval", "document.title = 'interop ok'");
+        _self ??= DotNetObjectReference.Create(this);
+        await JS.InvokeVoidAsync("riftwaySample.callBack", _self);
+    }
+
+    [JSInvokable]
+    public void Echo(string text)
+    {
+        _echo = text;
+        StateHasChanged();
+    }
+
+    public void Dispose()
+    {
+        Counter.Changed -= OnChanged;
+        _self?.Dispose();
+    }
+}

@@ -24,7 +24,7 @@ Percentages are over the non-n/a items; the second counts a partial item as half
 
 ### Static methods (`webContents`)
 
-| Electron | Oriel | Status | Note |
+| Electron | Riftway | Status | Note |
 |---|---|---|---|
 | `getAllWebContents()` | `GetAllWebContents` | partial | Window pages only (C17). |
 | `getFocusedWebContents()` | `GetFocusedWebContents` | partial | Never a DevTools page (C17). |
@@ -34,7 +34,7 @@ Percentages are over the non-n/a items; the second counts a partial item as half
 
 ### Instance events
 
-| Electron | Oriel | Status | Note |
+| Electron | Riftway | Status | Note |
 |---|---|---|---|
 | `did-finish-load` | `DidFinishLoad` | done |  |
 | `did-fail-load` | `DidFailLoad` | done | `LoadFailedEventArgs`. |
@@ -98,7 +98,7 @@ Percentages are over the non-n/a items; the second counts a partial item as half
 
 ### Instance methods
 
-| Electron | Oriel | Status | Note |
+| Electron | Riftway | Status | Note |
 |---|---|---|---|
 | `loadURL(url, options)` | `LoadUrl` | partial | Returns Task; `baseURLForDataURL` throws, `UploadFile` offset/length throw, no client hints, reload drops options (C1, C2, C3, C5). |
 | `loadFile(filePath, options)` | `LoadFile` | done | `query`, `search`, `hash` |
@@ -189,7 +189,7 @@ Percentages are over the non-n/a items; the second counts a partial item as half
 | `startDrag()` | `StartDrag` | partial | Windows (the drag blocks queued UI tasks, its image painted with GDI) and macOS (Electron's `NSDraggingSession`, _branch `mac-integration`_, its drag session starts on screen, macOS 26, arm64 and x64); not Linux (C40). |
 | `savePage()` | `SavePageAsync` | partial | Through DevTools; `HTMLComplete` saves only the main document and its images, scripts and style sheets (C50). |
 | `showDefinitionForSelection()` | `ShowDefinitionForSelection` | partial | macOS: Chromium's `ShowDictionaryOverlayForSelection` on the page's `RenderWidgetHostViewCocoa`, found under the browser's view; nothing elsewhere, as Electron _(branch `mac-integration`)_; not yet run on screen. |
-| `isOffscreen()` | `IsOffscreen` | done | Always false: Oriel has no offscreen rendering (webPreferences `offscreen` is missing). |
+| `isOffscreen()` | `IsOffscreen` | done | Always false: Riftway has no offscreen rendering (webPreferences `offscreen` is missing). |
 | `startPainting()` | — | missing |  |
 | `stopPainting()` | — | missing |  |
 | `isPainting()` | — | missing |  |
@@ -221,7 +221,7 @@ Percentages are over the non-n/a items; the second counts a partial item as half
 
 ### Instance properties
 
-| Electron | Oriel | Status | Note |
+| Electron | Riftway | Status | Note |
 |---|---|---|---|
 | `audioMuted` | `SetAudioMuted / IsAudioMuted` | done |  |
 | `userAgent` | `SetUserAgent / GetUserAgent` | done |  |
@@ -237,14 +237,14 @@ Percentages are over the non-n/a items; the second counts a partial item as half
 | `id` | `Id` | done |  |
 | `session` | `Session` | done | See DRIFT E1-E11 for the session gaps. |
 | `devToolsWebContents` | — | missing |  |
-| `debugger` | `Debugger` | done | Shares Oriel's protocol session (DRIFT C43) |
+| `debugger` | `Debugger` | done | Shares Riftway's protocol session (DRIFT C43) |
 | `backgroundThrottling` | — | missing |  |
 | `opener` | `Opener` | partial | Read over DevTools; on the UI thread, the value last read (C49). |
 | `zoomMode` | — | missing |  |
 
 ### `navigationHistory` (`NavigationHistory`)
 
-| Electron | Oriel | Status | Note |
+| Electron | Riftway | Status | Note |
 |---|---|---|---|
 | `canGoBack()` | `CanGoBack` | done |  |
 | `canGoForward()` | `CanGoForward` | done |  |
@@ -263,7 +263,7 @@ Percentages are over the non-n/a items; the second counts a partial item as half
 
 ### `webFrameMain` statics and events (`WebFrameMain`)
 
-| Electron | Oriel | Status | Note |
+| Electron | Riftway | Status | Note |
 |---|---|---|---|
 | `fromId(processId, routingId)` | — | missing | No routing id (F2). |
 | `fromFrameToken(processId, frameToken)` | `WebFrameMain.FromFrameToken` | partial | Current frames of window pages, by CEF's frame identifier (F6). |
@@ -271,7 +271,7 @@ Percentages are over the non-n/a items; the second counts a partial item as half
 
 ### `WebFrameMain` instance methods
 
-| Electron | Oriel | Status | Note |
+| Electron | Riftway | Status | Note |
 |---|---|---|---|
 | `executeJavaScript(code, userGesture)` | `ExecuteJavaScriptAsync` | partial | JSON result only; cross-process frames cannot run script (F1, C6). |
 | `reload()` | `Reload` | partial | Cross-process frames cannot reload (F1). |
@@ -285,7 +285,7 @@ Percentages are over the non-n/a items; the second counts a partial item as half
 
 ### `WebFrameMain` instance properties
 
-| Electron | Oriel | Status | Note |
+| Electron | Riftway | Status | Note |
 |---|---|---|---|
 | `url` | `Url` | done |  |
 | `origin` | `Origin` | done |  |

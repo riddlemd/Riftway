@@ -1,18 +1,18 @@
-Oriel CEF patch 0012: crash keys for GPU, utility and zygote children from the command line.
+Riftway CEF patch 0012: crash keys for GPU, utility and zygote children from the command line.
 
 On macOS and Linux a child process cannot set crash keys: before
 cef_execute_process libcef has not read crash_reporter.cfg and drops the call,
 and once crash reporting starts (PreSandboxStartup, and ZygoteForked for
 children the Linux zygote forks) only renderers get a client callback
 (OnWebKitInitialized). So GPU and utility crash reports lacked the app's
-globalExtra and process_type, which Electron's carry. Oriel's browser already
-gives every child --oriel-crash-keys (hex of UTF-8 "key\0value\0..."); libcef
+globalExtra and process_type, which Electron's carry. Riftway's browser already
+gives every child --riftway-crash-keys (hex of UTF-8 "key\0value\0..."); libcef
 now sets those keys itself right after crash reporting starts in the child, and
 leaves the switch out of the switch-N keys. On Windows chrome_elf has set them
 before main, so setting them again changes nothing. No CEF API change: the
 API hashes, CEF_NEXT's included, are unchanged.
 
-Resolves: Oriel docs/DRIFT.md CR11.
+Resolves: Riftway docs/DRIFT.md CR11.
 Base: CEF a03e714 (branch 8037, CEF 154). No other patch touches this file.
 Applies in chromium/src/cef.
 
@@ -34,7 +34,7 @@ index 04c129cf..eea16405 100644
  namespace {
  
 +// The browser passes each child its crash keys as the hex of UTF-8 "key\0value\0...".
-+constexpr char kChildCrashKeysSwitch[] = "oriel-crash-keys";
++constexpr char kChildCrashKeysSwitch[] = "riftway-crash-keys";
 +
  #if BUILDFLAG(IS_WIN)
  
