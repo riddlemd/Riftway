@@ -1,4 +1,5 @@
 using Velopack;
+using Velopack.Sources;
 
 namespace Riftway;
 
@@ -126,7 +127,29 @@ internal interface IUpdateClient
 
 internal sealed class VelopackClient(string url) : IUpdateClient
 {
-    private readonly UpdateManager _manager = new(url);
+    private readonly UpdateManager _manager = new(CreateSource(url));
+
+    /// <summary>The Velopack source for a feed: a GitHub repository URL (<c>https://github.com/owner/repo</c>) reads its
+    /// published releases through the GitHub API, as <c>vpk upload github</c> lays them out; any other http(s) URL is a
+    /// plain web feed and anything else a folder, as <c>new UpdateManager(urlOrPath)</c> decides.</summary>
+    internal static IUpdateSource CreateSource(string url)
+    {
+        if (!Uri.TryCreate(url, UriKind.Absolute, out var uri) || uri.Scheme is not ("http" or "https"))
+            return new SimpleFileSource(new DirectoryInfo(url));
+        return GitHubRepository(uri) is { } repo ? new GithubSource(repo, accessToken: null, prerelease: false) : new SimpleWebSource(uri);
+    }
+
+    /// <summary><c>https://github.com/owner/repo</c> for a repository's own URL (any case, <c>www.</c>, a trailing slash
+    /// or <c>.git</c>), or null for any other URL, such as a <c>releases/latest/download</c> folder.</summary>
+    private static string? GitHubRepository(Uri uri)
+    {
+        if (!uri.Host.Equals("github.com", StringComparison.OrdinalIgnoreCase) && !uri.Host.Equals("www.github.com", StringComparison.OrdinalIgnoreCase))
+            return null;
+        var parts = uri.AbsolutePath.Split('/', StringSplitOptions.RemoveEmptyEntries);
+        if (parts.Length != 2) return null;
+        var repo = parts[1].EndsWith(".git", StringComparison.OrdinalIgnoreCase) ? parts[1][..^4] : parts[1];
+        return repo.Length == 0 ? null : $"https://github.com/{parts[0]}/{repo}";
+    }
 
     public async Task<UpdateRelease?> CheckAsync()
         => await _manager.CheckForUpdatesAsync().ConfigureAwait(false) is { } info

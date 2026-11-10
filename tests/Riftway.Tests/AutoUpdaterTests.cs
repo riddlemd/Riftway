@@ -108,4 +108,32 @@ public sealed class AutoUpdaterTests
         Assert.Equal("https://feed.test", updater.GetFeedUrl());
         Assert.Throws<ArgumentException>(() => updater.SetFeedUrl(""));
     }
+
+    [Theory]
+    [InlineData("https://github.com/riddlemd/KHost")]
+    [InlineData("https://github.com/riddlemd/KHost/")]
+    [InlineData("https://github.com/riddlemd/KHost.git")]
+    [InlineData("https://GitHub.com/riddlemd/KHost")]
+    [InlineData("https://www.github.com/riddlemd/KHost")]
+    [InlineData("http://github.com/riddlemd/KHost")]
+    [InlineData("https://github.com/riddlemd/KHost?tab=readme-ov-file#install")]
+    public void FeedSource_GitHubRepository_ReadsItsReleasesThroughTheGitHubApi(string url)
+    {
+        var source = Assert.IsType<Velopack.Sources.GithubSource>(VelopackClient.CreateSource(url));
+        Assert.Equal(new Uri("https://github.com/riddlemd/KHost"), source.RepoUri);
+        Assert.False(source.Prerelease);
+    }
+
+    [Theory]
+    [InlineData("https://github.com/riddlemd/KHost/releases/latest/download")]
+    [InlineData("https://github.com/riddlemd/KHost/releases/download/v1.2.3")]
+    [InlineData("https://github.com/riddlemd")]
+    [InlineData("https://feed.test/app")]
+    [InlineData("https://github.example.com/riddlemd/KHost")]
+    public void FeedSource_AnyOtherUrl_IsAPlainWebFeed(string url)
+        => Assert.IsType<Velopack.Sources.SimpleWebSource>(VelopackClient.CreateSource(url));
+
+    [Fact]
+    public void FeedSource_AFolder_IsAFileFeed()
+        => Assert.IsType<Velopack.Sources.SimpleFileSource>(VelopackClient.CreateSource(Path.GetTempPath()));
 }
