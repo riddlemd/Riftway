@@ -9,6 +9,9 @@ public sealed unsafe partial class Session
 {
     // Chromium's local-state prefs, watched by SystemNetworkContextManager and SSLConfigServiceManager.
     internal const string AuthServerAllowlistPreference = "auth.server_allowlist";
+    internal const string AuthDelegateAllowlistPreference = "auth.negotiate_delegate_whitelist";
+    internal const string AuthNegotiatePortPreference = "auth.enable_negotiate_port";
+    internal const string NtlmV2Preference = "auth.ntlm_v2_enabled";
     internal const string SslVersionMinPreference = "ssl.version_min";
     internal const string SslVersionMaxPreference = "ssl.version_max";
     internal const string DisabledCipherSuitesPreference = "ssl.cipher_suites.blacklist";
@@ -100,11 +103,49 @@ public sealed unsafe partial class Session
     /// Local State, which outlives the run where Electron's settings do not.</summary>
     internal static void ResetProcessNetworkPreferences()
     {
-        foreach (var name in new[] { AuthServerAllowlistPreference, SslVersionMinPreference, SslVersionMaxPreference, DisabledCipherSuitesPreference })
+        string[] names = [AuthServerAllowlistPreference, AuthDelegateAllowlistPreference, AuthNegotiatePortPreference,
+            SslVersionMinPreference, SslVersionMaxPreference, DisabledCipherSuitesPreference];
+        if (!OperatingSystem.IsWindows()) names = [.. names, NtlmV2Preference];
+        foreach (var name in names)
         {
             try { SetGlobalPreference(name, null); }
             catch (ArgumentException e) { Console.Error.WriteLine($"[Riftway] Could not reset {name}: {e.Message}"); }
         }
+    }
+
+    /// <summary>UI thread: Electron's HTTP auth switches, which Chrome style keeps as Local State preferences that it
+    /// applies live; only <c>--auth-server-allowlist</c>, Chromium's newer name, would otherwise reach it (drift A44).</summary>
+    internal static void ApplyElectronAuthSwitches(CommandLine commandLine)
+    {
+        foreach (var (name, value) in ElectronAuthPreferences(commandLine, posix: !OperatingSystem.IsWindows()))
+        {
+            try
+            {
+                if (value is string text) SetGlobalString(name, text);
+                else
+                {
+                    var boolean = CefNative.cef_value_create();
+                    boolean->set_bool(boolean, (bool)value ? 1 : 0);
+                    SetGlobalPreference(name, boolean);
+                }
+            }
+            catch (ArgumentException e) { Console.Error.WriteLine($"[Riftway] Could not apply {name}: {e.Message}"); }
+        }
+    }
+
+    /// <summary>Electron's <c>CreateHttpAuthDynamicParams</c>, as the Local State preferences that hold the same params:
+    /// <c>--auth-server-whitelist</c>, <c>--auth-negotiate-delegate-whitelist</c>, <c>--enable-auth-negotiate-port</c>,
+    /// and <c>--disable-ntlm-v2</c> where Chromium has NTLMv2 settings (POSIX). Only switches present set anything, so
+    /// Chromium's defaults, which are Electron's, stand otherwise.</summary>
+    internal static IReadOnlyList<(string Name, object Value)> ElectronAuthPreferences(CommandLine commandLine, bool posix)
+    {
+        var preferences = new List<(string, object)>();
+        if (commandLine.HasSwitch("auth-server-whitelist")) preferences.Add((AuthServerAllowlistPreference, commandLine.GetSwitchValue("auth-server-whitelist")));
+        if (commandLine.HasSwitch("auth-negotiate-delegate-whitelist"))
+            preferences.Add((AuthDelegateAllowlistPreference, commandLine.GetSwitchValue("auth-negotiate-delegate-whitelist")));
+        if (commandLine.HasSwitch("enable-auth-negotiate-port")) preferences.Add((AuthNegotiatePortPreference, true));
+        if (posix && commandLine.HasSwitch("disable-ntlm-v2")) preferences.Add((NtlmV2Preference, false));
+        return preferences;
     }
 
     private static void SetGlobalString(string name, string text)

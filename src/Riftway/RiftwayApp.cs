@@ -431,6 +431,7 @@ public sealed unsafe partial class RiftwayApp
         Session.ApplyElectronDefaults(global);
         NativeObject.Release(global);
         Session.ResetProcessNetworkPreferences();
+        Session.ApplyElectronAuthSwitches(CommandLine);
         ForgetSavedSystemProxy();
         NativeTheme.OnReady();
         // Before Ready, so the first window's page can already load from a custom scheme.
