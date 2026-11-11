@@ -3529,10 +3529,8 @@ async Task MenusAsync(BrowserWindow win)
     MenuItemRole[] expected = OperatingSystem.IsMacOS()
         ? [MenuItemRole.AppMenu, MenuItemRole.FileMenu, MenuItemRole.EditMenu, MenuItemRole.ViewMenu, MenuItemRole.WindowMenu]
         : [MenuItemRole.FileMenu, MenuItemRole.EditMenu, MenuItemRole.ViewMenu, MenuItemRole.WindowMenu];
-    // Riftway puts the default menu in on macOS only; Electron also gives Windows and Linux windows its bar (drift M13).
-    Check("the default application menu is Electron's on macOS, and Windows and Linux windows get none (drift M13)", OperatingSystem.IsMacOS()
-        ? defaultMenu?.Items.Select(i => i.Role).SequenceEqual(expected) == true
-        : defaultMenu is null && !win.IsMenuBarVisible, $"menu={(defaultMenu is null ? "none" : string.Join(",", defaultMenu.Items.Select(i => i.Role)))} bar={win.IsMenuBarVisible}");
+    Check("the default application menu is Electron's on every OS", defaultMenu?.Items.Select(i => i.Role).SequenceEqual(expected) == true
+        && (OperatingSystem.IsMacOS() || win.IsMenuBarVisible), $"menu={(defaultMenu is null ? "none" : string.Join(",", defaultMenu.Items.Select(i => i.Role)))} bar={win.IsMenuBarVisible}");
 
     var clicks = new List<string>();
     var save = new MenuItem { Id = "save", Label = "&Save", Accelerator = "CmdOrCtrl+Shift+K", Click = (_, w, keys) => { saveKeys = keys; clicks.Add($"save:{w == win}"); } };
