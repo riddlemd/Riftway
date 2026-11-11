@@ -17,13 +17,13 @@ Counted from the Checklist at the end: `BaseWindow` and `BrowserWindow` are one 
 
 | Area | Items | Done | Partial | Missing | n/a | % done | % done + partial/2 |
 |---|---|---|---|---|---|---|---|
-| BaseWindow + BrowserWindow options | 54 | 34 | 19 | 1 | 0 | 63.0% | 80.6% |
-| webPreferences | 46 | 12 | 7 | 20 | 7 | 30.8% | 39.7% |
+| BaseWindow + BrowserWindow options | 54 | 34 | 20 | 0 | 0 | 63.0% | 81.5% |
+| webPreferences | 46 | 12 | 8 | 19 | 7 | 30.8% | 41.0% |
 | Instance methods | 143 | 107 | 30 | 0 | 6 | 78.1% | 89.1% |
 | Instance properties | 24 | 17 | 7 | 0 | 0 | 70.8% | 85.4% |
 | Events | 35 | 20 | 15 | 0 | 0 | 57.1% | 78.6% |
 | Static methods | 7 | 6 | 0 | 0 | 1 | 100.0% | 100.0% |
-| **Total** | 309 | 196 | 78 | 21 | 14 | 66.4% | 79.7% |
+| **Total** | 309 | 196 | 80 | 19 | 14 | 66.4% | 80.0% |
 
 ## Done since the audit
 
@@ -163,7 +163,7 @@ Counted from the Checklist at the end: `BaseWindow` and `BrowserWindow` are one 
    - Profile-wide in Chrome style, so they throw `NotSupportedException`: `minimumFontSize`, `defaultEncoding`.
    - Not yet investigated: `backgroundThrottling`, `navigateOnDragDrop`, `safeDialogs`/`safeDialogsMessage`,
      `accessibleTitle`, `scrollBounce`, `imageAnimationPolicy`, `zoomMode`, `focusOnNavigation`,
-     `disableHtmlFullscreenWindowResize`, `additionalArguments`.
+     `additionalArguments`.
    - `contextIsolation` is always on; `false` is not offered.
 2. (none: `setParentWindow` is done on every OS; W8 tracks a macOS check.)
 3. The Window Controls Overlay page API, and the macOS overlay rectangle beside the traffic lights (W34, W37) — OS, Patch.
@@ -256,7 +256,7 @@ Parameters in brackets are optional in Electron. `webContents` members are in [w
 | `zoomToPageWidth` | `ZoomToPageWidth` | partial | macOS: the window delegate's `windowWillUseStandardFrame:defaultFrame:` widens to the page's preferred width (0 without `EnablePreferredSizeMode`, as Electron's `GetPreferredSize`), never narrower, moved left only to stay on screen; Shift fills the screen _(branch `mac-integration`)_; not yet run on screen. |
 | `tabbingIdentifier` | `TabbingIdentifier` | partial | macOS; without one, or transparent or frameless, the window never tabs (`NSWindowTabbingModeDisallowed`), as Electron _(branch `mac-integration`)_; a tabbed window and one without an identifier pass on screen (macOS 26, arm64 and x64), the transparent and frameless cases not yet run. |
 | `webPreferences (BrowserWindow)` | `WebPreferences` | done | Per-option status in the next table. |
-| `paintWhenInitiallyHidden (BrowserWindow)` | — | missing |  |
+| `paintWhenInitiallyHidden (BrowserWindow)` | `PaintWhenInitiallyHidden` | partial | True only, Electron's default; false throws (W63). |
 
 ### webPreferences
 
@@ -279,7 +279,7 @@ Parameters in brackets are optional in Electron. `webContents` members are in [w
 | `imageAnimationPolicy` | — | missing |  |
 | `textAreasAreResizable` | `TextAreasAreResizable` | done |  |
 | `webgl` | `WebGL` | done |  |
-| `plugins` | — | missing |  |
+| `plugins` | — | missing | Pages run with plugins enabled; CEF cannot turn them off per page (W65). |
 | `experimentalFeatures` | — | missing | Process-wide in CEF (W13). |
 | `scrollBounce` | `ScrollBounce` | partial | Per session (`SessionOptions.ScrollBounce`), with Riftway's patches 0010 and 0014, Electron's `scroll_bounce_flag.patch`; with stock CEF every page rubber-bands (W55). |
 | `enableBlinkFeatures` | — | missing | Process-wide in CEF (W13). |
@@ -299,7 +299,7 @@ Parameters in brackets are optional in Electron. `webContents` members are in [w
 | `disableDialogs` | `DisableDialogs` | done |  |
 | `navigateOnDragDrop` | — | missing |  |
 | `autoplayPolicy` | — | missing | Process-wide in CEF (W13). |
-| `disableHtmlFullscreenWindowResize` | — | missing |  |
+| `disableHtmlFullscreenWindowResize` | `DisableHtmlFullscreenWindowResize` | partial | False only, Electron's default; true throws (W64). |
 | `accessibleTitle` | `BaseWindowOptions.AccessibleTitle` | partial | macOS: VoiceOver reads it; Windows/Linux stored only (W58). |
 | `spellcheck` | — | missing | No per-page switch in CEF (E22); the session's `SetSpellCheckerEnabled` covers every page. |
 | `enableWebSQL` | — | n/a | Not applicable (listed in "Not applicable"). |
