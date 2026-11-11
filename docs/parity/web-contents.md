@@ -71,8 +71,8 @@ Percentages are over the non-n/a items; the second counts a partial item as half
 | `zoom-changed` | `ZoomChanged` | partial | From the page's wheel events (C35). |
 | `blur` | `Blurred` | partial | Raised when the window loses focus; another view in the window taking focus is not seen (C30). |
 | `focus` | `Focused` | done |  |
-| `devtools-open-url` | — | missing |  |
-| `devtools-search-query` | — | missing |  |
+| `devtools-open-url` | — | missing | C61. |
+| `devtools-search-query` | — | missing | C61. |
 | `devtools-opened` | `DevToolsOpened` | partial | Watched, within a quarter second (C36). |
 | `devtools-closed` | `DevToolsClosed` | partial | Watched, within a quarter second (C36). |
 | `devtools-focused` | — | missing | Chrome style's DevTools window is not CEF's (C36). |
@@ -86,9 +86,9 @@ Percentages are over the non-n/a items; the second counts a partial item as half
 | `did-change-theme-color` | `DidChangeThemeColor` | done | Computed in the main frame by Blink's rule. |
 | `update-target-url` | `UpdateTargetUrl` | done |  |
 | `cursor-changed` | `CursorChanged` | done |  |
-| `select-bluetooth-device` | — | missing |  |
+| `select-bluetooth-device` | — | missing | C64. |
 | `paint` | — | missing |  |
-| `devtools-reload-page` | — | missing |  |
+| `devtools-reload-page` | — | missing | C61. |
 | `console-message` | `ConsoleMessage` | partial | No `frame` (C28). |
 | `preload-error` | `PreloadError` | done | The error arrives as its name, message and stack. |
 | `ipc-message` | `IpcMessage` | done |  |
@@ -148,8 +148,8 @@ Percentages are over the non-n/a items; the second counts a partial item as half
 | `isCurrentlyAudible()` | — | missing | CEF never reports audio for Chrome-style browsers (C23). |
 | `setCaretBrowsingEnabled()` | `SetCaretBrowsingEnabled` | partial | Applies to every page of the session (C53). |
 | `isCaretBrowsingEnabled()` | `IsCaretBrowsingEnabled` | partial | What this page set; the session's pages share the setting (C53). |
-| `setZoomMode()` | — | missing |  |
-| `getZoomMode()` | — | missing |  |
+| `setZoomMode()` | — | missing | C62. |
+| `getZoomMode()` | — | missing | C62. |
 | `setVisualZoomLevelLimits()` | `SetVisualZoomLevelLimits` | partial | Pinch on or off; off on Windows/Linux (C37) |
 | `centerSelection()` | `CenterSelection` | partial | Script; does nothing off macOS, as Electron (C20). |
 | `copyImageAt()` | `CopyImageAt` | partial | The page's own hit test over DevTools: a canvas the page cannot read and a cross-origin image in an iframe are not copied (C48). |
@@ -169,17 +169,17 @@ Percentages are over the non-n/a items; the second counts a partial item as half
 | `getPrintersAsync()` | `GetPrintersAsync` | partial | Windows only, listed as Chromium lists them (Z4). |
 | `print()` | `Print` | partial | Electron's option checks and device-name errors; opens Chromium's print dialog without the settings; no silent printing or outcome callback (Z1-Z3). |
 | `printToPDF()` | `PrintToPDFAsync` | partial | Page.printToPDF over DevTools with Electron's defaults, validation messages and per-page queue; always the main frame, even with a selection in a focused iframe (C51). |
-| `addWorkSpace()` | — | missing |  |
-| `removeWorkSpace()` | — | missing |  |
-| `setDevToolsWebContents()` | — | missing |  |
+| `addWorkSpace()` | — | missing | C61. |
+| `removeWorkSpace()` | — | missing | C61. |
+| `setDevToolsWebContents()` | — | missing | C61. |
 | `isDevToolsFocused()` | — | missing |  |
-| `getDevToolsTitle()` | — | missing |  |
-| `setDevToolsTitle()` | — | missing |  |
+| `getDevToolsTitle()` | — | missing | C61. |
+| `setDevToolsTitle()` | — | missing | C61. |
 | `inspectElement()` | `InspectElement` | done | Which element DevTools selects is unverified: the selection is not visible from the page. |
-| `inspectSharedWorker()` | — | missing |  |
-| `inspectSharedWorkerById()` | — | missing |  |
+| `inspectSharedWorker()` | — | missing | C61. |
+| `inspectSharedWorkerById()` | — | missing | C61. |
 | `getAllSharedWorkers()` | `GetAllSharedWorkers` | partial | Through DevTools' target discovery; a page's first call on the UI thread lists none (C54). |
-| `inspectServiceWorker()` | — | missing |  |
+| `inspectServiceWorker()` | — | missing | C61. |
 | `sendToFrame()` | — | missing |  |
 | `postMessage(channel, message, transfer)` | `PostMessage` | partial | JSON messages (I1). |
 | `enableDeviceEmulation()` | `EnableDeviceEmulation` | partial | DevTools metrics override; `mobile` forces more (C24). |
@@ -200,14 +200,14 @@ Percentages are over the non-n/a items; the second counts a partial item as half
 | `setWebRTCIPHandlingPolicy()` | `SetWebRtcIpHandlingPolicy` | partial | Applies to every page of the session (C52). |
 | `getWebRTCUDPPortRange()` | `GetWebRtcUdpPortRange` | partial | The range this page set; the session's pages share the setting (C52). |
 | `setWebRTCUDPPortRange()` | `SetWebRtcUdpPortRange` | partial | Electron's checks and messages; applies to every page of the session (C52). |
-| `getMediaSourceId()` | — | missing |  |
+| `getMediaSourceId()` | — | missing | C65. |
 | `getOrCreateDevToolsTargetId()` | `GetOrCreateDevToolsTargetId` | partial | Read over DevTools as the page is created; `'` on the UI thread before that (C46). |
 | `getOSProcessId()` | `GetOSProcessId` | done | 0 once the page has closed. |
 | `getProcessId()` | `GetProcessId` | done | The main frame's, read from CEF's main frame; -1 once the page has closed. |
-| `clone()` | — | missing |  |
+| `clone()` | — | missing | C66. |
 | `takeHeapSnapshot()` | `TakeHeapSnapshotAsync` | done | DevTools `HeapProfiler.takeHeapSnapshot`, one at a time per page (C47). |
-| `getBackgroundThrottling()` | — | missing |  |
-| `setBackgroundThrottling()` | — | missing |  |
+| `getBackgroundThrottling()` | — | missing | W62. |
+| `setBackgroundThrottling()` | — | missing | W62. |
 | `getType()` | `GetWebContentsType` | done | Renamed from .NET's `GetType` (C45); always `window`. |
 | `setImageAnimationPolicy()` | `SetImageAnimationPolicy` | partial | Applies to every page of the session (C53). |
 | `canGoBack()` | — | n/a | Deprecated; use navigationHistory. |
@@ -236,11 +236,11 @@ Percentages are over the non-n/a items; the second counts a partial item as half
 | `frameRate` | — | missing |  |
 | `id` | `Id` | done |  |
 | `session` | `Session` | done | See DRIFT E1-E11 for the session gaps. |
-| `devToolsWebContents` | — | missing |  |
+| `devToolsWebContents` | — | missing | C61. |
 | `debugger` | `Debugger` | done | Shares Riftway's protocol session (DRIFT C43) |
-| `backgroundThrottling` | — | missing |  |
+| `backgroundThrottling` | — | missing | W62. |
 | `opener` | `Opener` | partial | Read over DevTools; on the UI thread, the value last read (C49). |
-| `zoomMode` | — | missing |  |
+| `zoomMode` | — | missing | C62. |
 
 ### `navigationHistory` (`NavigationHistory`)
 

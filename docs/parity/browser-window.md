@@ -163,8 +163,8 @@ Counted from the Checklist at the end: `BaseWindow` and `BrowserWindow` are one 
      `experimentalFeatures`, `enableBlinkFeatures`/`disableBlinkFeatures`, `autoplayPolicy`, `sandbox`. Decide between
      an app-level option and a per-window gap.
    - Profile-wide in Chrome style, so they throw `NotSupportedException`: `minimumFontSize`, `defaultEncoding`.
-   - Not yet investigated: `backgroundThrottling`, `navigateOnDragDrop`,
-     `accessibleTitle`, `scrollBounce`, `imageAnimationPolicy`, `zoomMode`,
+   - CEF cannot do them: `backgroundThrottling` (W62), `navigateOnDragDrop` (W61), `zoomMode` (C62).
+   - Not yet investigated: `accessibleTitle`, `scrollBounce`, `imageAnimationPolicy`,
      `additionalArguments`.
    - `contextIsolation` is always on; `false` is not offered.
 2. (none: `setParentWindow` is done on every OS; W8 tracks a macOS check.)
@@ -273,7 +273,7 @@ Parameters in brackets are optional in Electron. `webContents` members are in [w
 | `session` | `Session` | done | Overrides `Partition`; popups cannot take another session (E7). |
 | `partition` | `Partition` | done | `persist:` dirs live in the data directory (E1). |
 | `zoomFactor` | `ZoomFactor` | partial | Re-applies to an origin whose zoom was reset to 0 (W15). |
-| `zoomMode` | — | missing |  |
+| `zoomMode` | — | missing | Zoom is always per origin; CEF cannot set the mode (C62). |
 | `javascript` | `Javascript` | done |  |
 | `webSecurity` | — | missing | Process-wide in CEF (W13). |
 | `allowRunningInsecureContent` | — | missing | Process-wide in CEF (W13). |
@@ -291,7 +291,7 @@ Parameters in brackets are optional in Electron. `webContents` members are in [w
 | `defaultMonospaceFontSize` | `DefaultMonospaceFontSize` | done |  |
 | `minimumFontSize` | `MinimumFontSize` | missing | Property exists but throws NotSupportedException (W12). |
 | `defaultEncoding` | `DefaultEncoding` | missing | Property exists but throws NotSupportedException (W12). |
-| `backgroundThrottling` | — | missing |  |
+| `backgroundThrottling` | — | missing | No per-page control in CEF; process-wide switches instead (W62). |
 | `offscreen` | — | missing |  |
 | `contextIsolation` | — | partial | Always on; `false` is not offered (W14). |
 | `webviewTag` | — | n/a | <webview> |
@@ -299,7 +299,7 @@ Parameters in brackets are optional in Electron. `webContents` members are in [w
 | `safeDialogs` | `SafeDialogs` | done | Electron's `-run-dialog`: page dialogs are Riftway message boxes, the checkbox from an origin's second dialog; a ticked origin gets none for the page's life. |
 | `safeDialogsMessage` | `SafeDialogsMessage` | done | Empty or null keeps Electron's label. |
 | `disableDialogs` | `DisableDialogs` | done |  |
-| `navigateOnDragDrop` | — | missing |  |
+| `navigateOnDragDrop` | — | missing | Chromium's default (drops can navigate) stands; CEF cannot set it (W61). |
 | `autoplayPolicy` | — | missing | Process-wide in CEF (W13). |
 | `disableHtmlFullscreenWindowResize` | `DisableHtmlFullscreenWindowResize` | partial | False only, Electron's default; true throws (W64). |
 | `accessibleTitle` | `BaseWindowOptions.AccessibleTitle` | partial | macOS: VoiceOver reads it; Windows/Linux stored only (W58). |
