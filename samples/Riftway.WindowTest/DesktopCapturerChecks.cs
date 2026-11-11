@@ -199,7 +199,7 @@ static class DesktopCapturerChecks
         var fullTitle = WindowText(popups[longTitle]);
         var longSource = sources.FirstOrDefault(s => Handle(s) == popups[longTitle]);
         check("Windows: this process's window titles are read in full, past webrtc's 500 characters",
-            fullTitle.Length == 600 && longSource?.Name == fullTitle, $"{longSource?.Name.Length.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? "not listed"} of {fullTitle.Length} characters");
+            fullTitle.Length == longTitle.Length && fullTitle.Length > 500 && longSource?.Name == fullTitle, $"{longSource?.Name.Length.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? "not listed"} of {fullTitle.Length} characters");
 
         var bigIcon = Centre(sources.FirstOrDefault(s => Handle(s) == popups["Riftway dc big icon"])?.AppIcon);
         check("Windows: appIcon prefers WM_GETICON's big icon (red, 32px) to its small one (blue, 16px)",

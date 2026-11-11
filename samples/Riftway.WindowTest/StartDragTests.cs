@@ -147,7 +147,9 @@ static class StartDragTests
             check("the drag image is the icon and title button: 150 DIPs wide, icon height plus insets, cursor at its DIP centre",
                 image is { } im && im.Cx == (int)Math.Ceiling(150 * scale) && im.Cy == (int)Math.Ceiling(42 * scale) && im.Ox == 75 && im.Oy == 21,
                 image is null ? $"none; formats={formats}" : $"{image} scale={scale}");
-            check("UI tasks wait while the drag runs (drift C40)", s_uiTaskRanInDrag == false, s_uiTaskRanInDrag);
+            // The task posted mid-drag runs once the drag ends; wait for it rather than read the flag once.
+            for (var i = 0; i < 100 && s_uiTaskRanInDrag is null; i++) await Task.Delay(20);
+            check("UI tasks wait while the drag runs (drift C40)", s_uiTaskRanInDrag == false, s_uiTaskRanInDrag?.ToString() ?? "the task never ran");
 
             var emptyDrag = await DragWithMouse(new StartDragItem { Files = [first], Icon = NativeImage.CreateEmpty() });
             check("startDrag with an empty icon starts no drag and returns at once", emptyDrag && dragError is null && DropTarget.Enters == 0,
