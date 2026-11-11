@@ -323,6 +323,20 @@ public sealed record MouseInputEvent(MouseInputEventType Type, int X, int Y)
     /// <summary>For <see cref="MouseInputEventType.MouseWheel"/>: pixels to scroll; positive scrolls up, as Electron's
     /// (Chromium's) <c>deltaY</c>.</summary>
     public int DeltaY { get; init; }
+
+    /// <summary>Horizontal position on the screen. Reported by <see cref="WebContents.BeforeMouseEvent"/>;
+    /// <see cref="WebContents.SendInputEvent(MouseInputEvent)"/> cannot pass it to the page (drift C57).</summary>
+    public int GlobalX { get; init; }
+
+    /// <summary>Vertical position on the screen; see <see cref="GlobalX"/>.</summary>
+    public int GlobalY { get; init; }
+
+    /// <summary>Horizontal movement since the last move. Reported by <see cref="WebContents.BeforeMouseEvent"/>;
+    /// <see cref="WebContents.SendInputEvent(MouseInputEvent)"/> cannot pass it to the page (drift C57).</summary>
+    public int MovementX { get; init; }
+
+    /// <summary>Vertical movement since the last move; see <see cref="MovementX"/>.</summary>
+    public int MovementY { get; init; }
 }
 
 /// <summary>Maps Electron key names to the DevTools <c>Input.dispatchKeyEvent</c> fields.</summary>
