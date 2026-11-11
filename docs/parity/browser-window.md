@@ -164,8 +164,8 @@ Counted from the Checklist at the end: `BaseWindow` and `BrowserWindow` are one 
      an app-level option and a per-window gap.
    - Profile-wide in Chrome style, so they throw `NotSupportedException`: `minimumFontSize`, `defaultEncoding`.
    - CEF cannot do them: `backgroundThrottling` (W62), `navigateOnDragDrop` (W61), `zoomMode` (C62).
-   - Not yet investigated: `accessibleTitle`, `scrollBounce`, `imageAnimationPolicy`,
-     `additionalArguments`.
+   - Not yet investigated: `scrollBounce`, `imageAnimationPolicy`, `additionalArguments`.
+   - CEF keeps Views' `WidgetDelegate` accessible title: `accessibleTitle` reaches screen readers on macOS only (W58).
    - `contextIsolation` is always on; `false` is not offered.
 2. (none: `setParentWindow` is done on every OS; W8 tracks a macOS check.)
 3. The Window Controls Overlay page API, and the macOS overlay rectangle beside the traffic lights (W34, W37) — OS, Patch.
