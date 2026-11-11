@@ -22,4 +22,16 @@ public unsafe struct cef_window_info_native_t
         else throw new PlatformNotSupportedException($"Riftway does not run on {Environment.OSVersion} yet.");
         return info;
     }
+
+    /// <summary>A window info for a windowless (offscreen) browser: Alloy style, as CEF allows windowless rendering
+    /// with no other.</summary>
+    /// <exception cref="PlatformNotSupportedException">Not yet supported on this OS.</exception>
+    public static cef_window_info_native_t Windowless()
+    {
+        var info = Empty();
+        if (OperatingSystem.IsMacOS()) (info.mac.windowless_rendering_enabled, info.mac.runtime_style) = (1, cef_runtime_style_t.CEF_RUNTIME_STYLE_ALLOY);
+        else if (OperatingSystem.IsLinux()) (info.linux.windowless_rendering_enabled, info.linux.runtime_style) = (1, cef_runtime_style_t.CEF_RUNTIME_STYLE_ALLOY);
+        else (info.win.windowless_rendering_enabled, info.win.runtime_style) = (1, cef_runtime_style_t.CEF_RUNTIME_STYLE_ALLOY);
+        return info;
+    }
 }

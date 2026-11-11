@@ -334,6 +334,27 @@ public sealed unsafe class ClientHandler
 
     private readonly PermissionHandler? _permission;
 
+    /// <summary>What a windowless browser renders into; required for one, ignored by windowed browsers.</summary>
+    public RenderHandler? Render
+    {
+        get => _render;
+        init
+        {
+            _render = value;
+            if (value is not null) Native->get_render_handler = &GetRenderHandler;
+        }
+    }
+
+    private readonly RenderHandler? _render;
+
+    [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])]
+    private static cef_render_handler_t* GetRenderHandler(cef_client_t* self)
+    {
+        var handler = NativeObject.Owner<ClientHandler>(self)._render!.Native;
+        NativeObject.AddRef(handler);
+        return handler;
+    }
+
     /// <summary>Reports find results; null leaves them to CEF.</summary>
     public FindHandler? Find
     {

@@ -271,6 +271,10 @@ public sealed unsafe partial class RiftwayApp
             size = (nuint)sizeof(cef_settings_t),
             no_sandbox = IsSandboxed ? 0 : 1,
             log_severity = cef_log_severity_t.LOGSEVERITY_WARNING,
+            // Lets offscreen pages exist (CEF logs an error for a windowless browser without it). It changes nothing
+            // else: CEF reads it only for a background colour whose windowless state is left at default, and every
+            // caller in libcef passes enabled or disabled (browser_host_base.cc, browser_platform_delegate_create.cc).
+            windowless_rendering_enabled = 1,
         };
         ProcessUserAgent = UserAgentFallback;
         CefString.Set(&settings.user_agent, ProcessUserAgent);
