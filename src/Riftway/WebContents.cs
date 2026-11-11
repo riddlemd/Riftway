@@ -95,6 +95,8 @@ public sealed unsafe partial class WebContents
                     _bootstrapForgotten = true;
                     _devTools.Send("Page.resetNavigationHistory");
                 }
+                // A navigation can give the page a new page window, which the user's mouse then reaches.
+                if (OperatingSystem.IsWindows() && _beforeMouseEvent is not null) HookUserMouse();
                 Raise(DidFinishLoad);
                 // A failed load's error page can end after LoadUrl started the next load, which it must not settle.
                 if (_navigated && (GetUrl() != _failedUrl || _loadStartedUrl == _failedUrl)) CompleteLoad(null);

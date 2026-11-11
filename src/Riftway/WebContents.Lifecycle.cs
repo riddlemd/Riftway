@@ -107,14 +107,24 @@ public sealed unsafe partial class WebContents
     /// <summary>A mouse event is about to reach the page; cancel to keep it from the page. Electron's
     /// <c>before-mouse-event</c>. Raised on the UI thread, so the decision must be made synchronously. Wheel events are not
     /// raised, as in Electron.</summary>
-    /// <remarks>Raised for the events <see cref="SendInputEvent(MouseInputEvent)"/> sends; see drift C57 for the user's
-    /// own mouse.</remarks>
-    public event EventHandler<BeforeMouseEventArgs>? BeforeMouseEvent;
+    /// <remarks>Raised for the events <see cref="SendInputEvent(MouseInputEvent)"/> sends, and on Windows for the user's own
+    /// mouse over the page; see drift C57.</remarks>
+    public event EventHandler<BeforeMouseEventArgs>? BeforeMouseEvent
+    {
+        add
+        {
+            lock (s_registryGate) _beforeMouseEvent += value;
+            if (OperatingSystem.IsWindows()) CefThread.PostUi(HookUserMouse);
+        }
+        remove { lock (s_registryGate) _beforeMouseEvent -= value; }
+    }
+
+    private EventHandler<BeforeMouseEventArgs>? _beforeMouseEvent;
 
     // UI thread. True when a BeforeMouseEvent listener cancelled the event.
     internal bool OnBeforeMouseEvent(MouseInputEvent mouse)
     {
-        if (mouse.Type == MouseInputEventType.MouseWheel || BeforeMouseEvent is not { } handler) return false;
+        if (mouse.Type == MouseInputEventType.MouseWheel || _beforeMouseEvent is not { } handler) return false;
         var args = new BeforeMouseEventArgs(mouse);
         try { handler(this, args); }
         catch (Exception e)

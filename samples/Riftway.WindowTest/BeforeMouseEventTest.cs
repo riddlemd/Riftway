@@ -75,6 +75,44 @@ static class BeforeMouseEventTest
             check("before-mouse-event: wheel events are not raised (the page still gets them); enter and leave are",
                 seen.Contains("wheel", StringComparison.Ordinal) && got.Select(g => g.Type).SequenceEqual([MouseInputEventType.MouseEnter, MouseInputEventType.MouseLeave]),
                 $"{seen} / {string.Join(" | ", got.Select(g => g.Type))}");
+            if (OperatingSystem.IsWindows())
+            {
+                // The user's own mouse: messages posted to the page's page window, as Windows delivers them, never the real
+                // pointer. Positions in client pixels; the page's scale turns them into DIPs.
+                await Reset();
+                var top = win.GetNativeWindowHandle();
+                var pageWindow = Riftway.Cef.Platform.WindowsPageMouse.PageWindows(top).FirstOrDefault();
+                var scale = Riftway.Cef.Platform.WindowsPageMouse.Scale(pageWindow);
+                static nint At(int x, int y) => (nint)((y << 16) | x);
+                cancel = _ => false;
+                _ = PostMessageW(pageWindow, 0x0200, 0, At(150, 150));
+                _ = PostMessageW(pageWindow, 0x0200, 0, At(160, 155));
+                _ = PostMessageW(pageWindow, 0x0201, 0x1, At(160, 155));
+                _ = PostMessageW(pageWindow, 0x0202, 0, At(160, 155));
+                await Task.Delay(500);
+                seen = await Seen();
+                lock (reported) got = [.. reported];
+                var down = got.FirstOrDefault(g => g.Type == MouseInputEventType.MouseDown);
+                var lastMove = got.LastOrDefault(g => g.Type == MouseInputEventType.MouseMove);
+                check("before-mouse-event: the user's press over the page is reported and reaches the page",
+                    pageWindow != 0 && down is { Button: MouseButton.Left, ClickCount: 1 } && seen.Contains("mousedown:0", StringComparison.Ordinal),
+                    $"{seen} / {string.Join(" | ", got.Select(g => g.ToString()))}");
+                check("before-mouse-event: the user's events carry the page position in DIPs and the movement since the last move",
+                    down is not null && down.X == (int)Math.Floor(160 / scale) && down.Y == (int)Math.Floor(155 / scale)
+                    && lastMove is not null && lastMove.MovementX == (int)Math.Floor(160 / scale) - (int)Math.Floor(150 / scale) && lastMove.Button == MouseButton.None,
+                    $"scale {scale}: {string.Join(" | ", got.Select(g => g.ToString()))}");
+                await Reset();
+                cancel = m => m.Type is MouseInputEventType.MouseDown or MouseInputEventType.MouseUp;
+                _ = PostMessageW(pageWindow, 0x0204, 0x2, At(100, 100));
+                _ = PostMessageW(pageWindow, 0x0205, 0, At(100, 100));
+                await Task.Delay(500);
+                seen = await Seen();
+                lock (reported) got = [.. reported];
+                check("before-mouse-event: cancelling the user's press and release keeps them from the page",
+                    got.Count(g => g.Button == MouseButton.Right) == 2 && !seen.Contains("mousedown", StringComparison.Ordinal) && !seen.Contains("mouseup", StringComparison.Ordinal),
+                    $"{seen} / {string.Join(" | ", got.Select(g => g.ToString()))}");
+                cancel = _ => false;
+            }
         }
         finally
         {
@@ -82,4 +120,7 @@ static class BeforeMouseEventTest
             try { dir.Delete(true); } catch (IOException) { }
         }
     }
+
+    [System.Runtime.InteropServices.DllImport("user32.dll")]
+    private static extern int PostMessageW(nint hwnd, uint message, nint wParam, nint lParam);
 }

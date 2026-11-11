@@ -65,7 +65,7 @@ Percentages are over the non-n/a items; the second counts a partial item as half
 | `destroyed` | `Destroyed` | done |  |
 | `input-event` | `InputEvent` | partial | Keys from CEF's key handler; mouse and wheel events from the main frame's DOM, a little later; no gesture, touch or pointer events (C41). |
 | `before-input-event` | `BeforeInputEvent` | partial | `modifiers` shape (C15); `code`, `isComposing`, `location` derived (C16). |
-| `before-mouse-event` | `BeforeMouseEvent` | partial | Raised for the events `sendInputEvent` sends, cancellable; not yet for the user's own mouse (C57). |
+| `before-mouse-event` | `BeforeMouseEvent` | partial | Cancellable; the events `sendInputEvent` sends, and on Windows the user's own mouse; not the user's mouse on macOS or Linux (C57). |
 | `enter-html-full-screen` | `EnterHtmlFullScreen` | done |  |
 | `leave-html-full-screen` | `LeaveHtmlFullScreen` | done |  |
 | `zoom-changed` | `ZoomChanged` | partial | From the page's wheel events (C35). |
