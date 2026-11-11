@@ -1173,6 +1173,10 @@ public sealed unsafe partial class WebContents
                 OnIpcMessage(parameters.GetProperty("executionContextId").GetInt32(), parameters.GetProperty("payload").GetString()!);
                 break;
 
+            case "Page.screencastFrame":
+                OnScreencastFrame(parameters);
+                break;
+
             case "Page.frameAttached":
                 var attached = parameters.GetProperty("frameId").GetString()!;
                 if (!_frames.ContainsKey(attached))

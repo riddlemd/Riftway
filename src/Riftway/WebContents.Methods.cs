@@ -286,6 +286,8 @@ public sealed unsafe partial class WebContents
     public Task<NativeImage> CapturePageAsync(Rectangle? rect = null, CapturePageOptions? options = null)
     {
         var done = new TaskCompletionSource<NativeImage>(TaskCreationOptions.RunContinuationsAsynchronously);
+        // Electron's capturer count: up from the call until the capture is done (IncrementCapturerCount's handle).
+        Interlocked.Increment(ref _capturers);
         CefThread.RunOnUi(() =>
         {
             if (_browser is null)
@@ -329,8 +331,15 @@ public sealed unsafe partial class WebContents
                 });
             });
         });
-        return done.Task;
+        return Captured(done.Task);
     }
+
+    // The capture's task, done only once the capturer count is back down, so its awaiter sees IsBeingCaptured false.
+    private Task<NativeImage> Captured(Task<NativeImage> capture) => capture.ContinueWith(t =>
+    {
+        Interlocked.Decrement(ref _capturers);
+        return t;
+    }, CancellationToken.None, TaskContinuationOptions.ExecuteSynchronously, TaskScheduler.Default).Unwrap();
 
     /// <summary>The device-pixel rectangle of the view's capture that <paramref name="rect"/> (DIPs) covers, clipped to
     /// the image; null for the whole image (no rect, or an empty one, as Electron's). Each edge is rounded half away

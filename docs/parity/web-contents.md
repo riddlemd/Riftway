@@ -12,13 +12,13 @@ Percentages are over the non-n/a items; the second counts a partial item as half
 |---|---|---|---|---|---|---|---|
 | Static methods | 5 | 3 | 2 | 0 | 0 | 60.0% | 80.0% |
 | Instance events | 59 | 31 | 18 | 8 | 2 | 54.4% | 70.2% |
-| Instance methods | 118 | 44 | 38 | 28 | 8 | 40.0% | 57.3% |
+| Instance methods | 118 | 45 | 40 | 25 | 8 | 40.9% | 59.1% |
 | Instance properties | 18 | 10 | 3 | 4 | 1 | 58.8% | 67.6% |
 | navigationHistory | 14 | 12 | 0 | 2 | 0 | 85.7% | 85.7% |
 | WebFrameMain events and statics | 3 | 1 | 1 | 1 | 0 | 33.3% | 50.0% |
 | WebFrameMain methods | 9 | 1 | 5 | 3 | 0 | 11.1% | 38.9% |
 | WebFrameMain properties | 15 | 10 | 3 | 2 | 0 | 66.7% | 76.7% |
-| **Total** | 241 | 112 | 70 | 48 | 11 | 48.7% | 63.9% |
+| **Total** | 241 | 113 | 72 | 45 | 11 | 49.1% | 64.8% |
 
 ## Checklist
 
@@ -165,7 +165,7 @@ Percentages are over the non-n/a items; the second counts a partial item as half
 | `findInPage(text, options)` | `FindInPage` | partial | A new session only when the text or case changes (C18). |
 | `stopFindInPage(action)` | `StopFindInPage` | partial | `activateSelection` keeps the selection (C18). |
 | `capturePage()` | `CapturePageAsync` | partial | `stayHidden`/`stayAwake` have no effect (C22). |
-| `isBeingCaptured()` | — | missing |  |
+| `isBeingCaptured()` | `IsBeingCaptured` | partial | True while `CapturePageAsync` runs; Chromium's own tab capture unseen (C59). |
 | `getPrintersAsync()` | `GetPrintersAsync` | partial | Windows only, listed as Chromium lists them (Z4). |
 | `print()` | `Print` | partial | Electron's option checks and device-name errors; opens Chromium's print dialog without the settings; no silent printing or outcome callback (Z1-Z3). |
 | `printToPDF()` | `PrintToPDFAsync` | partial | Page.printToPDF over DevTools with Electron's defaults, validation messages and per-page queue; always the main frame, even with a selection in a focused iframe (C51). |
@@ -184,8 +184,8 @@ Percentages are over the non-n/a items; the second counts a partial item as half
 | `postMessage(channel, message, transfer)` | `PostMessage` | partial | JSON messages (I1). |
 | `enableDeviceEmulation()` | `EnableDeviceEmulation` | partial | DevTools metrics override; `mobile` forces more (C24). |
 | `disableDeviceEmulation()` | `DisableDeviceEmulation` | done |  |
-| `beginFrameSubscription()` | — | missing |  |
-| `endFrameSubscription()` | — | missing |  |
+| `beginFrameSubscription()` | `BeginFrameSubscription` | partial | Whole PNG frames from DevTools' screencast; no dirty rectangles (C58). |
+| `endFrameSubscription()` | `EndFrameSubscription` | done |  |
 | `startDrag()` | `StartDrag` | partial | Windows (the drag blocks queued UI tasks, its image painted with GDI) and macOS (Electron's `NSDraggingSession`, _branch `mac-integration`_, its drag session starts on screen, macOS 26, arm64 and x64); not Linux (C40). |
 | `savePage()` | `SavePageAsync` | partial | Through DevTools; `HTMLComplete` saves only the main document and its images, scripts and style sheets (C50). |
 | `showDefinitionForSelection()` | `ShowDefinitionForSelection` | partial | macOS: Chromium's `ShowDictionaryOverlayForSelection` on the page's `RenderWidgetHostViewCocoa`, found under the browser's view; nothing elsewhere, as Electron _(branch `mac-integration`)_; not yet run on screen. |
