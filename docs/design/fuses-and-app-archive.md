@@ -1,6 +1,6 @@
 # Fuses and the packed app archive
 
-Design for M4's "fuses and a packed app archive" (ELECTRON-PARITY: Fuses, ASAR). Status: proposal, nothing built.
+Design for M4's "fuses and a packed app archive" (ELECTRON-PARITY: Fuses, ASAR). Status: step 2 (the archive format, `Riftway.Asar`) built; the rest is a proposal.
 
 ## What Electron's fuses guard, and what Riftway has instead
 
@@ -48,6 +48,8 @@ C#; nothing about it needs Node.
 1. Fuse plumbing: MSBuild properties → runtimeconfig + assembly metadata; `RiftwayApp` reads them; `StartupHooks`,
    `Diagnostics`, `RemoteDebugging`, `DotnetEnvironment`. Unit tests for the reader and the switch stripping; a sample
    check that a `DOTNET_STARTUP_HOOKS` hook does not run with the fuse off.
-2. ASAR reader/writer with Electron's own test archives as fixtures (byte-for-byte header compatibility).
+2. ASAR reader/writer with Electron's own test archives as fixtures (byte-for-byte header compatibility). Done:
+   `AsarArchive`/`AsarPacker` in `src/Riftway/Asar`, `tests/Riftway.Tests/AsarTests.cs` (fixtures from electron/asar,
+   MIT). The packer's file predicates stand in for `unpack`/`unpackDir` globs; the MSBuild target maps globs onto them.
 3. Pack-after-publish target; `AsarFileProvider` in `Riftway.Blazor`; BlazorSample self-check from a packed publish.
 4. Integrity: embed, verify header at startup and blocks on read; a check that a tampered archive refuses to load.

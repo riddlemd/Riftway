@@ -9,7 +9,7 @@ These figures are counted from the rows: after changing a row or checklist item,
 
 | Measure | Done | Partial | Not started | Total |
 |---|---|---|---|---|
-| Module rows below | 11 | 44 | 12 | 67 |
+| Module rows below | 11 | 45 | 11 | 67 |
 | M2 rows | 3 | 18 | 0 | 21 |
 
 The 67 rows include `BrowserView` (deprecated, never implemented; counted as not started).
@@ -49,7 +49,7 @@ Where an implemented module differs from Electron, the difference and its reason
 | `crashReporter` | `CrashReporter` (Crashpad) | CEF | M4 | partial: every method; `Start` before `Run()` writes CEF's `crash_reporter.cfg`; Windows and macOS verified end to end (renderer and browser crashes, uploads, local-only, rate limit), Linux written and unrun; see DRIFT.md CR1–CR12, CR14–CR16 |
 | `contentTracing` | `ContentTracing` | CEF | M6 | partial: `startRecording` (`TraceConfig` and `TraceCategoriesAndOptions`), `stopRecording`, `getCategories`, `getTraceBufferUsage`; options beyond categories, `getCategories` and buffer usage go through an open page's DevTools session (P6, P14, P15, P16); no `enableHeapProfiling` |
 | `autoUpdater` | `AutoUpdater` (Velopack) | Pack | M4 | partial: `Riftway.AutoUpdater` package, every method and event over Velopack's `UpdateManager` (unit-tested through a fake feed); `HandleInstallerHooks` exits Velopack's hook runs before any window (checked through the Windows bootstrap layout); a Linux AppImage updates itself from 1.0.0 to 2.0.0 through it (Docker). Not yet run on an installed Windows app; `releaseDate` is always null (Velopack feeds have none) |
-| Fuses, ASAR | Fuses, packed app archive with integrity check | Pack | M4 | — |
+| Fuses, ASAR | Fuses, packed app archive with integrity check | Pack | M4 | partial: the archive format (`Riftway.Asar`): `AsarArchive` reads Electron's archives (links, unpacked files, `..` kept inside, each 4 MiB block checked against its SHA-256 before it is returned), `AsarPacker` writes `@electron/asar`'s archives byte for byte (checked against its own fixtures); packing at publish, serving pages from the archive, the header check at startup and fuses are not built ([design](design/fuses-and-app-archive.md)) |
 
 ## Windows and views
 
