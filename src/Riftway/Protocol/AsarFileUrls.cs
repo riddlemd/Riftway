@@ -47,7 +47,7 @@ internal static class AsarFileUrls
 
     private static AsarArchive? Open(string path) => s_archives.GetOrAdd(Path.GetFullPath(path), full =>
     {
-        try { return AsarArchive.Open(full); }
+        try { return AsarArchive.OpenForApp(full); }
         catch (Exception e) when (e is IOException or InvalidDataException or UnauthorizedAccessException) { return null; }
     });
 

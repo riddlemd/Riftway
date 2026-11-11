@@ -13,13 +13,14 @@ public sealed class AsarFileProvider : IFileProvider, IDisposable
     private readonly bool _verifyIntegrity;
     private readonly DateTimeOffset _lastModified;
 
-    /// <summary>Opens the archive.</summary>
+    /// <summary>Opens the archive as the app's own (<see cref="AsarArchive.OpenForApp"/>): with the
+    /// <c>ArchiveIntegrity</c> fuse on, it is checked against the hash in the app and every read is checked.</summary>
     /// <param name="archivePath">The <c>.asar</c> file.</param>
     /// <param name="verifyIntegrity">Check each block read against its SHA-256 in the header; a mismatch fails the read
     /// with <see cref="InvalidDataException"/>, as Electron's integrity check refuses it.</param>
     public AsarFileProvider(string archivePath, bool verifyIntegrity = false)
     {
-        _archive = AsarArchive.Open(archivePath);
+        _archive = AsarArchive.OpenForApp(archivePath);
         _verifyIntegrity = verifyIntegrity;
         _lastModified = File.GetLastWriteTimeUtc(_archive.FilePath);
     }

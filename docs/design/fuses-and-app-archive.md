@@ -62,3 +62,7 @@ C#; nothing about it needs Node.
    archive: `AsarFileUrls` behind a `file` scheme factory that declines every other path to Chromium's loader
    (DRIFT A45); checked with a page, CSS, an unpacked image, a loose page and a missing entry (`ERR_FILE_NOT_FOUND`).
 4. Integrity: embed, verify header at startup and blocks on read; a check that a tampered archive refuses to load.
+   Done on Windows: `RiftwayFuseArchiveIntegrity` (assembly metadata) and Electron's `Integrity`/`ElectronAsar` exe
+   resource written after packing; `AsarArchive.OpenForApp` checks the header when an archive is first opened (as
+   Electron's `Archive::Init`) and every block read, failing fast. A tampered header and a tampered file each stopped
+   the packed BlazorSample; the untouched one passed its self-check. macOS (`Info.plist`) is open (DRIFT A46).

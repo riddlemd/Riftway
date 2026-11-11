@@ -10,7 +10,8 @@
   </PropertyGroup>
 
   <ItemGroup>
-    <Compile Include="..\Riftway\Asar\*.cs" Link="Asar\%(Filename)%(Extension)" />
+    <Compile Include="..\Riftway\Asar\*.cs" Exclude="..\Riftway\Asar\AppArchiveIntegrity.cs" Link="Asar\%(Filename)%(Extension)" />
+    <!-- OpenForApp's fuse policy is the app's, not the packer's: AppArchiveIntegrity.Stub.cs stands in for it. -->
   </ItemGroup>
 
 </Project>

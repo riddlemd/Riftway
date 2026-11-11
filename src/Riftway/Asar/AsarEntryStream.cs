@@ -13,13 +13,15 @@ internal sealed class AsarEntryStream : Stream
     private readonly long _length;
     private readonly AsarIntegrity? _integrity;
     private readonly string _name;
+    private readonly bool _failFast;
     private long _position;
     private byte[]? _block;
     private long _blockIndex = -1;
     private int _blockLength;
 
-    internal AsarEntryStream(SafeFileHandle handle, bool ownsHandle, long start, long length, AsarIntegrity? integrity, string name)
+    internal AsarEntryStream(SafeFileHandle handle, bool ownsHandle, long start, long length, AsarIntegrity? integrity, string name, bool failFast = false)
     {
+        _failFast = failFast;
         _handle = handle;
         _ownsHandle = ownsHandle;
         _start = start;
@@ -29,7 +31,7 @@ internal sealed class AsarEntryStream : Stream
         if (integrity is not null && integrity.Blocks.Count != Math.Max(1, (length + integrity.BlockSize - 1) / integrity.BlockSize))
         {
             if (ownsHandle) handle.Dispose();
-            throw new InvalidDataException($"\"{name}\" has {integrity.Blocks.Count} block hashes for {length} bytes.");
+            Refuse($"\"{name}\" has {integrity.Blocks.Count} block hashes for {length} bytes.");
         }
     }
 
@@ -78,14 +80,22 @@ internal sealed class AsarEntryStream : Stream
         while (filled < length)
         {
             var read = RandomAccess.Read(_handle, _block.AsSpan(filled, length - filled), _start + index * size + filled);
-            if (read == 0) throw new InvalidDataException($"\"{_name}\" ends before its size.");
+            if (read == 0) Refuse($"\"{_name}\" ends before its size.");
             filled += read;
         }
         _blockIndex = -1;
         if (Convert.ToHexStringLower(SHA256.HashData(_block.AsSpan(0, length))) != _integrity.Blocks[(int)index])
-            throw new InvalidDataException($"Block {index} of \"{_name}\" does not match its integrity hash.");
+            Refuse($"Block {index} of \"{_name}\" does not match its integrity hash.");
         _blockIndex = index;
         _blockLength = length;
+    }
+
+    // Electron's ValidateIntegrityOrDie under the ArchiveIntegrity fuse; a failed read otherwise.
+    [System.Diagnostics.CodeAnalysis.DoesNotReturn]
+    private void Refuse(string why)
+    {
+        if (_failFast) Environment.FailFast(why);
+        throw new InvalidDataException(why);
     }
 
     public override long Seek(long offset, SeekOrigin origin) => Position = origin switch

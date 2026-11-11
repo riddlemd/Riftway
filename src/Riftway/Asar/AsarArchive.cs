@@ -123,6 +123,28 @@ public sealed class AsarArchive : IDisposable
     /// <summary>The root directory.</summary>
     public AsarEntry Root { get; }
 
+    /// <summary>Whether every read is checked against its hashes and a mismatch ends the process: an archive
+    /// <see cref="OpenForApp"/> opened with the <c>ArchiveIntegrity</c> fuse on.</summary>
+    public bool ChecksReads { get; private set; }
+
+    /// <summary>Opens an archive the app serves its own pages from. With the <c>ArchiveIntegrity</c> fuse on
+    /// (<c>RiftwayFuseArchiveIntegrity</c>, Electron's <c>EnableEmbeddedAsarIntegrityValidation</c>), its header must
+    /// match the hash built into the app's exe and every block read must match its hash; otherwise the process ends,
+    /// as Electron's does. With the fuse off this is <see cref="Open"/>.</summary>
+    public static AsarArchive OpenForApp(string path)
+    {
+        var archive = Open(path);
+        var policy = AppArchiveIntegrity.Current;
+        if (!policy.Enabled) return archive;
+        if (AppArchiveIntegrity.Check(policy, archive.FilePath, archive.HeaderHash) is { } error)
+        {
+            archive.Dispose();
+            Environment.FailFast(error);
+        }
+        archive.ChecksReads = true;
+        return archive;
+    }
+
     /// <summary>Opens an archive and reads its header.</summary>
     /// <exception cref="InvalidDataException">The file is not an ASAR archive, or its header is malformed.</exception>
     public static AsarArchive Open(string path)
@@ -283,11 +305,11 @@ public sealed class AsarArchive : IDisposable
         var entry = GetEntry(path) ?? throw new FileNotFoundException($"{FilePath} has no \"{path}\".", path);
         if (entry.Kind == AsarEntryKind.Directory) throw new UnauthorizedAccessException($"\"{path}\" in {FilePath} is a directory.");
         AsarIntegrity? integrity = null;
-        if (verifyIntegrity)
+        if (verifyIntegrity || ChecksReads)
         {
             integrity = entry.Integrity;
             if (integrity is null || integrity.Algorithm != "SHA256" || integrity.BlockSize <= 0)
-                throw new InvalidDataException($"\"{entry.Path}\" in {FilePath} has no SHA256 integrity.");
+                Refuse($"\"{entry.Path}\" in {FilePath} has no SHA256 integrity.");
         }
 
         if (entry.Unpacked)
@@ -295,12 +317,12 @@ public sealed class AsarArchive : IDisposable
             var file = System.IO.Path.Combine(FilePath + ".unpacked", entry.Path.Replace('/', System.IO.Path.DirectorySeparatorChar));
             if (!File.Exists(file)) throw new FileNotFoundException($"The unpacked file {file} is missing.", file);
             var handle = File.OpenHandle(file, FileMode.Open, FileAccess.Read, FileShare.Read);
-            return new AsarEntryStream(handle, ownsHandle: true, 0, RandomAccess.GetLength(handle), integrity, entry.Path);
+            return new AsarEntryStream(handle, ownsHandle: true, 0, RandomAccess.GetLength(handle), integrity, entry.Path, ChecksReads);
         }
 
         if (entry.Offset < 0 || entry.Offset > _length - DataOffset - entry.Size)
             throw new InvalidDataException($"\"{entry.Path}\" lies outside {FilePath}.");
-        return new AsarEntryStream(_handle, ownsHandle: false, DataOffset + entry.Offset, entry.Size, integrity, entry.Path);
+        return new AsarEntryStream(_handle, ownsHandle: false, DataOffset + entry.Offset, entry.Size, integrity, entry.Path, ChecksReads);
     }
 
     /// <summary>Reads a whole file; with <paramref name="verifyIntegrity"/>, its blocks and its whole hash are checked.</summary>
@@ -312,9 +334,17 @@ public sealed class AsarArchive : IDisposable
         using var stream = OpenRead(path, verifyIntegrity);
         var bytes = new byte[stream.Length];
         stream.ReadExactly(bytes);
-        if (verifyIntegrity && Convert.ToHexStringLower(SHA256.HashData(bytes)) != GetEntry(path)!.Integrity!.Hash)
-            throw new InvalidDataException($"\"{path}\" in {FilePath} does not match its integrity hash.");
+        if ((verifyIntegrity || ChecksReads) && Convert.ToHexStringLower(SHA256.HashData(bytes)) != GetEntry(path)!.Integrity!.Hash)
+            Refuse($"\"{path}\" in {FilePath} does not match its integrity hash.");
         return bytes;
+    }
+
+    // Electron's ValidateIntegrityOrDie: under the fuse a mismatch ends the process; otherwise the read fails.
+    [System.Diagnostics.CodeAnalysis.DoesNotReturn]
+    private void Refuse(string why)
+    {
+        if (ChecksReads) Environment.FailFast(why);
+        throw new InvalidDataException(why);
     }
 
     /// <summary>Closes the archive.</summary>
