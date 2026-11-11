@@ -119,10 +119,13 @@ static class WindowStatePersistenceChecks
         catch (NotSupportedException e) { pageError = e.Message; }
         check("Name: a window refused for a page it cannot adopt leaves its name free",
             pageError is not null && NameIsFree("refused-page"), pageError);
-        try { _ = new BrowserWindow(new BrowserWindowOptions { Name = "refused-icon", Show = false, Icon = Path.Combine(Path.GetTempPath(), "riftway-no-such-icon.png") }); }
-        catch (IOException e) { iconError = e.Message; }
-        check("Name: a window refused for a missing icon file leaves its name free",
-            iconError is not null && NameIsFree("refused-icon"), iconError);
+        // A missing icon file is no refusal: Electron reads it through createFromPath, which gives an empty image.
+        BrowserWindow? noIcon = null;
+        try { noIcon = new BrowserWindow(new BrowserWindowOptions { Name = "missing-icon", Show = false, Icon = Path.Combine(Path.GetTempPath(), "riftway-no-such-icon.png") }); }
+        catch (Exception e) { iconError = e.Message; }
+        check("Name: a window whose icon file is missing still opens and takes its name, as Electron's createFromPath gives an empty icon",
+            noIcon is not null && iconError is null && !NameIsFree("missing-icon"), iconError);
+        noIcon?.Destroy();
         again?.Destroy();
 
         // Electron keeps restore_display_mode_ without a name, and with it skips the fullscreen option.
