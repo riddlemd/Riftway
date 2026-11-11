@@ -1,0 +1,15 @@
+<Project>
+  <!-- Fuses (Riftway.Fuses): RiftwayFuse<Name>=true|false becomes Riftway.Fuse.<Name> metadata in the app's assembly.
+       ArchiveIntegrity and OnlyLoadFromArchive are off unless set; StartupHooks, RemoteDebugging and DotnetEnvironment
+       are on unless set false. StartupHooks=false is also .NET's StartupHookSupport=false, which the runtime enforces. -->
+  <ItemGroup>
+    <AssemblyMetadata Include="Riftway.Fuse.ArchiveIntegrity" Value="$(RiftwayFuseArchiveIntegrity)" Condition="'$(RiftwayFuseArchiveIntegrity)' != ''" />
+    <AssemblyMetadata Include="Riftway.Fuse.OnlyLoadFromArchive" Value="$(RiftwayFuseOnlyLoadFromArchive)" Condition="'$(RiftwayFuseOnlyLoadFromArchive)' != ''" />
+    <AssemblyMetadata Include="Riftway.Fuse.StartupHooks" Value="$(RiftwayFuseStartupHooks)" Condition="'$(RiftwayFuseStartupHooks)' != ''" />
+    <AssemblyMetadata Include="Riftway.Fuse.RemoteDebugging" Value="$(RiftwayFuseRemoteDebugging)" Condition="'$(RiftwayFuseRemoteDebugging)' != ''" />
+    <AssemblyMetadata Include="Riftway.Fuse.DotnetEnvironment" Value="$(RiftwayFuseDotnetEnvironment)" Condition="'$(RiftwayFuseDotnetEnvironment)' != ''" />
+  </ItemGroup>
+  <PropertyGroup Condition="'$(RiftwayFuseStartupHooks)' == 'false'">
+    <StartupHookSupport>false</StartupHookSupport>
+  </PropertyGroup>
+</Project>

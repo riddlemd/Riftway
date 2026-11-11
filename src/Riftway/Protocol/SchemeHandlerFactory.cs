@@ -10,10 +10,15 @@ namespace Riftway;
 internal sealed unsafe class SchemeHandlerFactory
 {
     private readonly Func<ProtocolRequest, CancellationToken, Task<ProtocolResponse>> _handler;
+    private readonly Func<string, bool>? _accepts;
 
-    public SchemeHandlerFactory(Func<ProtocolRequest, CancellationToken, Task<ProtocolResponse>> handler)
+    /// <param name="handler">Answers each request.</param>
+    /// <param name="accepts">Asked first, on CEF's IO thread, with the URL: false leaves the request to CEF's own
+    /// handling (for <c>file://</c>, Chromium's file loader). Null takes every request.</param>
+    public SchemeHandlerFactory(Func<ProtocolRequest, CancellationToken, Task<ProtocolResponse>> handler, Func<string, bool>? accepts = null)
     {
         _handler = handler;
+        _accepts = accepts;
         Native = NativeObject.Create<cef_scheme_handler_factory_t>(this);
         Native->create = &Create;
     }
@@ -56,8 +61,10 @@ internal sealed unsafe class SchemeHandlerFactory
         try
         {
             // Null is CEF's default handling: the network for http(s), net::ERR_UNKNOWN_URL_SCHEME otherwise.
-            if (IsBypassed(CefString.ReadUserFree(request->get_url(request)))) return null;
+            var url = CefString.ReadUserFree(request->get_url(request));
+            if (IsBypassed(url)) return null;
             var owner = NativeObject.Owner<SchemeHandlerFactory>(self);
+            if (owner._accepts is not null && !owner._accepts(url)) return null;
             return new ResourceHandler(Snapshot(request), owner._handler).Native;
         }
         catch (Exception e)

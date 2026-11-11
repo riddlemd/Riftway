@@ -5,7 +5,8 @@ namespace Riftway.Blazor;
 /// <summary>Where a Blazor window's host page and static files come from.</summary>
 public sealed record BlazorWebViewOptions
 {
-    /// <summary>The static files root; <c>wwwroot</c> beside the app by default.</summary>
+    /// <summary>The static files root: a folder, or an ASAR archive (<see cref="AsarFileProvider"/>). By default
+    /// <c>resources/app.asar</c> beside the app when there is one, as Electron, and <c>wwwroot</c> otherwise.</summary>
     public string? ContentRoot { get; init; }
 
     /// <summary>The host page, relative to <see cref="ContentRoot"/>.</summary>

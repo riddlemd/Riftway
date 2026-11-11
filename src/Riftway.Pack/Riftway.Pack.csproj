@@ -1,0 +1,17 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!-- The packer the RiftwayPackArchive publish step runs (buildTransitive/Riftway.Archive.targets), shipped in the
+       Riftway package under tools/pack. Framework-dependent and free of CEF: it compiles the archive sources itself,
+       so it runs in its own process under any MSBuild (dotnet or Visual Studio's). -->
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <RollForward>Major</RollForward>
+    <IsPackable>false</IsPackable>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <Compile Include="..\Riftway\Asar\*.cs" Exclude="..\Riftway\Asar\AppArchiveIntegrity.cs" Link="Asar\%(Filename)%(Extension)" />
+    <!-- OpenForApp's fuse policy is the app's, not the packer's: AppArchiveIntegrity.Stub.cs stands in for it. -->
+  </ItemGroup>
+
+</Project>

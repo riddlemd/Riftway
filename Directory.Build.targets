@@ -39,4 +39,16 @@
   </Target>
 
   <Import Project="eng/windows-layout.targets" Condition="'$(RiftwayWindowsLayout)' == 'true'" />
+
+  <!-- RiftwayPackArchive for in-repo apps: the archive step (also imported by Riftway.targets above, on a Mac bundle) and
+       the packer built from src/Riftway.Pack rather than taken from the package. -->
+  <Import Project="src/Riftway/buildTransitive/Riftway.Archive.targets" Condition="'$(RiftwayPackArchive)' == 'true' and '$(OutputType)' == 'Exe' and !('$(RiftwayMacBundle)' == 'true')" />
+  <Import Project="src/Riftway/buildTransitive/Riftway.Fuses.targets" Condition="'$(OutputType)' == 'Exe' and !('$(RiftwayMacBundle)' == 'true')" />
+  <Target Name="_RiftwayRepoPackTool" BeforeTargets="RiftwayPackArchive" Condition="'$(RiftwayPackArchive)' == 'true' and '$(OutputType)' == 'Exe'">
+    <MSBuild Projects="$(MSBuildThisFileDirectory)src/Riftway.Pack/Riftway.Pack.csproj" Targets="Build"
+             Properties="Configuration=$(Configuration)"
+             RemoveProperties="RuntimeIdentifier;SelfContained;PublishDir;OutputPath;RiftwayPackArchive;RiftwayWindowsLayout;RiftwayExeName;RiftwayMacBundle">
+      <Output TaskParameter="TargetOutputs" PropertyName="RiftwayPackTool" />
+    </MSBuild>
+  </Target>
 </Project>

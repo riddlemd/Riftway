@@ -66,3 +66,6 @@
 #*.PDF   diff=astextplain
 #*.rtf   diff=astextplain
 #*.RTF   diff=astextplain
+
+# Fixtures from electron/asar, compared byte for byte (their SHA-256 hashes are in the archives).
+tests/Riftway.Tests/Fixtures/** -text

@@ -22,6 +22,13 @@
   </ItemGroup>
 
   <ItemGroup>
+    <!-- electron/asar's test archives and inputs, read in place by AsarTests. -->
+    <None Include="Fixtures\**" CopyToOutputDirectory="PreserveNewest" />
+    <!-- Riftway.Pack is an exe compiling the archive sources itself; its pattern matcher is tested from source. -->
+    <Compile Include="..\..\src\Riftway.Pack\ArchiveGlob.cs" Link="Pack\ArchiveGlob.cs" />
+  </ItemGroup>
+
+  <ItemGroup>
     <ProjectReference Include="..\..\src\Riftway\Riftway.csproj" />
     <ProjectReference Include="..\..\src\Riftway.AutoUpdater\Riftway.AutoUpdater.csproj" />
     <ProjectReference Include="..\..\src\Riftway.Blazor\Riftway.Blazor.csproj" />

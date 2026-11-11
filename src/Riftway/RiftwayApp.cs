@@ -153,6 +153,8 @@ public sealed unsafe partial class RiftwayApp
         if (s_current is not null) throw new InvalidOperationException("A RiftwayApp already exists in this process.");
         // Electron's wWinMain: a GUI-subsystem app started from a console writes to it, unless ELECTRON_NO_ATTACH_CONSOLE.
         if (OperatingSystem.IsWindows()) Riftway.Cef.Platform.WindowsConsole.RouteStdioToConsole();
+        // Before anything of the app's runs, as Electron reads NODE_OPTIONS only when its fuse allows.
+        Fuses.EnforceAtStartup();
         s_current = new RiftwayApp(name ?? Assembly.GetEntryAssembly()?.GetName().Name ?? "Riftway");
         // Electron's init.ts does this at start-up, from package.json's desktopName or the app's name.
         s_current.SetDesktopName(DefaultDesktopName(s_current.Name));
@@ -401,6 +403,17 @@ public sealed unsafe partial class RiftwayApp
             app.CommandLine.ApplyTo(commandLine);
             CommandLine.Append(commandLine, app._loggingSwitches);
         }
+        // Last, so neither the launcher's switches nor the app's own reach Chromium with the fuse off.
+        if (processType.Length == 0 && !Fuses.RemoteDebugging)
+            foreach (var name in Fuses.RemoteDebuggingSwitches) RemoveSwitch(commandLine, name);
+    }
+
+    private static void RemoveSwitch(cef_command_line_t* commandLine, string name)
+    {
+        cef_string_utf16_t value = default;
+        CefString.Set(&value, name);
+        commandLine->remove_switch(commandLine, &value);
+        CefString.Clear(&value);
     }
 
     private static void AppendSwitch(cef_command_line_t* commandLine, string name)

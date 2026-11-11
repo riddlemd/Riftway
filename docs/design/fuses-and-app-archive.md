@@ -1,6 +1,7 @@
 # Fuses and the packed app archive
 
-Design for M4's "fuses and a packed app archive" (ELECTRON-PARITY: Fuses, ASAR). Status: proposal, nothing built.
+Design for M4's "fuses and a packed app archive" (ELECTRON-PARITY: Fuses, ASAR). Status: built on Windows (steps 1-4 below); the macOS `Info.plist` integrity and a fuse-reading CLI are open
+(DRIFT A46, A47).
 
 ## What Electron's fuses guard, and what Riftway has instead
 
@@ -47,7 +48,24 @@ C#; nothing about it needs Node.
 
 1. Fuse plumbing: MSBuild properties → runtimeconfig + assembly metadata; `RiftwayApp` reads them; `StartupHooks`,
    `Diagnostics`, `RemoteDebugging`, `DotnetEnvironment`. Unit tests for the reader and the switch stripping; a sample
-   check that a `DOTNET_STARTUP_HOOKS` hook does not run with the fuse off.
-2. ASAR reader/writer with Electron's own test archives as fixtures (byte-for-byte header compatibility).
+   check that a `DOTNET_STARTUP_HOOKS` hook does not run with the fuse off. Done (`Riftway.Fuses`,
+   `buildTransitive/Riftway.Fuses.targets`) except `Diagnostics`, which .NET offers only as an environment variable;
+   checked in a published app: hook and debug port with no fuses, neither with `StartupHooks`/`RemoteDebugging` off,
+   and a refused start with `DotnetEnvironment` off.
+2. ASAR reader/writer with Electron's own test archives as fixtures (byte-for-byte header compatibility). Done:
+   `AsarArchive`/`AsarPacker` in `src/Riftway/Asar`, `tests/Riftway.Tests/AsarTests.cs` (fixtures from electron/asar,
+   MIT). The packer's file predicates stand in for `unpack`/`unpackDir` globs; the MSBuild target maps globs onto them.
 3. Pack-after-publish target; `AsarFileProvider` in `Riftway.Blazor`; BlazorSample self-check from a packed publish.
+   Done: `AsarFileProvider`, chosen by `BlazorWebView` when `resources/app.asar` is beside the app (Electron's order:
+   the archive before loose files) or named by `ContentRoot`; the self-check passed 18/18 three times with `wwwroot`
+   packed by `AsarPacker` and deleted. Publish: `-p:RiftwayPackArchive=true` (`buildTransitive/Riftway.Archive.targets`)
+   runs `src/Riftway.Pack` (shipped as `tools/pack/Riftway.Pack.dll`, run through `DOTNET_HOST_PATH` so it works under
+   any MSBuild), packs `wwwroot` into `resources/app.asar`, removes the folder and any previous archive; the
+   self-check passed 18/18 three times from such a publish (with `RiftwayArchiveUnpack=*.css`). `file://` into an
+   archive: `AsarFileUrls` behind a `file` scheme factory that declines every other path to Chromium's loader
+   (DRIFT A45); checked with a page, CSS, an unpacked image, a loose page and a missing entry (`ERR_FILE_NOT_FOUND`).
 4. Integrity: embed, verify header at startup and blocks on read; a check that a tampered archive refuses to load.
+   Done on Windows: `RiftwayFuseArchiveIntegrity` (assembly metadata) and Electron's `Integrity`/`ElectronAsar` exe
+   resource written after packing; `AsarArchive.OpenForApp` checks the header when an archive is first opened (as
+   Electron's `Archive::Init`) and every block read, failing fast. A tampered header and a tampered file each stopped
+   the packed BlazorSample; the untouched one passed its self-check. macOS (`Info.plist`) is open (DRIFT A46).

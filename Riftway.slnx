@@ -4,6 +4,7 @@
     <Project Path="src/Riftway.AutoUpdater/Riftway.AutoUpdater.csproj" />
     <Project Path="src/Riftway.Blazor/Riftway.Blazor.csproj" />
     <Project Path="src/Riftway.Cef/Riftway.Cef.csproj" />
+    <Project Path="src/Riftway.Pack/Riftway.Pack.csproj" />
     <Project Path="src/Riftway.Subprocess/Riftway.Subprocess.csproj" />
   </Folder>
   <Folder Name="/samples/">
