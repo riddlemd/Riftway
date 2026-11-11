@@ -6,6 +6,7 @@ using Riftway.Cef.Interop;
 
 namespace Riftway.Tests;
 
+[Collection(nameof(CefPatchedApiCollection))]
 public sealed unsafe class CefPatchedApiTests
 {
     private const string Stock = "5c8344ae7d7f6421bc801401e35d4dbf6d38e101";
@@ -420,6 +421,7 @@ public sealed unsafe class CefPatchedApiTests
     }
 }
 
+[Collection(nameof(CefPatchedApiCollection))]
 public sealed class CefPatchedApiAsyncTests
 {
     [Fact]
@@ -430,3 +432,7 @@ public sealed class CefPatchedApiAsyncTests
     public async Task NetLogCallback_CompletesWithTheErrorText() =>
         Assert.Equal("net::ERR_FAILED", await CefPatchedApiTests.CompleteWith("net::ERR_FAILED"));
 }
+
+// Both classes share the fakes' static call lists, so they run one after the other.
+[CollectionDefinition(nameof(CefPatchedApiCollection))]
+public sealed class CefPatchedApiCollection;
