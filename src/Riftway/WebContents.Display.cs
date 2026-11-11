@@ -244,7 +244,9 @@ public sealed unsafe partial class WebContents
     internal void SetWidgetFocus(bool focus) => WithHost(host => host->set_focus(host, focus ? 1 : 0));
 
     /// <summary>Whether the page's view has keyboard focus in a visible window. Electron's <c>webContents.isFocused()</c>.</summary>
-    public bool IsFocused() => CefThread.InvokeOnUi(() => _hasFocus) && BaseWindow.HostOf(this) is not { IsVisible: false };
+    /// <remarks>As Electron's, the view's own focus: false once another view of the same window (another page, DevTools)
+    /// has it, though the window stays active.</remarks>
+    public bool IsFocused() => CefThread.InvokeOnUi(() => _hasFocus && ViewHasFocus()) && BaseWindow.HostOf(this) is not { IsVisible: false };
 
     // UI thread. Chromium's RenderWidgetHostView::HasFocus as Views knows it; _hasFocus misses focus moving between
     // views of one window, which CEF reports to neither page.
@@ -260,7 +262,17 @@ public sealed unsafe partial class WebContents
         return focused;
     }
 
-    internal FocusHandler FocusEvents =>_focusEvents ??= new FocusHandler { GotFocus = OnGotFocus };
+    internal FocusHandler FocusEvents =>_focusEvents ??= new FocusHandler
+    {
+        GotFocus = OnGotFocus,
+        SetFocus = source => source == cef_focus_source_t.FOCUS_SOURCE_NAVIGATION && !ShouldFocusOnNavigation(),
+    };
+
+    // UI thread. Electron's ReadyToCommitNavigation: a navigation focuses the page only when it is a BrowserWindow's own
+    // page (not a WebContentsView's), its window is the active one, and focusOnNavigation is on. CEF asks only for
+    // main-frame navigations, Electron's other condition.
+    private bool ShouldFocusOnNavigation()
+        => _preferences.FocusOnNavigation && BrowserWindow.FromWebContents(this) is { IsDestroyed: false } owner && owner.IsFocused;
 
     /// <summary>The page <paramref name="frame"/> belongs to, or null once it is gone. Electron's
     /// <c>webContents.fromFrame()</c>.</summary>
