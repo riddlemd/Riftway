@@ -4,11 +4,6 @@ namespace Riftway.BlazorSample;
 
 internal static class SelfCheck
 {
-    /// <summary>A child process that exits at once: <c>/bin/sh -c true</c>, or <c>cmd.exe /c exit 0</c> on Windows.</summary>
-    public static System.Diagnostics.ProcessStartInfo TrivialChild() => OperatingSystem.IsWindows()
-        ? new("cmd.exe", "/c exit 0") { UseShellExecute = false, CreateNoWindow = true }
-        : new("/bin/sh", "-c true") { UseShellExecute = false };
-
     public static async Task<int> RunAsync(BrowserWindow window, SharedCounter counter)
     {
         var page = window.WebContents;
