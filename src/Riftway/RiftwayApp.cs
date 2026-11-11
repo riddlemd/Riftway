@@ -143,12 +143,16 @@ public sealed unsafe partial class RiftwayApp
 
     internal void RaiseLogin(object? sender, LoginEventArgs args) => Login?.Invoke(this, args);
 
-    /// <summary>Creates the process's application.</summary>
+    /// <summary>Creates the process's application. On Windows, an app built as a GUI exe that was started from a console,
+    /// with no stdout or stderr of its own, attaches to that console first, as Electron does; set
+    /// <c>ELECTRON_NO_ATTACH_CONSOLE</c> (or <c>RIFTWAY_NO_ATTACH_CONSOLE</c>) to keep it detached.</summary>
     /// <param name="name">Defaults to the entry assembly's name.</param>
     /// <exception cref="InvalidOperationException">An application already exists.</exception>
     public static RiftwayApp Create(string? name = null)
     {
         if (s_current is not null) throw new InvalidOperationException("A RiftwayApp already exists in this process.");
+        // Electron's wWinMain: a GUI-subsystem app started from a console writes to it, unless ELECTRON_NO_ATTACH_CONSOLE.
+        if (OperatingSystem.IsWindows()) Riftway.Cef.Platform.WindowsConsole.RouteStdioToConsole();
         s_current = new RiftwayApp(name ?? Assembly.GetEntryAssembly()?.GetName().Name ?? "Riftway");
         // Electron's init.ts does this at start-up, from package.json's desktopName or the app's name.
         s_current.SetDesktopName(DefaultDesktopName(s_current.Name));
