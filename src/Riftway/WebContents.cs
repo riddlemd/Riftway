@@ -56,6 +56,8 @@ public sealed unsafe partial class WebContents
         RegisterLifecycle();
         _preferences = preferences;
         Session = session;
+        // Before the page's first load, as Electron's OverrideWebkitPrefs: the session's preference (drift C53).
+        if (preferences.ImageAnimationPolicy is { } animation) SetImageAnimationPolicy(animation);
         // Electron's -run-dialog: alert and confirm in a message box modal to the page's window, safeDialogs, no prompt.
         _dialogs = new JavaScriptDialogs(
             options => BrowserWindow.FromWebContents(this) is { IsDestroyed: false } owner ? Dialog.ShowMessageBoxAsync(owner, options) : Dialog.ShowMessageBoxAsync(options),
@@ -854,11 +856,21 @@ public sealed unsafe partial class WebContents
     {
         var script = new System.Text.StringBuilder("(() => {\nlet reportPreloadError;\n")
             .Append("const riftwayOptions = { preferredSizeMode: ").Append(_preferences.EnablePreferredSizeMode ? "true" : "false").Append(" };\n")
+            .Append(PreloadProcessScript(Environment.ProcessPath ?? "", _preferences.AdditionalArguments)).Append('\n')
             .Append(s_preloadRuntime);
         var paths = Session.GetPreloadScripts().Select(p => p.FilePath).ToList();
         if (_appPreloadPath is not null) paths.Add(_appPreloadPath);
         foreach (var path in paths) script.Append(PreloadWrapper(path, ReadPreload(path)));
         return script.Append("\n})();\n").ToString();
+    }
+
+    // The preloads' `process`: Electron's argv, the executable then the page's additionalArguments (drift W66).
+    internal static string PreloadProcessScript(string execPath, IReadOnlyList<string>? additionalArguments)
+    {
+        var argv = new JsonArray(JsonValue.Create(execPath));
+        foreach (var argument in additionalArguments ?? [])
+            argv.Add((JsonNode)JsonValue.Create(argument ?? throw new ArgumentException("An additional argument is null.", nameof(additionalArguments))));
+        return $"const riftwayPreloadProcess = Object.freeze({{ argv: Object.freeze({argv.ToJsonString()}) }});";
     }
 
     // The preload's source, or a throw of Node's error for a file it cannot load.
@@ -871,9 +883,10 @@ public sealed unsafe partial class WebContents
         }
     }
 
+    // Each preload is called with `process`, as Electron's wrapper passes it to a sandboxed preload.
     internal static string PreloadWrapper(string path, string source)
         => $"\n;(() => {{\n  const preloadPath = {JsonValue.Create(path).ToJsonString()};\n"
-            + $"  try {{ new Function({JsonValue.Create(source).ToJsonString()})(); }}\n"
+            + $"  try {{ new Function(\"process\", {JsonValue.Create(source).ToJsonString()})(riftwayPreloadProcess); }}\n"
             + "  catch (error) {\n    console.error(`Unable to load preload script: ${preloadPath}`);\n    console.error(error);\n"
             + "    reportPreloadError(preloadPath, error);\n  }\n})();\n";
 

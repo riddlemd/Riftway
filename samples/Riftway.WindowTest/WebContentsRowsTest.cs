@@ -18,6 +18,7 @@ static class WebContentsRowsTest
         await PrintToPdfAsync(check);
         await WebRtcAsync(check);
         await ImageAnimationAsync(check);
+        await AdditionalArgumentsAsync(check);
         await CaretBrowsingAsync(check);
         await SharedWorkersAsync(check, debugPort);
         await CloseUnstartedAsync(check, step);
@@ -821,6 +822,41 @@ static class WebContentsRowsTest
         var again = await SampleGif(wc);
         check("SetImageAnimationPolicy(animate) animates new images again", Loops(again), again);
         win.Destroy();
+
+        // webPreferences.imageAnimationPolicy: set as the page is made, in a session of its own (drift C53).
+        foreach (var (policy, name) in new[] { ("noAnimation", "keeps the page's images on their first frame"), ("Animate", "ignores an unknown policy, as Electron's") })
+        {
+            var made = new BrowserWindow(new BrowserWindowOptions
+            {
+                Show = true, Width = 300, Height = 200,
+                WebPreferences = new WebPreferences { Partition = "riftway-image-animation-" + policy, ImageAnimationPolicy = policy },
+            });
+            await made.WebContents.LoadUrl("data:text/html,<body style='margin:0'><img id=g style='width:100px;height:100px;image-rendering:pixelated'></body>");
+            var seen = await SampleGif(made.WebContents);
+            check($"WebPreferences.ImageAnimationPolicy {policy} {name}", policy == "noAnimation" ? seen.Length > 4 && seen.All(c => c == 'r') : Loops(seen), seen);
+            made.Destroy();
+        }
+    }
+
+    // Electron's additionalArguments: the preload's process.argv ends with them (drift W66).
+    static async Task AdditionalArgumentsAsync(CheckFn check)
+    {
+        var preload = Path.Combine(Path.GetTempPath(), "riftway-argv-preload.js");
+        File.WriteAllText(preload, "riftway.contextBridge.exposeInMainWorld('preloadArgv', JSON.stringify(process.argv));");
+        var page = Path.Combine(Path.GetTempPath(), "riftway-argv.html");
+        File.WriteAllText(page, "<!doctype html><title>argv</title><p>argv</p>");
+        var win = new BrowserWindow(new BrowserWindowOptions
+        {
+            Show = true, Width = 300, Height = 200,
+            WebPreferences = new WebPreferences { Preload = preload, AdditionalArguments = ["--riftway-test=1", "two words"] },
+        });
+        await win.WebContents.LoadFile(page);
+        var argv = (await win.WebContents.ExecuteJavaScriptAsync("String(window.preloadArgv)"))?.GetValue<string>();
+        var expected = System.Text.Json.JsonSerializer.Serialize(new[] { Environment.ProcessPath, "--riftway-test=1", "two words" });
+        check("AdditionalArguments: a preload's process.argv is the app's executable, then the arguments", argv == expected, argv);
+        win.Destroy();
+        File.Delete(preload);
+        File.Delete(page);
     }
 
     static async Task CaretBrowsingAsync(CheckFn check)

@@ -86,6 +86,16 @@ public sealed record WebPreferences
     /// more for the rest of the page's life. Electron's <c>safeDialogs</c>.</summary>
     public bool SafeDialogs { get; init; }
 
+    /// <summary>Strings appended to <c>process.argv</c> where the page's preload scripts run, after the app's executable;
+    /// handy for passing small bits of data to a preload. Electron's <c>additionalArguments</c> (drift W66).</summary>
+    public IReadOnlyList<string>? AdditionalArguments { get; init; }
+
+    /// <summary>How the page's images animate from its first load: <c>animate</c>, <c>animateOnce</c> or
+    /// <c>noAnimation</c>; anything else is ignored, and null (the default) leaves the session's policy as it is.
+    /// Electron's <c>imageAnimationPolicy</c> (default <c>animate</c>). As <see cref="WebContents.SetImageAnimationPolicy"/>,
+    /// it applies to every page of the page's session (drift C53).</summary>
+    public string? ImageAnimationPolicy { get; init; }
+
     /// <summary>The checkbox's label when <see cref="SafeDialogs"/> is on; null or empty uses Electron's "Prevent this app
     /// from creating additional dialogs". Electron's <c>safeDialogsMessage</c>.</summary>
     public string? SafeDialogsMessage { get; init; }
@@ -134,6 +144,8 @@ public sealed record WebPreferences
 
     internal void Validate(string paramName, bool windowPage = true)
     {
+        if (AdditionalArguments?.Any(a => a is null) == true)
+            throw new ArgumentException("AdditionalArguments cannot hold null.", paramName);
         if (windowPage && !FocusOnNavigation)
             throw new NotSupportedException("FocusOnNavigation = false is not supported for a window's page: Chrome-style browsers focus it on every navigation in an active window.");
         if (DisableHtmlFullscreenWindowResize)

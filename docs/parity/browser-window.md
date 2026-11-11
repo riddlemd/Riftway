@@ -18,12 +18,12 @@ Counted from the Checklist at the end: `BaseWindow` and `BrowserWindow` are one 
 | Area | Items | Done | Partial | Missing | n/a | % done | % done + partial/2 |
 |---|---|---|---|---|---|---|---|
 | BaseWindow + BrowserWindow options | 54 | 34 | 20 | 0 | 0 | 63.0% | 81.5% |
-| webPreferences | 46 | 14 | 10 | 15 | 7 | 35.9% | 48.7% |
+| webPreferences | 46 | 14 | 12 | 13 | 7 | 35.9% | 51.3% |
 | Instance methods | 143 | 107 | 30 | 0 | 6 | 78.1% | 89.1% |
 | Instance properties | 24 | 17 | 7 | 0 | 0 | 70.8% | 85.4% |
 | Events | 35 | 20 | 15 | 0 | 0 | 57.1% | 78.6% |
 | Static methods | 7 | 6 | 0 | 0 | 1 | 100.0% | 100.0% |
-| **Total** | 309 | 198 | 82 | 15 | 14 | 67.1% | 81.0% |
+| **Total** | 309 | 198 | 84 | 13 | 14 | 67.1% | 81.4% |
 
 ## Done since the audit
 
@@ -164,7 +164,7 @@ Counted from the Checklist at the end: `BaseWindow` and `BrowserWindow` are one 
      an app-level option and a per-window gap.
    - Profile-wide in Chrome style, so they throw `NotSupportedException`: `minimumFontSize`, `defaultEncoding`.
    - CEF cannot do them: `backgroundThrottling` (W62), `navigateOnDragDrop` (W61), `zoomMode` (C62).
-   - Not yet investigated: `scrollBounce`, `imageAnimationPolicy`, `additionalArguments`.
+   - Not yet investigated: `scrollBounce` (macOS).
    - CEF keeps Views' `WidgetDelegate` accessible title: `accessibleTitle` reaches screen readers on macOS only (W58).
    - `contextIsolation` is always on; `false` is not offered.
 2. (none: `setParentWindow` is done on every OS; W8 tracks a macOS check.)
@@ -278,7 +278,7 @@ Parameters in brackets are optional in Electron. `webContents` members are in [w
 | `webSecurity` | — | missing | Process-wide in CEF (W13). |
 | `allowRunningInsecureContent` | — | missing | Process-wide in CEF (W13). |
 | `images` | `Images` | done |  |
-| `imageAnimationPolicy` | — | missing |  |
+| `imageAnimationPolicy` | `WebPreferences.ImageAnimationPolicy` | partial | Set before the page's first load, for every page of its session (C53). |
 | `textAreasAreResizable` | `TextAreasAreResizable` | done |  |
 | `webgl` | `WebGL` | done |  |
 | `plugins` | — | missing | Pages run with plugins enabled; CEF cannot turn them off per page (W65). |
@@ -295,7 +295,7 @@ Parameters in brackets are optional in Electron. `webContents` members are in [w
 | `offscreen` | `WebPreferences.Offscreen` | partial | A window's or a view's page, CPU frames; shared textures on Windows only while `Paint` runs (C63). |
 | `contextIsolation` | — | partial | Always on; `false` is not offered (W14). |
 | `webviewTag` | — | n/a | <webview> |
-| `additionalArguments` | — | missing |  |
+| `additionalArguments` | `WebPreferences.AdditionalArguments` | partial | In the preloads' `process.argv`, after the app's executable (W66). |
 | `safeDialogs` | `SafeDialogs` | done | Electron's `-run-dialog`: page dialogs are Riftway message boxes, the checkbox from an origin's second dialog; a ticked origin gets none for the page's life. |
 | `safeDialogsMessage` | `SafeDialogsMessage` | done | Empty or null keeps Electron's label. |
 | `disableDialogs` | `DisableDialogs` | done |  |
