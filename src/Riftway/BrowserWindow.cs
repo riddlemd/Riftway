@@ -70,6 +70,14 @@ public sealed record WebPreferences
     /// (<c>confirm</c> false, <c>prompt</c> null). Electron's <c>disableDialogs</c>.</summary>
     public bool DisableDialogs { get; init; }
 
+    /// <summary>From the page's second dialog on, the dialog offers a checkbox that stops the page's origin opening any
+    /// more for the rest of the page's life. Electron's <c>safeDialogs</c>.</summary>
+    public bool SafeDialogs { get; init; }
+
+    /// <summary>The checkbox's label when <see cref="SafeDialogs"/> is on; null or empty uses Electron's "Prevent this app
+    /// from creating additional dialogs". Electron's <c>safeDialogsMessage</c>.</summary>
+    public string? SafeDialogsMessage { get; init; }
+
     /// <summary>The session the page uses; overrides <see cref="Partition"/>. Null uses <see cref="Partition"/>.
     /// Electron's <c>session</c>.</summary>
     public Session? Session { get; init; }
