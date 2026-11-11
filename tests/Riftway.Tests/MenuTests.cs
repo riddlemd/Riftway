@@ -2,17 +2,16 @@ namespace Riftway.Tests;
 
 public sealed class MenuTests
 {
+    // Electron's default behavior spec: the default menu is made on every OS unless the app set one, null included.
     [Theory]
-    [InlineData(true, false, true)]
-    [InlineData(true, true, false)]
-    [InlineData(false, false, false)]
-    [InlineData(false, true, false)]
-    public void Given_AnOsAndWhetherTheAppSetAMenu_When_ReadyEnds_Then_OnlyMacOSWithoutOneGetsTheDefault(bool isMacOS, bool appSetOne, bool expected)
+    [InlineData(false, true)]
+    [InlineData(true, false)]
+    public void Given_WhetherTheAppSetAMenu_When_ReadyEnds_Then_AnAppWithoutOneGetsTheDefault_OnEveryOS(bool appSetOne, bool expected)
     {
-        // Given: the OS and whether the app set its own menu in Ready (the parameters)
+        // Given: whether the app set its own menu, or null, in Ready (the parameter)
 
         // When
-        var needed = Menu.NeedsDefaultApplicationMenu(isMacOS, appSetOne);
+        var needed = Menu.NeedsDefaultApplicationMenu(appSetOne);
 
         // Then
         Assert.Equal(expected, needed);

@@ -745,9 +745,9 @@ public sealed class Menu : IEnumerable<MenuItem>
     /// bar of every window without its own (<see cref="BaseWindow.SetMenu"/>). Null removes it.
     /// Electron's <c>Menu.setApplicationMenu()</c>.</summary>
     /// <remarks>On macOS the first item becomes the application menu, titled with the app's name whatever
-    /// its label. If none is set by the end of <see cref="RiftwayApp.Ready"/>, macOS gets a default menu
-    /// (application, Edit, View, Window) so that copy, paste and quit shortcuts work; unlike Electron,
-    /// Windows and Linux get none.</remarks>
+    /// its label. If none is set by the end of <see cref="RiftwayApp.Ready"/>, Riftway sets Electron's default menu:
+    /// application (macOS), File, Edit, View and Window; on Windows and Linux it is every window's menu bar. Set null
+    /// in Ready to have none.</remarks>
     public static void SetApplicationMenu(Menu? menu)
     {
         lock (s_gate)
@@ -767,16 +767,16 @@ public sealed class Menu : IEnumerable<MenuItem>
     /// <summary>Raised on the setting thread when <see cref="SetApplicationMenu"/> is called.</summary>
     internal static event Action<Menu?>? ApplicationMenuChanged;
 
-    /// <summary>Sets the default application menu on macOS unless the app has set one.</summary>
+    /// <summary>Sets the default application menu unless the app has set one (or null), on every OS as Electron.</summary>
     internal static void SetDefaultApplicationMenuIfUnset()
     {
         bool appSetOne;
         lock (s_gate) appSetOne = s_applicationMenuSet;
-        if (NeedsDefaultApplicationMenu(OperatingSystem.IsMacOS(), appSetOne))
+        if (NeedsDefaultApplicationMenu(appSetOne))
             SetApplicationMenu(MenuRoles.DefaultApplicationMenu());
     }
 
-    /// <summary>Whether the default application menu goes in: only on macOS, where copy, paste and quit shortcuts
-    /// need one; on Windows and Linux it would be a File/Edit/View/Window bar on every window.</summary>
-    internal static bool NeedsDefaultApplicationMenu(bool isMacOS, bool appSetOne) => isMacOS && !appSetOne;
+    /// <summary>Whether the default application menu goes in: whenever the app has set none, as Electron's; on Windows
+    /// and Linux it is each window's File, Edit, View and Window bar, which <c>SetApplicationMenu(null)</c> removes.</summary>
+    internal static bool NeedsDefaultApplicationMenu(bool appSetOne) => !appSetOne;
 }
