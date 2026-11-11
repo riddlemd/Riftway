@@ -25,8 +25,12 @@ General items: [todo.md](todo.md). Windows work runs on the Windows laptop.
           (unsigned among signed, a signature `WinVerifyTrust` does not accept, two certificates). Each refused case
           fails it and an unsigned layout passes (2026-10-17, self-signed certificates, removed after); the trusted,
           correctly signed case is not yet run: trusting a root per user needs the user to accept Windows' prompt
-  - [ ] Packaging (M4): build `Riftway.Host.Native` per RID into the runtime package; re-check `bootstrap.exe`'s
-        resources and hash on every CEF bump
+  - [x] Packaging (M4): `Riftway.Host.Native` is built into `Riftway.Runtime.win-x64` by
+        `eng/runtime/stage-windows.ps1` (publish workflow), so a NuGet app needs no C++ toolchain. On every CEF bump the
+        archive's SHA-1 is checked against `eng/cef.json` (fetch-cef.sh), and staging fails unless the staged
+        `bootstrap.exe` and `Riftway.Subprocess.exe` declare Windows 8+ in `supportedOS` (`check-windows-manifest.ps1`;
+        the layout replaces only version resources and icons, so the manifest apps ship is bootstrap's). Still open:
+        a `win-arm64` runtime package (the workflow's matrix has none; needs MSVC's ARM64 tools, issue #32)
     - [x] Opt-in publish target (`-p:RiftwayWindowsLayout=true`, `eng/windows-layout.targets`) that builds the host and
           runs `layout-windows.ps1`: IpcTest and Sample lay out file for file as the script does and run sandboxed
           (2026-10-14, d07986c, Wojtek). Still a prototype: it needs `pwsh` and a C++ toolchain on the publishing machine

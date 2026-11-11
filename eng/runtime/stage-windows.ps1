@@ -32,4 +32,12 @@ $build = Join-Path $Out 'build'
 Copy-Item -Force (Join-Path $build 'Riftway.Host.dll'), (Join-Path $build 'Riftway.Subprocess.exe') $native
 Remove-Item -Recurse -Force $build
 
+# Every app's exe is this bootstrap.exe renamed (its version resources and icons replaced, its manifest kept), and the
+# unsandboxed fallback runs as Riftway.Subprocess.exe: without Windows 8+ in supportedOS, Windows refuses the GPU
+# process's layered child window and Chromium falls back to software compositing. Checked here so a CEF bump fails
+# the package rather than every app that publishes with it.
+foreach ($exe in 'bootstrap.exe', 'Riftway.Subprocess.exe') {
+    & (Join-Path $repo 'eng\check-windows-manifest.ps1') (Join-Path $native $exe) | Out-Host
+}
+
 Get-ChildItem $native -File | Measure-Object Length -Sum | ForEach-Object { 'native: {0} files, {1:N0} MB' -f $_.Count, ($_.Sum / 1MB) }
