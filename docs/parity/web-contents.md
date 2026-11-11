@@ -206,8 +206,8 @@ Percentages are over the non-n/a items; the second counts a partial item as half
 | `getProcessId()` | `GetProcessId` | done | The main frame's, read from CEF's main frame; -1 once the page has closed. |
 | `clone()` | — | missing |  |
 | `takeHeapSnapshot()` | `TakeHeapSnapshotAsync` | done | DevTools `HeapProfiler.takeHeapSnapshot`, one at a time per page (C47). |
-| `getBackgroundThrottling()` | — | missing |  |
-| `setBackgroundThrottling()` | — | missing |  |
+| `getBackgroundThrottling()` | — | missing | W62. |
+| `setBackgroundThrottling()` | — | missing | W62. |
 | `getType()` | `GetWebContentsType` | done | Renamed from .NET's `GetType` (C45); always `window`. |
 | `setImageAnimationPolicy()` | `SetImageAnimationPolicy` | partial | Applies to every page of the session (C53). |
 | `canGoBack()` | — | n/a | Deprecated; use navigationHistory. |
@@ -238,7 +238,7 @@ Percentages are over the non-n/a items; the second counts a partial item as half
 | `session` | `Session` | done | See DRIFT E1-E11 for the session gaps. |
 | `devToolsWebContents` | — | missing |  |
 | `debugger` | `Debugger` | done | Shares Riftway's protocol session (DRIFT C43) |
-| `backgroundThrottling` | — | missing |  |
+| `backgroundThrottling` | — | missing | W62. |
 | `opener` | `Opener` | partial | Read over DevTools; on the UI thread, the value last read (C49). |
 | `zoomMode` | — | missing |  |
 

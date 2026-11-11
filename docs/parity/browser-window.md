@@ -161,7 +161,8 @@ Counted from the Checklist at the end: `BaseWindow` and `BrowserWindow` are one 
      `experimentalFeatures`, `enableBlinkFeatures`/`disableBlinkFeatures`, `autoplayPolicy`, `sandbox`. Decide between
      an app-level option and a per-window gap.
    - Profile-wide in Chrome style, so they throw `NotSupportedException`: `minimumFontSize`, `defaultEncoding`.
-   - Not yet investigated: `backgroundThrottling`, `navigateOnDragDrop`, `safeDialogs`/`safeDialogsMessage`,
+   - CEF cannot do them: `backgroundThrottling` (W62), `navigateOnDragDrop` (W61).
+   - Not yet investigated: `safeDialogs`/`safeDialogsMessage`,
      `accessibleTitle`, `scrollBounce`, `imageAnimationPolicy`, `zoomMode`, `focusOnNavigation`,
      `disableHtmlFullscreenWindowResize`, `additionalArguments`.
    - `contextIsolation` is always on; `false` is not offered.
@@ -289,7 +290,7 @@ Parameters in brackets are optional in Electron. `webContents` members are in [w
 | `defaultMonospaceFontSize` | `DefaultMonospaceFontSize` | done |  |
 | `minimumFontSize` | `MinimumFontSize` | missing | Property exists but throws NotSupportedException (W12). |
 | `defaultEncoding` | `DefaultEncoding` | missing | Property exists but throws NotSupportedException (W12). |
-| `backgroundThrottling` | — | missing |  |
+| `backgroundThrottling` | — | missing | No per-page control in CEF; process-wide switches instead (W62). |
 | `offscreen` | — | missing |  |
 | `contextIsolation` | — | partial | Always on; `false` is not offered (W14). |
 | `webviewTag` | — | n/a | <webview> |
@@ -297,7 +298,7 @@ Parameters in brackets are optional in Electron. `webContents` members are in [w
 | `safeDialogs` | — | missing |  |
 | `safeDialogsMessage` | — | missing |  |
 | `disableDialogs` | `DisableDialogs` | done |  |
-| `navigateOnDragDrop` | — | missing |  |
+| `navigateOnDragDrop` | — | missing | Chromium's default (drops can navigate) stands; CEF cannot set it (W61). |
 | `autoplayPolicy` | — | missing | Process-wide in CEF (W13). |
 | `disableHtmlFullscreenWindowResize` | — | missing |  |
 | `accessibleTitle` | `BaseWindowOptions.AccessibleTitle` | partial | macOS: VoiceOver reads it; Windows/Linux stored only (W58). |
