@@ -13,21 +13,23 @@ public sealed partial class WebContents
     public void SetImageAnimationPolicy(string policy)
     {
         ArgumentNullException.ThrowIfNull(policy);
-        // Chromium's names for Electron's three policies.
-        var value = policy switch
-        {
-            "animate" => "allowed",
-            "animateOnce" => "once",
-            "noAnimation" => "none",
-            _ => null,
-        };
-        if (value is null) return;
+        if (ChromiumAnimationPolicy(policy) is not { } value) return;
         CefThread.InvokeOnUi(() =>
         {
             Session.SetRendererPreference("settings.a11y.animation_policy", value);
             return true;
         });
     }
+
+    /// <summary>Chromium's <c>settings.a11y.animation_policy</c> value for one of Electron's three policies; null for
+    /// anything else, which Electron ignores.</summary>
+    internal static string? ChromiumAnimationPolicy(string policy) => policy switch
+    {
+        "animate" => "allowed",
+        "animateOnce" => "once",
+        "noAnimation" => "none",
+        _ => null,
+    };
 
     /// <summary>Whether caret browsing is on: arrow keys move a caret through the page's text. Electron's
     /// <c>webContents.isCaretBrowsingEnabled()</c> and <c>caretBrowsingEnabled</c>.</summary>
