@@ -39,6 +39,13 @@ static class FrameSubscriptionTest
             win.WebContents.BeginFrameSubscription((_, _) => Interlocked.Increment(ref again));
             check("frame subscription: a new subscription after the end gets frames again", Eventually(() => Volatile.Read(ref again) >= 1, step), again);
             win.WebContents.EndFrameSubscription();
+
+            var idle = win.WebContents.IsBeingCaptured();
+            var capture = win.WebContents.CapturePageAsync();
+            var during = win.WebContents.IsBeingCaptured();
+            await capture;
+            check("isBeingCaptured: true from CapturePageAsync's call until its image is ready, false before and after",
+                !idle && during && !win.WebContents.IsBeingCaptured(), $"{idle} {during} {win.WebContents.IsBeingCaptured()}");
         }
         finally { win.Destroy(); }
     }

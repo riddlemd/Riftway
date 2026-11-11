@@ -8,6 +8,13 @@ public sealed partial class WebContents
 {
     private Action<NativeImage, Rectangle>? _frameSubscriber;
 
+    private int _capturers;
+
+    /// <summary>Whether the page is being captured: true while a <see cref="CapturePageAsync"/> is in progress. Electron's
+    /// <c>webContents.isBeingCaptured()</c>, whose capturer count also counts Chromium's own tab capture, which Riftway
+    /// cannot see (drift C59).</summary>
+    public bool IsBeingCaptured() => Volatile.Read(ref _capturers) > 0;
+
     /// <summary>Calls <paramref name="callback"/> with an image of the page each time it repaints, until
     /// <see cref="EndFrameSubscription"/>; a second call replaces the first subscriber. Electron's
     /// <c>webContents.beginFrameSubscription(callback)</c>.</summary>
