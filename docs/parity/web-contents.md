@@ -11,14 +11,14 @@ Percentages are over the non-n/a items; the second counts a partial item as half
 | Area | Items | Done | Partial | Missing | n/a | % done | % done + partial/2 |
 |---|---|---|---|---|---|---|---|
 | Static methods | 5 | 3 | 2 | 0 | 0 | 60.0% | 80.0% |
-| Instance events | 59 | 31 | 19 | 7 | 2 | 54.4% | 71.1% |
+| Instance events | 59 | 31 | 20 | 6 | 2 | 54.4% | 71.9% |
 | Instance methods | 118 | 50 | 43 | 17 | 8 | 45.5% | 65.0% |
 | Instance properties | 18 | 11 | 3 | 3 | 1 | 64.7% | 73.5% |
 | navigationHistory | 14 | 12 | 0 | 2 | 0 | 85.7% | 85.7% |
 | WebFrameMain events and statics | 3 | 1 | 1 | 1 | 0 | 33.3% | 50.0% |
 | WebFrameMain methods | 9 | 1 | 7 | 1 | 0 | 11.1% | 50.0% |
 | WebFrameMain properties | 15 | 10 | 3 | 2 | 0 | 66.7% | 76.7% |
-| **Total** | 241 | 119 | 78 | 33 | 11 | 51.7% | 68.7% |
+| **Total** | 241 | 119 | 79 | 32 | 11 | 51.7% | 68.9% |
 
 ## Checklist
 
@@ -87,7 +87,7 @@ Percentages are over the non-n/a items; the second counts a partial item as half
 | `update-target-url` | `UpdateTargetUrl` | done |  |
 | `cursor-changed` | `CursorChanged` | done |  |
 | `select-bluetooth-device` | — | missing | C64. |
-| `paint` | — | missing |  |
+| `paint` | `Paint` | partial | CPU frames on every OS; `UseSharedTexture` GPU frames on Windows, valid only while the handler runs (C63). |
 | `devtools-reload-page` | — | missing | C61. |
 | `console-message` | `ConsoleMessage` | partial | No `frame` (C28). |
 | `preload-error` | `PreloadError` | done | The error arrives as its name, message and stack. |
@@ -172,7 +172,7 @@ Percentages are over the non-n/a items; the second counts a partial item as half
 | `addWorkSpace()` | — | missing | C61. |
 | `removeWorkSpace()` | — | missing | C61. |
 | `setDevToolsWebContents()` | — | missing | C61. |
-| `isDevToolsFocused()` | — | missing |  |
+| `isDevToolsFocused()` | — | missing | Chrome style's DevTools window is not CEF's (C36). |
 | `getDevToolsTitle()` | — | missing | C61. |
 | `setDevToolsTitle()` | — | missing | C61. |
 | `inspectElement()` | `InspectElement` | done | Which element DevTools selects is unverified: the selection is not visible from the page. |

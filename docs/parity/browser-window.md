@@ -18,12 +18,12 @@ Counted from the Checklist at the end: `BaseWindow` and `BrowserWindow` are one 
 | Area | Items | Done | Partial | Missing | n/a | % done | % done + partial/2 |
 |---|---|---|---|---|---|---|---|
 | BaseWindow + BrowserWindow options | 54 | 34 | 20 | 0 | 0 | 63.0% | 81.5% |
-| webPreferences | 46 | 14 | 9 | 16 | 7 | 35.9% | 47.4% |
+| webPreferences | 46 | 14 | 10 | 15 | 7 | 35.9% | 48.7% |
 | Instance methods | 143 | 107 | 30 | 0 | 6 | 78.1% | 89.1% |
 | Instance properties | 24 | 17 | 7 | 0 | 0 | 70.8% | 85.4% |
 | Events | 35 | 20 | 15 | 0 | 0 | 57.1% | 78.6% |
 | Static methods | 7 | 6 | 0 | 0 | 1 | 100.0% | 100.0% |
-| **Total** | 309 | 198 | 81 | 16 | 14 | 67.1% | 80.8% |
+| **Total** | 309 | 198 | 82 | 15 | 14 | 67.1% | 81.0% |
 
 ## Done since the audit
 
@@ -292,7 +292,7 @@ Parameters in brackets are optional in Electron. `webContents` members are in [w
 | `minimumFontSize` | `MinimumFontSize` | missing | Property exists but throws NotSupportedException (W12). |
 | `defaultEncoding` | `DefaultEncoding` | missing | Property exists but throws NotSupportedException (W12). |
 | `backgroundThrottling` | — | missing | No per-page control in CEF; process-wide switches instead (W62). |
-| `offscreen` | — | missing |  |
+| `offscreen` | `WebPreferences.Offscreen` | partial | A window's or a view's page, CPU frames; shared textures on Windows only while `Paint` runs (C63). |
 | `contextIsolation` | — | partial | Always on; `false` is not offered (W14). |
 | `webviewTag` | — | n/a | <webview> |
 | `additionalArguments` | — | missing |  |
