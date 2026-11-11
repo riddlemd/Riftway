@@ -4,6 +4,11 @@ namespace Riftway.BlazorSample;
 
 internal static class SelfCheck
 {
+    /// <summary>A child process that exits at once: <c>/bin/sh -c true</c>, or <c>cmd.exe /c exit 0</c> on Windows.</summary>
+    public static System.Diagnostics.ProcessStartInfo TrivialChild() => OperatingSystem.IsWindows()
+        ? new("cmd.exe", "/c exit 0") { UseShellExecute = false, CreateNoWindow = true }
+        : new("/bin/sh", "-c true") { UseShellExecute = false };
+
     public static async Task<int> RunAsync(BrowserWindow window, SharedCounter counter)
     {
         var page = window.WebContents;
@@ -46,7 +51,7 @@ internal static class SelfCheck
         // A child process started after Chromium is up must still be seen to exit (.NET learns it from SIGCHLD).
         var exited = await Task.Run(() =>
         {
-            using var child = System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo("/bin/sh", "-c true") { UseShellExecute = false })!;
+            using var child = System.Diagnostics.Process.Start(TrivialChild())!;
             return child.WaitForExit(5000);
         }).ConfigureAwait(false);
         Check(exited, $"a child process's exit is seen after Chromium starts (exited = {exited})");
