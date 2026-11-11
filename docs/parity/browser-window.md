@@ -161,9 +161,9 @@ Counted from the Checklist at the end: `BaseWindow` and `BrowserWindow` are one 
      `experimentalFeatures`, `enableBlinkFeatures`/`disableBlinkFeatures`, `autoplayPolicy`, `sandbox`. Decide between
      an app-level option and a per-window gap.
    - Profile-wide in Chrome style, so they throw `NotSupportedException`: `minimumFontSize`, `defaultEncoding`.
-   - CEF cannot do them: `backgroundThrottling` (W62), `navigateOnDragDrop` (W61).
+   - CEF cannot do them: `backgroundThrottling` (W62), `navigateOnDragDrop` (W61), `zoomMode` (C62).
    - Not yet investigated: `safeDialogs`/`safeDialogsMessage`,
-     `accessibleTitle`, `scrollBounce`, `imageAnimationPolicy`, `zoomMode`, `focusOnNavigation`,
+     `accessibleTitle`, `scrollBounce`, `imageAnimationPolicy`, `focusOnNavigation`,
      `disableHtmlFullscreenWindowResize`, `additionalArguments`.
    - `contextIsolation` is always on; `false` is not offered.
 2. (none: `setParentWindow` is done on every OS; W8 tracks a macOS check.)
@@ -272,7 +272,7 @@ Parameters in brackets are optional in Electron. `webContents` members are in [w
 | `session` | `Session` | done | Overrides `Partition`; popups cannot take another session (E7). |
 | `partition` | `Partition` | done | `persist:` dirs live in the data directory (E1). |
 | `zoomFactor` | `ZoomFactor` | partial | Re-applies to an origin whose zoom was reset to 0 (W15). |
-| `zoomMode` | — | missing |  |
+| `zoomMode` | — | missing | Zoom is always per origin; CEF cannot set the mode (C62). |
 | `javascript` | `Javascript` | done |  |
 | `webSecurity` | — | missing | Process-wide in CEF (W13). |
 | `allowRunningInsecureContent` | — | missing | Process-wide in CEF (W13). |
