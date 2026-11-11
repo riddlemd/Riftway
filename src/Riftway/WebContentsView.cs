@@ -48,7 +48,7 @@ public sealed unsafe class WebContentsView : View
         RequireReady();
         options ??= new WebContentsViewOptions();
         var preferences = options.WebPreferences;
-        preferences.Validate(nameof(options));
+        preferences.Validate(nameof(options), windowPage: false);
         if (options.WebContents is { } adopted)
         {
             // CEF makes a popup its opener's style, and a window's own page is its one Chrome-style browser.

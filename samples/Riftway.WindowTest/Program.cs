@@ -404,6 +404,7 @@ async Task RunAsync(BrowserWindow win, BrowserWindow simple)
     await MenuRolesAsync(win);
     await WebContentsMethodsAsync();
     await MessageBoxTest.RunAsync(win, Check, step);
+    await FocusNavigationTest.RunAsync(Check, step);
     await ShellAsync();
     await ClipboardAsync();
     await WindowPolishAsync(win);

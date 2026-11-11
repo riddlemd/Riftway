@@ -18,12 +18,12 @@ Counted from the Checklist at the end: `BaseWindow` and `BrowserWindow` are one 
 | Area | Items | Done | Partial | Missing | n/a | % done | % done + partial/2 |
 |---|---|---|---|---|---|---|---|
 | BaseWindow + BrowserWindow options | 54 | 34 | 19 | 1 | 0 | 63.0% | 80.6% |
-| webPreferences | 46 | 12 | 7 | 20 | 7 | 30.8% | 39.7% |
+| webPreferences | 46 | 12 | 8 | 19 | 7 | 30.8% | 41.0% |
 | Instance methods | 143 | 107 | 30 | 0 | 6 | 78.1% | 89.1% |
 | Instance properties | 24 | 17 | 7 | 0 | 0 | 70.8% | 85.4% |
 | Events | 35 | 20 | 15 | 0 | 0 | 57.1% | 78.6% |
 | Static methods | 7 | 6 | 0 | 0 | 1 | 100.0% | 100.0% |
-| **Total** | 309 | 196 | 78 | 21 | 14 | 66.4% | 79.7% |
+| **Total** | 309 | 196 | 79 | 20 | 14 | 66.4% | 79.8% |
 
 ## Done since the audit
 
@@ -162,7 +162,7 @@ Counted from the Checklist at the end: `BaseWindow` and `BrowserWindow` are one 
      an app-level option and a per-window gap.
    - Profile-wide in Chrome style, so they throw `NotSupportedException`: `minimumFontSize`, `defaultEncoding`.
    - Not yet investigated: `backgroundThrottling`, `navigateOnDragDrop`, `safeDialogs`/`safeDialogsMessage`,
-     `accessibleTitle`, `scrollBounce`, `imageAnimationPolicy`, `zoomMode`, `focusOnNavigation`,
+     `accessibleTitle`, `scrollBounce`, `imageAnimationPolicy`, `zoomMode`,
      `disableHtmlFullscreenWindowResize`, `additionalArguments`.
    - `contextIsolation` is always on; `false` is not offered.
 2. (none: `setParentWindow` is done on every OS; W8 tracks a macOS check.)
@@ -307,7 +307,7 @@ Parameters in brackets are optional in Electron. `webContents` members are in [w
 | `enablePreferredSizeMode` | `EnablePreferredSizeMode` | partial | Turns on `PreferredSizeChanged`, measured in the page (C42). |
 | `transparent` | `Transparent` | done | Only an explicit true acts, as Electron for a window's or view's page; the window's `backgroundColor` wins (V14). Screen-pixel checks on Windows. |
 | `enableDeprecatedPaste` | — | n/a | Deprecated. |
-| `focusOnNavigation` | — | missing |  |
+| `focusOnNavigation` | `FocusOnNavigation` | partial | On (Electron's rule: only a window's own page, only in the active window); `false` throws for a window's page (W60). |
 
 ### Instance methods (`BaseWindow` and `BrowserWindow`, union)
 

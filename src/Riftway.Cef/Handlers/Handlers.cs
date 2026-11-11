@@ -955,9 +955,22 @@ public sealed unsafe class FocusHandler
     {
         Native = NativeObject.Create<cef_focus_handler_t>(this);
         Native->on_got_focus = &OnGotFocus;
+        Native->on_set_focus = &OnSetFocus;
     }
 
     public cef_focus_handler_t* Native { get; }
+
+    /// <summary>The browser asks to take focus: (source) → true to cancel. Null allows every request.</summary>
+    public Func<cef_focus_source_t, bool>? SetFocus { get; init; }
+
+    [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])]
+    private static int OnSetFocus(cef_focus_handler_t* self, cef_browser_t* browser, cef_focus_source_t source)
+    {
+        var cancel = false;
+        if (NativeObject.Owner<FocusHandler>(self).SetFocus is { } decide) Guard.Run(() => cancel = decide(source));
+        NativeObject.Release(browser);
+        return cancel ? 1 : 0;
+    }
 
     /// <summary>The page's view took keyboard focus: Chromium's OnWebContentsFocused.</summary>
     public Action? GotFocus { get; init; }

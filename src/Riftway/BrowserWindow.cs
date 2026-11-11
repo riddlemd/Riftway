@@ -69,6 +69,13 @@ public sealed record WebPreferences
     /// <summary>Suppresses the page's <c>alert</c>, <c>confirm</c> and <c>prompt</c>: they return at once
     /// (<c>confirm</c> false, <c>prompt</c> null). Electron's <c>disableDialogs</c>.</summary>
     public bool DisableDialogs { get; init; }
+
+    /// <summary>Whether a navigation focuses the page, when the page is its window's own and that window is active.
+    /// Electron's <c>focusOnNavigation</c>; on by default.</summary>
+    /// <remarks>A window's own page cannot turn it off (setting false throws): Chrome-style browsers focus the page on
+    /// every navigation in an active window themselves (drift W60). A <see cref="WebContentsView"/>'s page never takes
+    /// focus on navigation, as in Electron, so false is accepted there.</remarks>
+    public bool FocusOnNavigation { get; init; } = true;
 
     /// <summary>The session the page uses; overrides <see cref="Partition"/>. Null uses <see cref="Partition"/>.
     /// Electron's <c>session</c>.</summary>
@@ -96,8 +103,10 @@ public sealed record WebPreferences
     /// that contradicts the page's session throws.</summary>
     public bool? ScrollBounce { get; init; }
 
-    internal void Validate(string paramName)
+    internal void Validate(string paramName, bool windowPage = true)
     {
+        if (windowPage && !FocusOnNavigation)
+            throw new NotSupportedException("FocusOnNavigation = false is not supported for a window's page: Chrome-style browsers focus it on every navigation in an active window.");
         // Chrome-style browsers take these from the profile's preferences, over the browser settings.
         if (MinimumFontSize is not null) throw new NotSupportedException("MinimumFontSize is not supported: CEF applies the profile's value to every window.");
         if (DefaultEncoding is not null) throw new NotSupportedException("DefaultEncoding is not supported: CEF applies the profile's value to every window.");
