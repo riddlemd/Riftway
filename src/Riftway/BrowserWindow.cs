@@ -16,6 +16,18 @@ public sealed partial record BrowserWindowOptions : BaseWindowOptions
     /// <see cref="WebPreferences"/>: only the popup page a <see cref="WindowOpenHandlerResponse.CreateWindow"/> callback
     /// receives, adopted while it runs (drift V4). Electron's <c>webContents</c>.</summary>
     public WebContents? WebContents { get; init; }
+
+    /// <summary>Whether the page is active while the window is created hidden: its <c>document.visibilityState</c> is
+    /// <c>visible</c>, it paints and <see cref="BrowserWindow.ReadyToShow"/> fires. Electron's
+    /// <c>paintWhenInitiallyHidden</c>, default true. Only true is supported: false throws (drift W63).</summary>
+    public bool PaintWhenInitiallyHidden { get; init; } = true;
+
+    internal void Validate()
+    {
+        if (!PaintWhenInitiallyHidden)
+            throw new NotSupportedException("PaintWhenInitiallyHidden = false is not supported: CEF cannot start a window's page hidden (drift W63).");
+        WebPreferences.Validate("options");
+    }
 }
 
 /// <summary>Settings for a window's page; Electron's <c>WebPreferences</c>.</summary>
@@ -85,6 +97,10 @@ public sealed record WebPreferences
     /// focus on navigation, as in Electron, so false is accepted there.</remarks>
     public bool FocusOnNavigation { get; init; } = true;
 
+    /// <summary>Whether HTML fullscreen (<c>element.requestFullscreen()</c>) leaves the window's size alone. Electron's
+    /// <c>disableHtmlFullscreenWindowResize</c>, default false. Only false is supported: true throws (drift W64).</summary>
+    public bool DisableHtmlFullscreenWindowResize { get; init; }
+
     /// <summary>The session the page uses; overrides <see cref="Partition"/>. Null uses <see cref="Partition"/>.
     /// Electron's <c>session</c>.</summary>
     public Session? Session { get; init; }
@@ -115,6 +131,8 @@ public sealed record WebPreferences
     {
         if (windowPage && !FocusOnNavigation)
             throw new NotSupportedException("FocusOnNavigation = false is not supported for a window's page: Chrome-style browsers focus it on every navigation in an active window.");
+        if (DisableHtmlFullscreenWindowResize)
+            throw new NotSupportedException("DisableHtmlFullscreenWindowResize is not supported: Chromium's fullscreen controller makes the window fullscreen with the page (drift W64).");
         // Chrome-style browsers take these from the profile's preferences, over the browser settings.
         if (MinimumFontSize is not null) throw new NotSupportedException("MinimumFontSize is not supported: CEF applies the profile's value to every window.");
         if (DefaultEncoding is not null) throw new NotSupportedException("DefaultEncoding is not supported: CEF applies the profile's value to every window.");
@@ -305,7 +323,7 @@ public sealed unsafe partial class BrowserWindow : BaseWindow
     private static BrowserWindowOptions Validated(BrowserWindowOptions options, ref WebContents? opener)
     {
         CheckOptions(options);
-        options.WebPreferences.Validate(nameof(options));
+        options.Validate();
         var adopted = options.WebContents;
         var session = adopted?.Session ?? options.WebPreferences.ResolveSession();
         if (adopted is not null) opener = PopupGuest.Adoptable(adopted).Opener;
