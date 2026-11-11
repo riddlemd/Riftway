@@ -17,6 +17,8 @@
 
   <ItemGroup>
     <None Include="buildTransitive\**" Pack="true" PackagePath="buildTransitive\" />
+    <!-- The packer Riftway.Archive.targets runs; built first, packed under tools/pack. -->
+    <ProjectReference Include="..\Riftway.Pack\Riftway.Pack.csproj" ReferenceOutputAssembly="false" Private="false" PrivateAssets="all" />
     <!-- Injected into every page over DevTools; named by path so WebContents can find them. -->
     <EmbeddedResource Include="Ipc/*.js" LogicalName="Riftway.Ipc.%(Filename)%(Extension)" />
   </ItemGroup>
@@ -25,5 +27,16 @@
     <InternalsVisibleTo Include="Riftway.Tests" />
     <InternalsVisibleTo Include="Riftway.WindowTest" />
   </ItemGroup>
+
+
+  <Target Name="_RiftwayPackTool" BeforeTargets="_GetPackageFiles">
+    <MSBuild Projects="..\Riftway.Pack\Riftway.Pack.csproj" Targets="GetTargetPath" Properties="Configuration=$(Configuration)">
+      <Output TaskParameter="TargetOutputs" ItemName="_RiftwayPackToolDll" />
+    </MSBuild>
+    <ItemGroup>
+      <_RiftwayPackToolFile Include="@(_RiftwayPackToolDll->'%(RootDir)%(Directory)Riftway.Pack.dll');@(_RiftwayPackToolDll->'%(RootDir)%(Directory)Riftway.Pack.runtimeconfig.json');@(_RiftwayPackToolDll->'%(RootDir)%(Directory)Riftway.Pack.deps.json')" />
+      <None Include="@(_RiftwayPackToolFile)" Pack="true" PackagePath="tools\pack\" />
+    </ItemGroup>
+  </Target>
 
 </Project>

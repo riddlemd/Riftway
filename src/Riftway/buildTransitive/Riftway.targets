@@ -280,4 +280,7 @@ public sealed class RiftwayCopyExeResources : Microsoft.Build.Utilities.Task
 ]]></Code>
     </Task>
   </UsingTask>
+
+  <!-- RiftwayPackArchive: wwwroot packed into resources/app.asar at publish. -->
+  <Import Project="$(MSBuildThisFileDirectory)Riftway.Archive.targets" />
 </Project>

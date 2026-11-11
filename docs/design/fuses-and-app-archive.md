@@ -55,5 +55,9 @@ C#; nothing about it needs Node.
 3. Pack-after-publish target; `AsarFileProvider` in `Riftway.Blazor`; BlazorSample self-check from a packed publish.
    Done: `AsarFileProvider`, chosen by `BlazorWebView` when `resources/app.asar` is beside the app (Electron's order:
    the archive before loose files) or named by `ContentRoot`; the self-check passed 18/18 three times with `wwwroot`
-   packed by `AsarPacker` and deleted. The publish target is still to do.
+   packed by `AsarPacker` and deleted. Publish: `-p:RiftwayPackArchive=true` (`buildTransitive/Riftway.Archive.targets`)
+   runs `src/Riftway.Pack` (shipped as `tools/pack/Riftway.Pack.dll`, run through `DOTNET_HOST_PATH` so it works under
+   any MSBuild), packs `wwwroot` into `resources/app.asar`, removes the folder and any previous archive; the
+   self-check passed 18/18 three times from such a publish (with `RiftwayArchiveUnpack=*.css`). Pages loaded with
+   `file://` from inside an archive (Electron's `loadFile`) are still to do.
 4. Integrity: embed, verify header at startup and blocks on read; a check that a tampered archive refuses to load.
