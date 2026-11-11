@@ -121,6 +121,11 @@ internal static class SelfCheck
         return failures == 0 ? 0 : 1;
     }
 
+    /// <summary>A child that exits at once: the shell's <c>true</c>, or <c>cmd /c exit 0</c> on Windows.</summary>
+    internal static System.Diagnostics.ProcessStartInfo TrivialChild() => OperatingSystem.IsWindows()
+        ? new(Path.Combine(Environment.SystemDirectory, "cmd.exe"), "/c exit 0") { UseShellExecute = false, CreateNoWindow = true }
+        : new("/bin/sh", "-c true") { UseShellExecute = false };
+
     public static async Task ProbeAsync(BrowserWindow window, string path)
     {
         while (!window.IsDestroyed)
