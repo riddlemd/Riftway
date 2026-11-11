@@ -12,6 +12,7 @@ static class WebContentsRowsTest
         await DevToolsTargetAsync(check, debugPort);
         await HeapSnapshotAsync(check);
         await CopyImageAsync(check, step);
+        await VideoFrameAsync(check, step);
         await OpenerAsync(check, step);
         await SavePageAsync(check);
         await PrintToPdfAsync(check);
@@ -241,6 +242,75 @@ static class WebContentsRowsTest
             await Task.Delay(100);
         }
         return await condition();
+    }
+
+    // Electron's copyVideoFrameAt and saveVideoFrameAs: Blink's "Copy Video Frame" at the size the video is drawn, and
+    // "Save Video Frame As" at its own size as a download named videoframe_<playback position in ms>.
+    internal static async Task VideoFrameAsync(CheckFn check, TimeSpan step)
+    {
+        if (!OperatingSystem.IsWindows()) return;
+        static Task<string> ClipImage() => PsAsync("$i = [Windows.Forms.Clipboard]::GetImage(); if ($i) { $p = $i.GetPixel(1, 1); '' + $i.Width + 'x' + $i.Height + ' ' + $p.R + ',' + $p.G + ',' + $p.B } else { 'none' }");
+        // Video frames go through YUV, so red comes back within a few levels of 255,0,0.
+        static bool IsRed(string clip, string size) => clip.Split(' ') is [var s, var rgb] && s == size
+            && rgb.Split(',').Select(int.Parse).ToArray() is [> 245, < 10, < 10];
+        var win = new BrowserWindow(new BrowserWindowOptions { Width = 400, Height = 300 });
+        var wc = win.WebContents;
+        try
+        {
+            // A 160x120 red canvas streamed into a 200x100 video: drawn at 133x100 (object-fit contain).
+            await wc.LoadUrl("data:text/html,<style>body{margin:0}</style><video id=v muted autoplay style='position:absolute;left:0;top:0;width:200px;height:100px'></video>"
+                + "<script>const c = document.createElement('canvas'); c.width = 160; c.height = 120; const g = c.getContext('2d');"
+                + "(function f() { g.fillStyle = 'red'; g.fillRect(0, 0, 160, 120); requestAnimationFrame(f); })(); v.srcObject = c.captureStream(30);</script>");
+            var playing = await Eventually(async () => (await wc.ExecuteJavaScriptAsync("v.readyState >= 2 && v.videoWidth === 160"))?.GetValue<bool>() == true, step);
+            check("video frame: the test video plays", playing);
+
+            await Clipboard.WriteTextAsync("before");
+            wc.CopyVideoFrameAt(100, 50);
+            var image = "";
+            var copied = await Eventually(async () => IsRed(image = await ClipImage(), "133x100"), step);
+            check("CopyVideoFrameAt copies the frame at the size the video is drawn (object-fit contain)", copied, image);
+
+            await wc.ExecuteJavaScriptAsync("v.style.objectFit = 'fill'");
+            await Clipboard.WriteTextAsync("before");
+            wc.CopyVideoFrameAt(100, 50);
+            check("CopyVideoFrameAt follows object-fit: fill copies the video's box", await Eventually(async () => IsRed(image = await ClipImage(), "200x100"), step), image);
+
+            await Clipboard.WriteTextAsync("before");
+            wc.CopyVideoFrameAt(300, 250);
+            await Task.Delay(1500);
+            check("CopyVideoFrameAt where there is no video leaves the clipboard alone", await PsAsync("Get-Clipboard -Raw") == "before", await ClipImage());
+
+            var dir = Directory.CreateTempSubdirectory("riftway-videoframe");
+            var names = new List<string>();
+            var finished = new TaskCompletionSource<DownloadState>(TaskCreationOptions.RunContinuationsAsynchronously);
+            void OnWillDownload(object? sender, WillDownloadEventArgs e)
+            {
+                lock (names) names.Add(e.Item.GetFilename());
+                e.Item.SetSavePath(Path.Combine(dir.FullName, e.Item.GetFilename()));
+                e.Item.Done += (_, d) => finished.TrySetResult(d.State);
+            }
+            wc.Session.WillDownload += OnWillDownload;
+            try
+            {
+                wc.SaveVideoFrameAs(100, 50);
+                var state = await finished.Task.WaitAsync(step).ContinueWith(t => t.IsCompletedSuccessfully ? t.Result.ToString() : "no download");
+                string name;
+                lock (names) name = names.Count > 0 ? names[0] : "";
+                var file = Path.Combine(dir.FullName, name);
+                var size = name.Length > 0 && File.Exists(file) ? NativeImage.CreateFromPath(file).GetSize() : (0, 0);
+                check("SaveVideoFrameAs downloads the frame at the video's own size as videoframe_<ms>.png",
+                    state == "Completed" && System.Text.RegularExpressions.Regex.IsMatch(name, @"^videoframe_\d+\.png$") && size == (160, 120), $"{state} {name} {size}");
+
+                lock (names) names.Clear();
+                wc.SaveVideoFrameAs(300, 250);
+                await Task.Delay(1500);
+                int count;
+                lock (names) count = names.Count;
+                check("SaveVideoFrameAs where there is no video downloads nothing", count == 0, count);
+            }
+            finally { wc.Session.WillDownload -= OnWillDownload; }
+        }
+        finally { win.Destroy(); }
     }
 
     static async Task CopyImageAsync(CheckFn check, TimeSpan step)

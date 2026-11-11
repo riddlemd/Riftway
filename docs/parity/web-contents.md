@@ -12,13 +12,13 @@ Percentages are over the non-n/a items; the second counts a partial item as half
 |---|---|---|---|---|---|---|---|
 | Static methods | 5 | 3 | 2 | 0 | 0 | 60.0% | 80.0% |
 | Instance events | 59 | 31 | 18 | 8 | 2 | 54.4% | 70.2% |
-| Instance methods | 118 | 45 | 40 | 25 | 8 | 40.9% | 59.1% |
+| Instance methods | 118 | 45 | 42 | 23 | 8 | 40.9% | 60.0% |
 | Instance properties | 18 | 10 | 3 | 4 | 1 | 58.8% | 67.6% |
 | navigationHistory | 14 | 12 | 0 | 2 | 0 | 85.7% | 85.7% |
 | WebFrameMain events and statics | 3 | 1 | 1 | 1 | 0 | 33.3% | 50.0% |
-| WebFrameMain methods | 9 | 1 | 5 | 3 | 0 | 11.1% | 38.9% |
+| WebFrameMain methods | 9 | 1 | 7 | 1 | 0 | 11.1% | 50.0% |
 | WebFrameMain properties | 15 | 10 | 3 | 2 | 0 | 66.7% | 76.7% |
-| **Total** | 241 | 113 | 72 | 45 | 11 | 49.1% | 64.8% |
+| **Total** | 241 | 113 | 76 | 41 | 11 | 49.1% | 65.7% |
 
 ## Checklist
 
@@ -153,8 +153,8 @@ Percentages are over the non-n/a items; the second counts a partial item as half
 | `setVisualZoomLevelLimits()` | `SetVisualZoomLevelLimits` | partial | Pinch on or off; off on Windows/Linux (C37) |
 | `centerSelection()` | `CenterSelection` | partial | Script; does nothing off macOS, as Electron (C20). |
 | `copyImageAt()` | `CopyImageAt` | partial | The page's own hit test over DevTools: a canvas the page cannot read and a cross-origin image in an iframe are not copied (C48). |
-| `copyVideoFrameAt()` | — | missing |  |
-| `saveVideoFrameAs()` | — | missing |  |
+| `copyVideoFrameAt()` | `CopyVideoFrameAt` | partial | Not for a cross-origin video without CORS (C60). |
+| `saveVideoFrameAs()` | `SaveVideoFrameAs` | partial | Not for a cross-origin video without CORS (C60). |
 | `unselect()` | `Unselect` | partial | Script in the focused frame (C20). |
 | `scrollToTop()` | `ScrollToTop` | partial | Script in the focused frame (C20). |
 | `scrollToBottom()` | `ScrollToBottom` | partial | Script in the focused frame (C20). |
@@ -279,8 +279,8 @@ Percentages are over the non-n/a items; the second counts a partial item as half
 | `send(channel, ...args)` | `Send` | partial | Dropped for cross-process frames and before the preload runs (F1). |
 | `postMessage(channel, message, transfer)` | `WebFrameMain.PostMessage` | partial | JSON messages (I1). |
 | `collectJavaScriptCallStack()` | — | missing | F5. |
-| `copyVideoFrameAt(x, y)` | — | missing |  |
-| `saveVideoFrameAs(x, y)` | — | missing |  |
+| `copyVideoFrameAt(x, y)` | `CopyVideoFrameAt` | partial | C60. |
+| `saveVideoFrameAs(x, y)` | `SaveVideoFrameAs` | partial | C60. |
 | `printToPDF(options)` | `WebFrameMain.PrintToPdfAsync` | partial | The main frame only; a subframe throws (C51). |
 
 ### `WebFrameMain` instance properties
