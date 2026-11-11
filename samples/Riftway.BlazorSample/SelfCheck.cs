@@ -46,7 +46,7 @@ internal static class SelfCheck
         // A child process started after Chromium is up must still be seen to exit (.NET learns it from SIGCHLD).
         var exited = await Task.Run(() =>
         {
-            using var child = System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo("/bin/sh", "-c true") { UseShellExecute = false })!;
+            using var child = System.Diagnostics.Process.Start(TrivialChild())!;
             return child.WaitForExit(5000);
         }).ConfigureAwait(false);
         Check(exited, $"a child process's exit is seen after Chromium starts (exited = {exited})");
@@ -115,6 +115,11 @@ internal static class SelfCheck
         Console.WriteLine(failures == 0 ? "SELF-CHECK OK" : $"SELF-CHECK FAILED ({failures})");
         return failures == 0 ? 0 : 1;
     }
+
+    /// <summary>A child that exits at once: the shell's <c>true</c>, or <c>cmd /c exit 0</c> on Windows.</summary>
+    internal static System.Diagnostics.ProcessStartInfo TrivialChild() => OperatingSystem.IsWindows()
+        ? new(Path.Combine(Environment.SystemDirectory, "cmd.exe"), "/c exit 0") { UseShellExecute = false, CreateNoWindow = true }
+        : new("/bin/sh", "-c true") { UseShellExecute = false };
 
     public static async Task ProbeAsync(BrowserWindow window, string path)
     {
