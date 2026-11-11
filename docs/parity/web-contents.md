@@ -132,7 +132,7 @@ Percentages are over the non-n/a items; the second counts a partial item as half
 | `isDestroyed()` | `IsDestroyed` | done |  |
 | `close()` | `Close` | done |  |
 | `focus()` | `Focus` | done |  |
-| `isFocused()` | `IsFocused` | done |  |
+| `isFocused()` | `IsFocused` | done | The view's own focus, as Electron: false once another view of the window has it. |
 | `isLoading()` | `IsLoading` | done |  |
 | `isLoadingMainFrame()` | `IsLoadingMainFrame` | partial | Derived from DevTools frame events (C19). |
 | `isWaitingForResponse()` | `IsWaitingForResponse` | partial | Ends at commit, from DevTools frame events (C19). |

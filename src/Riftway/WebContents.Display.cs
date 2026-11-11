@@ -244,7 +244,9 @@ public sealed unsafe partial class WebContents
     internal void SetWidgetFocus(bool focus) => WithHost(host => host->set_focus(host, focus ? 1 : 0));
 
     /// <summary>Whether the page's view has keyboard focus in a visible window. Electron's <c>webContents.isFocused()</c>.</summary>
-    public bool IsFocused() => CefThread.InvokeOnUi(() => _hasFocus) && BaseWindow.HostOf(this) is not { IsVisible: false };
+    /// <remarks>As Electron's, the view's own focus: false once another view of the same window (another page, DevTools)
+    /// has it, though the window stays active.</remarks>
+    public bool IsFocused() => CefThread.InvokeOnUi(() => _hasFocus && ViewHasFocus()) && BaseWindow.HostOf(this) is not { IsVisible: false };
 
     // UI thread. Chromium's RenderWidgetHostView::HasFocus as Views knows it; _hasFocus misses focus moving between
     // views of one window, which CEF reports to neither page.

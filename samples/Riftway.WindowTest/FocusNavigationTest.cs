@@ -37,10 +37,15 @@ static class FocusNavigationTest
             view.WebContents.Focus();
             await Task.Delay(600);
             check("focus on navigation: focus moves to another view of the window", Has(view.WebContents) && !Has(win.WebContents));
+            check("isFocused: false for the page once another view of its window has focus, true for that view",
+                !win.WebContents.IsFocused() && view.WebContents.IsFocused() && win.IsFocused, $"page {win.WebContents.IsFocused()} view {view.WebContents.IsFocused()}");
             await win.WebContents.LoadUrl(Page());
             await Task.Delay(800);
             check("focus on navigation: the window's page takes focus back when it navigates", Has(win.WebContents) && !Has(view.WebContents),
                 $"page {Has(win.WebContents)} view {Has(view.WebContents)}");
+
+            check("isFocused: true again for the page once it takes focus back", win.WebContents.IsFocused() && !view.WebContents.IsFocused(),
+                $"page {win.WebContents.IsFocused()} view {view.WebContents.IsFocused()}");
 
             await view.WebContents.LoadUrl(Page());
             await Task.Delay(800);
