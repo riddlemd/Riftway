@@ -1,3 +1,4 @@
+using Riftway.Cef.Platform;
 using System.Security.Cryptography;
 using System.Security.Cryptography.X509Certificates;
 
@@ -10,9 +11,21 @@ public sealed class CertificateTrustTests : IDisposable
     private readonly Action<nint, IReadOnlyList<byte[]>, string, Action> _saved = Dialog.ShowTrustPanel;
     private readonly List<(nint View, IReadOnlyList<byte[]> Chain, string Message, Action Done)> _shown = [];
 
-    public CertificateTrustTests() => Dialog.ShowTrustPanel = (view, chain, message, done) => _shown.Add((view, chain, message, done));
+    private readonly Func<byte[], bool> _savedAdd = Dialog.AddToTrustedRootStore;
+    private readonly List<byte[]> _added = [];
 
-    public void Dispose() => Dialog.ShowTrustPanel = _saved;
+    public CertificateTrustTests()
+    {
+        Dialog.ShowTrustPanel = (view, chain, message, done) => _shown.Add((view, chain, message, done));
+        // Never touch the user's real root store: adding to it raises Windows' own security prompt.
+        Dialog.AddToTrustedRootStore = der => { _added.Add(der); return true; };
+    }
+
+    public void Dispose()
+    {
+        Dialog.ShowTrustPanel = _saved;
+        Dialog.AddToTrustedRootStore = _savedAdd;
+    }
 
     // A root, an intermediate it signed and a leaf the intermediate signed, as DER.
     private static (byte[] Leaf, byte[] Intermediate, byte[] Root) Chain()
@@ -82,11 +95,7 @@ public sealed class CertificateTrustTests : IDisposable
     public async Task ThePanelGetsTheChainAndMessage_AndTheTaskEndsWithIt()
     {
         var (leaf, mid, _) = Chain();
-        if (!OperatingSystem.IsMacOS())
-        {
-            Assert.Throws<PlatformNotSupportedException>(() => { _ = Dialog.ShowCertificateTrustDialogAsync(new CertificateTrustDialogOptions { Certificate = Of(leaf) }); });
-            return;
-        }
+        if (!OperatingSystem.IsMacOS()) return;
         var task = Dialog.ShowCertificateTrustDialogAsync(new CertificateTrustDialogOptions { Certificate = Of(leaf, mid), Message = "Trust it?" });
         var (view, chain, message, done) = Assert.Single(_shown);
         Assert.Equal((0, 2, "Trust it?"), (view, chain.Count, message));
@@ -112,6 +121,118 @@ public sealed class CertificateTrustTests : IDisposable
         var (leaf, _, _) = Chain();
         Assert.Throws<ArgumentException>(() => { _ = Dialog.ShowCertificateTrustDialogAsync(new CertificateTrustDialogOptions { Certificate = Of(leaf) with { Data = "junk" } }); });
         Assert.Empty(_shown);
+    }
+
+    private static byte[] SelfSigned(DateTimeOffset notBefore, DateTimeOffset notAfter, string name = "CN=Riftway trust test")
+    {
+        using var key = ECDsa.Create();
+        var request = new CertificateRequest(name, key, HashAlgorithmName.SHA256);
+        request.CertificateExtensions.Add(new X509BasicConstraintsExtension(true, false, 0, true));
+        using var cert = request.CreateSelfSigned(notBefore, notAfter);
+        return cert.RawData;
+    }
+
+    [Fact]
+    public void Windows_OnlyAnUntrustedRootOrElectronsSelfSignedValueAlone_IsAdded()
+    {
+        // certificate_trust_win.cc compares dwErrorStatus for equality with CERT_TRUST_IS_SELF_SIGNED (0x8) and
+        // CERT_TRUST_IS_UNTRUSTED_ROOT (0x20); any other bit beside them leaves the store alone.
+        Assert.True(WindowsCertificateTrust.ShouldAdd(0x20));
+        Assert.True(WindowsCertificateTrust.ShouldAdd(0x8));
+        Assert.False(WindowsCertificateTrust.ShouldAdd(0));
+        Assert.False(WindowsCertificateTrust.ShouldAdd(0x21));
+        Assert.False(WindowsCertificateTrust.ShouldAdd(0x28));
+        Assert.False(WindowsCertificateTrust.ShouldAdd(0x10020));
+    }
+
+    [Fact]
+    public void Windows_AnUntrustedSelfSignedCertificate_IsAnUntrustedRootToTheChainEngine()
+    {
+        if (!OperatingSystem.IsWindows()) return;
+        var now = DateTimeOffset.UtcNow;
+        Assert.Equal(0x20u, WindowsCertificateTrust.ChainErrorStatus([SelfSigned(now.AddDays(-1), now.AddDays(30))]));
+    }
+
+    [Fact]
+    public void Windows_AnExpiredSelfSignedCertificate_AlsoFailsOnTime()
+    {
+        if (!OperatingSystem.IsWindows()) return;
+        var now = DateTimeOffset.UtcNow;
+        Assert.Equal(0x21u, WindowsCertificateTrust.ChainErrorStatus([SelfSigned(now.AddDays(-30), now.AddDays(-1))]));
+    }
+
+    [Fact]
+    public void Windows_AnIssuerOnlyInTheChainIsNotSearched_SoALeafWithOneIsAPartialChain()
+    {
+        if (!OperatingSystem.IsWindows()) return;
+        var (leaf, mid, root) = Chain();
+        // Electron passes no additional store to CertGetCertificateChain, so an issuer held only in the leaf's memory
+        // store is never found: CERT_TRUST_IS_PARTIAL_CHAIN, which Electron leaves alone.
+        Assert.Equal(0x10000u, WindowsCertificateTrust.ChainErrorStatus([leaf]) & 0x10000u);
+        Assert.Equal(0x10000u, WindowsCertificateTrust.ChainErrorStatus([leaf, mid]) & 0x10000u);
+        Assert.Equal(0x10000u, WindowsCertificateTrust.ChainErrorStatus([mid, root]) & 0x10000u);
+        Assert.False(WindowsCertificateTrust.ShouldAdd(WindowsCertificateTrust.ChainErrorStatus([mid, root])!.Value));
+    }
+
+    [Fact]
+    public async Task Windows_AnUntrustedSelfSignedLeafGoesToTheUsersRootStore_AndTheTaskThenEnds()
+    {
+        if (!OperatingSystem.IsWindows()) return;
+        var now = DateTimeOffset.UtcNow;
+        var der = SelfSigned(now.AddDays(-1), now.AddDays(30));
+        await Dialog.ShowCertificateTrustDialogAsync(new CertificateTrustDialogOptions { Certificate = Of(der), Message = "ignored on Windows" });
+        Assert.Equal(der, Assert.Single(_added));
+        Assert.Empty(_shown);
+    }
+
+    [Fact]
+    public async Task Windows_TheLeafIsAdded_NotTheIssuerGivenWithIt()
+    {
+        if (!OperatingSystem.IsWindows()) return;
+        // A self-signed leaf is an untrusted root whatever issuer comes with it; Electron adds the leaf's context.
+        var now = DateTimeOffset.UtcNow;
+        var leaf = SelfSigned(now.AddDays(-1), now.AddDays(30));
+        var other = SelfSigned(now.AddDays(-1), now.AddDays(30), "CN=Riftway unrelated issuer");
+        await Dialog.ShowCertificateTrustDialogAsync(new CertificateTrustDialogOptions { Certificate = Of(leaf, other) });
+        Assert.Equal(leaf, Assert.Single(_added));
+    }
+
+    [Fact]
+    public async Task Windows_AnyOtherChainError_LeavesTheStoreAlone_AndStillResolves()
+    {
+        if (!OperatingSystem.IsWindows()) return;
+        var now = DateTimeOffset.UtcNow;
+        var (leaf, mid, _) = Chain();
+        await Dialog.ShowCertificateTrustDialogAsync(new CertificateTrustDialogOptions { Certificate = Of(SelfSigned(now.AddDays(-30), now.AddDays(-1))) });
+        await Dialog.ShowCertificateTrustDialogAsync(new CertificateTrustDialogOptions { Certificate = Of(leaf, mid) });
+        Assert.Empty(_added);
+    }
+
+    [Fact]
+    public async Task Windows_AStoreThatRefusesStillResolves()
+    {
+        if (!OperatingSystem.IsWindows()) return;
+        // The user said No to Windows' prompt: Electron ignores AddToTrustedRootStore's result and resolves.
+        Dialog.AddToTrustedRootStore = _ => false;
+        var now = DateTimeOffset.UtcNow;
+        await Dialog.ShowCertificateTrustDialogAsync(new CertificateTrustDialogOptions { Certificate = Of(SelfSigned(now.AddDays(-1), now.AddDays(30))) });
+    }
+
+    [Fact]
+    public void Windows_BadDataThrowsBeforeTheStoreIsTouched()
+    {
+        if (!OperatingSystem.IsWindows()) return;
+        var (leaf, _, _) = Chain();
+        Assert.Throws<ArgumentException>(() => { _ = Dialog.ShowCertificateTrustDialogAsync(new CertificateTrustDialogOptions { Certificate = Of(leaf) with { Data = "junk" } }); });
+        Assert.Empty(_added);
+    }
+
+    [Fact]
+    public void Linux_StillThrowsPlatformNotSupported()
+    {
+        if (!OperatingSystem.IsLinux()) return;
+        var (leaf, _, _) = Chain();
+        Assert.Throws<PlatformNotSupportedException>(() => { _ = Dialog.ShowCertificateTrustDialogAsync(new CertificateTrustDialogOptions { Certificate = Of(leaf) }); });
     }
 }
 
