@@ -1,4 +1,3 @@
-using System.Reflection;
 using System.Runtime.InteropServices;
 using System.Text;
 using System.Text.Json;
@@ -10,8 +9,6 @@ namespace Riftway.Asar;
 /// <c>Integrity</c>/<c>ElectronAsar</c> resource lists it, and every block read must match its hash.</summary>
 internal static partial class AppArchiveIntegrity
 {
-    internal const string FuseKey = "Riftway.Fuse.ArchiveIntegrity";
-
     private static readonly Lazy<Policy> s_current = new(Load);
 
     /// <summary>The fuse's state for this process.</summary>
@@ -24,8 +21,7 @@ internal static partial class AppArchiveIntegrity
 
     private static Policy Load()
     {
-        var enabled = Assembly.GetEntryAssembly()?.GetCustomAttributes<AssemblyMetadataAttribute>()
-            .Any(a => a.Key == FuseKey && string.Equals(a.Value, "true", StringComparison.OrdinalIgnoreCase)) == true;
+        var enabled = Fuses.ArchiveIntegrity;
         var exe = Environment.ProcessPath;
         // Electron checks archives on macOS and Windows only; on Linux the fuse has no effect.
         if (!enabled || OperatingSystem.IsLinux() || exe is null) return new(false, new Dictionary<string, string>(), null);

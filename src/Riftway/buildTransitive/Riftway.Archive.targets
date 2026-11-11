@@ -3,12 +3,9 @@
        pack an app into app.asar, and the loose folder goes. Riftway.Blazor serves from the archive when it is there
        (AsarFileProvider). RiftwayArchiveUnpack / RiftwayArchiveUnpackDir: ;-separated globs kept beside it in
        app.asar.unpacked (@electron/asar's unpack / unpackDir); RiftwayArchiveSource: another published folder. -->
-  <!-- RiftwayFuseArchiveIntegrity=true: Electron's EnableEmbeddedAsarIntegrityValidation. The app refuses an archive
-       whose header does not match the hash its exe carries (written below, after packing, as Electron's Windows
-       Integrity/ElectronAsar resource) and ends the process on any block that does not match (AsarArchive.OpenForApp). -->
-  <ItemGroup Condition="'$(RiftwayFuseArchiveIntegrity)' == 'true'">
-    <AssemblyMetadata Include="Riftway.Fuse.ArchiveIntegrity" Value="true" />
-  </ItemGroup>
+  <!-- RiftwayFuseArchiveIntegrity=true (Riftway.Fuses.targets): Electron's EnableEmbeddedAsarIntegrityValidation. The app
+       refuses an archive whose header does not match the hash its exe carries (written below, after packing, as
+       Electron's Windows Integrity/ElectronAsar resource) and ends the process on any block that does not match. -->
 
   <PropertyGroup>
     <RiftwayPackTool Condition="'$(RiftwayPackTool)' == ''">$(MSBuildThisFileDirectory)..\tools\pack\Riftway.Pack.dll</RiftwayPackTool>

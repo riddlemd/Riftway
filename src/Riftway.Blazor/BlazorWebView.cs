@@ -27,7 +27,7 @@ public sealed class BlazorWebView : WebViewManager
     internal event Action? Disposed;
 
     internal BlazorWebView(BrowserWindow window, IServiceProvider services, BlazorWebViewOptions options)
-        : this(window.WebContents, services, options, Dispatcher.CreateDefault(), StaticFiles(options, AppContext.BaseDirectory))
+        : this(window.WebContents, services, options, Dispatcher.CreateDefault(), StaticFiles(options, AppContext.BaseDirectory, Fuses.OnlyLoadFromArchive))
     {
         Window = window;
     }
@@ -138,13 +138,15 @@ public sealed class BlazorWebView : WebViewManager
     }
 
     /// <summary>Where the static files come from: <see cref="BlazorWebViewOptions.ContentRoot"/> when given (a folder, or
-    /// an ASAR archive file); otherwise, as Electron, <c>resources/app.asar</c> beside the app before <c>wwwroot</c>.</summary>
-    internal static IFileProvider StaticFiles(BlazorWebViewOptions options, string baseDirectory)
+    /// an ASAR archive file); otherwise, as Electron, <c>resources/app.asar</c> beside the app before <c>wwwroot</c>,
+    /// and with <paramref name="onlyFromArchive"/> (<see cref="Fuses.OnlyLoadFromArchive"/>) never <c>wwwroot</c>.</summary>
+    internal static IFileProvider StaticFiles(BlazorWebViewOptions options, string baseDirectory, bool onlyFromArchive = false)
     {
         if (options.ContentRoot is null)
         {
             var archive = Path.Combine(baseDirectory, "resources", "app.asar");
             if (File.Exists(archive)) return new AsarFileProvider(archive);
+            if (onlyFromArchive) return new NullFileProvider();
         }
         var root = Path.GetFullPath(options.ContentRoot ?? Path.Combine(baseDirectory, "wwwroot"));
         if (File.Exists(root)) return new AsarFileProvider(root);

@@ -283,4 +283,6 @@ public sealed class RiftwayCopyExeResources : Microsoft.Build.Utilities.Task
 
   <!-- RiftwayPackArchive: wwwroot packed into resources/app.asar at publish. -->
   <Import Project="$(MSBuildThisFileDirectory)Riftway.Archive.targets" />
+  <!-- RiftwayFuse<Name>: the app's fuses (Riftway.Fuses). -->
+  <Import Project="$(MSBuildThisFileDirectory)Riftway.Fuses.targets" />
 </Project>
