@@ -190,6 +190,7 @@ public sealed unsafe class WebContentsView : View
             NativeObject.Release(viewDelegate.Native);
             settings.windowless_frame_rate = WebContents.InitialFrameRate;
             var info = cef_window_info_native_t.Windowless();
+            if (WebContents.UsesSharedTexture) info.win.shared_texture_enabled = 1;
             UpdateOffscreenView();
             if (CefNative.cef_browser_host_create_browser((cef_window_info_t*)&info, client.Native, &url, &settings, null, context) == 0)
                 Console.Error.WriteLine("[Riftway] CEF could not create an offscreen view's page.");

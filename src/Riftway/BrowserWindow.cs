@@ -103,7 +103,8 @@ public sealed record WebPreferences
 
     internal void Validate(string paramName)
     {
-        if (Offscreen is { UseSharedTexture: true }) throw new NotSupportedException("Offscreen.UseSharedTexture is not supported: CEF's shared textures are not offered (drift C63).");
+        if (Offscreen is { UseSharedTexture: true } && !OperatingSystem.IsWindows())
+            throw new NotSupportedException("Offscreen.UseSharedTexture is supported on Windows only for now (drift C63).");
         if (Offscreen is { DeviceScaleFactor: <= 0 }) throw new ArgumentOutOfRangeException(paramName, "Offscreen.DeviceScaleFactor must be greater than 0.");
         // Chrome-style browsers take these from the profile's preferences, over the browser settings.
         if (MinimumFontSize is not null) throw new NotSupportedException("MinimumFontSize is not supported: CEF applies the profile's value to every window.");
@@ -342,6 +343,7 @@ public sealed unsafe partial class BrowserWindow : BaseWindow
             NativeObject.Release(_viewDelegate.Native);
             UpdateOffscreenView();
             var info = cef_window_info_native_t.Windowless();
+            if (WebContents.UsesSharedTexture) info.win.shared_texture_enabled = 1;
             var created = CefNative.cef_browser_host_create_browser((cef_window_info_t*)&info, _client.Native, &url, &settings, null, context) != 0;
             CefString.Clear(&url);
             ClearWebPreferenceStrings(&settings);

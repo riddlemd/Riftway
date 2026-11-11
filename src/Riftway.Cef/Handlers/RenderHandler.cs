@@ -40,6 +40,7 @@ public sealed unsafe class RenderHandler
         Native->on_paint = &OnPaint;
         Native->on_popup_show = &OnPopupShow;
         Native->on_popup_size = &OnPopupSize;
+        Native->on_accelerated_paint = &OnAcceleratedPaint;
     }
 
     public cef_render_handler_t* Native { get; }
@@ -55,6 +56,23 @@ public sealed unsafe class RenderHandler
 
     /// <summary>A frame of the open popup widget (a <c>&lt;select&gt;</c> list), on CEF's UI thread.</summary>
     public PaintCallback? PopupPainted { get; init; }
+
+    /// <summary>A GPU frame of the view or the popup widget (<see cref="AcceleratedFrame.IsPopup"/>), for a browser created
+    /// with shared textures; on CEF's UI thread, the texture valid only during the call.</summary>
+    public AcceleratedPaintCallback? AcceleratedPainted { get; init; }
+
+    [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])]
+    private static void OnAcceleratedPaint(cef_render_handler_t* self, cef_browser_t* browser, cef_paint_element_type_t type, nuint dirtyCount,
+        cef_rect_t* dirtyRects, cef_accelerated_paint_info_t* info)
+    {
+        var owner = NativeObject.Owner<RenderHandler>(self);
+        if (owner.AcceleratedPainted is { } callback && info is not null)
+        {
+            try { callback(new AcceleratedFrame(type == cef_paint_element_type_t.PET_POPUP, (AcceleratedPaintInfo*)info, new ReadOnlySpan<cef_rect_t>(dirtyRects, (int)dirtyCount))); }
+            catch (Exception e) { Console.Error.WriteLine($"[Riftway] A paint handler failed: {e}"); }
+        }
+        NativeObject.Release(browser);
+    }
 
     /// <summary>The popup widget opened (true) or closed (false).</summary>
     public Action<bool>? PopupShown { get; init; }
@@ -114,3 +132,34 @@ public sealed unsafe class RenderHandler
         NativeObject.Release(browser);
     }
 }
+
+/// <summary>CEF's Windows <c>cef_accelerated_paint_info_t</c>: an NT handle to a D3D11 texture. macOS (an IOSurface)
+/// and Linux (dma-buf planes before the format) lay it out differently.</summary>
+[StructLayout(LayoutKind.Sequential)]
+public struct AcceleratedPaintInfo
+{
+    public nuint Size;
+    public nint SharedTextureHandle;
+    public cef_color_type_t Format;
+    public cef_accelerated_paint_info_common_t Extra;
+}
+
+/// <summary>A GPU frame: its texture and description are valid only during the callback.</summary>
+public readonly unsafe ref struct AcceleratedFrame
+{
+    internal AcceleratedFrame(bool isPopup, AcceleratedPaintInfo* info, ReadOnlySpan<cef_rect_t> dirty)
+    {
+        IsPopup = isPopup;
+        Info = info;
+        Dirty = dirty;
+    }
+
+    public bool IsPopup { get; }
+
+    public AcceleratedPaintInfo* Info { get; }
+
+    public ReadOnlySpan<cef_rect_t> Dirty { get; }
+}
+
+/// <summary>Receives an <see cref="AcceleratedFrame"/>.</summary>
+public delegate void AcceleratedPaintCallback(AcceleratedFrame frame);

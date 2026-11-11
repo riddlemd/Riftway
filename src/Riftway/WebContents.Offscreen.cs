@@ -35,7 +35,49 @@ public sealed unsafe partial class WebContents
         PopupPainted = OnOffscreenPopupPaint,
         PopupShown = OnOffscreenPopupShown,
         PopupMoved = rect => _popupRect = rect,
+        AcceleratedPainted = OnOffscreenAcceleratedPaint,
     };
+
+    /// <summary>Whether the page's frames come as GPU shared textures.</summary>
+    internal bool UsesSharedTexture => _preferences.Offscreen is { UseSharedTexture: true };
+
+    // A GPU frame: Electron's paint with event.texture and an empty image. The texture is valid only while Paint runs:
+    // CEF returns it to its pool when this callback returns (drift C63).
+    private void OnOffscreenAcceleratedPaint(AcceleratedFrame frame)
+    {
+        if (Paint is null) return;
+        var info = frame.Info;
+        var extra = info->Extra;
+        int left = int.MaxValue, top = int.MaxValue, right = int.MinValue, bottom = int.MinValue;
+        foreach (var r in frame.Dirty)
+        {
+            (left, top) = (Math.Min(left, r.x), Math.Min(top, r.y));
+            (right, bottom) = (Math.Max(right, r.x + r.width), Math.Max(bottom, r.y + r.height));
+        }
+        var dirty = left == int.MaxValue ? Rect(extra.content_rect) : new Rectangle(left, top, right - left, bottom - top);
+        var textureInfo = new SharedTextureInfo
+        {
+            WidgetType = frame.IsPopup ? "popup" : "frame",
+            PixelFormat = info->Format == cef_color_type_t.CEF_COLOR_TYPE_RGBA_8888 ? "rgba" : "bgra",
+            CodedSize = (extra.coded_size.width, extra.coded_size.height),
+            VisibleRect = Rect(extra.visible_rect),
+            ContentRect = Rect(extra.content_rect),
+            Timestamp = (long)extra.timestamp,
+            Metadata = new SharedTextureMetadata
+            {
+                CaptureUpdateRect = extra.has_capture_update_rect != 0 ? Rect(extra.capture_update_rect) : null,
+                RegionCaptureRect = extra.has_region_capture_rect != 0 ? Rect(extra.region_capture_rect) : null,
+                SourceSize = extra.has_source_size != 0 ? new Rectangle(0, 0, extra.source_size.width, extra.source_size.height) : null,
+                FrameCount = extra.has_capture_counter != 0 ? (long)extra.capture_counter : null,
+            },
+            Handle = new SharedTextureHandle { NtHandle = info->SharedTextureHandle },
+        };
+        var texture = new OffscreenSharedTexture(textureInfo);
+        try { Paint?.Invoke(this, new PaintEventArgs(dirty, NativeImage.CreateEmpty()) { Texture = texture }); }
+        finally { texture.Release(); }
+    }
+
+    private static Rectangle Rect(cef_rect_t r) => new(r.x, r.y, r.width, r.height);
 
     /// <summary>The view an offscreen page renders, in DIPs; tells CEF when it changes. The device scale is
     /// <see cref="OffscreenOptions.DeviceScaleFactor"/>, else 1, whatever the display: Electron's
@@ -206,15 +248,90 @@ public sealed unsafe partial class WebContents
 
 /// <summary>A frame of an offscreen page: Electron's <c>paint</c> arguments.</summary>
 /// <param name="DirtyRect">The part of the frame that changed, in pixels; Electron's <c>dirtyRect</c>.</param>
-/// <param name="Image">The whole view, at the page's device scale; Electron's <c>image</c>.</param>
-public sealed record PaintEventArgs(Rectangle DirtyRect, NativeImage Image);
+/// <param name="Image">The whole view, at the page's device scale; empty for a shared texture. Electron's <c>image</c>.</param>
+public sealed record PaintEventArgs(Rectangle DirtyRect, NativeImage Image)
+{
+    /// <summary>The frame as a GPU texture, with <see cref="OffscreenOptions.UseSharedTexture"/>; else null. Electron's
+    /// <c>event.texture</c>.</summary>
+    public OffscreenSharedTexture? Texture { get; init; }
+}
+
+/// <summary>A frame as a GPU shared texture: Electron's <c>OffscreenSharedTexture</c>. Valid only while the
+/// <see cref="WebContents.Paint"/> handler runs, where Electron's lasts until <see cref="Release"/> (drift C63): open or
+/// copy the texture there.</summary>
+public sealed class OffscreenSharedTexture
+{
+    internal OffscreenSharedTexture(SharedTextureInfo textureInfo) => TextureInfo = textureInfo;
+
+    /// <summary>The texture's description. Electron's <c>textureInfo</c>.</summary>
+    public SharedTextureInfo TextureInfo { get; }
+
+    /// <summary>Whether the texture has been handed back; its handle is then no longer valid.</summary>
+    public bool IsReleased { get; private set; }
+
+    /// <summary>Hands the texture back. Electron's <c>release()</c>; Riftway hands it back when the handler returns
+    /// anyway, so a call is only needed to say it is done sooner.</summary>
+    public void Release() => IsReleased = true;
+}
+
+/// <summary>Electron's <c>OffscreenSharedTexture.textureInfo</c>.</summary>
+public sealed record SharedTextureInfo
+{
+    /// <summary><c>frame</c> for the view, <c>popup</c> for an open <c>&lt;select&gt;</c> list. Electron's <c>widgetType</c>.</summary>
+    public required string WidgetType { get; init; }
+
+    /// <summary><c>bgra</c> or <c>rgba</c>, 8 bits a channel. Electron's <c>pixelFormat</c>.</summary>
+    public required string PixelFormat { get; init; }
+
+    /// <summary>The texture's full size, in pixels. Electron's <c>codedSize</c>.</summary>
+    public (int Width, int Height) CodedSize { get; init; }
+
+    /// <summary>The part of the texture with content. Electron's <c>visibleRect</c>.</summary>
+    public Rectangle VisibleRect { get; init; }
+
+    /// <summary>The part painted. Electron's <c>contentRect</c>.</summary>
+    public Rectangle ContentRect { get; init; }
+
+    /// <summary>Microseconds since capture started. Electron's <c>timestamp</c>.</summary>
+    public long Timestamp { get; init; }
+
+    /// <summary>Electron's <c>metadata</c>.</summary>
+    public SharedTextureMetadata Metadata { get; init; } = new();
+
+    /// <summary>Electron's <c>handle</c>.</summary>
+    public SharedTextureHandle Handle { get; init; } = new();
+}
+
+/// <summary>Electron's <c>textureInfo.metadata</c>.</summary>
+public sealed record SharedTextureMetadata
+{
+    /// <summary>The updated area. Electron's <c>captureUpdateRect</c>.</summary>
+    public Rectangle? CaptureUpdateRect { get; init; }
+
+    /// <summary>Electron's <c>regionCaptureRect</c>.</summary>
+    public Rectangle? RegionCaptureRect { get; init; }
+
+    /// <summary>The source frame's full size. Electron's <c>sourceSize</c>.</summary>
+    public Rectangle? SourceSize { get; init; }
+
+    /// <summary>The increasing frame count. Electron's <c>frameCount</c>.</summary>
+    public long? FrameCount { get; init; }
+}
+
+/// <summary>Electron's <c>SharedTextureHandle</c>.</summary>
+public sealed record SharedTextureHandle
+{
+    /// <summary>Windows: an NT handle to the D3D11 texture (open it with <c>ID3D11Device1::OpenSharedResource1</c>).
+    /// Electron's <c>ntHandle</c>.</summary>
+    public nint NtHandle { get; init; }
+}
 
 /// <summary>A page rendered offscreen, into <see cref="WebContents.Paint"/>: Electron's <c>webPreferences.offscreen</c>
 /// object.</summary>
 public sealed record OffscreenOptions
 {
-    /// <summary>Frames as GPU shared textures. Not supported: <c>true</c> throws (drift C63). Electron's
-    /// <c>useSharedTexture</c>.</summary>
+    /// <summary>Frames as GPU shared textures in <see cref="PaintEventArgs.Texture"/>, with an empty image. Windows only:
+    /// <c>true</c> throws elsewhere (drift C63). Electron's <c>useSharedTexture</c>.</summary>
     public bool UseSharedTexture { get; init; }
 
     /// <summary>The device scale the page renders at; null renders at 1, whatever the display, as Electron. Electron's

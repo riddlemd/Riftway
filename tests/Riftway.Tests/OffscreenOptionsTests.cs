@@ -12,9 +12,15 @@ public sealed class OffscreenOptionsTests
     public void Offscreen_Validates() => new WebPreferences { Offscreen = new OffscreenOptions { DeviceScaleFactor = 2 } }.Validate("options");
 
     [Fact]
-    public void SharedTexture_IsNotSupported()
+    public void SharedTexture_IsWindowsOnly()
     {
-        var e = Assert.Throws<NotSupportedException>(() => new WebPreferences { Offscreen = new OffscreenOptions { UseSharedTexture = true } }.Validate("options"));
+        var preferences = new WebPreferences { Offscreen = new OffscreenOptions { UseSharedTexture = true } };
+        if (OperatingSystem.IsWindows())
+        {
+            preferences.Validate("options");
+            return;
+        }
+        var e = Assert.Throws<NotSupportedException>(() => preferences.Validate("options"));
         Assert.Contains("C63", e.Message, StringComparison.Ordinal);
     }
 

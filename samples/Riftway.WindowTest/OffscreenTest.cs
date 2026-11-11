@@ -100,12 +100,7 @@ static class OffscreenTest
             !windowed.WebContents.IsOffscreen() && !windowed.WebContents.IsPainting() && windowed.WebContents.GetFrameRate() == 0);
         windowed.Destroy();
 
-        try
-        {
-            _ = new BrowserWindow(new BrowserWindowOptions { Show = false, WebPreferences = new WebPreferences { Offscreen = new OffscreenOptions { UseSharedTexture = true } } });
-            check("offscreen: UseSharedTexture throws", false);
-        }
-        catch (NotSupportedException) { check("offscreen: UseSharedTexture throws", true); }
+        await SharedTextureAsync(check, step);
     }
 
     // A page an offscreen page opens is offscreen too, as Electron's popups take their opener's web preferences; making
@@ -204,6 +199,48 @@ static class OffscreenTest
         }
         finally { win.Destroy(); }
     }
+
+    // Electron's useSharedTexture: GPU frames in event.texture with an empty image. Windows: an NT handle to a D3D11
+    // texture, live while the handler runs and handed back after it (drift C63).
+    private static async Task SharedTextureAsync(MessageBoxTest.CheckFn check, TimeSpan step)
+    {
+        if (!OperatingSystem.IsWindows())
+        {
+            try
+            {
+                _ = new BrowserWindow(new BrowserWindowOptions { Show = false, WebPreferences = new WebPreferences { Offscreen = new OffscreenOptions { UseSharedTexture = true } } });
+                check("offscreen: UseSharedTexture throws off Windows", false);
+            }
+            catch (NotSupportedException) { check("offscreen: UseSharedTexture throws off Windows", true); }
+            return;
+        }
+        var win = new BrowserWindow(new BrowserWindowOptions { Width = 320, Height = 240, Show = false, WebPreferences = new WebPreferences { Offscreen = new OffscreenOptions { UseSharedTexture = true } } });
+        var frames = 0;
+        string? seen = null;
+        var liveDuring = true;
+        OffscreenSharedTexture? kept = null;
+        win.WebContents.Paint += (_, e) =>
+        {
+            if (e.Texture is not { } texture) { seen = "no texture"; return; }
+            var info = texture.TextureInfo;
+            liveDuring &= info.Handle.NtHandle != 0 && GetHandleInformation(info.Handle.NtHandle, out uint _) && !texture.IsReleased;
+            seen = $"{info.WidgetType} {info.PixelFormat} {info.CodedSize} empty={e.Image.IsEmpty()}";
+            kept = texture;
+            Interlocked.Increment(ref frames);
+        };
+        try
+        {
+            await win.WebContents.LoadUrl("data:text/html,<body style='background:rgb(255,0,0)'><div id=d></div><script>let n=0;setInterval(()=>d.textContent=n++,50)</script>");
+            var got = Eventually(() => Volatile.Read(ref frames) >= 10, step);
+            check("offscreen: UseSharedTexture paints GPU frames with an empty image, Electron's textureInfo filled in",
+                got && seen == $"frame bgra {win.GetSize()} empty=True", $"{frames} {seen} window {win.GetSize()}");
+            check("offscreen: the texture's NT handle is live during the handler, and handed back after it", liveDuring && kept is { IsReleased: true }, $"{liveDuring} {kept?.IsReleased}");
+        }
+        finally { win.Destroy(); }
+    }
+
+    [System.Runtime.InteropServices.DllImport("kernel32.dll")]
+    private static extern bool GetHandleInformation(nint handle, out uint flags);
 
     private static bool IsGreen(NativeImage image)
     {
