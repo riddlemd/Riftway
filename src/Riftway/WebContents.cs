@@ -40,6 +40,7 @@ public sealed unsafe partial class WebContents
     private bool _navigated;
     private string _title = string.Empty;
     private readonly WebPreferences _preferences;
+    private readonly JavaScriptDialogs _dialogs;
 
     internal WebContents(string? appPreloadPath, WebPreferences preferences, Session session)
     {
@@ -55,7 +56,19 @@ public sealed unsafe partial class WebContents
         RegisterLifecycle();
         _preferences = preferences;
         Session = session;
-        JsDialog = new JsDialogHandler { SuppressAll = preferences.DisableDialogs, BeforeUnload = OnBeforeUnload };
+        // Electron's -run-dialog: alert and confirm in a message box modal to the page's window, safeDialogs, no prompt.
+        _dialogs = new JavaScriptDialogs(
+            options => BrowserWindow.FromWebContents(this) is { IsDestroyed: false } owner ? Dialog.ShowMessageBoxAsync(owner, options) : Dialog.ShowMessageBoxAsync(options),
+            () => IsDestroyed());
+        JsDialog = new JsDialogHandler
+        {
+            SuppressAll = preferences.DisableDialogs,
+            BeforeUnload = OnBeforeUnload,
+            Run = (originUrl, kind, message, answer) => _dialogs.Run(JavaScriptDialogs.Origin(originUrl, GetUrl()), kind, message, _preferences, answer),
+            ResetDialogState = _dialogs.CancelAll,
+        };
+        // Chromium cancels a closing page's dialogs after CEF has let go of its handlers: close the boxes here.
+        _destroyed.Token.Register(_dialogs.CancelAll);
         // Chrome's own shortcut (F12) and the context menu's Inspect open DevTools without OpenDevTools.
         if (!preferences.DevTools)
             Command = new CommandHandler(["IDC_DEV_TOOLS", "IDC_DEV_TOOLS_CONSOLE", "IDC_DEV_TOOLS_DEVICES", "IDC_DEV_TOOLS_INSPECT",

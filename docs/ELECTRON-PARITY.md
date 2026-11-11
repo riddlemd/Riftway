@@ -16,7 +16,7 @@ The 67 rows include `BrowserView` (deprecated, never implemented; counted as not
 
 | Checklist | Applicable items | Done | Partial | Missing | % done | % done + partial/2 |
 |---|---|---|---|---|---|---|
-| [BrowserWindow](parity/browser-window.md) (with `BaseWindow`) | 295 | 196 | 78 | 21 | 66.4% | 79.7% |
+| [BrowserWindow](parity/browser-window.md) (with `BaseWindow`) | 295 | 198 | 78 | 19 | 67.1% | 80.3% |
 | [webContents](parity/web-contents.md) (with `navigationHistory`, `WebFrameMain`) | 230 | 112 | 70 | 48 | 48.7% | 63.9% |
 | [DownloadItem](parity/download-item.md) (with the session's download API) | 31 | 20 | 10 | 1 | 64.5% | 80.6% |
 | [app](parity/app.md) (with `app.dock` as one item) | 114 | 79 | 30 | 5 | 69.3% | 82.5% |
@@ -58,7 +58,7 @@ Detailed item-by-item status: [parity/browser-window.md](parity/browser-window.m
 | Electron | Riftway | Source | Wave | Status |
 |---|---|---|---|---|
 | `BaseWindow` | `BaseWindow` | CEF (Views) | M2 | partial: a window with an empty `ContentView` and no page, `SetContentView`, `GetAllWindows`/`GetFocusedWindow`/`FromId` over every window; items counted in [parity/browser-window.md](parity/browser-window.md) (DRIFT V15) |
-| `BrowserWindow` | `BrowserWindow` | CEF (Views) | M2 | partial: 196 of 295 applicable items done (66.4%), see parity/browser-window.md |
+| `BrowserWindow` | `BrowserWindow` | CEF (Views) | M2 | partial: 198 of 295 applicable items done (67.1%), see parity/browser-window.md |
 | `View` | `View` | CEF (Views panel) | M2 | partial: `addChildView` (index, move to top, reparent), `removeChildView`, `children`, `setBounds`/`getBounds`, `setVisible`/`getVisible`, `setBackgroundColor`, `bounds-changed`; no `setBorderRadius` (DRIFT V1) |
 | `WebContentsView` | `WebContentsView` | CEF (Views browser view) | M2 | partial: `new WebContentsView({ webPreferences })`, `webContents`, child views in a window's `ContentView`, above a `BrowserWindow`'s page; pages outlive their window and the view stays when its page closes, as Electron; popups and `webContents.close()` from view pages; `webContents` option for a `createWindow` popup (V4); Alloy style (DRIFT V2, V4, V7, V12, V13) |
 | `ImageView` | `ImageView` | CEF + .NET | M5 | — |

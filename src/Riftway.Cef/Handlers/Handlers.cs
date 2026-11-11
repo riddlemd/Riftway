@@ -781,6 +781,14 @@ public sealed unsafe class CommandHandler
 }
 
 /// <summary><c>cef_jsdialog_handler_t</c>: the page's <c>alert</c>, <c>confirm</c> and <c>prompt</c>.</summary>
+/// <summary>The kind of dialog a page asks for: <c>alert</c>, <c>confirm</c> or <c>prompt</c>.</summary>
+public enum JsDialogKind
+{
+    Alert,
+    Confirm,
+    Prompt,
+}
+
 public sealed unsafe class JsDialogHandler
 {
     public JsDialogHandler()
@@ -788,6 +796,22 @@ public sealed unsafe class JsDialogHandler
         Native = NativeObject.Create<cef_jsdialog_handler_t>(this);
         Native->on_jsdialog = &OnJsDialog;
         Native->on_before_unload_dialog = &OnBeforeUnloadDialog;
+        Native->on_reset_dialog_state = &OnResetDialogState;
+    }
+
+    /// <summary>A page asks for a dialog: (origin URL, kind, message, answer) → true when the handler shows it and calls
+    /// answer later, on any thread: true/false is the user's choice (OK/Cancel), null drops the dialog unanswered. False
+    /// suppresses it (<c>alert</c> returns at once, <c>confirm</c> false, <c>prompt</c> null). Null leaves CEF's dialog.</summary>
+    public Func<string, JsDialogKind, string, Action<bool?>, bool>? Run { get; init; }
+
+    /// <summary>CEF cancels pending dialogs and resets dialog state (navigation, closing): Electron's <c>CancelDialogs</c>.</summary>
+    public Action? ResetDialogState { get; init; }
+
+    [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])]
+    private static void OnResetDialogState(cef_jsdialog_handler_t* self, cef_browser_t* browser)
+    {
+        if (NativeObject.Owner<JsDialogHandler>(self).ResetDialogState is { } reset) Guard.Run(reset);
+        NativeObject.Release(browser);
     }
 
     /// <summary>A beforeunload handler objects to leaving the page: (isReload) → whether to leave anyway. Answered at
@@ -820,10 +844,43 @@ public sealed unsafe class JsDialogHandler
     private static int OnJsDialog(cef_jsdialog_handler_t* self, cef_browser_t* browser, cef_string_utf16_t* originUrl,
         cef_jsdialog_type_t type, cef_string_utf16_t* message, cef_string_utf16_t* defaultPrompt, cef_jsdialog_callback_t* callback, int* suppressMessage)
     {
-        // Suppressing rather than answering through the callback: CEF treats instant answers as dialog spam.
-        *suppressMessage = NativeObject.Owner<JsDialogHandler>(self).SuppressAll ? 1 : 0;
-        NativeObject.Release(callback);
+        var handler = NativeObject.Owner<JsDialogHandler>(self);
         NativeObject.Release(browser);
+        // Suppressing rather than answering through the callback: CEF treats instant answers as dialog spam.
+        if (handler.SuppressAll || handler.Run is not { } run)
+        {
+            *suppressMessage = handler.SuppressAll ? 1 : 0;
+            NativeObject.Release(callback);
+            return 0;
+        }
+        var kind = type switch
+        {
+            cef_jsdialog_type_t.JSDIALOGTYPE_CONFIRM => JsDialogKind.Confirm,
+            cef_jsdialog_type_t.JSDIALOGTYPE_PROMPT => JsDialogKind.Prompt,
+            _ => JsDialogKind.Alert,
+        };
+        // The callback is kept until the answer (or the drop) comes, once.
+        var pending = (nint)callback;
+        void Answer(bool? ok)
+        {
+            var held = Interlocked.Exchange(ref pending, 0);
+            if (held == 0) return;
+            CefThread.PostUi(() =>
+            {
+                var cb = (cef_jsdialog_callback_t*)held;
+                if (ok is { } accepted)
+                {
+                    cef_string_utf16_t none = default;
+                    cb->cont(cb, accepted ? 1 : 0, &none);
+                }
+                NativeObject.Release(cb);
+            });
+        }
+        var shown = false;
+        Guard.Run(() => shown = run(CefString.Read(originUrl), kind, CefString.Read(message), Answer));
+        if (shown) return 1;
+        if (Interlocked.Exchange(ref pending, 0) != 0) NativeObject.Release(callback);
+        *suppressMessage = 1;
         return 0;
     }
 }

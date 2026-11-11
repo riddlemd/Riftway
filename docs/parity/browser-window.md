@@ -18,12 +18,12 @@ Counted from the Checklist at the end: `BaseWindow` and `BrowserWindow` are one 
 | Area | Items | Done | Partial | Missing | n/a | % done | % done + partial/2 |
 |---|---|---|---|---|---|---|---|
 | BaseWindow + BrowserWindow options | 54 | 34 | 19 | 1 | 0 | 63.0% | 80.6% |
-| webPreferences | 46 | 12 | 7 | 20 | 7 | 30.8% | 39.7% |
+| webPreferences | 46 | 14 | 7 | 18 | 7 | 35.9% | 44.9% |
 | Instance methods | 143 | 107 | 30 | 0 | 6 | 78.1% | 89.1% |
 | Instance properties | 24 | 17 | 7 | 0 | 0 | 70.8% | 85.4% |
 | Events | 35 | 20 | 15 | 0 | 0 | 57.1% | 78.6% |
 | Static methods | 7 | 6 | 0 | 0 | 1 | 100.0% | 100.0% |
-| **Total** | 309 | 196 | 78 | 21 | 14 | 66.4% | 79.7% |
+| **Total** | 309 | 198 | 78 | 19 | 14 | 67.1% | 80.3% |
 
 ## Done since the audit
 
@@ -72,7 +72,9 @@ Counted from the Checklist at the end: `BaseWindow` and `BrowserWindow` are one 
   `defaultFontFamily` (all but `math`, which throws), `defaultFontSize`, `defaultMonospaceFontSize`, `disableDialogs`.
   Routes: `cef_browser_settings_t`; the two font sizes go through DevTools `Page.setFontSizes`, because Chrome-style
   browsers overwrite them from the profile; `zoomFactor` is `H.set_zoom_level` on each origin not yet zoomed;
-  `disableDialogs` is a `cef_jsdialog_handler_t` that suppresses. Zoom is per origin and lasts for the session, as in
+  `disableDialogs` is a `cef_jsdialog_handler_t` that suppresses; other `alert`/`confirm` calls show as Electron's
+  `-run-dialog` does (Riftway's message box, modal to the page's window; `prompt` returns null, as Electron), with
+  `safeDialogs`/`safeDialogsMessage`. Zoom is per origin and lasts for the session, as in
   Electron: Chrome-style profiles save it across launches, so Riftway clears `partition.per_host_zoom_levels` at startup.
 - webContents: `openDevTools` (own window only; no docked modes), `closeDevTools`, `isDevToolsOpened`, `toggleDevTools`,
   `setZoomFactor`/`getZoomFactor`, `setZoomLevel`/`getZoomLevel`, `executeJavaScript` (`ExecuteJavaScriptAsync`,
@@ -161,7 +163,7 @@ Counted from the Checklist at the end: `BaseWindow` and `BrowserWindow` are one 
      `experimentalFeatures`, `enableBlinkFeatures`/`disableBlinkFeatures`, `autoplayPolicy`, `sandbox`. Decide between
      an app-level option and a per-window gap.
    - Profile-wide in Chrome style, so they throw `NotSupportedException`: `minimumFontSize`, `defaultEncoding`.
-   - Not yet investigated: `backgroundThrottling`, `navigateOnDragDrop`, `safeDialogs`/`safeDialogsMessage`,
+   - Not yet investigated: `backgroundThrottling`, `navigateOnDragDrop`,
      `accessibleTitle`, `scrollBounce`, `imageAnimationPolicy`, `zoomMode`, `focusOnNavigation`,
      `disableHtmlFullscreenWindowResize`, `additionalArguments`.
    - `contextIsolation` is always on; `false` is not offered.
@@ -294,8 +296,8 @@ Parameters in brackets are optional in Electron. `webContents` members are in [w
 | `contextIsolation` | — | partial | Always on; `false` is not offered (W14). |
 | `webviewTag` | — | n/a | <webview> |
 | `additionalArguments` | — | missing |  |
-| `safeDialogs` | — | missing |  |
-| `safeDialogsMessage` | — | missing |  |
+| `safeDialogs` | `SafeDialogs` | done | Electron's `-run-dialog`: page dialogs are Riftway message boxes, the checkbox from an origin's second dialog; a ticked origin gets none for the page's life. |
+| `safeDialogsMessage` | `SafeDialogsMessage` | done | Empty or null keeps Electron's label. |
 | `disableDialogs` | `DisableDialogs` | done |  |
 | `navigateOnDragDrop` | — | missing |  |
 | `autoplayPolicy` | — | missing | Process-wide in CEF (W13). |
