@@ -49,6 +49,7 @@ public sealed unsafe class WebContentsView : View
         options ??= new WebContentsViewOptions();
         var preferences = options.WebPreferences;
         preferences.Validate(nameof(options), windowPage: false);
+        if (options.WebContents?.IsOffscreen() == true) throw new NotSupportedException("Offscreen is not supported for a WebContentsView yet, only a BrowserWindow's page (drift C63).");
         if (options.WebContents is { } adopted)
         {
             // CEF makes a popup its opener's style, and a window's own page is its one Chrome-style browser.
@@ -63,12 +64,18 @@ public sealed unsafe class WebContentsView : View
         {
             BeforePopup = (request, features, settings) => BrowserWindow.OpenPopup(WebContents, request, features, settings),
             PopupAborted = BrowserWindow.OnPopupAborted,
-            // A view's page would otherwise close the whole window (CEF's default for an Alloy browser).
+            PopupWindowless = BrowserWindow.IsWindowlessPopup,
+            // A view's page would otherwise close the whole window (CEF's default for an Alloy browser). A windowless
+            // page has no window to close: CEF destroys it.
             Closing = () =>
             {
+                if (WebContents.IsOffscreen()) return false;
                 CefThread.PostUi(Teardown);
                 return true;
             },
+            // A windowless page has no browser view to report it: CEF's life span handler does.
+            AfterCreated = WebContents.IsOffscreen() ? OnBrowserCreated : null,
+            BeforeClose = WebContents.IsOffscreen() ? _ => OnBrowserDestroyed() : null,
         };
         _client = new ClientHandler(WebContents.Display, WebContents.Load, WebContents.JsDialog, WebContents.Request, WebContents.Command,
             // Only before-input-event here: an Alloy page's unhandled keys reach the window delegate, and so the menu bar.
@@ -78,29 +85,15 @@ public sealed unsafe class WebContentsView : View
             Download = WebContents.Downloads,
             Find = WebContents.Finds,
             Focus = WebContents.FocusEvents,
+            Render = WebContents.OffscreenRender,
         };
         _viewDelegate = new BrowserViewDelegate
         {
             RuntimeStyle = cef_runtime_style_t.CEF_RUNTIME_STYLE_ALLOY,
-            BrowserCreated = browser =>
-            {
-                s_unstarted.Remove(this);
-                s_live.Add(this);
-                WebContents.OnBrowserCreated(browser);
-                ApplyPageColor();
-            },
+            BrowserCreated = OnBrowserCreated,
             // CEF resets the browser view's colour whenever the theme applies.
             ThemeChanged = ApplyPageColor,
-            BrowserDestroyed = _ =>
-            {
-                WebContents.OnBrowserDestroyed();
-                s_live.Remove(this);
-                if (s_live.Count == 0 && s_allClosed is { } done)
-                {
-                    s_allClosed = null;
-                    done();
-                }
-            },
+            BrowserDestroyed = _ => OnBrowserDestroyed(),
             PopupDelegate = BrowserWindow.PopupDelegateFor,
             PopupViewCreated = (view, popupDelegate) => BrowserWindow.AdoptPopupView(WebContents, view, popupDelegate),
         };
@@ -118,6 +111,49 @@ public sealed unsafe class WebContentsView : View
             else session.Initialized.ContinueWith(_ => CefThread.RunOnUi(() => CreatePage(preferences, session)), TaskScheduler.Default);
             return true;
         });
+    }
+
+    private void OnBrowserCreated(cef_browser_t* browser)
+    {
+        s_unstarted.Remove(this);
+        s_live.Add(this);
+        WebContents.OnBrowserCreated(browser);
+        ApplyPageColor();
+        if (WebContents.IsOffscreen()) UpdateOffscreenView();
+    }
+
+    private void OnBrowserDestroyed()
+    {
+        WebContents.OnBrowserDestroyed();
+        s_live.Remove(this);
+        if (s_live.Count == 0 && s_allClosed is { } done)
+        {
+            s_allClosed = null;
+            done();
+        }
+    }
+
+    // An offscreen page paints at the outer size of the window its view is in, and at nothing outside one: Electron's
+    // OffScreenWebContentsView takes its owner window's GetSize (CEF needs at least 1x1).
+    private BaseWindow? _offscreenWindow;
+
+    private protected override void OnWindowChanged(bool added)
+    {
+        if (_client is null || !WebContents.IsOffscreen()) return;
+        var window = added ? BaseWindow.WindowAround(this) : null;
+        if (window == _offscreenWindow) return;
+        if (_offscreenWindow is { } previous) previous.Resized -= OnOffscreenWindowResized;
+        _offscreenWindow = window;
+        if (window is not null) window.Resized += OnOffscreenWindowResized;
+        UpdateOffscreenView();
+    }
+
+    private void OnOffscreenWindowResized(object? sender, EventArgs e) => UpdateOffscreenView();
+
+    private void UpdateOffscreenView()
+    {
+        var (width, height) = _offscreenWindow is { IsDestroyed: false } window ? window.GetSize() : (0, 0);
+        WebContents.SetOffscreenView(width, height);
     }
 
     // UI thread.
@@ -147,9 +183,22 @@ public sealed unsafe class WebContentsView : View
         NativeObject.AddRef(client.Native);
         NativeObject.AddRef(viewDelegate.Native);
         var context = session.IsDefault ? null : session.AddRefNative();
-        SetPage((cef_view_t*)CefNative.cef_browser_view_create(client.Native, &url, &settings, null, context, viewDelegate.Native));
+        if (WebContents.IsOffscreen())
+        {
+            // No page view: the view stays an empty panel, and the page renders into Paint from now on, in a window
+            // or not, as Electron's offscreen web contents exists from its creation.
+            NativeObject.Release(viewDelegate.Native);
+            settings.windowless_frame_rate = WebContents.InitialFrameRate;
+            var info = cef_window_info_native_t.Windowless();
+            if (WebContents.UsesSharedTexture) info.win.shared_texture_enabled = 1;
+            UpdateOffscreenView();
+            if (CefNative.cef_browser_host_create_browser((cef_window_info_t*)&info, client.Native, &url, &settings, null, context) == 0)
+                Console.Error.WriteLine("[Riftway] CEF could not create an offscreen view's page.");
+        }
+        else SetPage((cef_view_t*)CefNative.cef_browser_view_create(client.Native, &url, &settings, null, context, viewDelegate.Native));
         s_unstarted.Add(this);
-        WebContents.CloseWithoutBrowser = CloseUnstarted;
+        // A windowless page starts at once, outside any window, so Close reaches its browser.
+        if (!WebContents.IsOffscreen()) WebContents.CloseWithoutBrowser = CloseUnstarted;
         CefString.Clear(&url);
         BrowserWindow.ClearWebPreferenceStrings(&settings);
     }

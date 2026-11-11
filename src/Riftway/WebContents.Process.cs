@@ -20,10 +20,6 @@ public sealed unsafe partial class WebContents
     /// own (drift C45).</summary>
     public string GetWebContentsType() => "window";
 
-    /// <summary>Whether the page renders offscreen: always false, as Riftway has no offscreen rendering. Electron's
-    /// <c>webContents.isOffscreen()</c>.</summary>
-    public bool IsOffscreen() => false;
-
     // UI thread: CEF's main frame is Chromium's primary main frame, so its identifier needs no matching to DevTools'.
     private int MainFrameProcessId()
     {

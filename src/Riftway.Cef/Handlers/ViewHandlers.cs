@@ -15,9 +15,21 @@ public sealed unsafe class PanelDelegate
         Native = NativeObject.Create<cef_panel_delegate_t>(this);
         Native->@base.on_layout_changed = &OnLayoutChanged;
         Native->@base.on_theme_changed = &OnThemeChanged;
+        Native->@base.on_window_changed = &OnWindowChanged;
     }
 
     public cef_panel_delegate_t* Native { get; }
+
+    /// <summary>UI thread: the panel joined a window (true) or left one (false), itself or with an ancestor.</summary>
+    public Action<bool>? WindowChanged { get; init; }
+
+    [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])]
+    private static void OnWindowChanged(cef_view_delegate_t* self, cef_view_t* view, int added)
+    {
+        var owner = NativeObject.Owner<PanelDelegate>(self);
+        if (owner.WindowChanged is { } callback) Guard.Run(() => callback(added != 0));
+        NativeObject.Release(view);
+    }
 
     /// <summary>UI thread, after the panel's layout manager has placed its children.</summary>
     public LayoutCallback? LayoutChanged { get; init; }

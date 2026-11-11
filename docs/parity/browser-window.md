@@ -157,8 +157,8 @@ Counted from the Checklist at the end: `BaseWindow` and `BrowserWindow` are one 
 ## Next, by importance
 
 1. Remaining webPreferences:
-   - Need other modules: `spellcheck` (no per-page switch, E22), `offscreen` (offscreen
-     rendering). `session`/`partition` landed with the `Session` module (DRIFT E1-E11).
+   - Need other modules: `spellcheck` (no per-page switch, E22). `offscreen` is done for BrowserWindow pages
+     (C63). `session`/`partition` landed with the `Session` module (DRIFT E1-E11).
    - Process-wide in CEF (Chromium switches, not per window): `webSecurity`, `allowRunningInsecureContent`,
      `experimentalFeatures`, `enableBlinkFeatures`/`disableBlinkFeatures`, `autoplayPolicy`, `sandbox`. Decide between
      an app-level option and a per-window gap.

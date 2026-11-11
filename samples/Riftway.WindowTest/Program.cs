@@ -408,6 +408,7 @@ async Task RunAsync(BrowserWindow win, BrowserWindow simple)
     await FocusNavigationTest.RunAsync(Check, step);
     await FrameSubscriptionTest.RunAsync(Check, step);
     await BeforeMouseEventTest.RunAsync(Check, step);
+    await OffscreenTest.RunAsync(Check, step);
     await ShellAsync();
     await ClipboardAsync();
     await WindowPolishAsync(win);

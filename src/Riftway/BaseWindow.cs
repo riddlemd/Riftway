@@ -571,11 +571,14 @@ public unsafe partial class BaseWindow
     private protected bool BlocksInput => OperatingSystem.IsLinux() && _enabled.DropsKeys;
 
     // UI thread. A view's page has a keyboard handler of its own, so it asks the window its view tree hangs from.
-    internal static bool BlocksInputAround(View view)
+    internal static bool BlocksInputAround(View view) => WindowAround(view) is { BlocksInput: true };
+
+    /// <summary>UI thread: the window <paramref name="view"/>'s tree hangs from, or null.</summary>
+    internal static BaseWindow? WindowAround(View view)
     {
         var root = view;
         while (root.Parent is { } parent) root = parent;
-        return GetAllWindows().FirstOrDefault(w => w._contentsView == root) is { BlocksInput: true };
+        return GetAllWindows().FirstOrDefault(w => w._contentsView == root);
     }
 
     private void ApplyLinuxEnabled()

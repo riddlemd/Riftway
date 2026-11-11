@@ -127,12 +127,20 @@ public sealed record WebPreferences
     /// that contradicts the page's session throws.</summary>
     public bool? ScrollBounce { get; init; }
 
+    /// <summary>Renders the page offscreen: it paints into <see cref="WebContents.Paint"/> instead of its window, at its
+    /// window's outer size (Electron's, not the content size), and takes input only from <see cref="WebContents.SendInputEvent(KeyboardInputEvent)"/>.
+    /// Null renders into the window. Electron's <c>offscreen</c>.</summary>
+    public OffscreenOptions? Offscreen { get; init; }
+
     internal void Validate(string paramName, bool windowPage = true)
     {
         if (windowPage && !FocusOnNavigation)
             throw new NotSupportedException("FocusOnNavigation = false is not supported for a window's page: Chrome-style browsers focus it on every navigation in an active window.");
         if (DisableHtmlFullscreenWindowResize)
             throw new NotSupportedException("DisableHtmlFullscreenWindowResize is not supported: Chromium's fullscreen controller makes the window fullscreen with the page (drift W64).");
+        if (Offscreen is { UseSharedTexture: true } && !OperatingSystem.IsWindows())
+            throw new NotSupportedException("Offscreen.UseSharedTexture is supported on Windows only for now (drift C63).");
+        if (Offscreen is { DeviceScaleFactor: <= 0 }) throw new ArgumentOutOfRangeException(paramName, "Offscreen.DeviceScaleFactor must be greater than 0.");
         // Chrome-style browsers take these from the profile's preferences, over the browser settings.
         if (MinimumFontSize is not null) throw new NotSupportedException("MinimumFontSize is not supported: CEF applies the profile's value to every window.");
         if (DefaultEncoding is not null) throw new NotSupportedException("DefaultEncoding is not supported: CEF applies the profile's value to every window.");
@@ -249,14 +257,24 @@ public sealed unsafe partial class BrowserWindow : BaseWindow
                 keyEvent => OperatingSystem.IsMacOS()
                     ? WebContents.IgnoresMenuShortcuts && keyEvent->type != cef_key_event_type_t.KEYEVENT_CHAR
                     : !WebContents.IgnoresMenuShortcuts && (_menuBar?.OnUnhandledKey(keyEvent) ?? false)),
-            new LifeSpanHandler { BeforePopup = (request, features, settings) => OpenPopup(WebContents, request, features, settings), PopupAborted = OnPopupAborted },
+            new LifeSpanHandler
+            {
+                BeforePopup = (request, features, settings) => OpenPopup(WebContents, request, features, settings),
+                PopupAborted = OnPopupAborted,
+                PopupWindowless = IsWindowlessPopup,
+                // A windowless page has no browser view to report it: CEF's life span handler does.
+                AfterCreated = WebContents.IsOffscreen() ? OnBrowserCreated : null,
+                BeforeClose = WebContents.IsOffscreen() ? OnOffscreenBrowserClosed : null,
+            },
             new DragHandler(regions => Command(w => SetDraggableRegionsOn(w, regions))))
         {
             Permission = WebContents.Permissions,
             Download = WebContents.Downloads,
             Find = WebContents.Finds,
             Focus = WebContents.FocusEvents,
+            Render = WebContents.OffscreenRender,
         };
+        if (WebContents.IsOffscreen()) Resized += (_, _) => UpdateOffscreenView();
         _viewDelegate = new BrowserViewDelegate
         {
             BrowserCreated = OnBrowserCreated,
@@ -330,6 +348,7 @@ public sealed unsafe partial class BrowserWindow : BaseWindow
         // CEF gives a popup its opener's request context, whatever the options say.
         if (opener is not null && session != opener.Session)
             throw new InvalidOperationException("A window a page opens must use its opener's session.");
+        if (opener is not null && OffscreenMismatch(opener, options.WebPreferences) is { } offscreen) throw new InvalidOperationException(offscreen);
         return options;
     }
 
@@ -341,6 +360,7 @@ public sealed unsafe partial class BrowserWindow : BaseWindow
         {
             size = (nuint)sizeof(cef_browser_settings_t),
             background_color = _backgroundColor is null ? 0 : ParseColor(_backgroundColor),
+            windowless_frame_rate = WebContents.InitialFrameRate,
         };
         ApplyWebPreferences(&settings, BrowserOptions.WebPreferences);
         // A document must exist before DevTools answers commands, and the preload is registered
@@ -352,6 +372,18 @@ public sealed unsafe partial class BrowserWindow : BaseWindow
         NativeObject.AddRef(_viewDelegate.Native);
         // Null is the global context, which the default session wraps.
         var context = WebContents.Session.IsDefault ? null : WebContents.Session.AddRefNative();
+        if (WebContents.IsOffscreen())
+        {
+            // No view: the page renders into Paint, at the window's content size; CEF reports it through the client.
+            NativeObject.Release(_viewDelegate.Native);
+            UpdateOffscreenView();
+            var info = cef_window_info_native_t.Windowless();
+            if (WebContents.UsesSharedTexture) info.win.shared_texture_enabled = 1;
+            var created = CefNative.cef_browser_host_create_browser((cef_window_info_t*)&info, _client.Native, &url, &settings, null, context) != 0;
+            CefString.Clear(&url);
+            ClearWebPreferenceStrings(&settings);
+            return created;
+        }
         _browserView = CefNative.cef_browser_view_create(_client.Native, &url, &settings, null, context, _viewDelegate.Native);
         CefString.Clear(&url);
         ClearWebPreferenceStrings(&settings);
@@ -399,6 +431,7 @@ public sealed unsafe partial class BrowserWindow : BaseWindow
             preferences.Validate(nameof(options));
             // CEF gives a popup its opener's request context, whatever the options say.
             if (preferences.ResolveSession() != opener.Session) throw new InvalidOperationException("A window a page opens must use its opener's session.");
+            if (OffscreenMismatch(opener, preferences) is { } offscreen) throw new InvalidOperationException(offscreen);
         }
         catch (Exception e) when (e is ArgumentException or NotSupportedException or InvalidOperationException)
         {
@@ -427,6 +460,25 @@ public sealed unsafe partial class BrowserWindow : BaseWindow
         s_pendingPopups[(nint)client] = new PendingPopup(window, view, page, request.PopupId, details,
             RaiseDidCreateWindow: false, ClosesWithOpener: outcome == CreateWindowOutcome.Wired);
         return client;
+    }
+
+    // A windowless opener's popups arrive through no browser view, and a windowed opener's through one: CEF can give a
+    // popup the other kind only by its window info, which Riftway sets for offscreen popups of offscreen openers alone.
+    private static string? OffscreenMismatch(WebContents opener, WebPreferences preferences)
+        => opener.IsOffscreen() == preferences.Offscreen is not null ? null
+            : "A window an offscreen page opens must be offscreen too, and a windowed page's windowed (drift C63).";
+
+    // CEF's on_before_popup, after OpenPopup chose this client: whether the popup's page renders offscreen.
+    internal static bool IsWindowlessPopup(nint client) => s_pendingPopups.TryGetValue(client, out var pending) && pending.Page.IsOffscreen();
+
+    // An offscreen popup has no view to adopt: its page arrives through the client's life span handler.
+    private void AdoptWindowlessPopup()
+    {
+        if (_opener is not { } opener || !s_pendingPopups.Remove((nint)_client.Native, out var pending) || pending.Window != this) return;
+        pending.Page.MarkOpenedByPage();
+        if (pending.ClosesWithOpener) opener.Popups.Add(this);
+        OpenWindow();
+        if (pending.RaiseDidCreateWindow) opener.RaiseDidCreateWindow(new DidCreateWindowEventArgs(this, pending.Details));
     }
 
     internal static void OnPopupAborted(int popupId)
@@ -639,7 +691,31 @@ public sealed unsafe partial class BrowserWindow : BaseWindow
     private void OnBrowserCreated(cef_browser_t* browser)
     {
         WebContents.OnBrowserCreated(browser);
+        if (WebContents.IsOffscreen())
+        {
+            AdoptWindowlessPopup();
+            // Created before the window opened, a windowless page took no content size: it takes it now.
+            UpdateOffscreenView();
+        }
         ApplyPageBackground();
+    }
+
+    // Electron's OffScreenWebContentsView::GetSize: the window's outer size, not its content size.
+    private void UpdateOffscreenView()
+    {
+        var (width, height) = GetSize();
+        WebContents.SetOffscreenView(width, height);
+    }
+
+    // An offscreen page has gone: closed by its window, or by itself. Nothing else closes the window then, so the
+    // window's close runs again, and with the page gone it is approved.
+    private void OnOffscreenBrowserClosed(cef_browser_t* browser)
+    {
+        OnBrowserDestroyed(browser);
+        CefThread.PostUi(() =>
+        {
+            if (!IsDestroyed) Close();
+        });
     }
 
     // The window's page goes first; the window's teardown follows at once, without asking can_close again.
