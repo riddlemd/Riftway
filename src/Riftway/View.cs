@@ -33,6 +33,7 @@ public unsafe class View
                 PlaceChildren(bounds);
             },
             ThemeChanged = ApplyBackgroundColor,
+            WindowChanged = OnWindowChanged,
         };
         CefThread.InvokeOnUi(() =>
         {
@@ -41,6 +42,11 @@ public unsafe class View
             NativeView = &_panel->@base;
             return true;
         });
+    }
+
+    /// <summary>UI thread: the view joined a window or left one, itself or with an ancestor.</summary>
+    private protected virtual void OnWindowChanged(bool added)
+    {
     }
 
     /// <summary>The native panel, holding one reference of this object's.</summary>

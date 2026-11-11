@@ -81,6 +81,7 @@ static class OffscreenTest
         }
 
         await PopupAsync(check, step);
+        await ViewAsync(check, step);
 
         var scaled = new BrowserWindow(new BrowserWindowOptions { Width = 200, Height = 200, Show = false, WebPreferences = new WebPreferences { Offscreen = new OffscreenOptions { DeviceScaleFactor = 1.5 } } });
         PaintEventArgs? scaledFrame = null;
@@ -147,6 +148,35 @@ static class OffscreenTest
             RiftwayApp.Current.BrowserWindowCreated -= OnCreated;
             if (!opener.IsDestroyed) opener.Destroy();
         }
+    }
+
+    // Electron's offscreen web contents in a WebContentsView: it exists and loads outside any window, paints at the outer
+    // size of the window its view is in, follows that window's resizes, and closes on its own.
+    private static async Task ViewAsync(MessageBoxTest.CheckFn check, TimeSpan step)
+    {
+        var host = new BrowserWindow(new BrowserWindowOptions { Width = 360, Height = 260, Show = false });
+        var view = new WebContentsView(new WebContentsViewOptions { WebPreferences = new WebPreferences { Offscreen = new OffscreenOptions() } });
+        PaintEventArgs? last = null;
+        view.WebContents.Paint += (_, e) => last = e;
+        try
+        {
+            await view.WebContents.LoadUrl("data:text/html,<body style='margin:0;background:rgb(255,0,0)'>view");
+            check("offscreen view: the page is offscreen and loads outside any window", view.WebContents.IsOffscreen() && view.WebContents.GetUrl().StartsWith("data:", StringComparison.Ordinal));
+
+            host.ContentView.AddChildView(view);
+            view.SetBounds(new Rectangle(10, 10, 100, 80));
+            check("offscreen view: in a window it paints at the window's outer size, not the view's bounds",
+                Eventually(() => last is { } frame && frame.Image.GetSize() == host.GetSize() && IsRed(frame.Image, 50, 50), step), $"{last?.Image.GetSize()} window {host.GetSize()}");
+
+            host.SetSize(420, 300);
+            check("offscreen view: it follows its window's resize", Eventually(() => last?.Image.GetSize() == (420, 300), step), last?.Image.GetSize());
+
+            var destroyed = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            view.WebContents.Destroyed += (_, _) => destroyed.TrySetResult();
+            view.WebContents.Close();
+            check("offscreen view: closing the page destroys it", await destroyed.Task.WaitAsync(step).ContinueWith(t => t.IsCompletedSuccessfully));
+        }
+        finally { host.Destroy(); }
     }
 
     private static bool IsGreen(NativeImage image)
