@@ -31,8 +31,8 @@ Cross-platform work. Platform-specific items: [linux-todo.md](linux-todo.md), [w
   - [x] Windows: `hookWindowMessage` family, `thickFrame`, `roundedCorners`, `accentColor`/`setAccentColor`/`getAccentColor` (branch `win-shell-apis`)
   - [x] Windows: `showInactive`, `opacity`, `hasShadow` (stored, as Electron), `setIgnoreMouseEvents` (with `forward`), content protection, kiosk, `getNormalBounds`, `will-resize`/`will-move` (branch `window-polish`)
   - [x] `loadURL` options (userAgent, extraHeaders, httpReferrer, postData); `baseURLForDataURL` throws
-  - [ ] Window state persistence (`persisted-state-restored`)
-  - [ ] `resized`/`moved` events
+  - [x] Window state persistence (`windowStatePersistence`, `persisted-state-restored`, `clearPersistedState`; DRIFT W51)
+  - [x] `resized`/`moved` events
   - [ ] Accuracy gaps: `Shown`/`Hidden` fire only from `Show()`/`Hide()`
 - [x] webContents: `executeJavaScript`, DevTools open/close/toggle, zoom factor/level, `setUserAgent`/`getUserAgent`
 - [x] File `Dialog` and `Screen`; gaps in [DRIFT.md](DRIFT.md)
@@ -135,7 +135,10 @@ Cross-platform work. Platform-specific items: [linux-todo.md](linux-todo.md), [w
 - [ ] M3 Blazor Hybrid (branch `blazor-hybrid`): `Riftway.Blazor` (`AddRiftwayBlazor`, `LoadBlazor<T>`, `app://localhost/`,
       `window.external` over IPC), `samples/Riftway.BlazorSample` (`--self-check`: render, events, JS interop both ways, a
       second window on shared services, close disposes components, reload) 10/10 on macOS arm64 and linux-arm64 (Docker, test-linux.sh with `RIFTWAY_EXTRA_ARGS=--self-check`) (2026-10-22);
-      `RiftwayMacBundle=true dotnet watch`: `.razor` edits applied in ~0.3 s without a restart. Open: run on Windows; `dotnet watch` reports "Failed to read obj\Debug/.../staticwebassets.development.json" (a Windows path
+      `RiftwayMacBundle=true dotnet watch`: `.razor` edits applied in ~0.3 s without a restart. Windows x64 (2026-11-03, 8e1df47,
+      blinky, stock CEF): published with `-p:RiftwayWindowsLayout=true`, `--self-check` 18/18 sandboxed three runs in a row and
+      17/17 with `--no-sandbox` (the sample's child-process check started `/bin/sh`, now `cmd.exe` on Windows); an in-repo
+      `dotnet run` has no CEF beside it on Windows (no Windows counterpart of `RiftwayMacBundle`). Open: `dotnet watch` reports "Failed to read obj\Debug/.../staticwebassets.development.json" (a Windows path
       in the SDK on macOS), so `wwwroot` edits need a reload; root components with parameters; `RiftwayApp.CreateBuilder`
 - [ ] M5 desktop integration · M6 session/network/processes · M7 own CEF builds
       (see [PLAN.md](PLAN.md#milestones))
