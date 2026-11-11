@@ -86,7 +86,7 @@ Percentages are over the non-n/a items; the second counts a partial item as half
 | `did-change-theme-color` | `DidChangeThemeColor` | done | Computed in the main frame by Blink's rule. |
 | `update-target-url` | `UpdateTargetUrl` | done |  |
 | `cursor-changed` | `CursorChanged` | done |  |
-| `select-bluetooth-device` | — | missing |  |
+| `select-bluetooth-device` | — | missing | C64. |
 | `paint` | — | missing |  |
 | `devtools-reload-page` | — | missing | C61. |
 | `console-message` | `ConsoleMessage` | partial | No `frame` (C28). |
@@ -200,11 +200,11 @@ Percentages are over the non-n/a items; the second counts a partial item as half
 | `setWebRTCIPHandlingPolicy()` | `SetWebRtcIpHandlingPolicy` | partial | Applies to every page of the session (C52). |
 | `getWebRTCUDPPortRange()` | `GetWebRtcUdpPortRange` | partial | The range this page set; the session's pages share the setting (C52). |
 | `setWebRTCUDPPortRange()` | `SetWebRtcUdpPortRange` | partial | Electron's checks and messages; applies to every page of the session (C52). |
-| `getMediaSourceId()` | — | missing |  |
+| `getMediaSourceId()` | — | missing | C65. |
 | `getOrCreateDevToolsTargetId()` | `GetOrCreateDevToolsTargetId` | partial | Read over DevTools as the page is created; `'` on the UI thread before that (C46). |
 | `getOSProcessId()` | `GetOSProcessId` | done | 0 once the page has closed. |
 | `getProcessId()` | `GetProcessId` | done | The main frame's, read from CEF's main frame; -1 once the page has closed. |
-| `clone()` | — | missing |  |
+| `clone()` | — | missing | C66. |
 | `takeHeapSnapshot()` | `TakeHeapSnapshotAsync` | done | DevTools `HeapProfiler.takeHeapSnapshot`, one at a time per page (C47). |
 | `getBackgroundThrottling()` | — | missing | W62. |
 | `setBackgroundThrottling()` | — | missing | W62. |
