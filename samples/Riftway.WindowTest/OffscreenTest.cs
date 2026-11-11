@@ -82,6 +82,7 @@ static class OffscreenTest
 
         await PopupAsync(check, step);
         await ViewAsync(check, step);
+        await SelectPopupAsync(check, step);
 
         var scaled = new BrowserWindow(new BrowserWindowOptions { Width = 200, Height = 200, Show = false, WebPreferences = new WebPreferences { Offscreen = new OffscreenOptions { DeviceScaleFactor = 1.5 } } });
         PaintEventArgs? scaledFrame = null;
@@ -177,6 +178,31 @@ static class OffscreenTest
             check("offscreen view: closing the page destroys it", await destroyed.Task.WaitAsync(step).ContinueWith(t => t.IsCompletedSuccessfully));
         }
         finally { host.Destroy(); }
+    }
+
+    // A <select>'s list is Chromium's popup widget, which CEF paints apart from the view; Electron's frames show it over
+    // the page, so Riftway draws it in.
+    private static async Task SelectPopupAsync(MessageBoxTest.CheckFn check, TimeSpan step)
+    {
+        var win = new BrowserWindow(new BrowserWindowOptions { Width = 400, Height = 300, Show = false, WebPreferences = new WebPreferences { Offscreen = new OffscreenOptions() } });
+        PaintEventArgs? last = null;
+        var frames = 0;
+        win.WebContents.Paint += (_, e) => { last = e; Interlocked.Increment(ref frames); };
+        try
+        {
+            await win.WebContents.LoadUrl("data:text/html,<body style='margin:0;background:rgb(255,0,0)'>"
+                + "<select id=s style='position:absolute;left:20px;top:20px;width:150px'>" + string.Concat(Enumerable.Range(1, 8).Select(i => $"<option>Option {i}</option>")) + "</select>");
+            var settled = Eventually(() => last is { } f && IsRed(f.Image, 60, 90), step);
+            win.WebContents.SendInputEvent(new MouseInputEvent(MouseInputEventType.MouseDown, 60, 30));
+            win.WebContents.SendInputEvent(new MouseInputEvent(MouseInputEventType.MouseUp, 60, 30));
+            var opened = Eventually(() => last is { } f && !IsRed(f.Image, 60, 90), step);
+            check("offscreen: an open <select> list is drawn into the frame, over the page", settled && opened, last?.DirtyRect);
+
+            win.WebContents.SendInputEvent(new KeyboardInputEvent(KeyboardInputEventType.KeyDown, "Escape"));
+            win.WebContents.SendInputEvent(new KeyboardInputEvent(KeyboardInputEventType.KeyUp, "Escape"));
+            check("offscreen: a closed <select> list leaves the page again", Eventually(() => last is { } f && IsRed(f.Image, 60, 90), step), last?.DirtyRect);
+        }
+        finally { win.Destroy(); }
     }
 
     private static bool IsGreen(NativeImage image)

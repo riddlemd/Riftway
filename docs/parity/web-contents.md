@@ -87,7 +87,7 @@ Percentages are over the non-n/a items; the second counts a partial item as half
 | `update-target-url` | `UpdateTargetUrl` | done |  |
 | `cursor-changed` | `CursorChanged` | done |  |
 | `select-bluetooth-device` | — | missing |  |
-| `paint` | `Paint` | partial | No `<select>` popups or shared textures (C63). |
+| `paint` | `Paint` | partial | No shared textures (C63). |
 | `devtools-reload-page` | — | missing |  |
 | `console-message` | `ConsoleMessage` | partial | No `frame` (C28). |
 | `preload-error` | `PreloadError` | done | The error arrives as its name, message and stack. |

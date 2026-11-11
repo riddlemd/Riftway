@@ -29,7 +29,7 @@ public readonly unsafe ref struct PaintedFrame
 public delegate void PaintCallback(PaintedFrame frame);
 
 /// <summary><c>cef_render_handler_t</c>: what a windowless browser renders into. Its view size and screen are asked
-/// for, and each frame of its view handed over; popups (<c>&lt;select&gt;</c> lists) are not drawn.</summary>
+/// for, and each frame of its view handed over, and the popup widget's (<c>&lt;select&gt;</c> lists) separately.</summary>
 public sealed unsafe class RenderHandler
 {
     public RenderHandler()
@@ -38,6 +38,8 @@ public sealed unsafe class RenderHandler
         Native->get_view_rect = &GetViewRect;
         Native->get_screen_info = &GetScreenInfo;
         Native->on_paint = &OnPaint;
+        Native->on_popup_show = &OnPopupShow;
+        Native->on_popup_size = &OnPopupSize;
     }
 
     public cef_render_handler_t* Native { get; }
@@ -50,6 +52,32 @@ public sealed unsafe class RenderHandler
 
     /// <summary>A frame of the view, on CEF's UI thread.</summary>
     public PaintCallback? Painted { get; init; }
+
+    /// <summary>A frame of the open popup widget (a <c>&lt;select&gt;</c> list), on CEF's UI thread.</summary>
+    public PaintCallback? PopupPainted { get; init; }
+
+    /// <summary>The popup widget opened (true) or closed (false).</summary>
+    public Action<bool>? PopupShown { get; init; }
+
+    /// <summary>The popup widget's rectangle in the view, in DIPs.</summary>
+    public Action<cef_rect_t>? PopupMoved { get; init; }
+
+    [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])]
+    private static void OnPopupShow(cef_render_handler_t* self, cef_browser_t* browser, int show)
+    {
+        var owner = NativeObject.Owner<RenderHandler>(self);
+        if (owner.PopupShown is { } callback) Guard.Run(() => callback(show != 0));
+        NativeObject.Release(browser);
+    }
+
+    [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])]
+    private static void OnPopupSize(cef_render_handler_t* self, cef_browser_t* browser, cef_rect_t* rect)
+    {
+        var owner = NativeObject.Owner<RenderHandler>(self);
+        var copy = *rect;
+        if (owner.PopupMoved is { } callback) Guard.Run(() => callback(copy));
+        NativeObject.Release(browser);
+    }
 
     [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])]
     private static void GetViewRect(cef_render_handler_t* self, cef_browser_t* browser, cef_rect_t* rect)
@@ -77,9 +105,10 @@ public sealed unsafe class RenderHandler
         cef_rect_t* dirtyRects, void* buffer, int width, int height)
     {
         var owner = NativeObject.Owner<RenderHandler>(self);
-        if (type == cef_paint_element_type_t.PET_VIEW && owner.Painted is { } callback && buffer is not null && width > 0 && height > 0)
+        var callback = type == cef_paint_element_type_t.PET_VIEW ? owner.Painted : owner.PopupPainted;
+        if (callback is not null && buffer is not null && width > 0 && height > 0)
         {
-            try { callback(new PaintedFrame(buffer, width, height, new ReadOnlySpan<cef_rect_t>(dirtyRects, (int)dirtyCount))); }
+            try { callback!(new PaintedFrame(buffer, width, height, new ReadOnlySpan<cef_rect_t>(dirtyRects, (int)dirtyCount))); }
             catch (Exception e) { Console.Error.WriteLine($"[Riftway] A paint handler failed: {e}"); }
         }
         NativeObject.Release(browser);

@@ -32,6 +32,9 @@ public sealed unsafe partial class WebContents
         ViewSize = () => _offscreenSize,
         ScaleFactor = () => _offscreenScale,
         Painted = OnOffscreenPaint,
+        PopupPainted = OnOffscreenPopupPaint,
+        PopupShown = OnOffscreenPopupShown,
+        PopupMoved = rect => _popupRect = rect,
     };
 
     /// <summary>The view an offscreen page renders, in DIPs; tells CEF when it changes. The device scale is
@@ -58,10 +61,20 @@ public sealed unsafe partial class WebContents
     /// <summary>The settings a windowless browser starts with.</summary>
     internal int InitialFrameRate => _frameRate;
 
+    // The last frames, kept to draw the open popup widget (a <select> list) over the view, as Electron's
+    // OffScreenRenderWidgetHostView composites its popup into the frame. UI thread.
+    private byte[]? _viewFrame;
+    private (int Width, int Height) _viewFrameSize;
+    private byte[]? _popupFrame;
+    private (int Width, int Height) _popupFrameSize;
+    private cef_rect_t _popupRect;
+    private bool _popupShown;
+
     private void OnOffscreenPaint(PaintedFrame frame)
     {
         if (Paint is null) return;
-        var bgra = frame.Pixels.ToArray();
+        _viewFrame = frame.Pixels.ToArray();
+        _viewFrameSize = (frame.Width, frame.Height);
         // CEF reports each damaged rectangle; Electron's paint carries their union.
         int left = int.MaxValue, top = int.MaxValue, right = int.MinValue, bottom = int.MinValue;
         foreach (var r in frame.Dirty)
@@ -70,8 +83,63 @@ public sealed unsafe partial class WebContents
             (right, bottom) = (Math.Max(right, r.x + r.width), Math.Max(bottom, r.y + r.height));
         }
         var dirty = left == int.MaxValue ? new Rectangle(0, 0, frame.Width, frame.Height) : new Rectangle(left, top, right - left, bottom - top);
-        var image = NativeImage.CreateFromBitmap(bgra, new NativeImageBitmapOptions { Width = frame.Width, Height = frame.Height, ScaleFactor = _offscreenScale });
+        // The popup is redrawn over whatever the view repainted under it.
+        if (PopupPixels() is { } popup && Intersects(dirty, popup)) dirty = Union(dirty, popup);
+        RaisePaint(dirty);
+    }
+
+    private void OnOffscreenPopupPaint(PaintedFrame frame)
+    {
+        _popupFrame = frame.Pixels.ToArray();
+        _popupFrameSize = (frame.Width, frame.Height);
+        if (Paint is null || _viewFrame is null || PopupPixels() is not { } popup) return;
+        RaisePaint(popup);
+    }
+
+    private void OnOffscreenPopupShown(bool shown)
+    {
+        _popupShown = shown;
+        if (!shown) _popupFrame = null;
+    }
+
+    // The open popup's rectangle in frame pixels, clipped to the frame; null while none is drawn.
+    private Rectangle? PopupPixels()
+    {
+        if (!_popupShown || _popupFrame is null) return null;
+        var x = (int)Math.Round(_popupRect.x * _offscreenScale);
+        var y = (int)Math.Round(_popupRect.y * _offscreenScale);
+        var right = Math.Min(_viewFrameSize.Width, x + _popupFrameSize.Width);
+        var bottom = Math.Min(_viewFrameSize.Height, y + _popupFrameSize.Height);
+        (x, y) = (Math.Max(0, x), Math.Max(0, y));
+        return right > x && bottom > y ? new Rectangle(x, y, right - x, bottom - y) : null;
+    }
+
+    private void RaisePaint(Rectangle dirty)
+    {
+        var (width, height) = _viewFrameSize;
+        var bgra = (byte[])_viewFrame!.Clone();
+        if (PopupPixels() is { } popup)
+        {
+            // The popup's own frame starts at its unclipped origin.
+            var originX = (int)Math.Round(_popupRect.x * _offscreenScale);
+            var originY = (int)Math.Round(_popupRect.y * _offscreenScale);
+            for (var row = popup.Y; row < popup.Y + popup.Height; row++)
+            {
+                var source = ((row - originY) * _popupFrameSize.Width + (popup.X - originX)) * 4;
+                Buffer.BlockCopy(_popupFrame!, source, bgra, (row * width + popup.X) * 4, popup.Width * 4);
+            }
+        }
+        var image = NativeImage.CreateFromBitmap(bgra, new NativeImageBitmapOptions { Width = width, Height = height, ScaleFactor = _offscreenScale });
         Paint?.Invoke(this, new PaintEventArgs(dirty, image));
+    }
+
+    private static bool Intersects(Rectangle a, Rectangle b)
+        => a.X < b.X + b.Width && b.X < a.X + a.Width && a.Y < b.Y + b.Height && b.Y < a.Y + a.Height;
+
+    private static Rectangle Union(Rectangle a, Rectangle b)
+    {
+        var (left, top) = (Math.Min(a.X, b.X), Math.Min(a.Y, b.Y));
+        return new Rectangle(left, top, Math.Max(a.X + a.Width, b.X + b.Width) - left, Math.Max(a.Y + a.Height, b.Y + b.Height) - top);
     }
 
     /// <summary>Starts an offscreen page painting again after <see cref="StopPainting"/>. Electron's
