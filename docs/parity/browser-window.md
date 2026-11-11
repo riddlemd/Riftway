@@ -18,12 +18,12 @@ Counted from the Checklist at the end: `BaseWindow` and `BrowserWindow` are one 
 | Area | Items | Done | Partial | Missing | n/a | % done | % done + partial/2 |
 |---|---|---|---|---|---|---|---|
 | BaseWindow + BrowserWindow options | 54 | 34 | 19 | 1 | 0 | 63.0% | 80.6% |
-| webPreferences | 46 | 12 | 7 | 20 | 7 | 30.8% | 39.7% |
+| webPreferences | 46 | 12 | 8 | 19 | 7 | 30.8% | 41.0% |
 | Instance methods | 143 | 107 | 30 | 0 | 6 | 78.1% | 89.1% |
 | Instance properties | 24 | 17 | 7 | 0 | 0 | 70.8% | 85.4% |
 | Events | 35 | 20 | 15 | 0 | 0 | 57.1% | 78.6% |
 | Static methods | 7 | 6 | 0 | 0 | 1 | 100.0% | 100.0% |
-| **Total** | 309 | 196 | 78 | 21 | 14 | 66.4% | 79.7% |
+| **Total** | 309 | 196 | 79 | 20 | 14 | 66.4% | 79.8% |
 
 ## Done since the audit
 
@@ -155,8 +155,8 @@ Counted from the Checklist at the end: `BaseWindow` and `BrowserWindow` are one 
 ## Next, by importance
 
 1. Remaining webPreferences:
-   - Need other modules: `spellcheck` (no per-page switch, E22), `offscreen` (offscreen
-     rendering). `session`/`partition` landed with the `Session` module (DRIFT E1-E11).
+   - Need other modules: `spellcheck` (no per-page switch, E22). `offscreen` is done for BrowserWindow pages
+     (C63). `session`/`partition` landed with the `Session` module (DRIFT E1-E11).
    - Process-wide in CEF (Chromium switches, not per window): `webSecurity`, `allowRunningInsecureContent`,
      `experimentalFeatures`, `enableBlinkFeatures`/`disableBlinkFeatures`, `autoplayPolicy`, `sandbox`. Decide between
      an app-level option and a per-window gap.
@@ -290,7 +290,7 @@ Parameters in brackets are optional in Electron. `webContents` members are in [w
 | `minimumFontSize` | `MinimumFontSize` | missing | Property exists but throws NotSupportedException (W12). |
 | `defaultEncoding` | `DefaultEncoding` | missing | Property exists but throws NotSupportedException (W12). |
 | `backgroundThrottling` | — | missing |  |
-| `offscreen` | — | missing |  |
+| `offscreen` | `Offscreen` | partial | BrowserWindow pages; `useSharedTexture` throws; no WebContentsView or popups (C63). |
 | `contextIsolation` | — | partial | Always on; `false` is not offered (W14). |
 | `webviewTag` | — | n/a | <webview> |
 | `additionalArguments` | — | missing |  |

@@ -11,14 +11,14 @@ Percentages are over the non-n/a items; the second counts a partial item as half
 | Area | Items | Done | Partial | Missing | n/a | % done | % done + partial/2 |
 |---|---|---|---|---|---|---|---|
 | Static methods | 5 | 3 | 2 | 0 | 0 | 60.0% | 80.0% |
-| Instance events | 59 | 31 | 18 | 8 | 2 | 54.4% | 70.2% |
-| Instance methods | 118 | 44 | 38 | 28 | 8 | 40.0% | 57.3% |
-| Instance properties | 18 | 10 | 3 | 4 | 1 | 58.8% | 67.6% |
+| Instance events | 59 | 31 | 19 | 7 | 2 | 54.4% | 71.1% |
+| Instance methods | 118 | 49 | 39 | 22 | 8 | 44.5% | 62.3% |
+| Instance properties | 18 | 11 | 3 | 3 | 1 | 64.7% | 73.5% |
 | navigationHistory | 14 | 12 | 0 | 2 | 0 | 85.7% | 85.7% |
 | WebFrameMain events and statics | 3 | 1 | 1 | 1 | 0 | 33.3% | 50.0% |
 | WebFrameMain methods | 9 | 1 | 5 | 3 | 0 | 11.1% | 38.9% |
 | WebFrameMain properties | 15 | 10 | 3 | 2 | 0 | 66.7% | 76.7% |
-| **Total** | 241 | 112 | 70 | 48 | 11 | 48.7% | 63.9% |
+| **Total** | 241 | 118 | 72 | 40 | 11 | 51.3% | 67.0% |
 
 ## Checklist
 
@@ -87,7 +87,7 @@ Percentages are over the non-n/a items; the second counts a partial item as half
 | `update-target-url` | `UpdateTargetUrl` | done |  |
 | `cursor-changed` | `CursorChanged` | done |  |
 | `select-bluetooth-device` | — | missing |  |
-| `paint` | — | missing |  |
+| `paint` | `Paint` | partial | A BrowserWindow's page; not a WebContentsView's, no popups or shared textures (C63). |
 | `devtools-reload-page` | — | missing |  |
 | `console-message` | `ConsoleMessage` | partial | No `frame` (C28). |
 | `preload-error` | `PreloadError` | done | The error arrives as its name, message and stack. |
@@ -189,13 +189,13 @@ Percentages are over the non-n/a items; the second counts a partial item as half
 | `startDrag()` | `StartDrag` | partial | Windows (the drag blocks queued UI tasks, its image painted with GDI) and macOS (Electron's `NSDraggingSession`, _branch `mac-integration`_, its drag session starts on screen, macOS 26, arm64 and x64); not Linux (C40). |
 | `savePage()` | `SavePageAsync` | partial | Through DevTools; `HTMLComplete` saves only the main document and its images, scripts and style sheets (C50). |
 | `showDefinitionForSelection()` | `ShowDefinitionForSelection` | partial | macOS: Chromium's `ShowDictionaryOverlayForSelection` on the page's `RenderWidgetHostViewCocoa`, found under the browser's view; nothing elsewhere, as Electron _(branch `mac-integration`)_; not yet run on screen. |
-| `isOffscreen()` | `IsOffscreen` | done | Always false: Riftway has no offscreen rendering (webPreferences `offscreen` is missing). |
-| `startPainting()` | — | missing |  |
-| `stopPainting()` | — | missing |  |
-| `isPainting()` | — | missing |  |
-| `setFrameRate()` | — | missing |  |
-| `getFrameRate()` | — | missing |  |
-| `invalidate()` | — | missing |  |
+| `isOffscreen()` | `IsOffscreen` | done |  |
+| `startPainting()` | `StartPainting` | done |  |
+| `stopPainting()` | `StopPainting` | done |  |
+| `isPainting()` | `IsPainting` | done |  |
+| `setFrameRate()` | `SetFrameRate` | done |  |
+| `getFrameRate()` | `GetFrameRate` | done |  |
+| `invalidate()` | `Invalidate` | partial | Offscreen pages only; a windowed page is not repainted (C63). |
 | `getWebRTCIPHandlingPolicy()` | `GetWebRtcIpHandlingPolicy` | partial | The value this page set; the session's pages share the setting (C52). |
 | `setWebRTCIPHandlingPolicy()` | `SetWebRtcIpHandlingPolicy` | partial | Applies to every page of the session (C52). |
 | `getWebRTCUDPPortRange()` | `GetWebRtcUdpPortRange` | partial | The range this page set; the session's pages share the setting (C52). |
@@ -233,7 +233,7 @@ Percentages are over the non-n/a items; the second counts a partial item as half
 | `focusedFrame` | `FocusedFrame` | done | Not cross-site frames in another process (F3). |
 | `ipc` | `Ipc` | done |  |
 | `caretBrowsingEnabled` | `SetCaretBrowsingEnabled / IsCaretBrowsingEnabled` | partial | C53. |
-| `frameRate` | — | missing |  |
+| `frameRate` | `FrameRate` | done |  |
 | `id` | `Id` | done |  |
 | `session` | `Session` | done | See DRIFT E1-E11 for the session gaps. |
 | `devToolsWebContents` | — | missing |  |

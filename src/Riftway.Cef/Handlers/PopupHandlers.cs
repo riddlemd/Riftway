@@ -34,6 +34,50 @@ public sealed unsafe class LifeSpanHandler
     /// <summary>A popup that <see cref="BeforePopup"/> allowed will not be created after all: its id.</summary>
     public Action<int>? PopupAborted { get; init; }
 
+    /// <summary>The browser exists, on the UI thread. Browser views report this to their delegate; a windowless browser
+    /// only here. Null leaves the slot unset.</summary>
+    public BrowserCallback? AfterCreated
+    {
+        get => _afterCreated;
+        init
+        {
+            _afterCreated = value;
+            if (value is not null) Native->on_after_created = &OnAfterCreated;
+        }
+    }
+
+    private readonly BrowserCallback? _afterCreated;
+
+    /// <summary>The browser is about to be destroyed, on the UI thread: the last callback it gets. Null leaves the slot
+    /// unset.</summary>
+    public BrowserCallback? BeforeClose
+    {
+        get => _beforeClose;
+        init
+        {
+            _beforeClose = value;
+            if (value is not null) Native->on_before_close = &OnBeforeClose;
+        }
+    }
+
+    private readonly BrowserCallback? _beforeClose;
+
+    [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])]
+    private static void OnAfterCreated(cef_life_span_handler_t* self, cef_browser_t* browser)
+    {
+        var owner = NativeObject.Owner<LifeSpanHandler>(self);
+        if (owner._afterCreated is { } callback) Guard.Run(() => callback(browser));
+        NativeObject.Release(browser);
+    }
+
+    [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])]
+    private static void OnBeforeClose(cef_life_span_handler_t* self, cef_browser_t* browser)
+    {
+        var owner = NativeObject.Owner<LifeSpanHandler>(self);
+        if (owner._beforeClose is { } callback) Guard.Run(() => callback(browser));
+        NativeObject.Release(browser);
+    }
+
     /// <summary>An Alloy-style browser is ready to close: true if the handler completes the close itself (by tearing
     /// its view down), false to send the top-level window CEF's close notification. Null answers false.</summary>
     public Func<bool>? Closing { get; init; }

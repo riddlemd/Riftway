@@ -1,0 +1,115 @@
+using Riftway;
+
+/// <summary>Electron's offscreen rendering: a BrowserWindow whose page paints into 'paint' at its window's content size,
+/// with start/stop painting, the frame rate, invalidate, a resize, and the window closing with its page.</summary>
+static class OffscreenTest
+{
+    internal static async Task RunAsync(MessageBoxTest.CheckFn check, TimeSpan step)
+    {
+        var win = new BrowserWindow(new BrowserWindowOptions
+        {
+            Title = "Riftway window test: offscreen",
+            Width = 320,
+            Height = 240,
+            UseContentSize = true,
+            Show = false,
+            WebPreferences = new WebPreferences { Offscreen = new OffscreenOptions { DeviceScaleFactor = 1 } },
+        });
+        var wc = win.WebContents;
+        var frames = 0;
+        PaintEventArgs? last = null;
+        wc.Paint += (_, e) =>
+        {
+            Interlocked.Increment(ref frames);
+            last = e;
+        };
+        try
+        {
+            check("offscreen: IsOffscreen", wc.IsOffscreen());
+            // A red page whose corner counter changes every 50 ms, so it keeps painting a small part.
+            await wc.LoadUrl("data:text/html,<body style='margin:0;background:rgb(255,0,0)'><div id=d style='font:10px monospace'>0</div>"
+                + "<script>let n=0;setInterval(()=>d.textContent=++n,50)</script>");
+            var painted = Eventually(() => Volatile.Read(ref frames) >= 10, step);
+            var size = last?.Image.GetSize() ?? (0, 0);
+            check("offscreen: the page paints at its window's content size", painted && size == (320, 240), $"{frames} {size}");
+            check("offscreen: a frame is the page's pixels", last is not null && IsRed(last.Image, 160, 120), last?.DirtyRect);
+            check("offscreen: the dirty rectangle is the part that changed, not the whole frame",
+                last is { DirtyRect: { Width: > 0 and < 320 } or { Height: > 0 and < 240 } }, last?.DirtyRect);
+
+            check("offscreen: the frame rate starts at Electron's 60", wc.GetFrameRate() == 60, wc.GetFrameRate());
+            wc.SetFrameRate(500);
+            check("offscreen: SetFrameRate clamps to 240", wc.FrameRate == 240, wc.FrameRate);
+            wc.SetFrameRate(10);
+            await Task.Delay(500);
+            var before = Volatile.Read(ref frames);
+            await Task.Delay(2000);
+            var slow = Volatile.Read(ref frames) - before;
+            check("offscreen: at 10 frames a second, about 20 frames in 2 s", slow is >= 10 and <= 25, slow);
+            wc.SetFrameRate(60);
+
+            check("offscreen: IsPainting starts true", wc.IsPainting());
+            wc.StopPainting();
+            await Task.Delay(500);
+            before = Volatile.Read(ref frames);
+            await Task.Delay(1000);
+            check("offscreen: StopPainting stops the frames", !wc.IsPainting() && Volatile.Read(ref frames) == before, Volatile.Read(ref frames) - before);
+            wc.StartPainting();
+            check("offscreen: StartPainting starts them again", wc.IsPainting() && Eventually(() => Volatile.Read(ref frames) > before + 5, step));
+
+            // A still page paints nothing until invalidated, then the whole view.
+            await wc.ExecuteJavaScriptAsync("for (let i = 1; i < 99999; i++) clearInterval(i); 0");
+            await Task.Delay(500);
+            before = Volatile.Read(ref frames);
+            await Task.Delay(500);
+            var still = Volatile.Read(ref frames) == before;
+            wc.Invalidate();
+            var invalidated = Eventually(() => Volatile.Read(ref frames) > before, step);
+            check("offscreen: Invalidate repaints a still page whole", still && invalidated && last?.DirtyRect == new Rectangle(0, 0, 320, 240), $"{still} {invalidated} {last?.DirtyRect}");
+
+            win.SetContentSize(400, 300);
+            check("offscreen: a resized window's page paints at its new content size",
+                Eventually(() => last?.Image.GetSize() == (400, 300), step), last?.Image.GetSize());
+
+            var closed = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            win.Closed += (_, _) => closed.TrySetResult();
+            // The page closes before its script's result comes back, so that call fails; the window is what counts.
+            _ = wc.ExecuteJavaScriptAsync("window.close()", userGesture: true).ContinueWith(t => _ = t.Exception, TaskScheduler.Default);
+            check("offscreen: the page's window.close() closes its window", await closed.Task.WaitAsync(step).ContinueWith(t => t.IsCompletedSuccessfully));
+        }
+        finally
+        {
+            if (!win.IsDestroyed) win.Destroy();
+        }
+
+        var windowed = new BrowserWindow(new BrowserWindowOptions { Show = false });
+        check("offscreen: a windowed page is not offscreen, and its painting calls do nothing",
+            !windowed.WebContents.IsOffscreen() && !windowed.WebContents.IsPainting() && windowed.WebContents.GetFrameRate() == 0);
+        windowed.Destroy();
+
+        try
+        {
+            _ = new BrowserWindow(new BrowserWindowOptions { Show = false, WebPreferences = new WebPreferences { Offscreen = new OffscreenOptions { UseSharedTexture = true } } });
+            check("offscreen: UseSharedTexture throws", false);
+        }
+        catch (NotSupportedException) { check("offscreen: UseSharedTexture throws", true); }
+    }
+
+    private static bool IsRed(NativeImage image, int x, int y)
+    {
+        var (width, _) = image.GetSize();
+        var bgra = image.ToBitmap();
+        var i = (y * width + x) * 4;
+        return i + 2 < bgra.Length && bgra[i + 2] > 200 && bgra[i + 1] < 60 && bgra[i] < 60;
+    }
+
+    private static bool Eventually(Func<bool> condition, TimeSpan timeout)
+    {
+        var deadline = DateTime.UtcNow + timeout;
+        while (DateTime.UtcNow < deadline)
+        {
+            if (condition()) return true;
+            Thread.Sleep(50);
+        }
+        return condition();
+    }
+}
