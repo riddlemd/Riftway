@@ -11,9 +11,8 @@ static class OffscreenTest
             Title = "Riftway window test: offscreen",
             Width = 320,
             Height = 240,
-            UseContentSize = true,
             Show = false,
-            WebPreferences = new WebPreferences { Offscreen = new OffscreenOptions { DeviceScaleFactor = 1 } },
+            WebPreferences = new WebPreferences { Offscreen = new OffscreenOptions() },
         });
         var wc = win.WebContents;
         var frames = 0;
@@ -31,7 +30,7 @@ static class OffscreenTest
                 + "<script>let n=0;setInterval(()=>d.textContent=++n,50)</script>");
             var painted = Eventually(() => Volatile.Read(ref frames) >= 10, step);
             var size = last?.Image.GetSize() ?? (0, 0);
-            check("offscreen: the page paints at its window's content size", painted && size == (320, 240), $"{frames} {size}");
+            check("offscreen: the page paints at its window's outer size, at scale 1 whatever the display", painted && size == (320, 240) && last!.Image.GetScaleFactors() is [1.0], $"{frames} {size}");
             check("offscreen: a frame is the page's pixels", last is not null && IsRed(last.Image, 160, 120), last?.DirtyRect);
             check("offscreen: the dirty rectangle is the part that changed, not the whole frame",
                 last is { DirtyRect: { Width: > 0 and < 320 } or { Height: > 0 and < 240 } }, last?.DirtyRect);
@@ -66,8 +65,8 @@ static class OffscreenTest
             var invalidated = Eventually(() => Volatile.Read(ref frames) > before, step);
             check("offscreen: Invalidate repaints a still page whole", still && invalidated && last?.DirtyRect == new Rectangle(0, 0, 320, 240), $"{still} {invalidated} {last?.DirtyRect}");
 
-            win.SetContentSize(400, 300);
-            check("offscreen: a resized window's page paints at its new content size",
+            win.SetSize(400, 300);
+            check("offscreen: a resized window's page paints at its new size",
                 Eventually(() => last?.Image.GetSize() == (400, 300), step), last?.Image.GetSize());
 
             var closed = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -82,6 +81,17 @@ static class OffscreenTest
         }
 
         await PopupAsync(check, step);
+
+        var scaled = new BrowserWindow(new BrowserWindowOptions { Width = 200, Height = 200, Show = false, WebPreferences = new WebPreferences { Offscreen = new OffscreenOptions { DeviceScaleFactor = 1.5 } } });
+        PaintEventArgs? scaledFrame = null;
+        scaled.WebContents.Paint += (_, e) => scaledFrame = e;
+        await scaled.WebContents.LoadUrl("data:text/html,<body style='background:red'>");
+        var scaledPainted = Eventually(() => scaledFrame is not null, step);
+        var pixels = scaledFrame is null ? (0, 0) : NativeImage.CreateFromBuffer(scaledFrame.Image.ToPng(1.5)).GetSize();
+        check("offscreen: DeviceScaleFactor 1.5 paints 300x300 pixels, an image of 200x200 at scale 1.5 (Electron's spec, above Windows' minimum width)",
+            scaledPainted && scaledFrame!.Image.GetSize() == (200, 200) && scaledFrame.Image.GetScaleFactors() is [1.5] && pixels == (300, 300),
+            $"{scaledFrame?.Image.GetSize()} {string.Join(',', scaledFrame?.Image.GetScaleFactors() ?? [])} {pixels}");
+        scaled.Destroy();
 
         var windowed = new BrowserWindow(new BrowserWindowOptions { Show = false });
         check("offscreen: a windowed page is not offscreen, and its painting calls do nothing",

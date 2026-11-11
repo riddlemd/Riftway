@@ -34,14 +34,16 @@ public sealed unsafe partial class WebContents
         Painted = OnOffscreenPaint,
     };
 
-    /// <summary>The view an offscreen page renders, in DIPs, and its device scale; tells CEF when either changes.</summary>
-    internal void SetOffscreenView(int width, int height, double scaleFactor)
+    /// <summary>The view an offscreen page renders, in DIPs; tells CEF when it changes. The device scale is
+    /// <see cref="OffscreenOptions.DeviceScaleFactor"/>, else 1, whatever the display: Electron's
+    /// OffScreenRenderWidgetHostView takes 1 for an unset factor.</summary>
+    internal void SetOffscreenView(int width, int height)
     {
         if (!IsOffscreen()) return;
         CefThread.RunOnUi(() =>
         {
             var size = (Math.Max(1, width), Math.Max(1, height));
-            var scale = (float)(_preferences.Offscreen!.DeviceScaleFactor ?? scaleFactor);
+            var scale = (float)(_preferences.Offscreen!.DeviceScaleFactor ?? 1);
             if (size == _offscreenSize && scale == _offscreenScale) return;
             var rescaled = scale != _offscreenScale;
             (_offscreenSize, _offscreenScale) = (size, scale);
@@ -147,7 +149,7 @@ public sealed record OffscreenOptions
     /// <c>useSharedTexture</c>.</summary>
     public bool UseSharedTexture { get; init; }
 
-    /// <summary>The device scale the page renders at; null uses its window's display. Electron's
+    /// <summary>The device scale the page renders at; null renders at 1, whatever the display, as Electron. Electron's
     /// <c>deviceScaleFactor</c>.</summary>
     public double? DeviceScaleFactor { get; init; }
 }

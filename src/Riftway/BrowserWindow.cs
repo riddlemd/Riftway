@@ -97,7 +97,7 @@ public sealed record WebPreferences
     public bool? ScrollBounce { get; init; }
 
     /// <summary>Renders the page offscreen: it paints into <see cref="WebContents.Paint"/> instead of its window, at its
-    /// window's content size, and takes input only from <see cref="WebContents.SendInputEvent(KeyboardInputEvent)"/>.
+    /// window's outer size (Electron's, not the content size), and takes input only from <see cref="WebContents.SendInputEvent(KeyboardInputEvent)"/>.
     /// Null renders into the window. Electron's <c>offscreen</c>.</summary>
     public OffscreenOptions? Offscreen { get; init; }
 
@@ -663,10 +663,11 @@ public sealed unsafe partial class BrowserWindow : BaseWindow
         ApplyPageBackground();
     }
 
+    // Electron's OffScreenWebContentsView::GetSize: the window's outer size, not its content size.
     private void UpdateOffscreenView()
     {
-        var (width, height) = GetContentSize();
-        WebContents.SetOffscreenView(width, height, Screen.GetDisplayMatching(GetBounds()).ScaleFactor);
+        var (width, height) = GetSize();
+        WebContents.SetOffscreenView(width, height);
     }
 
     // An offscreen page has gone: closed by its window, or by itself. Nothing else closes the window then, so the
