@@ -11,14 +11,14 @@ Percentages are over the non-n/a items; the second counts a partial item as half
 | Area | Items | Done | Partial | Missing | n/a | % done | % done + partial/2 |
 |---|---|---|---|---|---|---|---|
 | Static methods | 5 | 3 | 2 | 0 | 0 | 60.0% | 80.0% |
-| Instance events | 59 | 31 | 18 | 8 | 2 | 54.4% | 70.2% |
+| Instance events | 59 | 31 | 19 | 7 | 2 | 54.4% | 71.1% |
 | Instance methods | 118 | 45 | 42 | 23 | 8 | 40.9% | 60.0% |
 | Instance properties | 18 | 10 | 3 | 4 | 1 | 58.8% | 67.6% |
 | navigationHistory | 14 | 12 | 0 | 2 | 0 | 85.7% | 85.7% |
 | WebFrameMain events and statics | 3 | 1 | 1 | 1 | 0 | 33.3% | 50.0% |
 | WebFrameMain methods | 9 | 1 | 7 | 1 | 0 | 11.1% | 50.0% |
 | WebFrameMain properties | 15 | 10 | 3 | 2 | 0 | 66.7% | 76.7% |
-| **Total** | 241 | 113 | 76 | 41 | 11 | 49.1% | 65.7% |
+| **Total** | 241 | 113 | 77 | 40 | 11 | 49.1% | 65.9% |
 
 ## Checklist
 
@@ -65,7 +65,7 @@ Percentages are over the non-n/a items; the second counts a partial item as half
 | `destroyed` | `Destroyed` | done |  |
 | `input-event` | `InputEvent` | partial | Keys from CEF's key handler; mouse and wheel events from the main frame's DOM, a little later; no gesture, touch or pointer events (C41). |
 | `before-input-event` | `BeforeInputEvent` | partial | `modifiers` shape (C15); `code`, `isComposing`, `location` derived (C16). |
-| `before-mouse-event` | — | missing |  |
+| `before-mouse-event` | `BeforeMouseEvent` | partial | Cancellable; the events `sendInputEvent` sends, and on Windows the user's own mouse; not the user's mouse on macOS or Linux (C57). |
 | `enter-html-full-screen` | `EnterHtmlFullScreen` | done |  |
 | `leave-html-full-screen` | `LeaveHtmlFullScreen` | done |  |
 | `zoom-changed` | `ZoomChanged` | partial | From the page's wheel events (C35). |

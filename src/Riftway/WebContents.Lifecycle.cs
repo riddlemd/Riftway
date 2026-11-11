@@ -48,6 +48,17 @@ public sealed class BeforeInputEventArgs : CancelEventArgs
     public KeyInput Input { get; }
 }
 
+/// <summary>Arguments for <see cref="WebContents.BeforeMouseEvent"/>. Setting <see cref="CancelEventArgs.Cancel"/>
+/// (Electron's <c>event.preventDefault()</c>) keeps the event from the page.</summary>
+public sealed class BeforeMouseEventArgs : CancelEventArgs
+{
+    internal BeforeMouseEventArgs(MouseInputEvent mouse) => Mouse = mouse;
+
+    /// <summary>The mouse event, as Electron reports it: type, position in the page and on the screen, button, click
+    /// count and movement.</summary>
+    public MouseInputEvent Mouse { get; }
+}
+
 /// <summary>The cross-cutting parts of <see cref="WebContents"/>: identity, process health, favicons and key interception.</summary>
 public sealed unsafe partial class WebContents
 {
@@ -92,6 +103,37 @@ public sealed unsafe partial class WebContents
     /// <summary>A key went down or up, before the page and the menu accelerators see it; cancel to swallow it.
     /// Electron's <c>before-input-event</c>. Raised on the UI thread, so the decision must be made synchronously.</summary>
     public event EventHandler<BeforeInputEventArgs>? BeforeInputEvent;
+
+    /// <summary>A mouse event is about to reach the page; cancel to keep it from the page. Electron's
+    /// <c>before-mouse-event</c>. Raised on the UI thread, so the decision must be made synchronously. Wheel events are not
+    /// raised, as in Electron.</summary>
+    /// <remarks>Raised for the events <see cref="SendInputEvent(MouseInputEvent)"/> sends, and on Windows for the user's own
+    /// mouse over the page; see drift C57.</remarks>
+    public event EventHandler<BeforeMouseEventArgs>? BeforeMouseEvent
+    {
+        add
+        {
+            lock (s_registryGate) _beforeMouseEvent += value;
+            if (OperatingSystem.IsWindows()) CefThread.PostUi(HookUserMouse);
+        }
+        remove { lock (s_registryGate) _beforeMouseEvent -= value; }
+    }
+
+    private EventHandler<BeforeMouseEventArgs>? _beforeMouseEvent;
+
+    // UI thread. True when a BeforeMouseEvent listener cancelled the event.
+    internal bool OnBeforeMouseEvent(MouseInputEvent mouse)
+    {
+        if (mouse.Type == MouseInputEventType.MouseWheel || _beforeMouseEvent is not { } handler) return false;
+        var args = new BeforeMouseEventArgs(mouse);
+        try { handler(this, args); }
+        catch (Exception e)
+        {
+            Console.Error.WriteLine($"[Riftway] A before-mouse-event handler failed: {e}");
+            return false;
+        }
+        return args.Cancel;
+    }
 
     private void RegisterLifecycle()
     {

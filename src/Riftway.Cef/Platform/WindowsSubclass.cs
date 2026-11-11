@@ -61,7 +61,14 @@ public static unsafe class WindowsSubclass
         public Func<int, int, bool>? TransparentAt;
         public bool TrackingLeave;
         public WindowsMessageHooks? Messages;
+        public Func<uint, nint, nint, bool>? Mouse;
     }
+
+    /// <summary>Calls <paramref name="filter"/> with each client mouse message <paramref name="hwnd"/> receives (buttons,
+    /// moves, <c>WM_MOUSELEAVE</c>; not the wheel) before the window handles it; true swallows the message. False if the
+    /// window could not be subclassed.</summary>
+    public static bool RouteMouse(nint hwnd, Func<uint, nint, nint, bool> filter)
+        => Hook(hwnd) is { } hooks && (hooks.Mouse = filter) is not null;
 
     /// <summary>Routes <paramref name="hwnd"/>'s <c>PreHandleMSG</c> messages to <paramref name="messages"/> through this
     /// subclass. False if the window could not be subclassed.</summary>
@@ -222,6 +229,8 @@ public static unsafe class WindowsSubclass
             // An exception must not cross into the window procedure.
             try
             {
+                // A page's own mouse, before Chromium's legacy window hands it to the widget: Electron's before-mouse-event.
+                if (hooks.Mouse is { } mouse && WindowsPageMouse.IsPageMouseMessage(message) && mouse(message, wParam, lParam)) return 0;
                 // Electron's PreHandleMSG: observers see every message first and it goes on whatever they do.
                 if (hooks.Message is { } onMessage)
                 {

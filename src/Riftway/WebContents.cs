@@ -108,6 +108,8 @@ public sealed unsafe partial class WebContents
                     _bootstrapForgotten = true;
                     _devTools.Send("Page.resetNavigationHistory");
                 }
+                // A navigation can give the page a new page window, which the user's mouse then reaches.
+                if (OperatingSystem.IsWindows() && _beforeMouseEvent is not null) HookUserMouse();
                 Raise(DidFinishLoad);
                 // A failed load's error page can end after LoadUrl started the next load, which it must not settle.
                 if (_navigated && (GetUrl() != _failedUrl || _loadStartedUrl == _failedUrl)) CompleteLoad(null);
@@ -339,6 +341,14 @@ public sealed unsafe partial class WebContents
     public void SendInputEvent(MouseInputEvent inputEvent)
     {
         ArgumentNullException.ThrowIfNull(inputEvent);
+        // Electron's before-mouse-event sees each event on its way to the page's widget, a sent one included (one
+        // contextMenu, though Riftway sends it as a right press and release).
+        if (CefThread.InvokeOnUi(() => OnBeforeMouseEvent(inputEvent))) return;
+        DispatchMouseEvent(inputEvent);
+    }
+
+    private void DispatchMouseEvent(MouseInputEvent inputEvent)
+    {
         var modifiers = KeyMap.DevToolsModifiers(inputEvent.Modifiers);
         switch (inputEvent.Type)
         {
@@ -352,8 +362,8 @@ public sealed unsafe partial class WebContents
                 return;
             // A right click is what raises the page's contextmenu, as Electron's contextMenu event does.
             case MouseInputEventType.ContextMenu:
-                SendInputEvent(inputEvent with { Type = MouseInputEventType.MouseDown, Button = MouseButton.Right });
-                SendInputEvent(inputEvent with { Type = MouseInputEventType.MouseUp, Button = MouseButton.Right });
+                DispatchMouseEvent(inputEvent with { Type = MouseInputEventType.MouseDown, Button = MouseButton.Right });
+                DispatchMouseEvent(inputEvent with { Type = MouseInputEventType.MouseUp, Button = MouseButton.Right });
                 return;
         }
         CefThread.RunOnUi(() => _devTools.Send("Input.dispatchMouseEvent", w =>
