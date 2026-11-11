@@ -313,6 +313,9 @@ public sealed class ServiceWorkersTests
     private sealed class FakeDevTools : IServiceWorkerDevTools
     {
         public List<(string Method, string Params, string? SessionId)> Sent { get; } = [];
+
+        /// <summary>A copy of <see cref="Sent"/> that is safe while a continuation on another thread sends.</summary>
+        public (string Method, string Params, string? SessionId)[] Snapshot() { lock (Sent) return [.. Sent]; }
         public bool FailStart { get; set; }
         public TaskCompletionSource<JsonElement>? PendingAttach { get; set; }
 
@@ -325,10 +328,15 @@ public sealed class ServiceWorkersTests
                 writeParams?.Invoke(writer);
                 writer.WriteEndObject();
             }
-            Sent.Add((method, Encoding.UTF8.GetString(buffer.ToArray()), sessionId));
+            int count;
+            lock (Sent)
+            {
+                Sent.Add((method, Encoding.UTF8.GetString(buffer.ToArray()), sessionId));
+                count = Sent.Count;
+            }
             if (method == "ServiceWorker.startWorker" && FailStart) return Task.FromException<JsonElement>(new InvalidOperationException("closed"));
             if (method == "Target.attachToTarget" && PendingAttach is { } pending) return pending.Task;
-            var result = method == "Target.attachToTarget" ? $$"""{"sessionId":"S{{Sent.Count}}"}""" : "{}";
+            var result = method == "Target.attachToTarget" ? $$"""{"sessionId":"S{{count}}"}""" : "{}";
             return Task.FromResult(ServiceWorkerProtocolTests.J(result));
         }
     }
@@ -526,7 +534,7 @@ public sealed class ServiceWorkersTests
         Version(workers, "activated", "stopped");
         devTools.PendingAttach.SetResult(ServiceWorkerProtocolTests.J("""{"sessionId":"late"}"""));
         // The attach's continuation may run on another thread.
-        Assert.True(SpinWait.SpinUntil(() => devTools.Sent.ToArray().Any(s => s.Method == "Target.detachFromTarget" && s.Params.Contains("\"sessionId\":\"late\"")), 2000));
+        Assert.True(SpinWait.SpinUntil(() => devTools.Snapshot().Any(s => s.Method == "Target.detachFromTarget" && s.Params.Contains("\"sessionId\":\"late\"")), 2000));
     }
 
     [Fact]
