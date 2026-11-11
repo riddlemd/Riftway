@@ -37,7 +37,7 @@ app.Ready += (_, _) =>
 // first; the self-check's later child must still be seen to exit.
 if (exitAfterCheck)
 {
-    using var early = System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo("/bin/sh", "-c true") { UseShellExecute = false })!;
+    using var early = System.Diagnostics.Process.Start(SelfCheck.TrivialChild())!;
     early.WaitForExit();
 }
 
