@@ -34,6 +34,10 @@ public sealed unsafe class LifeSpanHandler
     /// <summary>A popup that <see cref="BeforePopup"/> allowed will not be created after all: its id.</summary>
     public Action<int>? PopupAborted { get; init; }
 
+    /// <summary>Whether the popup <see cref="BeforePopup"/> gave this client renders offscreen: CEF then makes it a
+    /// windowless browser instead of the native popup window it fills in for every opener. Null answers false.</summary>
+    public Func<nint, bool>? PopupWindowless { get; init; }
+
     /// <summary>The browser exists, on the UI thread. Browser views report this to their delegate; a windowless browser
     /// only here. Null leaves the slot unset.</summary>
     public BrowserCallback? AfterCreated
@@ -105,6 +109,8 @@ public sealed unsafe class LifeSpanHandler
         {
             var request = new PopupRequest(popupId, CefString.Read(targetUrl), CefString.Read(targetFrameName), targetDisposition, userGesture != 0);
             var chosen = Guard.Run(() => (nint)decide(request, popupFeatures, settings), 0);
+            if (chosen != 0 && owner.PopupWindowless is { } windowless && Guard.Run(() => windowless(chosen), false))
+                cef_window_info_native_t.MakeWindowless((cef_window_info_native_t*)windowInfo);
             if (chosen == 0) block = true;
             else if (chosen != (nint)(*client))
             {

@@ -81,6 +81,8 @@ static class OffscreenTest
             if (!win.IsDestroyed) win.Destroy();
         }
 
+        await PopupAsync(check, step);
+
         var windowed = new BrowserWindow(new BrowserWindowOptions { Show = false });
         check("offscreen: a windowed page is not offscreen, and its painting calls do nothing",
             !windowed.WebContents.IsOffscreen() && !windowed.WebContents.IsPainting() && windowed.WebContents.GetFrameRate() == 0);
@@ -92,6 +94,57 @@ static class OffscreenTest
             check("offscreen: UseSharedTexture throws", false);
         }
         catch (NotSupportedException) { check("offscreen: UseSharedTexture throws", true); }
+    }
+
+    // A page an offscreen page opens is offscreen too, as Electron's popups take their opener's web preferences; making
+    // it windowed is refused (drift C63); it closes with its opener.
+    private static async Task PopupAsync(MessageBoxTest.CheckFn check, TimeSpan step)
+    {
+        var dir = Directory.CreateTempSubdirectory("riftway-offscreen-popup").FullName;
+        File.WriteAllText(Path.Combine(dir, "opener.html"), "<body style='background:red'>opener");
+        File.WriteAllText(Path.Combine(dir, "popup.html"), "<body style='margin:0;background:lime'>popup");
+        var opener = new BrowserWindow(new BrowserWindowOptions { Show = false, WebPreferences = new WebPreferences { Offscreen = new OffscreenOptions() } });
+        var created = new TaskCompletionSource<BrowserWindow>(TaskCreationOptions.RunContinuationsAsynchronously);
+        void OnCreated(object? sender, BrowserWindow w)
+        {
+            if (w != opener) created.TrySetResult(w);
+        }
+        RiftwayApp.Current.BrowserWindowCreated += OnCreated;
+        try
+        {
+            await opener.WebContents.LoadFile(Path.Combine(dir, "opener.html"));
+            var opened = await opener.WebContents.ExecuteJavaScriptAsync("window.open('popup.html', '_blank', 'width=250,height=180') ? 'opened' : 'null'", userGesture: true);
+            var popup = await created.Task.WaitAsync(step).ContinueWith(t => t.IsCompletedSuccessfully ? t.Result : null);
+            var paints = 0;
+            NativeImage? last = null;
+            if (popup is not null) popup.WebContents.Paint += (_, e) => { Interlocked.Increment(ref paints); last = e.Image; };
+            var painted = popup is not null && Eventually(() => last is { } image && image.GetSize().Width > 10 && IsGreen(image), step);
+            check("offscreen: a page an offscreen page opens is offscreen, loads and paints",
+                opened?.ToString() == "opened" && popup is not null && popup.WebContents.IsOffscreen() && popup.WebContents.GetUrl().EndsWith("popup.html", StringComparison.Ordinal) && painted,
+                $"{opened} {popup?.WebContents.GetUrl()} paints={paints} {last?.GetSize()}");
+
+            created = new TaskCompletionSource<BrowserWindow>(TaskCreationOptions.RunContinuationsAsynchronously);
+            opener.WebContents.SetWindowOpenHandler(_ => WindowOpenHandlerResponse.Allow(o => o with { WebPreferences = o.WebPreferences with { Offscreen = null } }));
+            var refused = await opener.WebContents.ExecuteJavaScriptAsync("window.open('popup.html', '_blank') ? 'opened' : 'null'", userGesture: true);
+            await Task.Delay(1500);
+            check("offscreen: making an offscreen page's popup windowed is refused", refused?.ToString() == "null" && !created.Task.IsCompleted, refused);
+
+            opener.Destroy();
+            check("offscreen: the popup closes with its opener", popup is not null && Eventually(() => popup.IsDestroyed, step));
+        }
+        finally
+        {
+            RiftwayApp.Current.BrowserWindowCreated -= OnCreated;
+            if (!opener.IsDestroyed) opener.Destroy();
+        }
+    }
+
+    private static bool IsGreen(NativeImage image)
+    {
+        var (width, height) = image.GetSize();
+        var bgra = image.ToBitmap();
+        var i = (height / 2 * width + width / 2) * 4;
+        return i + 2 < bgra.Length && bgra[i + 1] > 200 && bgra[i + 2] < 60 && bgra[i] < 60;
     }
 
     private static bool IsRed(NativeImage image, int x, int y)

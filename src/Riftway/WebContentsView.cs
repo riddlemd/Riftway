@@ -49,7 +49,7 @@ public sealed unsafe class WebContentsView : View
         options ??= new WebContentsViewOptions();
         var preferences = options.WebPreferences;
         preferences.Validate(nameof(options));
-        if (preferences.Offscreen is not null) throw new NotSupportedException("Offscreen is not supported for a WebContentsView yet, only a BrowserWindow's page (drift C63).");
+        if (preferences.Offscreen is not null || options.WebContents?.IsOffscreen() == true) throw new NotSupportedException("Offscreen is not supported for a WebContentsView yet, only a BrowserWindow's page (drift C63).");
         if (options.WebContents is { } adopted)
         {
             // CEF makes a popup its opener's style, and a window's own page is its one Chrome-style browser.
@@ -64,6 +64,7 @@ public sealed unsafe class WebContentsView : View
         {
             BeforePopup = (request, features, settings) => BrowserWindow.OpenPopup(WebContents, request, features, settings),
             PopupAborted = BrowserWindow.OnPopupAborted,
+            PopupWindowless = BrowserWindow.IsWindowlessPopup,
             // A view's page would otherwise close the whole window (CEF's default for an Alloy browser).
             Closing = () =>
             {

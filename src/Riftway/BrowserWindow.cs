@@ -225,6 +225,7 @@ public sealed unsafe partial class BrowserWindow : BaseWindow
             {
                 BeforePopup = (request, features, settings) => OpenPopup(WebContents, request, features, settings),
                 PopupAborted = OnPopupAborted,
+                PopupWindowless = IsWindowlessPopup,
                 // A windowless page has no browser view to report it: CEF's life span handler does.
                 AfterCreated = WebContents.IsOffscreen() ? OnBrowserCreated : null,
                 BeforeClose = WebContents.IsOffscreen() ? OnOffscreenBrowserClosed : null,
@@ -311,6 +312,7 @@ public sealed unsafe partial class BrowserWindow : BaseWindow
         // CEF gives a popup its opener's request context, whatever the options say.
         if (opener is not null && session != opener.Session)
             throw new InvalidOperationException("A window a page opens must use its opener's session.");
+        if (opener is not null && OffscreenMismatch(opener, options.WebPreferences) is { } offscreen) throw new InvalidOperationException(offscreen);
         return options;
     }
 
@@ -392,6 +394,7 @@ public sealed unsafe partial class BrowserWindow : BaseWindow
             preferences.Validate(nameof(options));
             // CEF gives a popup its opener's request context, whatever the options say.
             if (preferences.ResolveSession() != opener.Session) throw new InvalidOperationException("A window a page opens must use its opener's session.");
+            if (OffscreenMismatch(opener, preferences) is { } offscreen) throw new InvalidOperationException(offscreen);
         }
         catch (Exception e) when (e is ArgumentException or NotSupportedException or InvalidOperationException)
         {
@@ -420,6 +423,25 @@ public sealed unsafe partial class BrowserWindow : BaseWindow
         s_pendingPopups[(nint)client] = new PendingPopup(window, view, page, request.PopupId, details,
             RaiseDidCreateWindow: false, ClosesWithOpener: outcome == CreateWindowOutcome.Wired);
         return client;
+    }
+
+    // A windowless opener's popups arrive through no browser view, and a windowed opener's through one: CEF can give a
+    // popup the other kind only by its window info, which Riftway sets for offscreen popups of offscreen openers alone.
+    private static string? OffscreenMismatch(WebContents opener, WebPreferences preferences)
+        => opener.IsOffscreen() == preferences.Offscreen is not null ? null
+            : "A window an offscreen page opens must be offscreen too, and a windowed page's windowed (drift C63).";
+
+    // CEF's on_before_popup, after OpenPopup chose this client: whether the popup's page renders offscreen.
+    internal static bool IsWindowlessPopup(nint client) => s_pendingPopups.TryGetValue(client, out var pending) && pending.Page.IsOffscreen();
+
+    // An offscreen popup has no view to adopt: its page arrives through the client's life span handler.
+    private void AdoptWindowlessPopup()
+    {
+        if (_opener is not { } opener || !s_pendingPopups.Remove((nint)_client.Native, out var pending) || pending.Window != this) return;
+        pending.Page.MarkOpenedByPage();
+        if (pending.ClosesWithOpener) opener.Popups.Add(this);
+        OpenWindow();
+        if (pending.RaiseDidCreateWindow) opener.RaiseDidCreateWindow(new DidCreateWindowEventArgs(this, pending.Details));
     }
 
     internal static void OnPopupAborted(int popupId)
@@ -632,8 +654,12 @@ public sealed unsafe partial class BrowserWindow : BaseWindow
     private void OnBrowserCreated(cef_browser_t* browser)
     {
         WebContents.OnBrowserCreated(browser);
-        // Created before the window opened, a windowless page took no content size: it takes it now.
-        if (WebContents.IsOffscreen()) UpdateOffscreenView();
+        if (WebContents.IsOffscreen())
+        {
+            AdoptWindowlessPopup();
+            // Created before the window opened, a windowless page took no content size: it takes it now.
+            UpdateOffscreenView();
+        }
         ApplyPageBackground();
     }
 

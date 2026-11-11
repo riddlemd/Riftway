@@ -290,7 +290,7 @@ Parameters in brackets are optional in Electron. `webContents` members are in [w
 | `minimumFontSize` | `MinimumFontSize` | missing | Property exists but throws NotSupportedException (W12). |
 | `defaultEncoding` | `DefaultEncoding` | missing | Property exists but throws NotSupportedException (W12). |
 | `backgroundThrottling` | — | missing |  |
-| `offscreen` | `Offscreen` | partial | BrowserWindow pages; `useSharedTexture` throws; no WebContentsView or popups (C63). |
+| `offscreen` | `Offscreen` | partial | BrowserWindow pages; `useSharedTexture` throws; no WebContentsView pages or `<select>` popups; its `window.open` popups are offscreen (C63). |
 | `contextIsolation` | — | partial | Always on; `false` is not offered (W14). |
 | `webviewTag` | — | n/a | <webview> |
 | `additionalArguments` | — | missing |  |
