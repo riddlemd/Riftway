@@ -58,6 +58,7 @@ C#; nothing about it needs Node.
    packed by `AsarPacker` and deleted. Publish: `-p:RiftwayPackArchive=true` (`buildTransitive/Riftway.Archive.targets`)
    runs `src/Riftway.Pack` (shipped as `tools/pack/Riftway.Pack.dll`, run through `DOTNET_HOST_PATH` so it works under
    any MSBuild), packs `wwwroot` into `resources/app.asar`, removes the folder and any previous archive; the
-   self-check passed 18/18 three times from such a publish (with `RiftwayArchiveUnpack=*.css`). Pages loaded with
-   `file://` from inside an archive (Electron's `loadFile`) are still to do.
+   self-check passed 18/18 three times from such a publish (with `RiftwayArchiveUnpack=*.css`). `file://` into an
+   archive: `AsarFileUrls` behind a `file` scheme factory that declines every other path to Chromium's loader
+   (DRIFT A45); checked with a page, CSS, an unpacked image, a loose page and a missing entry (`ERR_FILE_NOT_FOUND`).
 4. Integrity: embed, verify header at startup and blocks on read; a check that a tampered archive refuses to load.

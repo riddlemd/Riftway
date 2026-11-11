@@ -11,6 +11,8 @@ public static unsafe class Protocol
     private static readonly Dictionary<string, SchemeHandlerFactory> s_handlers = new(StringComparer.Ordinal);
     private static bool s_started;
     private static bool s_ready;
+    // file:// into ASAR archives, as Electron serves them; a handler the app gives for "file" takes its place.
+    private static SchemeHandlerFactory? s_archiveFiles;
 
     /// <summary>Registers schemes with privileges. Must run before <see cref="RiftwayApp.Run"/>: every
     /// Chromium process registers them at startup. Electron's <c>protocol.registerSchemesAsPrivileged()</c>.</summary>
@@ -68,7 +70,7 @@ public static unsafe class Protocol
         ArgumentNullException.ThrowIfNull(scheme);
         lock (s_gate)
         {
-            if (s_handlers.Remove(scheme) && s_ready) RegisterFactory(scheme, null);
+            if (s_handlers.Remove(scheme) && s_ready) RegisterFactory(scheme, scheme == "file" ? ArchiveFiles() : null);
         }
     }
 
@@ -102,6 +104,7 @@ public static unsafe class Protocol
             s_ready = true;
             RegisterFactory(SyncIpc.Scheme, SyncIpc.Factory);
             foreach (var (scheme, factory) in s_handlers) RegisterFactory(scheme, factory);
+            if (!s_handlers.ContainsKey("file") && ArchiveFiles() is { } archives) RegisterFactory("file", archives);
         }
     }
 
@@ -115,6 +118,11 @@ public static unsafe class Protocol
         if (privileges.SupportFetchApi) options |= cef_scheme_options_t.CEF_SCHEME_OPTION_FETCH_ENABLED;
         return (int)options;
     }
+
+    /// <summary>The archive factory for <c>file://</c>; null when <c>ELECTRON_NO_ASAR</c> turns archives off.</summary>
+    private static SchemeHandlerFactory? ArchiveFiles()
+        => AsarFileUrls.IsDisabledBy(Environment.GetEnvironmentVariable) ? null
+            : s_archiveFiles ??= new SchemeHandlerFactory(AsarFileUrls.Serve, url => AsarFileUrls.TryResolve(url, out _, out _));
 
     // A null factory unregisters the scheme.
     private static void RegisterFactory(string scheme, SchemeHandlerFactory? factory)
