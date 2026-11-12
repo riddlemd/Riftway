@@ -262,7 +262,10 @@ static class WebContentsRowsTest
             await wc.LoadUrl("data:text/html,<style>body{margin:0}</style><video id=v muted autoplay style='position:absolute;left:0;top:0;width:200px;height:100px'></video>"
                 + "<script>const c = document.createElement('canvas'); c.width = 160; c.height = 120; const g = c.getContext('2d');"
                 + "(function f() { g.fillStyle = 'red'; g.fillRect(0, 0, 160, 120); requestAnimationFrame(f); })(); v.srcObject = c.captureStream(30);</script>");
-            var playing = await Eventually(async () => (await wc.ExecuteJavaScriptAsync("v.readyState >= 2 && v.videoWidth === 160"))?.GetValue<bool>() == true, step);
+            // Until the video shows red: a capture stream's first frame can come before the canvas has drawn.
+            var playing = await Eventually(async () => (await wc.ExecuteJavaScriptAsync("v.readyState >= 2 && v.videoWidth === 160 && (() => {"
+                + " const k = document.createElement('canvas'); k.width = k.height = 1; const x = k.getContext('2d'); x.drawImage(v, 0, 0, 1, 1);"
+                + " const d = x.getImageData(0, 0, 1, 1).data; return d[0] > 200 && d[1] < 50 && d[2] < 50; })()"))?.GetValue<bool>() == true, step);
             check("video frame: the test video plays", playing);
 
             await Clipboard.WriteTextAsync("before");
