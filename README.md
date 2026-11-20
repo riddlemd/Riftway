@@ -131,6 +131,12 @@ window without a restart:
 RiftwayMacBundle=true dotnet watch --project samples/Riftway.BlazorSample
 ```
 
+### Generative UI
+
+[Riftway.OpenUI](https://github.com/riddlemd/Riftway.OpenUI) (experimental) lets a model answer with
+[OpenUI Lang](https://www.openui.com/docs/openui-lang) that Blazor draws as live components while it streams. The
+model is called from the .NET main process, and the program's queries and actions call the app's C# code directly.
+
 ## Why one Chromium
 
 System webviews (WebView2, WKWebView, WebKitGTK) mean three engines with different rendering and codecs. Riftway ships one Chromium everywhere, like Electron, but with .NET as the main process instead of Node. The cost is size, about the same as Electron.
