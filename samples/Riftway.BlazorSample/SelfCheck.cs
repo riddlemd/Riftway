@@ -104,6 +104,8 @@ internal static class SelfCheck
         await page.ExecuteJavaScriptAsync("document.querySelector('#increment').click()").ConfigureAwait(false);
         var afterReload = await Poll(page, "document.querySelector('#count')?.textContent ?? ''", v => v == "3").ConfigureAwait(false);
         Check(afterReload == "3", $"after a reload clicks still reach the component (#count = '{afterReload}')");
+        var tidied = await Poll(page, "String(window.riftwayTidied ?? 'none')", _ => true).ConfigureAwait(false);
+        Check(tidied == "none", $"the old page's tidy-up calls never reach the new page (riftwayTidied = '{tidied}')");
 
         if (RiftwayApp.Current.IsSandboxed)
         {

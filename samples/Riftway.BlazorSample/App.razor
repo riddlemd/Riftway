@@ -1,4 +1,4 @@
-@implements IDisposable
+@implements IAsyncDisposable
 @inject SharedCounter Counter
 @inject WindowOpener Opener
 @inject IJSRuntime JS
@@ -24,7 +24,16 @@
     }
     private DotNetObjectReference<App>? _self;
 
+    // A JS object the component holds, as components holding a module or a widget do.
+    private IJSObjectReference? _handle;
+
     protected override void OnInitialized() => Counter.Changed += OnChanged;
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (firstRender)
+            _handle = await JS.InvokeAsync<IJSObjectReference>("eval", "({ dispose() { window.riftwayTidied = (window.riftwayTidied ?? 0) + 1; } })");
+    }
 
     private void OnChanged() => InvokeAsync(StateHasChanged);
 
@@ -42,9 +51,16 @@
         StateHasChanged();
     }
 
-    public void Dispose()
+    // Tidying up talks to the page, as components holding a JS module or handle do. On a reload the page
+    // that held the object is already gone: Riftway must answer for it, or the new page never renders.
+    public async ValueTask DisposeAsync()
     {
         Counter.Changed -= OnChanged;
         _self?.Dispose();
+        if (_handle is not null)
+        {
+            await _handle.InvokeVoidAsync("dispose");
+            await _handle.DisposeAsync();
+        }
     }
 }

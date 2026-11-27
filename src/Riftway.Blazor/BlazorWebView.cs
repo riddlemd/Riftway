@@ -22,6 +22,8 @@ public sealed class BlazorWebView : WebViewManager
     // The page's messages in arrival order, handled off Chromium's UI thread; see OnMessage.
     private readonly Channel<string> _inbox = Channel.CreateUnbounded<string>(new UnboundedChannelOptions { SingleReader = true });
     private readonly IFileProvider _staticFiles;
+    // Answers the old page's JS calls while a reloaded page takes over; see PageHandover.
+    private readonly PageHandover _handover = new();
     private int _disposed;
 
     internal event Action? Disposed;
@@ -68,6 +70,14 @@ public sealed class BlazorWebView : WebViewManager
     /// <inheritdoc />
     protected override void SendMessage(string message)
     {
+        if (!_handover.ToPage(message, out var answer))
+        {
+            // The old page's call, made while a reloaded page takes over: answered as the page would, in order
+            // with its messages, so the old page's components finish tidying up and the new page renders.
+            if (answer is not null) _inbox.Writer.TryWrite(answer);
+            return;
+        }
+
         if (_webContents.IsDestroyed()) return;
         _webContents.Send(RiftwayBlazor.Channel, JsonValue.Create(message));
     }
@@ -86,15 +96,24 @@ public sealed class BlazorWebView : WebViewManager
     {
         await foreach (var message in _inbox.Reader.ReadAllAsync().ConfigureAwait(false))
         {
-            try
-            {
-                await Dispatcher.InvokeAsync(() => MessageReceived(RiftwayBlazor.AppBaseUri, message)).ConfigureAwait(false);
-            }
-            catch (Exception ex)
-            {
-                // The renderer has already reported it to the page; one bad message must not stop the rest.
-                Console.Error.WriteLine($"[Riftway.Blazor] A page message failed: {ex}");
-            }
+            // A reloaded page attaching: the old page's unanswered calls are answered first, while it is still
+            // the page Blazor holds.
+            foreach (var answer in _handover.FromPage(message))
+                await HandleAsync(answer).ConfigureAwait(false);
+            await HandleAsync(message).ConfigureAwait(false);
+        }
+    }
+
+    private async Task HandleAsync(string message)
+    {
+        try
+        {
+            await Dispatcher.InvokeAsync(() => MessageReceived(RiftwayBlazor.AppBaseUri, message)).ConfigureAwait(false);
+        }
+        catch (Exception ex)
+        {
+            // The renderer has already reported it to the page; one bad message must not stop the rest.
+            Console.Error.WriteLine($"[Riftway.Blazor] A page message failed: {ex}");
         }
     }
 
